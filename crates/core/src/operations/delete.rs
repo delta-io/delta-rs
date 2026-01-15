@@ -297,7 +297,7 @@ async fn execute_non_empty_expr(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
         .with_schema(snapshot.input_schema())
-        .build(snapshot)?;
+        .build(snapshot.snapshot())?;
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
@@ -406,7 +406,13 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), session, predicate.clone()).await?;
+    let candidates = find_files(
+        snapshot.clone().into(),
+        log_store.clone(),
+        session,
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));

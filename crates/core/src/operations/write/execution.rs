@@ -149,7 +149,7 @@ pub(crate) async fn execute_non_empty_expr(
     // it is simply the table schema
     let scan_config = DeltaScanConfigBuilder::new()
         .with_schema(snapshot.input_schema())
-        .build(snapshot)?;
+        .build(snapshot.snapshot())?;
 
     let target_provider = Arc::new(
         DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
@@ -217,7 +217,7 @@ pub(crate) async fn prepare_predicate_actions(
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     let candidates = find_files(
-        snapshot,
+        snapshot.clone().into(),
         log_store.clone(),
         session,
         Some(predicate.clone()),

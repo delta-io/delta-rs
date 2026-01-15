@@ -271,24 +271,8 @@ async fn execute(
     // For files that were identified, scan for records that match the predicate,
     // perform update operations, and then commit add and remove actions to
     // the log.
-
-    // NOTE: The optimize_projections rule is being temporarily disabled because it errors with
-    // our schemas for Lists due to issues discussed
-    // [here](https://github.com/delta-io/delta-rs/pull/2886#issuecomment-2481550560>
-    let rules: Vec<Arc<dyn datafusion::optimizer::OptimizerRule + Send + Sync>> = session
-        .optimizers()
-        .iter()
-        .filter(|rule| {
-            rule.name() != "optimize_projections" && rule.name() != "simplify_expressions"
-        })
-        .cloned()
-        .collect();
-
-    let update_planner = DeltaPlanner::new();
-
     let session = SessionStateBuilder::from(session)
-        .with_optimizer_rules(rules)
-        .with_query_planner(update_planner)
+        .with_query_planner(DeltaPlanner::new())
         .build();
 
     let exec_start = Instant::now();
@@ -320,7 +304,13 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
+    let candidates = find_files(
+        snapshot.clone().into(),
+        log_store.clone(),
+        &session,
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -332,7 +322,7 @@ async fn execute(
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(false)
         .with_schema(snapshot.input_schema())
-        .build(&snapshot)?;
+        .build(snapshot.snapshot())?;
 
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches

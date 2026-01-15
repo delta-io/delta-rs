@@ -589,7 +589,7 @@ impl EagerSnapshot {
     }
 
     /// Get the underlying snapshot
-    pub(crate) fn snapshot(&self) -> &Snapshot {
+    pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 

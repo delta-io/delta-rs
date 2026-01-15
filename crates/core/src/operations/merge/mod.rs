@@ -830,7 +830,7 @@ async fn execute(
         .with_file_column(true)
         .with_parquet_pushdown(false)
         .with_schema(snapshot.input_schema())
-        .build(&snapshot)?;
+        .build(snapshot.snapshot())?;
 
     let target_provider = Arc::new(DeltaTableProvider::try_new(
         snapshot.clone(),

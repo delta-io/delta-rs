@@ -60,7 +60,7 @@ pub(crate) fn consume_dv_mask(
             should_remove: is_empty,
         }
     } else {
-        let mut sv: Vec<bool> = selection_vector.drain(..).collect();
+        let mut sv: Vec<bool> = std::mem::take(selection_vector);
         sv.resize(batch_num_rows, true);
         DvMaskResult {
             selection: Some(sv),

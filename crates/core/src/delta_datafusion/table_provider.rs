@@ -139,7 +139,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &Snapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             let input_schema = snapshot.input_schema();
             let mut column_names: HashSet<&String> = HashSet::new();
@@ -315,7 +315,7 @@ impl<'a> DeltaScanBuilder<'a> {
         PROTOCOL.can_read_from(self.snapshot)?;
         let config = match self.config {
             Some(config) => config,
-            None => DeltaScanConfigBuilder::new().build(self.snapshot)?,
+            None => DeltaScanConfigBuilder::new().build(self.snapshot.snapshot())?,
         };
 
         let schema = match config.schema.clone() {
@@ -1038,7 +1038,7 @@ pub(crate) fn simplify_expr(
     df_schema: DFSchemaRef,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let context = SimplifyContext::new(&session.execution_props()).with_schema(df_schema.clone());
+    let context = SimplifyContext::new(session.execution_props()).with_schema(df_schema.clone());
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
@@ -1216,7 +1216,7 @@ mod tests {
         let session_state = create_test_session_state();
 
         let scan_config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.snapshot().unwrap().snapshot().snapshot())
             .unwrap();
         let table_provider = DeltaTableProvider::try_new(
             table.snapshot().unwrap().snapshot().clone(),

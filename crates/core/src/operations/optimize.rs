@@ -706,7 +706,7 @@ impl MergePlan {
                 let scan_config = DeltaScanConfigBuilder::default()
                     .with_file_column(false)
                     .with_schema(snapshot.input_schema())
-                    .build(snapshot)?;
+                    .build(snapshot.snapshot())?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
