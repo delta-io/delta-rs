@@ -1,11 +1,61 @@
-use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{ExprSchemable, col, when};
-use datafusion::prelude::lit;
-use datafusion::{execution::SessionState, prelude::DataFrame};
+use arrow_schema::Schema;
+use datafusion::catalog::Session;
+use datafusion::common::{HashMap, plan_err};
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col};
+use datafusion::prelude::{DataFrame, lit, when};
+use datafusion::scalar::ScalarValue;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use itertools::Itertools as _;
 use tracing::debug;
 
+use crate::DeltaTableError;
+use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::{DeltaResult, kernel::DataCheck, table::GeneratedColumn};
+
+pub fn with_generated_columns(
+    session: &dyn Session,
+    plan: LogicalPlan,
+    table_schema: &Schema,
+    generated_cols: &Vec<GeneratedColumn>,
+) -> DeltaResult<LogicalPlan> {
+    if generated_cols.is_empty() {
+        return Ok(plan);
+    }
+
+    let mut gen_lookup: HashMap<_, _> = generated_cols
+        .iter()
+        .map(|gc| {
+            Ok::<_, DeltaTableError>((
+                gc.get_name(),
+                parse_predicate_expression(plan.schema(), &gc.generation_expr, session)?,
+            ))
+        })
+        .try_collect()?;
+
+    let projection: Vec<_> = table_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let expr = if plan.schema().field_with_unqualified_name(f.name()).is_err() {
+                if let Some(expr) = gen_lookup.remove(f.name().as_str()) {
+                    debug!("Adding missing generated column {}.", f.name());
+                    expr.cast_to(f.data_type(), plan.schema())?
+                } else {
+                    return plan_err!(
+                        "Generated column expression for missing column {} not found.",
+                        f.name()
+                    );
+                }
+            } else {
+                col(f.name())
+            };
+            Ok(expr)
+        })
+        .try_collect()?;
+
+    Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
+}
 
 /// Add generated column expressions to a dataframe
 pub fn add_missing_generated_columns(

@@ -119,7 +119,7 @@ pub(super) async fn execution_plan(
         metrics,
         limit,
         file_id_field,
-        config.retain_file_id(),
+        &config,
     )
     .await
 }
@@ -172,7 +172,7 @@ async fn get_data_scan_plan(
     metrics: ExecutionPlanMetricsSet,
     limit: Option<usize>,
     file_id_field: FieldRef,
-    retain_file_ids: bool,
+    config: &DeltaScanConfig,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -215,7 +215,9 @@ async fn get_data_scan_plan(
     // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
     // so leaving predicate as None for now until we are sure this is safe to do.
     let table_config = scan_plan.table_configuration();
-    let predicate = if table_config.is_feature_enabled(&TableFeature::RowTracking) {
+    let predicate = if !config.enable_parquet_pushdown
+        || table_config.is_feature_enabled(&TableFeature::RowTracking)
+    {
         None
     } else {
         scan_plan.parquet_predicate.as_ref()
@@ -238,7 +240,7 @@ async fn get_data_scan_plan(
         Arc::new(dvs),
         partition_stats,
         file_id_column,
-        retain_file_ids,
+        config.retain_file_id(),
         metrics,
     );
 

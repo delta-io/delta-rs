@@ -3,8 +3,6 @@
 //!
 
 use crate::DeltaResult;
-use crate::kernel::EagerSnapshot;
-use crate::table::config::TablePropertiesExt as _;
 
 use datafusion::common::ScalarValue;
 use datafusion::prelude::*;
@@ -52,35 +50,6 @@ impl CDCTracker {
     }
 }
 
-///
-/// Return true if the specified table is capable of writing Change Data files
-///
-/// From the Protocol:
-///
-/// > For Writer Versions 4 up to 6, all writers must respect the delta.enableChangeDataFeed
-/// > configuration flag in the metadata of the table. When delta.enableChangeDataFeed is true,
-/// > writers must produce the relevant AddCDCFile's for any operation that changes data, as
-/// > specified in Change Data Files.
-/// >
-/// > For Writer Version 7, all writers must respect the delta.enableChangeDataFeed configuration flag in
-/// > the metadata of the table only if the feature changeDataFeed exists in the table protocol's
-/// > writerFeatures.
-pub(crate) fn should_write_cdc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
-    if let Some(features) = &snapshot.protocol().writer_features() {
-        // Features should only exist at writer version 7 but to avoid cases where
-        // the Option<HashSet<T>> can get filled with an empty set, checking for the value
-        // explicitly
-        if snapshot.protocol().min_writer_version() == 7
-            && !features.contains(&delta_kernel::table_features::TableFeature::ChangeDataFeed)
-        {
-            // If the writer feature has not been set, then the table should not have CDC written
-            // to it. Otherwise fallback to the configured table configuration
-            return Ok(false);
-        }
-    }
-    Ok(snapshot.table_properties().enable_change_data_feed())
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -91,118 +60,8 @@ mod tests {
     use arrow_schema::Schema;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::{MemTable, TableProvider};
-    use delta_kernel::table_features::TableFeature;
 
     use super::*;
-    use crate::kernel::{Action, PrimitiveType};
-    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::{DeltaTable, TableProperty};
-
-    /// A simple test which validates primitive writer version 1 tables should
-    /// not write Change Data Files
-    #[tokio::test]
-    async fn test_should_write_cdc_basic_table() {
-        let mut table = DeltaTable::new_in_memory()
-            .create()
-            .with_column(
-                "value",
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-                None,
-            )
-            .await
-            .expect("Failed to make a table");
-        table.load().await.expect("Failed to reload table");
-        let result =
-            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
-        assert!(!result, "A default table should not create CDC files");
-    }
-
-    ///
-    /// This test manually creates a table with writer version 4 that has the configuration sets
-    ///
-    #[tokio::test]
-    async fn test_should_write_cdc_table_with_configuration() {
-        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let mut table: DeltaTable = DeltaTable::new_in_memory()
-            .create()
-            .with_column(
-                "value",
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-                None,
-            )
-            .with_actions(actions)
-            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
-            .await
-            .expect("failed to make a version 4 table with EnableChangeDataFeed");
-        table.load().await.expect("Failed to reload table");
-
-        let result =
-            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
-        assert!(
-            result,
-            "A table with the EnableChangeDataFeed should create CDC files"
-        );
-    }
-
-    ///
-    /// This test creates a writer version 7 table which has a slightly different way of
-    /// determining whether CDC files should be written or not.
-    #[tokio::test]
-    async fn test_should_write_cdc_v7_table_no_writer_feature() {
-        let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
-        let mut table: DeltaTable = DeltaTable::new_in_memory()
-            .create()
-            .with_column(
-                "value",
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-                None,
-            )
-            .with_actions(actions)
-            .await
-            .expect("failed to make a version 4 table with EnableChangeDataFeed");
-        table.load().await.expect("Failed to reload table");
-
-        let result =
-            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
-        assert!(
-            !result,
-            "A v7 table must not write CDC files unless the writer feature is set"
-        );
-    }
-
-    ///
-    /// This test creates a writer version 7 table with a writer table feature enabled for CDC and
-    /// therefore should write CDC files
-    #[tokio::test]
-    async fn test_should_write_cdc_v7_table_with_writer_feature() {
-        let protocol = ProtocolInner::new(1, 7)
-            .append_writer_features(vec![TableFeature::ChangeDataFeed])
-            .as_kernel();
-        let actions = vec![Action::Protocol(protocol)];
-        let mut table: DeltaTable = DeltaTable::new_in_memory()
-            .create()
-            .with_column(
-                "value",
-                DeltaDataType::Primitive(PrimitiveType::Integer),
-                true,
-                None,
-            )
-            .with_actions(actions)
-            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
-            .await
-            .expect("failed to make a version 4 table with EnableChangeDataFeed");
-        table.load().await.expect("Failed to reload table");
-
-        let result =
-            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
-        assert!(
-            result,
-            "A v7 table must not write CDC files unless the writer feature is set"
-        );
-    }
 
     #[tokio::test]
     async fn test_sanity_check() {

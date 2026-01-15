@@ -41,6 +41,7 @@ use datafusion::{
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
 };
+use delta_kernel::table_features::TableFeature;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -53,11 +54,11 @@ use super::{
     CustomExecuteHandler, Operation,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
-use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{delta_datafusion::update_datafusion_session, logstore::LogStoreRef};
 use crate::{
     delta_datafusion::{
         DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaTableProvider, create_session,
@@ -76,6 +77,7 @@ use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
     kernel::resolve_snapshot,
 };
+use itertools::Itertools as _;
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
 pub(crate) const UPDATE_PREDICATE_COLNAME: &str = "__delta_rs_update_predicate";
@@ -356,7 +358,7 @@ async fn execute(
     });
     let df_with_predicate_and_metrics = DataFrame::new(session.clone(), plan_with_metrics);
 
-    let expressions: Vec<Expr> = df_with_predicate_and_metrics
+    let expressions: Vec<_> = df_with_predicate_and_metrics
         .schema()
         .fields()
         .into_iter()
@@ -369,9 +371,9 @@ async fn execute(
                     .alias(field_name),
                 None => col(Column::from_name(field_name)),
             };
-            Ok(expr)
+            Ok::<_, DeltaTableError>(expr)
         })
-        .collect::<DeltaResult<Vec<Expr>>>()?;
+        .try_collect()?;
 
     //let updated_df = df_with_predicate_and_metrics.clone();
     // Disabling the select allows the coerce test to pass, still not sure why
@@ -403,7 +405,11 @@ async fn execute(
     )
     .await?;
 
-    let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
+    let err = || {
+        DeltaTableError::Generic(format!(
+            "Unable to locate expected metric node: {UPDATE_COUNT_ID}"
+        ))
+    };
     let update_count = find_metric_node(UPDATE_COUNT_ID, &physical_plan).ok_or_else(err)?;
     let update_count_metrics = update_count.metrics().unwrap();
 
@@ -449,7 +455,10 @@ async fn execute(
         serde_json::to_value(&metrics)?,
     );
 
-    if let Ok(true) = should_write_cdc(&snapshot) {
+    if snapshot
+        .table_configuration()
+        .is_feature_enabled(&TableFeature::ChangeDataFeed)
+    {
         match tracker.collect() {
             Ok(df) => {
                 let cdc_actions = write_execution_plan_cdc(
@@ -504,7 +513,8 @@ impl std::future::IntoFuture for UpdateBuilder {
             let session = this
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            register_store(this.log_store.clone(), session.runtime_env().as_ref());
+            update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
+
             let state = session_state_from_session(session.as_ref())?;
 
             let (snapshot, metrics) = execute(

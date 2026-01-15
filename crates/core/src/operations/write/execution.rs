@@ -9,11 +9,12 @@ use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
-use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_features::TableFeature;
 use futures::StreamExt;
+use itertools::Itertools as _;
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
@@ -24,12 +25,12 @@ use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    generated_columns_to_exprs, session_state_from_session, validation_predicates,
+    generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
-use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
+use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
 
@@ -140,7 +141,7 @@ pub(crate) async fn execute_non_empty_expr(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
@@ -160,7 +161,7 @@ pub(crate) async fn execute_non_empty_expr(
     let source =
         Arc::new(LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?);
 
-    let cdf_df = if !partition_scan {
+    let cdf_plan = if !partition_scan {
         // Apply the negation of the filter and rewrite files
         let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
         let filter = LogicalPlanBuilder::from(source.clone())
@@ -186,13 +187,22 @@ pub(crate) async fn execute_non_empty_expr(
         // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
-        if should_write_cdc(snapshot)? {
-            let state = session_state_from_session(session)?;
-            let df = DataFrame::new(state.clone(), source.as_ref().clone());
-            Some(
-                df.filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?,
-            )
+        if snapshot
+            .table_configuration()
+            .is_feature_enabled(&TableFeature::ChangeDataFeed)
+        {
+            let mut projection = source
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| col(f.name()))
+                .collect_vec();
+            projection.push(lit("delete").alias(CDC_COLUMN_NAME));
+            let cdf_plan = LogicalPlanBuilder::new_from_arc(source.clone())
+                .filter(expression.clone())?
+                .project(projection)?
+                .build()?;
+            Some(cdf_plan)
         } else {
             None
         }
@@ -200,7 +210,7 @@ pub(crate) async fn execute_non_empty_expr(
         None
     };
 
-    Ok((actions, cdf_df))
+    Ok((actions, cdf_plan))
 }
 
 // This should only be called with a valid predicate
@@ -215,7 +225,7 @@ pub(crate) async fn prepare_predicate_actions(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     let candidates = find_files(
         snapshot.clone().into(),
         log_store.clone(),
@@ -224,7 +234,7 @@ pub(crate) async fn prepare_predicate_actions(
     )
     .await?;
 
-    let (mut actions, cdf_df) = execute_non_empty_expr(
+    let (mut actions, cdf_plan) = execute_non_empty_expr(
         snapshot,
         log_store,
         session,
@@ -254,7 +264,8 @@ pub(crate) async fn prepare_predicate_actions(
             default_row_commit_version: action.default_row_commit_version,
         }))
     }
-    Ok((actions, cdf_df))
+
+    Ok((actions, cdf_plan))
 }
 
 #[allow(clippy::too_many_arguments)]

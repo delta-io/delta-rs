@@ -604,6 +604,7 @@ pub struct TableProviderBuilder {
     snapshot: Option<SnapshotWrapper>,
     file_column: Option<String>,
     table_version: Option<Version>,
+    parquet_pushdown: Option<bool>,
 }
 
 impl Default for TableProviderBuilder {
@@ -619,6 +620,7 @@ impl TableProviderBuilder {
             snapshot: None,
             file_column: None,
             table_version: None,
+            parquet_pushdown: None,
         }
     }
 
@@ -654,6 +656,12 @@ impl TableProviderBuilder {
         self.file_column = Some(file_column.to_string());
         self
     }
+
+    /// Specify whether to enable parquet filter pushdown
+    pub fn with_parquet_pushdown(mut self, pushdown: bool) -> Self {
+        self.parquet_pushdown = Some(pushdown);
+        self
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -667,6 +675,9 @@ impl std::future::IntoFuture for TableProviderBuilder {
             let mut config = DeltaScanConfig::new();
             if let Some(file_column) = this.file_column {
                 config = config.with_file_column_name(file_column);
+            }
+            if let Some(parquet_pushdown) = this.parquet_pushdown {
+                config = config.with_parquet_pushdown(parquet_pushdown);
             }
 
             let snapshot = match this.snapshot {

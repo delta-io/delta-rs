@@ -47,6 +47,7 @@ use datafusion::physical_plan::metrics::MetricBuilder;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::{Expr, col};
 
+use delta_kernel::table_features::TableFeature;
 use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -56,7 +57,6 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 
 use super::Operation;
-use super::cdc::should_write_cdc;
 use super::datafusion_utils::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
@@ -347,7 +347,9 @@ async fn execute_non_empty_expr(
         actions.extend(add_actions);
 
         let source_count = find_metric_node(SOURCE_COUNT_ID, &filter).ok_or_else(|| {
-            DeltaTableError::Generic("Unable to locate expected metric node".into())
+            DeltaTableError::Generic(format!(
+                "Unable to locate expected metric node: {SOURCE_COUNT_ID}"
+            ))
         })?;
         let source_count_metrics = source_count.metrics().unwrap();
         let read_records = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
@@ -358,9 +360,12 @@ async fn execute_non_empty_expr(
     }
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-    if let Ok(true) = should_write_cdc(snapshot) {
+    if snapshot
+        .table_configuration()
+        .is_feature_enabled(&TableFeature::ChangeDataFeed)
+    {
         let mut projection: Vec<_> = source.schema().iter().map(|(_, f)| col(f.name())).collect();
-        projection.push(lit(ScalarValue::Utf8(Some("delete".to_string()))).alias(CDC_COLUMN_NAME));
+        projection.push(lit("delete").alias(CDC_COLUMN_NAME));
 
         let cdc_filter = LogicalPlanBuilder::new(source.clone())
             .filter(expression.clone())?
