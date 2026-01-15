@@ -711,7 +711,7 @@ mod tests {
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;
         use arrow::compute::sort_to_indices;
-        use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
+        use arrow::datatypes::{Date32Type, TimestampMicrosecondType};
         use arrow::record_batch::RecordBatch;
         use futures::TryStreamExt;
         use pretty_assertions::assert_eq;

@@ -4,7 +4,9 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::AsArray;
+use arrow::compute::{filter_record_batch, not};
 use arrow_array::RecordBatch;
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::{DataType, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{DFSchema, Statistics, exec_err, plan_datafusion_err, plan_err};
@@ -27,11 +29,11 @@ use futures::Stream;
 use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
-use crate::StructTypeExt as _;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
+use crate::{DeltaTableError, StructTypeExt as _};
 
 /// Generate validation predicates based on the table configuration
 ///
@@ -341,15 +343,23 @@ where
             Poll::Ready(Some(Ok(batch))) => {
                 match this.check_expression.evaluate(&batch)? {
                     ColumnarValue::Array(array) => {
-                        let invalid_count = array
-                            .as_boolean()
+                        let validity_mask = array.as_boolean();
+                        let invalid_count = validity_mask
                             .iter()
                             .filter(|v| matches!(v, Some(false) | None))
                             .count();
                         if invalid_count > 0 {
-                            return Poll::Ready(Some(exec_err!(
-                                "Invalid data found: {invalid_count} rows failed validation check."
-                            )));
+                            let invalid_data = filter_record_batch(&batch, &not(&validity_mask)?)?;
+                            let invalid_slice =
+                                invalid_data.slice(0, invalid_data.num_rows().min(5));
+                            let preview = pretty_format_batches(&[invalid_slice])?;
+                            return Poll::Ready(Some(Err(DataFusionError::External(Box::new(
+                                DeltaTableError::InvalidData {
+                                    message: format!(
+                                        "Invalid data found: {invalid_count} rows failed validation check. \nPreview of invalid data:\n\n{preview}"
+                                    ),
+                                },
+                            )))));
                         }
                     }
                     ColumnarValue::Scalar(value) => {
@@ -861,6 +871,44 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("scalar validation check failed"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_detailed_error_message() -> Result<()> {
+        let schema = create_test_schema(true);
+        // Create batch with multiple invalid rows to test the detailed error message
+        let batch = create_test_batch(
+            schema.clone(),
+            vec![Some(1), Some(2), Some(30)], // First 2 fail constraint id > 5
+            vec![Some("a"), Some("b"), Some("c")],
+        );
+
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+
+        // Create validation: id > 5 (2 rows should fail)
+        let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
+        let validated_exec =
+            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+
+        let result = collect(validated_exec, ctx.task_ctx()).await;
+        assert!(result.is_err());
+
+        let err_msg = result.unwrap_err().to_string();
+
+        let data = vec![
+            "+----+------+",
+            "| id | name |",
+            "+----+------+",
+            "| 1  | a    |",
+            "| 2  | b    |",
+            "+----+------+",
+        ];
+        for line in data {
+            assert!(err_msg.contains(line));
+        }
 
         Ok(())
     }
