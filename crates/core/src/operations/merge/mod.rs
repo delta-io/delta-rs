@@ -61,6 +61,7 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
+use delta_kernel::table_features::TableFeature;
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -88,7 +89,7 @@ use crate::operations::merge::barrier::find_node;
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
-    able_to_gc, add_generated_columns, add_missing_generated_columns,
+    add_generated_columns, add_missing_generated_columns,
 };
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
@@ -801,7 +802,10 @@ async fn execute(
     let mut generated_col_exp = None;
     let mut missing_generated_col = None;
 
-    if able_to_gc(&snapshot)? {
+    if snapshot
+        .table_configuration()
+        .is_feature_enabled(&TableFeature::GeneratedColumns)
+    {
         let generated_col_expressions = snapshot.schema().get_generated_columns()?;
         let (source_with_gc, missing_generated_columns) =
             add_missing_generated_columns(source, &generated_col_expressions)?;

@@ -38,6 +38,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
 use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_features::TableFeature;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -48,7 +49,7 @@ use url::Url;
 
 pub use self::configs::WriterStatsConfig;
 use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
-use self::generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
+use self::generated_columns::{add_generated_columns, add_missing_generated_columns};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
@@ -444,7 +445,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 let mut source =
                     DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
                 if let Some(snapshot) = &this.snapshot
-                    && able_to_gc(snapshot)?
+                    && snapshot
+                        .table_configuration()
+                        .is_feature_enabled(&TableFeature::GeneratedColumns)
                 {
                     let generated_col_expressions = snapshot.schema().get_generated_columns()?;
                     // Add missing generated columns to source_df

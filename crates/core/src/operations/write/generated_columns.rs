@@ -1,4 +1,3 @@
-use crate::kernel::EagerSnapshot;
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{ExprSchemable, col, when};
 use datafusion::prelude::lit;
@@ -7,21 +6,6 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::debug;
 
 use crate::{DeltaResult, kernel::DataCheck, table::GeneratedColumn};
-
-/// check if the writer version is able to write generated columns
-pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
-    if let Some(features) = &snapshot.protocol().writer_features() {
-        if snapshot.protocol().min_writer_version() < 4 {
-            return Ok(false);
-        }
-        if snapshot.protocol().min_writer_version() == 7
-            && !features.contains(&delta_kernel::table_features::TableFeature::GeneratedColumns)
-        {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
 
 /// Add generated column expressions to a dataframe
 pub fn add_missing_generated_columns(
