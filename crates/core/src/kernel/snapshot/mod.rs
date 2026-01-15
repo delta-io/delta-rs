@@ -70,6 +70,7 @@ pub struct Snapshot {
     config: DeltaTableConfig,
     /// Logical table schema
     schema: SchemaRef,
+    logical_files: Vec<RecordBatch>,
 }
 
 impl Snapshot {
@@ -78,6 +79,7 @@ impl Snapshot {
         table_root: Url,
         config: DeltaTableConfig,
         version: Option<Version>,
+        logical_files: Option<Vec<RecordBatch>>,
     ) -> DeltaResult<Self> {
         let snapshot = match spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
@@ -92,11 +94,11 @@ impl Snapshot {
             Ok(snapshot) => snapshot,
             Err(e) => {
                 // TODO: we should have more handling-friendly errors upstream in kernel.
-                if e.to_string().contains("No files in log segment") {
-                    return Err(DeltaTableError::NotATable(e.to_string()));
+                return if e.to_string().contains("No files in log segment") {
+                    Err(DeltaTableError::NotATable(e.to_string()))
                 } else {
-                    return Err(e.into());
-                }
+                    Err(e.into())
+                };
             }
         };
 
@@ -112,6 +114,7 @@ impl Snapshot {
             inner: snapshot,
             config,
             schema,
+            logical_files: logical_files.unwrap_or_else(|| vec![]),
         })
     }
 
@@ -120,19 +123,27 @@ impl Snapshot {
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
         version: Option<i64>,
+        files: Option<Vec<RecordBatch>>,
     ) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
 
         // NB: kernel engine uses Url::join to construct paths,
-        // if the path does not end with a slash, the would override the entire path.
+        // if the path does not end with a slash, this would override the entire path.
         // So we need to be extra sure its ends with a slash.
         let mut table_root = log_store.table_root_url();
         if !table_root.path().ends_with('/') {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
+        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64), files)
+            .await?
+            .with_files(log_store)
+            .await
+    }
+
+    pub fn is_eager(&self) -> bool {
+        !self.logical_files.is_empty()
     }
 
     pub fn scan_builder(&self) -> ScanBuilder {
@@ -141,6 +152,19 @@ impl Snapshot {
 
     pub fn into_scan_builder(self) -> ScanBuilder {
         ScanBuilder::new(self.inner)
+    }
+
+    pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
+        if self.config.require_files {
+            return Ok(self);
+        }
+        self.config.require_files = true;
+        self.logical_files = match self.load_config().require_files {
+            true => self.files(log_store, None).try_collect().await?,
+            false => vec![],
+        };
+
+        Ok(self)
     }
 
     /// Update the snapshot to the given version
@@ -486,9 +510,56 @@ impl Snapshot {
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         Ok(metadata)
     }
+
+    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+        for path in &self.inner.log_segment().ascending_commit_files {
+            if path.version as i64 == version {
+                return Some(path.location.last_modified);
+            }
+        }
+        None
+    }
+
+    pub fn log_data(&self) -> LogDataHandler<'_> {
+        LogDataHandler::new(&self.logical_files, self.table_configuration())
+    }
+
+    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
+    pub fn file_views_by_partitions(
+        &self,
+        log_store: &dyn LogStore,
+        filters: &[PartitionFilter],
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        if filters.is_empty() {
+            return self.file_views(log_store, None);
+        }
+        let predicate = match to_kernel_predicate(filters, self.schema().as_ref()) {
+            Ok(predicate) => Arc::new(predicate),
+            Err(err) => return Box::pin(once(ready(Err(err)))),
+        };
+        self.file_views(log_store, Some(predicate))
+    }
+
+    pub(crate) fn logical_files(&self) -> DeltaResult<&[RecordBatch]> {
+        if self.config.require_files {
+            Ok(&self.logical_files)
+        } else {
+            Err(DeltaTableError::NotInitializedWithFiles("files".into()))
+        }
+    }
+
+    pub async fn transaction_version(
+        &self,
+        log_store: &dyn LogStore,
+        app_id: impl ToString,
+    ) -> DeltaResult<Option<i64>> {
+        self.application_transaction_version(log_store, app_id.to_string())
+            .await
+    }
 }
 
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
+#[deprecated(note = "I am evil.")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
     snapshot: Snapshot,
@@ -498,10 +569,10 @@ pub struct EagerSnapshot {
 
 pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
-    maybe_snapshot: Option<EagerSnapshot>,
+    maybe_snapshot: Option<Snapshot>,
     require_files: bool,
     version: Option<Version>,
-) -> DeltaResult<EagerSnapshot> {
+) -> DeltaResult<Snapshot> {
     if let Some(snapshot) = maybe_snapshot {
         if let Some(version) = version
             && snapshot.version() as Version != version
@@ -518,191 +589,194 @@ pub(crate) async fn resolve_snapshot(
     } else {
         let mut config = DeltaTableConfig::default();
         config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
-    }
-}
-
-impl EagerSnapshot {
-    /// Create a new [`EagerSnapshot`] instance
-    pub async fn try_new(
-        log_store: &dyn LogStore,
-        config: DeltaTableConfig,
-        version: Option<i64>,
-    ) -> DeltaResult<Self> {
-        let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
-        Self::try_new_with_snapshot(log_store, snapshot).await
-    }
-
-    pub(crate) async fn try_new_with_snapshot(
-        log_store: &dyn LogStore,
-        snapshot: Snapshot,
-    ) -> DeltaResult<Self> {
-        let files = match snapshot.load_config().require_files {
-            true => snapshot.files(log_store, None).try_collect().await?,
-            false => vec![],
-        };
-        Ok(Self { snapshot, files })
-    }
-
-    pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
-        if self.snapshot.config.require_files {
-            return Ok(self);
-        }
-        self.snapshot.config.require_files = true;
-        Self::try_new_with_snapshot(log_store, self.snapshot).await
-    }
-
-    pub(crate) fn files(&self) -> DeltaResult<&[RecordBatch]> {
-        if self.snapshot.config.require_files {
-            Ok(&self.files)
-        } else {
-            Err(DeltaTableError::NotInitializedWithFiles("files".into()))
-        }
-    }
-
-    /// Update the snapshot to the given version
-    pub(crate) async fn update(
-        &mut self,
-        log_store: &dyn LogStore,
-        target_version: Option<Version>,
-    ) -> DeltaResult<()> {
-        let current_version = self.version() as u64;
-        if Some(current_version) == target_version {
-            return Ok(());
-        }
-
-        self.snapshot.update(log_store, target_version).await?;
-
-        self.files = self
-            .snapshot
-            .files_from(
-                log_store,
-                None,
-                current_version,
-                Box::new(std::mem::take(&mut self.files).into_iter()),
-                None,
-            )
-            .try_collect()
-            .await?;
-
-        Ok(())
-    }
-
-    /// Get the underlying snapshot
-    pub(crate) fn snapshot(&self) -> &Snapshot {
-        &self.snapshot
-    }
-
-    /// Get the table version of the snapshot
-    pub fn version(&self) -> i64 {
-        self.snapshot.version()
-    }
-
-    /// Get the timestamp of the given version
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
-        for path in &self.snapshot.inner.log_segment().ascending_commit_files {
-            if path.version as i64 == version {
-                return Some(path.location.last_modified);
-            }
-        }
-        None
-    }
-
-    /// Get the table schema of the snapshot
-    pub fn schema(&self) -> KernelSchemaRef {
-        self.snapshot.schema()
-    }
-
-    /// Get the table arrow schema of the snapshot
-    pub fn arrow_schema(&self) -> SchemaRef {
-        self.snapshot.arrow_schema()
-    }
-
-    /// Get the table metadata of the snapshot
-    pub fn metadata(&self) -> &Metadata {
-        self.snapshot.metadata()
-    }
-
-    /// Get the table protocol of the snapshot
-    pub fn protocol(&self) -> &Protocol {
-        self.snapshot.protocol()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
-    }
-
-    /// Well known table configuration
-    pub fn table_properties(&self) -> &TableProperties {
-        self.snapshot.table_properties()
-    }
-
-    pub fn table_configuration(&self) -> &TableConfiguration {
-        self.snapshot.table_configuration()
-    }
-
-    /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
-    pub fn log_data(&self) -> LogDataHandler<'_> {
-        LogDataHandler::new(&self.files, self.snapshot.table_configuration())
-    }
-
-    /// Stream the active files in the snapshot
-    ///
-    /// This function returns a stream of [`LogicalFileView`] objects,
-    /// which represent the active files in the snapshot.
-    ///
-    /// ## Parameters
-    ///
-    /// * `log_store` - A reference to a [`LogStore`] implementation.
-    /// * `predicate` - An optional predicate to filter the files.
-    ///
-    /// ## Returns
-    ///
-    /// A stream of [`LogicalFileView`] objects.
-    pub fn file_views(
-        &self,
-        log_store: &dyn LogStore,
-        predicate: Option<PredicateRef>,
-    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        self.snapshot.file_views(log_store, predicate)
-    }
-
-    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
-    pub fn file_views_by_partitions(
-        &self,
-        log_store: &dyn LogStore,
-        filters: &[PartitionFilter],
-    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if filters.is_empty() {
-            return self.file_views(log_store, None);
-        }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema().as_ref()) {
-            Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(once(ready(Err(err)))),
-        };
-        self.file_views(log_store, Some(predicate))
-    }
-
-    /// Iterate over all latest app transactions
-    pub async fn transaction_version(
-        &self,
-        log_store: &dyn LogStore,
-        app_id: impl ToString,
-    ) -> DeltaResult<Option<i64>> {
-        self.snapshot
-            .application_transaction_version(log_store, app_id.to_string())
+        Snapshot::try_new(log_store, config, version.map(|v| v as i64), None)
+            .await?
+            .with_files(log_store)
             .await
     }
-
-    pub async fn domain_metadata(
-        &self,
-        log_store: &dyn LogStore,
-        domain: impl ToString,
-    ) -> DeltaResult<Option<String>> {
-        self.snapshot.domain_metadata(log_store, domain).await
-    }
 }
+
+// impl EagerSnapshot {
+//     /// Create a new [`EagerSnapshot`] instance
+//     pub async fn try_new(
+//         log_store: &dyn LogStore,
+//         config: DeltaTableConfig,
+//         version: Option<i64>,
+//     ) -> DeltaResult<Self> {
+//         let snapshot = Snapshot::try_new(log_store, config.clone(), version, None).await?;
+//         Self::try_new_with_snapshot(log_store, snapshot).await
+//     }
+//
+//     pub(crate) async fn try_new_with_snapshot(
+//         log_store: &dyn LogStore,
+//         snapshot: Snapshot,
+//     ) -> DeltaResult<Self> {
+//         let files = match snapshot.load_config().require_files {
+//             true => snapshot.files(log_store, None).try_collect().await?,
+//             false => vec![],
+//         };
+//         Ok(Self { snapshot, files })
+//     }
+//
+//     pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
+//         if self.snapshot.config.require_files {
+//             return Ok(self);
+//         }
+//         self.snapshot.config.require_files = true;
+//         Self::try_new_with_snapshot(log_store, self.snapshot).await
+//     }
+//
+//     pub(crate) fn files(&self) -> DeltaResult<&[RecordBatch]> {
+//         if self.snapshot.config.require_files {
+//             Ok(&self.files)
+//         } else {
+//             Err(DeltaTableError::NotInitializedWithFiles("files".into()))
+//         }
+//     }
+//
+//     /// Update the snapshot to the given version
+//     pub(crate) async fn update(
+//         &mut self,
+//         log_store: &dyn LogStore,
+//         target_version: Option<Version>,
+//     ) -> DeltaResult<()> {
+//         let current_version = self.version() as u64;
+//         if Some(current_version) == target_version {
+//             return Ok(());
+//         }
+//
+//         self.snapshot.update(log_store, target_version).await?;
+//
+//         self.files = self
+//             .snapshot
+//             .files_from(
+//                 log_store,
+//                 None,
+//                 current_version,
+//                 Box::new(std::mem::take(&mut self.files).into_iter()),
+//                 None,
+//             )
+//             .try_collect()
+//             .await?;
+//
+//         Ok(())
+//     }
+//
+//     /// Get the underlying snapshot
+//     pub(crate) fn snapshot(&self) -> &Snapshot {
+//         &self.snapshot
+//     }
+//
+//     /// Get the table version of the snapshot
+//     pub fn version(&self) -> i64 {
+//         self.snapshot.version()
+//     }
+//
+//     /// Get the timestamp of the given version
+//     pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+//         for path in &self.snapshot.inner.log_segment().ascending_commit_files {
+//             if path.version as i64 == version {
+//                 return Some(path.location.last_modified);
+//             }
+//         }
+//         None
+//     }
+//
+//     /// Get the table schema of the snapshot
+//     pub fn schema(&self) -> KernelSchemaRef {
+//         self.snapshot.schema()
+//     }
+//
+//     /// Get the table arrow schema of the snapshot
+//     pub fn arrow_schema(&self) -> SchemaRef {
+//         self.snapshot.arrow_schema()
+//     }
+//
+//     /// Get the table metadata of the snapshot
+//     pub fn metadata(&self) -> &Metadata {
+//         self.snapshot.metadata()
+//     }
+//
+//     /// Get the table protocol of the snapshot
+//     pub fn protocol(&self) -> &Protocol {
+//         self.snapshot.protocol()
+//     }
+//
+//     /// Get the table config which is loaded with of the snapshot
+//     pub fn load_config(&self) -> &DeltaTableConfig {
+//         self.snapshot.load_config()
+//     }
+//
+//     /// Well known table configuration
+//     pub fn table_properties(&self) -> &TableProperties {
+//         self.snapshot.table_properties()
+//     }
+//
+//     pub fn table_configuration(&self) -> &TableConfiguration {
+//         self.snapshot.table_configuration()
+//     }
+//
+//     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
+//     pub fn log_data(&self) -> LogDataHandler<'_> {
+//         LogDataHandler::new(&self.files, self.snapshot.table_configuration())
+//     }
+//
+//     /// Stream the active files in the snapshot
+//     ///
+//     /// This function returns a stream of [`LogicalFileView`] objects,
+//     /// which represent the active files in the snapshot.
+//     ///
+//     /// ## Parameters
+//     ///
+//     /// * `log_store` - A reference to a [`LogStore`] implementation.
+//     /// * `predicate` - An optional predicate to filter the files.
+//     ///
+//     /// ## Returns
+//     ///
+//     /// A stream of [`LogicalFileView`] objects.
+//     pub fn file_views(
+//         &self,
+//         log_store: &dyn LogStore,
+//         predicate: Option<PredicateRef>,
+//     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+//         self.snapshot.file_views(log_store, predicate)
+//     }
+//
+//     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
+//     pub fn file_views_by_partitions(
+//         &self,
+//         log_store: &dyn LogStore,
+//         filters: &[PartitionFilter],
+//     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+//         if filters.is_empty() {
+//             return self.file_views(log_store, None);
+//         }
+//         let predicate = match to_kernel_predicate(filters, self.snapshot.schema().as_ref()) {
+//             Ok(predicate) => Arc::new(predicate),
+//             Err(err) => return Box::pin(once(ready(Err(err)))),
+//         };
+//         self.file_views(log_store, Some(predicate))
+//     }
+//
+//     /// Iterate over all latest app transactions
+//     pub async fn transaction_version(
+//         &self,
+//         log_store: &dyn LogStore,
+//         app_id: impl ToString,
+//     ) -> DeltaResult<Option<i64>> {
+//         self.snapshot
+//             .application_transaction_version(log_store, app_id.to_string())
+//             .await
+//     }
+//
+//     pub async fn domain_metadata(
+//         &self,
+//         log_store: &dyn LogStore,
+//         domain: impl ToString,
+//     ) -> DeltaResult<Option<String>> {
+//         self.snapshot.domain_metadata(log_store, domain).await
+//     }
+// }
 
 #[cfg(any(test, feature = "integration_test"))]
 pub(crate) fn partitions_schema(
@@ -774,24 +848,39 @@ mod tests {
                     inner: snapshot,
                     config: Default::default(),
                     schema: Arc::new(schema),
-                },
+                    logical_files: vec![],
+                }
+                .with_files(log_store.as_ref())
+                .await?,
                 log_store,
             ))
         }
-    }
 
-    impl EagerSnapshot {
-        pub async fn new_test<'a>(
+        pub async fn eager_test<'a>(
             commits: impl IntoIterator<Item = &'a CommitData>,
         ) -> DeltaResult<Self> {
-            let (snapshot, log_store) = Snapshot::new_test(commits).await?;
+            let (mut snapshot, log_store) = Snapshot::new_test(commits).await?;
             let files: Vec<_> = snapshot
                 .files(log_store.as_ref(), None)
                 .try_collect()
                 .await?;
-            Ok(Self { snapshot, files })
+            snapshot.logical_files = files;
+            Ok(snapshot)
         }
     }
+
+    // impl EagerSnapshot {
+    //     pub async fn new_test<'a>(
+    //         commits: impl IntoIterator<Item = &'a CommitData>,
+    //     ) -> DeltaResult<Self> {
+    //         let (snapshot, log_store) = Snapshot::new_test(commits).await?;
+    //         let files: Vec<_> = snapshot
+    //             .files(log_store.as_ref(), None)
+    //             .try_collect()
+    //             .await?;
+    //         Ok(Self { snapshot, files })
+    //     }
+    // }
 
     #[tokio::test]
     async fn test_snapshots() -> TestResult {
@@ -811,7 +900,7 @@ mod tests {
     async fn test_snapshot() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None, None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual = serde_json::from_slice::<'_, Snapshot>(&bytes);
@@ -855,7 +944,8 @@ mod tests {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
-            let snapshot = Snapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+            let snapshot =
+                Snapshot::try_new(&log_store, Default::default(), Some(version), None).await?;
             let batches = snapshot
                 .files(&log_store, None)
                 .try_collect::<Vec<_>>()
@@ -870,9 +960,9 @@ mod tests {
     async fn test_eager_snapshot() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
-        let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None, None).await?;
 
-        let bytes = serde_json::to_vec(&snapshot).unwrap();
+        let bytes = serde_json::to_vec(&snapshot)?;
         let actual = serde_json::from_slice::<'_, EagerSnapshot>(&bytes);
         assert!(actual.is_ok());
 
@@ -884,7 +974,7 @@ mod tests {
 
         for version in 0..=12 {
             let snapshot =
-                EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+                Snapshot::try_new(&log_store, Default::default(), Some(version), None).await?;
             let batches: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }

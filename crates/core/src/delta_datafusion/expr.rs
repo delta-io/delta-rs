@@ -821,7 +821,7 @@ mod test {
                 expr: col("value").cast_to(
                         &arrow_schema::DataType::Utf8,
                         &table
-                            .snapshot()
+                            .table_state()
                             .unwrap()
                             .snapshot()
                             .input_schema()
@@ -931,7 +931,7 @@ mod test {
             assert_eq!(test.expected, actual);
 
             let actual_expr = table
-                .snapshot()
+                .table_state()
                 .unwrap()
                 .snapshot()
                 .parse_predicate_expression(actual, &session.state())

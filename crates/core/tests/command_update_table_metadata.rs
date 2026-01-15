@@ -35,7 +35,7 @@ async fn test_update_table_name_valid() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -59,7 +59,7 @@ async fn test_update_table_description_valid() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.description().unwrap(), description);
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -83,7 +83,7 @@ async fn test_update_table_name_character_limit_valid() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.name().unwrap(), &name_255_chars);
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -127,7 +127,7 @@ async fn test_update_table_description_character_limit_valid() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.description().unwrap(), &description_4000_chars);
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -173,7 +173,12 @@ async fn test_update_existing_table_name() {
 
     assert_eq!(updated_table.version(), Some(1));
     assert_eq!(
-        updated_table.snapshot().unwrap().metadata().name().unwrap(),
+        updated_table
+            .table_state()
+            .unwrap()
+            .metadata()
+            .name()
+            .unwrap(),
         initial_name
     );
 
@@ -190,7 +195,12 @@ async fn test_update_existing_table_name() {
 
     assert_eq!(final_table.version(), Some(2));
     assert_eq!(
-        final_table.snapshot().unwrap().metadata().name().unwrap(),
+        final_table
+            .table_state()
+            .unwrap()
+            .metadata()
+            .name()
+            .unwrap(),
         new_name
     );
 }
@@ -217,7 +227,7 @@ async fn test_update_existing_table_description() {
     assert_eq!(updated_table.version(), Some(1));
     assert_eq!(
         updated_table
-            .snapshot()
+            .table_state()
             .unwrap()
             .metadata()
             .description()
@@ -239,7 +249,7 @@ async fn test_update_existing_table_description() {
     assert_eq!(final_table.version(), Some(2));
     assert_eq!(
         final_table
-            .snapshot()
+            .table_state()
             .unwrap()
             .metadata()
             .description()
@@ -285,7 +295,7 @@ async fn test_empty_table_description() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.description().unwrap(), "");
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -330,7 +340,7 @@ async fn test_with_commit_properties() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 }
@@ -413,7 +423,7 @@ async fn test_with_custom_execute_handler() {
         .await
         .unwrap();
 
-    let metadata = updated_table.snapshot().unwrap().metadata();
+    let metadata = updated_table.table_state().unwrap().metadata();
     assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 

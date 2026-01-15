@@ -421,7 +421,7 @@ async fn create_incomplete_commit_entry(
     };
     let prepared = CommitBuilder::default()
         .with_actions(actions)
-        .build(Some(table.snapshot()?), table.log_store(), operation)
+        .build(Some(table.table_state()?), table.log_store(), operation)
         .into_prepared_commit_future()
         .await?;
 
@@ -499,7 +499,7 @@ async fn append_to_table(
     let version = CommitBuilder::default()
         .with_actions(actions)
         .with_app_metadata(metadata.unwrap_or_default())
-        .build(Some(table.snapshot()?), table.log_store(), operation)
+        .build(Some(table.table_state()?), table.log_store(), operation)
         .await?
         .version();
     Ok(version)

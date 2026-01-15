@@ -477,7 +477,7 @@ mod tests {
             .build_storage()
             .expect("Failed to build storage");
         let snapshot =
-            crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None, None)
                 .await
                 .unwrap();
 

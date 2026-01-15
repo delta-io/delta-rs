@@ -18,7 +18,7 @@ use super::DeltaTableConfig;
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
+    ARROW_HANDLER, DataType, LogDataHandler, Metadata, Protocol, Snapshot, TombstoneView,
 };
 use crate::logstore::LogStore;
 use crate::{DeltaResult, DeltaTableError};
@@ -27,11 +27,11 @@ use crate::{DeltaResult, DeltaTableError};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    pub(crate) snapshot: EagerSnapshot,
+    pub(crate) snapshot: Snapshot,
 }
 
 impl DeltaTableState {
-    pub fn new(snapshot: EagerSnapshot) -> Self {
+    pub fn new(snapshot: Snapshot) -> Self {
         Self { snapshot }
     }
 
@@ -42,8 +42,11 @@ impl DeltaTableState {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         log_store.refresh().await?;
-        // TODO: pass through predictae
-        let snapshot = EagerSnapshot::try_new(log_store, config, version).await?;
+        // TODO: pass through predicate
+        let snapshot = Snapshot::try_new(log_store, config, version, None)
+            .await?
+            .with_files(log_store)
+            .await?;
         Ok(Self { snapshot })
     }
 
@@ -119,7 +122,7 @@ impl DeltaTableState {
             Vec::new(),
         )];
 
-        let snapshot = EagerSnapshot::new_test(&commit_data).await.unwrap();
+        let snapshot = Snapshot::eager_test(&commit_data).await?;
 
         Ok(Self { snapshot })
     }
@@ -134,7 +137,7 @@ impl DeltaTableState {
         &self,
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
-        self.snapshot.snapshot().tombstones(log_store)
+        self.snapshot.tombstones(log_store)
     }
 
     /// Get the transaction version for the given application ID.
@@ -145,11 +148,11 @@ impl DeltaTableState {
         log_store: &dyn LogStore,
         app_id: impl ToString,
     ) -> DeltaResult<Option<i64>> {
-        self.snapshot.transaction_version(log_store, app_id).await
+        self.snapshot().transaction_version(log_store, app_id).await
     }
 
     /// Obtain the Eager snapshot of the state
-    pub fn snapshot(&self) -> &EagerSnapshot {
+    pub fn snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 
@@ -200,7 +203,7 @@ impl DeltaTableState {
     }
 }
 
-impl EagerSnapshot {
+impl Snapshot {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
     ///
     /// # Arguments
@@ -242,7 +245,7 @@ impl EagerSnapshot {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot().inner.stats_schema()?;
+        let stats_schema = self.inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::SchemaMismatch {
@@ -271,7 +274,7 @@ impl EagerSnapshot {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -282,7 +285,7 @@ impl EagerSnapshot {
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
 
-        let files = self.files()?;
+        let files = self.logical_files()?;
         if files.is_empty() {
             // When there are no add actions, create an empty RecordBatch with the correct schema
             let DataType::Struct(struct_type) = &table_schema else {
@@ -300,7 +303,7 @@ impl EagerSnapshot {
             };
         }
 
-        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
+        let input_schema = self.inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             input_schema,
@@ -340,7 +343,7 @@ mod tests {
                 None,
             )
             .await?;
-        let _actions = table.snapshot()?.add_actions_table(false)?;
+        let _actions = table.table_state()?.add_actions_table(false)?;
         Ok(())
     }
 }

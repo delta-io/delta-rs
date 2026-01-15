@@ -35,7 +35,7 @@ use tracing::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Snapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -93,7 +93,7 @@ pub enum VacuumMode {
 /// See this module's documentation for more information
 pub struct VacuumBuilder {
     /// A snapshot of the to-be-vacuumed table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Period of stale files allowed.
@@ -154,7 +154,7 @@ pub struct VacuumEndOperationMetrics {
 /// Methods to specify various vacuum options and to execute the operation
 impl VacuumBuilder {
     /// Create a new [`VacuumBuilder`]
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         VacuumBuilder {
             snapshot,
             log_store,
@@ -221,10 +221,7 @@ impl VacuumBuilder {
     }
 
     /// Determine which files can be deleted. Does not actually perform the deletion
-    async fn create_vacuum_plan(
-        &self,
-        snapshot: &EagerSnapshot,
-    ) -> Result<VacuumPlan, VacuumError> {
+    async fn create_vacuum_plan(&self, snapshot: &Snapshot) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
             info!(
                 "Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!"
@@ -434,7 +431,7 @@ impl VacuumPlan {
     pub async fn execute(
         self,
         store: LogStoreRef,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         mut commit_properties: CommitProperties,
         operation_id: uuid::Uuid,
         handle: Option<Arc<dyn CustomExecuteHandler>>,
@@ -532,14 +529,13 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 async fn get_stale_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     retention_period: Duration,
     now_timestamp_millis: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<HashSet<String>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
-        .snapshot()
         .tombstones(store)
         .try_filter(|tombstone| {
             // if the file has a creation time before the `tombstone_retention_timestamp`
@@ -568,24 +564,28 @@ mod tests {
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
         let table = open_table(table_uri).await?;
 
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Lite)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Lite)
+        .with_enforce_retention_duration(false)
+        .await?;
         // When running lite, this table with superfluous parquet files should not have anything to
         // delete
         assert!(result.files_deleted.is_empty());
 
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Full)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Full)
+        .with_enforce_retention_duration(false)
+        .await?;
         let mut files_deleted = result.files_deleted.clone();
         files_deleted.sort();
         // When running with full, these superfluous parquet files which are not actually
@@ -613,26 +613,30 @@ mod tests {
         let versions_to_keep = vec![3];
 
         // First, vacuum without keeping any particular versions
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Full)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Full)
+        .with_enforce_retention_duration(false)
+        .await?;
 
         // Our simple_table has 32 data files in it which could be vacuumed.
         assert_eq!(32, result.files_deleted.len());
 
         // Next, vacuum with specific versions retained
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_keep_versions(&versions_to_keep)
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Full)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_keep_versions(&versions_to_keep)
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Full)
+        .with_enforce_retention_duration(false)
+        .await?;
         assert_ne!(
             32,
             result.files_deleted.len(),
@@ -652,26 +656,30 @@ mod tests {
         let versions_to_keep = vec![2, 3];
 
         // First, vacuum without keeping any particular versions
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Full)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Full)
+        .with_enforce_retention_duration(false)
+        .await?;
 
         // Our simple_table has 32 data files in it which could be vacuumed.
         assert_eq!(32, result.files_deleted.len());
 
         // Next, vacuum with specific versions retained
-        let (_table, result) =
-            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
-                .with_retention_period(Duration::hours(0))
-                .with_keep_versions(&versions_to_keep)
-                .with_dry_run(true)
-                .with_mode(VacuumMode::Full)
-                .with_enforce_retention_duration(false)
-                .await?;
+        let (_table, result) = VacuumBuilder::new(
+            table.log_store(),
+            Some(table.table_state()?.snapshot.clone()),
+        )
+        .with_retention_period(Duration::hours(0))
+        .with_keep_versions(&versions_to_keep)
+        .with_dry_run(true)
+        .with_mode(VacuumMode::Full)
+        .with_enforce_retention_duration(false)
+        .await?;
         assert_ne!(
             32,
             result.files_deleted.len(),
@@ -733,7 +741,7 @@ mod tests {
 
         let (mut table, result) = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::hours(0))
         .with_keep_versions(&[2, 3])
@@ -773,7 +781,7 @@ mod tests {
 
         let result = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::hours(1))
         .with_dry_run(true)
@@ -788,7 +796,7 @@ mod tests {
 
         let (table, result) = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::hours(0))
         .with_dry_run(true)
@@ -802,7 +810,7 @@ mod tests {
 
         let (table, result) = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::hours(169))
         .with_dry_run(true)
@@ -821,7 +829,7 @@ mod tests {
         let empty: Vec<String> = Vec::new();
         let (_table, result) = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::hours(retention_hours as i64))
         .with_dry_run(true)
@@ -903,7 +911,7 @@ mod tests {
         // The recent file should NOT be deleted because it's too new
         let (_table, result) = VacuumBuilder::new(
             table.log_store(),
-            Some(table.snapshot().unwrap().snapshot.clone()),
+            Some(table.table_state().unwrap().snapshot.clone()),
         )
         .with_retention_period(Duration::days(7))
         .with_dry_run(true)

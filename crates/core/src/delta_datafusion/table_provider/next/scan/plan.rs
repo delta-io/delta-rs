@@ -454,7 +454,7 @@ mod tests {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
         table.load().await?;
 
-        let config = table.snapshot()?.snapshot().table_configuration();
+        let config = table.table_state()?.snapshot().table_configuration();
 
         let expr = col(r#""Super Name""#).eq(lit("Anthony Johnson"));
         let rewritten = rewrite_expression(expr.clone(), config)?;
@@ -476,7 +476,7 @@ mod tests {
 
         let expr = col(r#""Super Name""#).eq(lit("Anthony Johnson"));
         let scan_plan = KernelScanPlan::try_new(
-            table.snapshot()?.snapshot().snapshot(),
+            table.table_state()?.snapshot(),
             None,
             &[expr.clone()],
             &DeltaScanConfig::default(),
@@ -487,7 +487,7 @@ mod tests {
 
         let expr = col(r#""Company Very Short""#).eq(lit("BME"));
         let scan_plan = KernelScanPlan::try_new(
-            table.snapshot()?.snapshot().snapshot(),
+            table.table_state()?.snapshot(),
             None,
             &[expr.clone()],
             &DeltaScanConfig::default(),
@@ -496,7 +496,7 @@ mod tests {
 
         let expr = col(r#""Super Name""#).eq(lit("Timothy Lamb"));
         let scan_plan = KernelScanPlan::try_new(
-            table.snapshot()?.snapshot().snapshot(),
+            table.table_state()?.snapshot(),
             None,
             &[expr.clone()],
             &DeltaScanConfig::default(),

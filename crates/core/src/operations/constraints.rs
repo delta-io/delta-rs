@@ -17,9 +17,7 @@ use crate::delta_datafusion::{
     update_datafusion_session,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{
-    EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner, resolve_snapshot,
-};
+use crate::kernel::{MetadataExt, ProtocolExt as _, ProtocolInner, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
@@ -30,7 +28,7 @@ use std::collections::HashMap;
 /// Build a constraint to add to a table
 pub struct ConstraintBuilder {
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Hashmap containing an name of the constraint and expression
     check_constraints: HashMap<String, Expression>,
     /// Delta object store for handling data files
@@ -53,7 +51,7 @@ impl super::Operation for ConstraintBuilder {
 
 impl ConstraintBuilder {
     /// Create a new builder
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             check_constraints: Default::default(),
             snapshot,
@@ -156,7 +154,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
             )?;
 
             let proivider = DeltaScanNext::builder()
-                .with_eager_snapshot(snapshot.clone())
+                .with_snapshot(snapshot.clone())
                 .await?;
             let schema = proivider.schema().to_dfschema()?;
 
@@ -286,7 +284,7 @@ mod tests {
 
     fn get_constraint(table: &DeltaTable, name: &str) -> String {
         table
-            .snapshot()
+            .table_state()
             .unwrap()
             .metadata()
             .configuration()

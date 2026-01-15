@@ -4,9 +4,7 @@ use std::sync::LazyLock;
 use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
-use crate::kernel::{
-    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
-};
+use crate::kernel::{Action, Protocol, ProtocolExt as _, Schema, Snapshot, contains_timestampntz};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 
@@ -84,7 +82,7 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+    pub fn check_append_only(&self, snapshot: &Snapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
@@ -94,7 +92,7 @@ impl ProtocolChecker {
     /// Check can write_timestamp_ntz
     pub fn check_can_write_timestamp_ntz(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         let contains_timestampntz = contains_timestampntz(schema.fields());
@@ -678,7 +676,7 @@ mod tests {
             .await
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         let eager_5 = table
-            .snapshot()
+            .table_state()
             .expect("Failed to get snapshot from test table");
         assert!(checker_5.can_write_to(eager_5).is_ok());
     }

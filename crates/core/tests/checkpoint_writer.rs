@@ -60,7 +60,7 @@ mod simple_checkpoint {
         // delta table should load just fine with the checkpoint in place
         let table_result = deltalake_core::open_table(table_url.clone()).await.unwrap();
         let table = table_result;
-        let files = table.snapshot().unwrap().log_data().num_files();
+        let files = table.table_state().unwrap().log_data().num_files();
         assert_eq!(12, files);
     }
 

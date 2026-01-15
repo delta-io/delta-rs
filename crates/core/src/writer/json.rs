@@ -215,7 +215,7 @@ impl JsonWriter {
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.snapshot()?.metadata();
+        let metadata = table.table_state()?.metadata();
         let partition_columns = metadata.partition_columns().clone();
 
         // Initialize writer properties for the underlying arrow writer
@@ -261,7 +261,7 @@ impl JsonWriter {
         }
         let schema = self
             .table
-            .snapshot()
+            .table_state()
             .expect("Failed to unwrap snapshot for table")
             .schema();
         Arc::new(
@@ -400,7 +400,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 .put_with_retries(&path, obj_bytes.into(), 15)
                 .await?;
 
-            let table_config = self.table.snapshot()?.table_config();
+            let table_config = self.table.table_state()?.table_config();
 
             actions.push(create_add(
                 &writer.partition_values,
@@ -510,7 +510,7 @@ mod tests {
     async fn test_partition_not_written_to_parquet() {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
-        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let arrow_schema = table.table_state().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             table.table_url().clone(),
             arrow_schema,
@@ -586,7 +586,7 @@ mod tests {
         let table_dir = tempfile::tempdir().unwrap();
         let table = get_test_table(&table_dir).await;
 
-        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let arrow_schema = table.table_state().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             table.table_url().clone(),
             arrow_schema,
@@ -623,7 +623,7 @@ mod tests {
             let table_dir = tempfile::tempdir().unwrap();
             let table = get_test_table(&table_dir).await;
 
-            let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+            let arrow_schema = table.table_state().unwrap().snapshot().arrow_schema();
             let mut writer = JsonWriter::try_new(
                 Url::from_directory_path(table_dir.path()).unwrap(),
                 arrow_schema,
@@ -665,7 +665,7 @@ mod tests {
 
             let mut writer = JsonWriter::try_new(
                 table.table_url().clone(),
-                table.snapshot().unwrap().snapshot().arrow_schema(),
+                table.table_state().unwrap().snapshot().arrow_schema(),
                 Some(vec!["modified".to_string()]),
                 None,
             )
@@ -769,7 +769,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let arrow_schema = table.table_state().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             table.table_url().clone(),
             arrow_schema,
@@ -790,7 +790,7 @@ mod tests {
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
         let add_actions: Vec<_> = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .snapshot()
             .file_views(&table.log_store, None)
@@ -834,7 +834,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let arrow_schema = table.table_state().unwrap().snapshot().arrow_schema();
         let mut writer = JsonWriter::try_new(
             table.table_url().clone(),
             arrow_schema,
@@ -855,7 +855,7 @@ mod tests {
         writer.flush_and_commit(&mut table).await.unwrap();
         assert_eq!(table.version(), Some(1));
         let add_actions: Vec<_> = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .snapshot()
             .file_views(&table.log_store, None)

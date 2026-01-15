@@ -21,7 +21,7 @@ use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN, get_path_column,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, EagerSnapshot};
+use crate::kernel::{Add, Snapshot};
 use crate::logstore::LogStoreRef;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -44,7 +44,7 @@ pub(crate) struct FindFiles {
     )
 )]
 pub(crate) async fn find_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     predicate: Option<Expr>,
@@ -231,7 +231,7 @@ fn join_batches_with_add_actions(
     )
 )]
 async fn find_files_scan(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     expression: Expr,
@@ -295,7 +295,7 @@ async fn find_files_scan(
     Ok(result)
 }
 
-async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
+async fn scan_memory_table(snapshot: &Snapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
     let actions = snapshot
         .log_data()
         .iter()
@@ -348,10 +348,7 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
 /// at the physical level
-fn df_logical_schema(
-    snapshot: &EagerSnapshot,
-    file_column_name: &String,
-) -> DeltaResult<SchemaRef> {
+fn df_logical_schema(snapshot: &Snapshot, file_column_name: &String) -> DeltaResult<SchemaRef> {
     let input_schema = snapshot.input_schema();
     let table_partition_cols = snapshot.metadata().partition_columns();
 
@@ -364,10 +361,7 @@ fn df_logical_schema(
 
     for partition_col in table_partition_cols.iter() {
         fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
+            input_schema.field_with_name(partition_col)?.to_owned(),
         ));
     }
 

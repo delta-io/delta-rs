@@ -128,7 +128,7 @@ fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
 
 /// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable, operation_id: Option<Uuid>) -> DeltaResult<()> {
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     create_checkpoint_for(
         snapshot.version() as u64,
         table.log_store.as_ref(),
@@ -144,7 +144,7 @@ pub async fn cleanup_metadata(
     table: &DeltaTable,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<usize> {
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     let log_retention_timestamp = Utc::now().timestamp_millis()
         - snapshot.table_config().log_retention_duration().as_millis() as i64;
     cleanup_expired_logs_for(
@@ -166,7 +166,7 @@ pub async fn create_checkpoint_from_table_url_and_cleanup(
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
     let table = open_table_with_version(table_url, version).await?;
-    let snapshot = table.snapshot()?;
+    let snapshot = table.table_state()?;
     create_checkpoint_for(version as u64, table.log_store.as_ref(), operation_id).await?;
 
     let enable_expired_log_cleanup =
@@ -346,7 +346,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
+        assert_eq!(
+            table.table_state().unwrap().schema().as_ref(),
+            &table_schema
+        );
         let res = create_checkpoint_for(0, table.log_store.as_ref(), None).await;
         assert!(res.is_ok());
 
@@ -371,7 +374,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
+        assert_eq!(
+            table.table_state().unwrap().schema().as_ref(),
+            &table_schema
+        );
         match create_checkpoint_for(1, table.log_store.as_ref(), None).await {
             Ok(_) => {
                 /*
@@ -396,6 +402,7 @@ mod tests {
     #[cfg(feature = "datafusion")]
     mod datafusion_tests {
         use super::*;
+        use crate::arrow::array::StringArray;
 
         use arrow_array::builder::{Int32Builder, ListBuilder, StructBuilder};
         use arrow_array::{ArrayRef, Int32Array, RecordBatch};
@@ -446,7 +453,10 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(table.version(), Some(0));
-            assert_eq!(table.snapshot().unwrap().schema().as_ref(), &table_schema);
+            assert_eq!(
+                table.table_state().unwrap().schema().as_ref(),
+                &table_schema
+            );
 
             let part_cols: Vec<String> = vec![];
             let metadata =
@@ -531,7 +541,7 @@ mod tests {
             let log_retention_timestamp = (Utc::now().timestamp_millis()
                 + Duration::days(31).num_milliseconds())
                 - table
-                    .snapshot()
+                    .table_state()
                     .unwrap()
                     .table_config()
                     .log_retention_duration()
@@ -560,7 +570,7 @@ mod tests {
             let log_retention_timestamp = (Utc::now().timestamp_millis()
                 + Duration::days(32).num_milliseconds())
                 - table
-                    .snapshot()
+                    .table_state()
                     .unwrap()
                     .table_config()
                     .log_retention_duration()
@@ -676,7 +686,7 @@ mod tests {
                 "Expected {count} transactions"
             );
             let pre_checkpoint_actions: Vec<_> = table
-                .snapshot()?
+                .table_state()?
                 .snapshot()
                 .file_views(&table.log_store, None)
                 .try_collect()
@@ -697,7 +707,7 @@ mod tests {
             );
 
             let post_checkpoint_actions: Vec<_> = table
-                .snapshot()?
+                .table_state()?
                 .snapshot()
                 .file_views(&table.log_store, None)
                 .try_collect()
@@ -719,18 +729,17 @@ mod tests {
             use crate::writer::test_utils::get_arrow_schema;
             use datafusion::assert_batches_sorted_eq;
 
-            let tmp_dir = tempfile::tempdir().unwrap();
-            let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+            let tmp_dir = tempfile::tempdir()?;
+            let tmp_path = std::fs::canonicalize(tmp_dir.path())?;
 
             let batch = RecordBatch::try_new(
                 Arc::clone(&get_arrow_schema(&None)),
                 vec![
-                    Arc::new(arrow::array::StringArray::from(vec!["C"])),
-                    Arc::new(arrow::array::Int32Array::from(vec![30])),
-                    Arc::new(arrow::array::StringArray::from(vec!["2021-02-03"])),
+                    Arc::new(StringArray::from(vec!["C"])),
+                    Arc::new(Int32Array::from(vec![30])),
+                    Arc::new(StringArray::from(vec!["2021-02-03"])),
                 ],
-            )
-            .unwrap();
+            )?;
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
             let mut table = DeltaTable::try_from_url(table_uri)
@@ -745,12 +754,11 @@ mod tests {
             let batch = RecordBatch::try_new(
                 Arc::clone(&get_arrow_schema(&None)),
                 vec![
-                    Arc::new(arrow::array::StringArray::from(vec!["A"])),
-                    Arc::new(arrow::array::Int32Array::from(vec![0])),
-                    Arc::new(arrow::array::StringArray::from(vec!["2021-02-02"])),
+                    Arc::new(StringArray::from(vec!["A"])),
+                    Arc::new(Int32Array::from(vec![0])),
+                    Arc::new(StringArray::from(vec!["2021-02-02"])),
                 ],
-            )
-            .unwrap();
+            )?;
 
             let table_uri = Url::from_directory_path(&tmp_path).unwrap();
             let table = DeltaTable::try_from_url(table_uri)

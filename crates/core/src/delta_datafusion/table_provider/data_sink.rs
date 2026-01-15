@@ -17,7 +17,7 @@ use itertools::Itertools as _;
 use crate::{
     cast_record_batch,
     delta_datafusion::DataFusionMixins as _,
-    kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
+    kernel::{Action, Snapshot, transaction::CommitBuilder},
     logstore::LogStoreRef,
     operations::write::writer::{DeltaWriter, WriterConfig},
     protocol::{DeltaOperation, SaveMode},
@@ -32,7 +32,7 @@ pub struct DeltaDataSink {
     /// The log store
     log_store: LogStoreRef,
     /// The snapshot
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     /// The save mode
     save_mode: SaveMode,
     /// The schema
@@ -49,7 +49,7 @@ pub struct DeltaDataSink {
 /// transaction log access, snapshot state, and session configuration.
 impl DeltaDataSink {
     /// Create a new [`DeltaDataSink`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot, save_mode: SaveMode) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: Snapshot, save_mode: SaveMode) -> Self {
         Self {
             log_store,
             schema: snapshot.read_schema(),

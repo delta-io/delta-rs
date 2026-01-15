@@ -57,7 +57,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         vec![]
     };
 
-    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp_dir = tempfile::tempdir()?;
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
     let dt = DeltaTable::try_from_url(
         url::Url::from_directory_path(std::path::Path::new(table_uri)).unwrap(),
@@ -173,7 +173,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version().unwrap();
-    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 5);
+    assert_eq!(dt.table_state()?.log_data().num_files(), 5);
 
     let optimize = dt.optimize().with_target_size(2_000_000);
     let (dt, metrics) = optimize.await?;
@@ -183,7 +183,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_removed, 4);
     assert_eq!(metrics.total_considered_files, 5);
     assert_eq!(metrics.partitions_optimized, 1);
-    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
+    assert_eq!(dt.table_state()?.log_data().num_files(), 2);
 
     let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
     let last_commit = &commit_info[0];
@@ -245,7 +245,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     assert_eq!(version + 1, dt.version().unwrap());
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 3);
+    assert_eq!(dt.table_state()?.log_data().num_files(), 3);
 
     let partition_adds = dt
         .get_active_add_actions_by_partitions(&filter)
@@ -297,7 +297,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?.snapshot(),
+        dt.table_state()?.snapshot(),
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -306,21 +306,30 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let table_url = ensure_table_uri(uri).unwrap();
+    let table_url = ensure_table_uri(uri)?;
     let other_dt = deltalake_core::open_table(table_url).await?;
-    let add = &other_dt.snapshot()?.log_data().into_iter().next().unwrap();
+    let add = &other_dt
+        .table_state()?
+        .log_data()
+        .into_iter()
+        .next()
+        .unwrap();
     let remove = add.remove_action(true);
 
     let operation = DeltaOperation::Delete { predicate: None };
     CommitBuilder::default()
         .with_actions(vec![Action::Remove(remove)])
-        .build(Some(other_dt.snapshot()?), other_dt.log_store(), operation)
+        .build(
+            Some(other_dt.table_state()?),
+            other_dt.log_store(),
+            operation,
+        )
         .await?;
 
     let maybe_metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?.snapshot(),
+            dt.table_state()?.snapshot(),
             1,
             None,
             CommitProperties::default(),
@@ -364,7 +373,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?.snapshot(),
+        dt.table_state()?.snapshot(),
         &filter,
         None,
         WriterProperties::builder().build(),
@@ -373,7 +382,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let table_url = ensure_table_uri(uri).unwrap();
+    let table_url = ensure_table_uri(uri)?;
     let mut other_dt = deltalake_core::open_table(table_url).await?;
     let mut writer = RecordBatchWriter::for_table(&other_dt)?;
     write(
@@ -386,7 +395,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?.snapshot(),
+            dt.table_state()?.snapshot(),
             1,
             None,
             CommitProperties::default(),
@@ -397,7 +406,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
 
-    dt.update_state().await.unwrap();
+    dt.update_state().await?;
     assert_eq!(dt.version().unwrap(), version + 2);
     Ok(())
 }
@@ -428,7 +437,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        dt.snapshot()?.snapshot(),
+        dt.table_state()?.snapshot(),
         &[],
         None,
         WriterProperties::builder().build(),
@@ -439,7 +448,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let metrics = plan
         .execute(
             dt.log_store(),
-            dt.snapshot()?.snapshot(),
+            dt.table_state()?.snapshot(),
             1,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             CommitProperties::default(),
@@ -450,7 +459,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 4);
 
-    dt.update_state().await.unwrap();
+    dt.update_state().await?;
     assert_eq!(dt.version().unwrap(), version + 2);
     Ok(())
 }

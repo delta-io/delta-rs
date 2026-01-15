@@ -51,13 +51,12 @@ use uuid::Uuid;
 
 use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
-use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
     DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
     to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Add, EagerSnapshot, Snapshot};
+use crate::kernel::{Add, Snapshot};
 use crate::logstore::LogStore;
 use crate::protocol::SaveMode;
 use crate::table::normalize_table_url;
@@ -139,7 +138,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &Snapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             let input_schema = snapshot.input_schema();
             let mut column_names: HashSet<&String> = HashSet::new();
@@ -258,7 +257,7 @@ impl DeltaScanConfig {
 }
 
 pub(crate) struct DeltaScanBuilder<'a> {
-    snapshot: &'a EagerSnapshot,
+    snapshot: &'a Snapshot,
     log_store: LogStoreRef,
     filter: Option<Expr>,
     session: &'a dyn Session,
@@ -269,11 +268,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
 }
 
 impl<'a> DeltaScanBuilder<'a> {
-    pub fn new(
-        snapshot: &'a EagerSnapshot,
-        log_store: LogStoreRef,
-        session: &'a dyn Session,
-    ) -> Self {
+    pub fn new(snapshot: &'a Snapshot, log_store: LogStoreRef, session: &'a dyn Session) -> Self {
         DeltaScanBuilder {
             snapshot,
             log_store,
@@ -516,11 +511,11 @@ impl<'a> DeltaScanBuilder<'a> {
         //  Temporarily re-generating the log handler, just so that we can compute the stats.
         //  Should we update datafusion_table_statistics to optionally take the mask?
         let stats = if let Some(mask) = pruning_mask {
-            let es = self.snapshot.snapshot();
+            let es = self.snapshot;
             let mut pruned_batches = Vec::new();
             let mut mask_offset = 0;
 
-            for batch in self.snapshot.files()? {
+            for batch in self.snapshot.logical_files()? {
                 let batch_size = batch.num_rows();
                 let batch_mask = &mask[mask_offset..mask_offset + batch_size];
                 let batch_mask_array = BooleanArray::from(batch_mask.to_vec());
@@ -601,7 +596,7 @@ impl<'a> DeltaScanBuilder<'a> {
 #[derive(Debug)]
 pub struct TableProviderBuilder {
     log_store: Option<Arc<dyn LogStore>>,
-    snapshot: Option<SnapshotWrapper>,
+    snapshot: Option<Arc<Snapshot>>,
     file_column: Option<String>,
     table_version: Option<Version>,
 }
@@ -628,15 +623,9 @@ impl TableProviderBuilder {
         self
     }
 
-    /// Provide an eager snapshot to use for the table provider
-    pub fn with_eager_snapshot(mut self, snapshot: impl Into<Arc<EagerSnapshot>>) -> Self {
-        self.snapshot = Some(SnapshotWrapper::EagerSnapshot(snapshot.into()));
-        self
-    }
-
     /// Provide a snapshot to use for the table provider
     pub fn with_snapshot(mut self, snapshot: impl Into<Arc<Snapshot>>) -> Self {
-        self.snapshot = Some(SnapshotWrapper::Snapshot(snapshot.into()));
+        self.snapshot = Some(snapshot.into());
         self
     }
 
@@ -656,7 +645,7 @@ impl TableProviderBuilder {
     }
 }
 
-impl std::future::IntoFuture for TableProviderBuilder {
+impl IntoFuture for TableProviderBuilder {
     type Output = Result<Arc<dyn TableProvider>>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
@@ -673,15 +662,16 @@ impl std::future::IntoFuture for TableProviderBuilder {
                 Some(wrapper) => wrapper,
                 None => {
                     if let Some(log_store) = this.log_store.as_ref() {
-                        SnapshotWrapper::Snapshot(
-                            Snapshot::try_new(
-                                log_store,
-                                Default::default(),
-                                this.table_version.map(|v| v as i64),
-                            )
-                            .await?
-                            .into(),
+                        Snapshot::try_new(
+                            log_store,
+                            Default::default(),
+                            this.table_version.map(|v| v as i64),
+                            None,
                         )
+                        .await?
+                        .with_files(log_store)
+                        .await?
+                        .into()
                     } else {
                         return Err(DataFusionError::Plan(
                         "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
@@ -701,8 +691,8 @@ impl DeltaTable {
     /// See [`TableProviderBuilder`] for options when building the provider.
     pub fn table_provider(&self) -> TableProviderBuilder {
         let mut builder = TableProviderBuilder::new();
-        if let Ok(state) = self.snapshot() {
-            builder = builder.with_eager_snapshot(state.snapshot().clone());
+        if let Ok(state) = self.table_state() {
+            builder = builder.with_snapshot(state.snapshot().clone());
         } else {
             builder = builder.with_log_store(self.log_store());
         }
@@ -734,7 +724,7 @@ pub(crate) fn update_datafusion_session(
 /// A Delta table provider that enables additional metadata columns to be included during the scan
 #[derive(Debug)]
 pub struct DeltaTableProvider {
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     log_store: LogStoreRef,
     config: DeltaScanConfig,
     schema: Arc<Schema>,
@@ -744,7 +734,7 @@ pub struct DeltaTableProvider {
 impl DeltaTableProvider {
     /// Build a DeltaTableProvider
     pub fn try_new(
-        snapshot: EagerSnapshot,
+        snapshot: Snapshot,
         log_store: LogStoreRef,
         config: DeltaScanConfig,
     ) -> DeltaResult<Self> {
@@ -1000,7 +990,7 @@ impl ExecutionPlan for DeltaScan {
 /// columns must appear at the end of the schema. This is to align with how partition are handled
 /// at the physical level
 fn df_logical_schema(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     file_column_name: &Option<String>,
     schema: Option<SchemaRef>,
 ) -> DeltaResult<SchemaRef> {
@@ -1019,10 +1009,7 @@ fn df_logical_schema(
 
     for partition_col in table_partition_cols.iter() {
         fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
+            input_schema.field_with_name(partition_col)?.to_owned(),
         ));
     }
 
@@ -1216,10 +1203,10 @@ mod tests {
         let session_state = create_test_session_state();
 
         let scan_config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.table_state().unwrap().snapshot())
             .unwrap();
         let table_provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
+            table.table_state().unwrap().snapshot().clone(),
             table.log_store(),
             scan_config,
         )

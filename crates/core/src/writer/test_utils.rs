@@ -323,8 +323,10 @@ pub mod datafusion {
     use crate::writer::SaveMode;
 
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
-        let table =
-            DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
+        let table = DeltaTable::new_with_state(
+            table.log_store.clone(),
+            table.table_state().unwrap().clone(),
+        );
         let ctx = SessionContext::new();
         table.update_datafusion_session(&ctx.state()).unwrap();
         ctx.register_table("test", table.table_provider().await.unwrap())

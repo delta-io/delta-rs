@@ -9,14 +9,14 @@ use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
+use crate::kernel::{Action, MetadataExt as _, ProtocolExt as _, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
     /// A snapshot of the table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Name of the property
     properties: HashMap<String, String>,
     /// Raise if property doesn't exist
@@ -39,7 +39,7 @@ impl super::Operation for SetTablePropertiesBuilder {
 
 impl SetTablePropertiesBuilder {
     /// Create a new builder
-    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             properties: HashMap::new(),
             raise_if_not_exists: true,

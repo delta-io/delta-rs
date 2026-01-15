@@ -10,7 +10,7 @@ use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistic
 
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
-use crate::kernel::{Add, EagerSnapshot};
+use crate::kernel::{Add, Snapshot};
 use crate::table::state::DeltaTableState;
 
 pub struct AddContainer<'a> {
@@ -176,7 +176,7 @@ impl PruningStatistics for AddContainer<'_> {
     }
 }
 
-impl PruningStatistics for EagerSnapshot {
+impl PruningStatistics for Snapshot {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {

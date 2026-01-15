@@ -92,7 +92,7 @@ use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
+use crate::kernel::{Action, CommitInfo, Metadata, Protocol, Snapshot, Transaction};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
@@ -237,30 +237,30 @@ pub trait TableReference: Send + Sync {
     fn metadata(&self) -> &Metadata;
 
     /// Try to cast this table reference to a `EagerSnapshot`
-    fn eager_snapshot(&self) -> &EagerSnapshot;
+    fn eager_snapshot(&self) -> &Snapshot;
 }
 
-impl TableReference for EagerSnapshot {
+impl TableReference for Snapshot {
     fn protocol(&self) -> &Protocol {
-        EagerSnapshot::protocol(self)
+        self.protocol()
     }
 
     fn metadata(&self) -> &Metadata {
-        EagerSnapshot::metadata(self)
+        self.metadata()
     }
 
     fn config(&self) -> &TableProperties {
         self.table_properties()
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
+    fn eager_snapshot(&self) -> &Snapshot {
         self
     }
 }
 
 impl TableReference for DeltaTableState {
     fn config(&self) -> &TableProperties {
-        self.snapshot.config()
+        self.table_config()
     }
 
     fn protocol(&self) -> &Protocol {
@@ -271,7 +271,7 @@ impl TableReference for DeltaTableState {
         self.snapshot.metadata()
     }
 
-    fn eager_snapshot(&self) -> &EagerSnapshot {
+    fn eager_snapshot(&self) -> &Snapshot {
         &self.snapshot
     }
 }
@@ -613,7 +613,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut attempt_number: usize = 1;
 
             // Handle the case where table doesn't exist yet (initial table creation)
-            let read_snapshot: EagerSnapshot = if this.table_data.is_none() {
+            let read_snapshot: Snapshot = if this.table_data.is_none() {
                 debug!("committing initial table version 0");
                 match this
                     .log_store
@@ -638,11 +638,14 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         debug!("version 0 already exists, loading table state for retry");
                         attempt_number = 2;
                         let latest_version = this.log_store.get_latest_version(0).await?;
-                        EagerSnapshot::try_new(
+                        Snapshot::try_new(
                             this.log_store.as_ref(),
                             Default::default(),
                             Some(latest_version),
+                            None,
                         )
+                        .await?
+                        .with_files(&*this.log_store)
                         .await?
                     }
                     Err(e) => return Err(e.into()),
@@ -973,7 +976,7 @@ impl FinalizedCommit {
     }
 }
 
-impl std::future::IntoFuture for PostCommit {
+impl IntoFuture for PostCommit {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 

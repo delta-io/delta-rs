@@ -743,7 +743,11 @@ mod tests {
             let table_uri =
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(true)
+                .unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -818,7 +822,11 @@ mod tests {
             let table_uri = Url::from_directory_path(std::fs::canonicalize(path).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
 
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(true)
+                .unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -894,7 +902,11 @@ mod tests {
             let table_uri =
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let table = crate::open_table(table_uri).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(true)
+                .unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -936,7 +948,11 @@ mod tests {
                 Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(true)
+                .unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             // get column-0 path, and column-4 num_records, and column_5 null_count.integer
             let expected_path: ArrayRef = Arc::new(array::StringArray::from(vec![
@@ -965,7 +981,7 @@ mod tests {
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
 
-            let snapshot = table.snapshot().unwrap().snapshot();
+            let snapshot = table.table_state().unwrap().snapshot();
             let files: Vec<_> = snapshot
                 .file_views(&table.log_store, None)
                 .try_collect()
@@ -984,7 +1000,11 @@ mod tests {
             let mut table = crate::open_table(table_uri).await.unwrap();
             table.load_version(1).await.unwrap();
 
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(true)
+                .unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
@@ -1153,7 +1173,11 @@ mod tests {
             );
             assert_eq!(expected, actions);
 
-            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
+            let actions = table
+                .table_state()
+                .unwrap()
+                .add_actions_table(false)
+                .unwrap();
             // For brevity, just checking a few nested columns in stats
 
             assert_eq!(

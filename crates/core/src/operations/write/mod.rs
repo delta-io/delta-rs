@@ -64,8 +64,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
-    new_metadata,
+    Action, MetadataExt as _, ProtocolExt as _, Snapshot, StructType, StructTypeExt, new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -128,7 +127,7 @@ impl FromStr for SchemaMode {
 /// Write data into a DeltaTable
 pub struct WriteBuilder {
     /// A snapshot of the to-be-loaded table's state
-    snapshot: Option<EagerSnapshot>,
+    snapshot: Option<Snapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
@@ -188,7 +187,7 @@ impl super::Operation for WriteBuilder {
 
 impl WriteBuilder {
     /// Create a new [`WriteBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+    pub fn new(log_store: LogStoreRef, snapshot: Option<Snapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -408,7 +407,7 @@ impl WriteBuilder {
     }
 }
 
-impl std::future::IntoFuture for WriteBuilder {
+impl IntoFuture for WriteBuilder {
     type Output = DeltaResult<DeltaTable>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
@@ -458,8 +457,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
 
                 // Schema merging code should be aware of columns that can be generated during write
-                // so they might be empty in the batch, but the will exist in the input_schema()
-                // in this case we have to insert the generated column and it's type in the schema of the batch
+                // so they might be empty in the batch, but they will exist in the input_schema()
+                // in this case we have to insert the generated column, and it's type in the schema of the batch
                 let mut new_schema = None;
                 if let Some(snapshot) = &this.snapshot {
                     let table_schema = snapshot.input_schema();
@@ -730,7 +729,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 if let Some(handler) = this.custom_execute_handler {
                     handler.post_execute(&this.log_store, operation_id).await?;
                 }
-
+                dbg!(&commit.snapshot);
                 Ok(DeltaTable::new_with_state(this.log_store, commit.snapshot))
             }
             .instrument(tracing::info_span!(
@@ -823,13 +822,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(1));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
 
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(
             write_metrics.num_added_files,
-            table.snapshot().unwrap().log_data().num_files()
+            table.table_state().unwrap().log_data().num_files()
         );
         assert_common_write_metrics(write_metrics);
 
@@ -856,7 +855,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(2));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert_eq!(write_metrics.num_added_files, 1);
@@ -885,7 +884,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(3));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_rows, batch.num_rows());
         assert!(write_metrics.num_removed_files > 0);
@@ -1031,7 +1030,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 1);
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
     }
@@ -1046,7 +1045,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 2);
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_files, 2);
         assert_common_write_metrics(write_metrics);
@@ -1058,7 +1057,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 4);
+        assert_eq!(table.table_state().unwrap().log_data().num_files(), 4);
 
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_eq!(write_metrics.num_added_files, 4);
@@ -1120,14 +1119,19 @@ mod tests {
             .unwrap();
         table.load().await.unwrap();
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+        let new_schema = table
+            .table_state()
+            .unwrap()
+            .metadata()
+            .parse_schema()
+            .unwrap();
         let fields = new_schema.fields();
         let names = fields.map(|f| f.name()).collect::<Vec<_>>();
         assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
 
         // <https://github.com/delta-io/delta-rs/issues/2925>
         let metadata = table
-            .snapshot()
+            .table_state()
             .expect("Failed to retrieve updated snapshot")
             .metadata();
         assert_ne!(
@@ -1195,13 +1199,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(table.version(), Some(1));
-        let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+        let new_schema = table
+            .table_state()
+            .unwrap()
+            .metadata()
+            .parse_schema()
+            .unwrap();
         let fields = new_schema.fields();
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
         let part_cols = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .metadata()
             .partition_columns()
@@ -2036,7 +2045,7 @@ mod tests {
             .await?;
 
         // Verify initial schema has correct nullability
-        let schema = table.snapshot().unwrap().schema();
+        let schema = table.table_state().unwrap().schema();
         let schema_fields: Vec<_> = schema.fields().collect();
         assert!(!schema_fields[0].is_nullable(), "id should be non-nullable");
         assert!(schema_fields[1].is_nullable(), "name should be nullable");
@@ -2083,7 +2092,7 @@ mod tests {
             .await?;
 
         // Verify that nullability constraints are preserved
-        let schema = table.snapshot().unwrap().schema();
+        let schema = table.table_state().unwrap().schema();
         let final_fields: Vec<_> = schema.fields().collect();
         assert!(
             !final_fields[0].is_nullable(),
@@ -2143,7 +2152,7 @@ mod tests {
 
         // Capture initial schema for comparison
         let initial_schema_fields: Vec<_> = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .schema()
             .fields()
@@ -2184,7 +2193,7 @@ mod tests {
             .await?;
 
         // Verify schema was NOT updated
-        let schema = table.snapshot().unwrap().schema();
+        let schema = table.table_state().unwrap().schema();
         let after_overwrite_fields: Vec<_> = schema.fields().collect();
 
         // Schema should be EXACTLY the same as before
@@ -2280,7 +2289,7 @@ mod tests {
         );
 
         // Verify the table data and schema remain unchanged after failed writes
-        let schema = table.snapshot().unwrap().schema();
+        let schema = table.table_state().unwrap().schema();
         let final_fields: Vec<_> = schema.fields().collect();
 
         // Schema should still be the original schema
@@ -2338,7 +2347,7 @@ mod tests {
 
         // Capture initial schema
         let initial_fields: Vec<_> = table
-            .snapshot()
+            .table_state()
             .unwrap()
             .schema()
             .fields()
@@ -2371,7 +2380,7 @@ mod tests {
             .await?;
 
         // Verify schema is preserved
-        let schema = table.snapshot().unwrap().schema();
+        let schema = table.table_state().unwrap().schema();
         let final_fields: Vec<_> = schema.fields().collect();
 
         for (i, field) in final_fields.iter().enumerate() {
