@@ -4,12 +4,12 @@
 
 use crate::delta_datafusion::DeltaSessionConfig;
 use crate::delta_datafusion::{register_store, DataFusionMixins};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
-use crate::kernel::{Action, Remove};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
+use crate::kernel::{Action, EagerSnapshot, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::WriterStatsConfig;
-use crate::protocol::SaveMode;
+use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use arrow_array::Array;
@@ -52,7 +52,7 @@ pub struct UpsertBuilder {
     /// The source data to upsert into the target table
     source: DataFrame,
     /// The current state of the target table
-    snapshot: DeltaTableState,
+    snapshot: EagerSnapshot,
     /// Delta log store for handling data files
     log_store: LogStoreRef,
     /// Datafusion session state for executing the plans
@@ -67,7 +67,7 @@ impl UpsertBuilder {
     /// Create a new UpsertBuilder with required parameters
     pub fn new(
         log_store: LogStoreRef,
-        snapshot: DeltaTableState,
+        snapshot: EagerSnapshot,
         join_keys: Vec<String>,
         source: DataFrame,
     ) -> Self {
@@ -101,7 +101,7 @@ impl UpsertBuilder {
     }
 }
 
-impl super::Operation<()> for UpsertBuilder {
+impl super::Operation for UpsertBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -142,8 +142,8 @@ const FILE_PATH_COLUMN: &'static str = "__delta_rs_path";
 
 impl UpsertBuilder {
     /// Validate that the table is in a valid state for upsert operations
-    fn validate_table_state(snapshot: &DeltaTableState) -> DeltaResult<()> {
-        PROTOCOL.can_write_to(&snapshot.snapshot)?;
+    fn validate_table_state(snapshot: &EagerSnapshot) -> DeltaResult<()> {
+        PROTOCOL.can_write_to(snapshot)?;
 
         if !snapshot.load_config().require_files {
             return Err(DeltaTableError::NotInitializedWithFiles("UPSERT".into()));
@@ -211,7 +211,7 @@ impl UpsertBuilder {
     /// and extract unique values from the source data to limit the scan scope
     async fn extract_partition_filters(&self) -> DeltaResult<HashMap<String, Vec<String>>> {
         let mut partition_filters = HashMap::new();
-        let partition_columns = &self.snapshot.metadata().partition_columns;
+        let partition_columns = self.snapshot.metadata().partition_columns();
 
         if partition_columns.is_empty() {
             return Ok(partition_filters);
@@ -281,7 +281,7 @@ impl UpsertBuilder {
         let scan_config = crate::delta_datafusion::DeltaScanConfigBuilder::default()
             .with_file_column_name(&FILE_PATH_COLUMN.to_string())
             .with_parquet_pushdown(true)
-            .with_schema(self.snapshot.input_schema().unwrap())
+            .with_schema(self.snapshot.schema())
             .build(&self.snapshot)?;
 
         let target_provider = Arc::new(crate::delta_datafusion::DeltaTableProvider::try_new(
@@ -354,7 +354,7 @@ impl UpsertBuilder {
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
         // Get partition columns for writing
-        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns.clone();
+        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns().to_vec();
 
         let (add_actions, write_metrics) = write_execution_plan_v2(
             Some(&self.snapshot),
@@ -362,10 +362,10 @@ impl UpsertBuilder {
             physical_plan,
             partition_columns,
             self.log_store.object_store(None),
-            Some(self.snapshot.table_config().target_file_size() as usize),
+            Some(self.snapshot.table_properties().target_file_size().get() as usize),
             None,
             self.writer_properties.clone(),
-            WriterStatsConfig::new(self.snapshot.table_config().num_indexed_cols(), None),
+            WriterStatsConfig::new(self.snapshot.table_properties().num_indexed_cols(), None),
             None,
             false,
         )
@@ -390,7 +390,7 @@ impl UpsertBuilder {
     ) -> DeltaResult<(Vec<Action>, UpsertMetrics)> {
         // Extract the file names from the conflicts DataFrame
         let conflicting_file_names = Self::extract_file_paths_from_conflicts(&conflicts_df).await?;
-        let remove_actions = self.files_to_remove(&conflicting_file_names);
+        let remove_actions = self.files_to_remove(&conflicting_file_names).await?;
 
         // Count the number of conflicting records
         let num_conflicting_records = conflicts_df.count().await?;
@@ -413,7 +413,7 @@ impl UpsertBuilder {
         let physical_plan = state.create_physical_plan(&logical_plan).await?;
 
         // Get partition columns for writing
-        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns.clone();
+        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns().to_vec();
 
         let (add_actions, write_metrics) = write_execution_plan_v2(
             Some(&self.snapshot),
@@ -421,10 +421,10 @@ impl UpsertBuilder {
             physical_plan,
             partition_columns,
             self.log_store.object_store(None),
-            Some(self.snapshot.table_config().target_file_size() as usize),
+            Some(self.snapshot.table_properties().target_file_size().get() as usize),
             None,
             self.writer_properties.clone(),
-            WriterStatsConfig::new(self.snapshot.table_config().num_indexed_cols(), None),
+            WriterStatsConfig::new(self.snapshot.table_properties().num_indexed_cols(), None),
             None,
             false,
         )
@@ -460,15 +460,22 @@ impl UpsertBuilder {
         Ok(filtered_target_df)
     }
 
-    fn files_to_remove(&self, conflicting_file_names: &Vec<String>) -> Vec<Action> {
-        let remove_actions = self
-            .snapshot
-            .eager_snapshot()
-            .files()
-            .filter(|f| conflicting_file_names.contains(&f.path().to_string()))
-            .map(|f| self.logical_file_to_remove(f))
-            .collect::<Vec<_>>();
-        remove_actions
+    async fn files_to_remove(&self, conflicting_file_names: &Vec<String>) -> DeltaResult<Vec<Action>> {
+        use futures::stream::StreamExt;
+        use futures::stream::TryStreamExt;
+        
+        let mut remove_actions = Vec::new();
+        let mut file_stream = self.snapshot.file_views(&self.log_store, None);
+        
+        while let Some(file_view) = file_stream.next().await {
+            let file_view = file_view?;
+            let path = file_view.path().to_string();
+            if conflicting_file_names.contains(&path) {
+                remove_actions.push(self.logical_file_to_remove(file_view));
+            }
+        }
+        
+        Ok(remove_actions)
     }
 
     /// Extract conflicting records as a DataFrame by performing a join.
@@ -570,25 +577,28 @@ impl UpsertBuilder {
         Ok(conflicting_files.into_iter().collect())
     }
 
-    /// Convert a LogicalFile to an Add action
-    fn logical_file_to_remove(&self, f: crate::kernel::LogicalFile) -> Action {
-        use delta_kernel::expressions::Scalar;
-
-        // Convert partition values from delta_kernel format to the expected HashMap
+    /// Convert a LogicalFileView to a Remove action
+    fn logical_file_to_remove(&self, f: crate::kernel::LogicalFileView) -> Action {
+        // Convert partition values from LogicalFileView to HashMap
         let partition_values = f
             .partition_values()
-            .unwrap_or_default()
-            .iter()
-            .map(|(k, v)| {
-                let value = match v {
-                    Scalar::Integer(i) => Some(i.to_string()),
-                    Scalar::String(s) => Some(s.clone()),
-                    Scalar::Long(l) => Some(l.to_string()),
-                    _ => None,
-                };
-                (k.to_string(), value)
+            .map(|pv| {
+                pv.fields()
+                    .iter()
+                    .zip(pv.values().iter())
+                    .map(|(k, v)| {
+                        let value = match v {
+                            delta_kernel::expressions::Scalar::Integer(i) => Some(i.to_string()),
+                            delta_kernel::expressions::Scalar::String(s) => Some(s.clone()),
+                            delta_kernel::expressions::Scalar::Long(l) => Some(l.to_string()),
+                            delta_kernel::expressions::Scalar::Null(_) => None,
+                            _ => None,
+                        };
+                        (k.name().to_string(), value)
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
 
         Action::Remove(Remove {
             path: f.path().to_string(),
@@ -645,7 +655,7 @@ impl UpsertBuilder {
         }
 
         // Use the table snapshot input schema as canonical ordering
-        let canonical_schema = self.snapshot.input_schema()?;
+        let canonical_schema = self.snapshot.schema();
 
         // Reorder both sides
         let source_aligned = reorder_to_schema(self.source.clone(), canonical_schema.as_ref())?;
@@ -677,9 +687,9 @@ impl UpsertBuilder {
         commit_properties.app_metadata = app_metadata;
 
         // Get partition columns for the operation metadata
-        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns.clone();
+        let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns().to_vec();
 
-        let operation = crate::protocol::DeltaOperation::Write {
+        let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: if partition_columns.is_empty() {
                 None
