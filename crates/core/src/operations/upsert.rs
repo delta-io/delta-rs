@@ -711,9 +711,7 @@ impl UpsertBuilder {
 mod tests {
     use super::*;
     use crate::DeltaOps;
-    use arrow::array::{Int32Array, StringArray};
-    use arrow::record_batch::RecordBatch;
-    use arrow_array::ArrayRef;
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
     use datafusion::prelude::SessionContext;
     use delta_kernel::schema::{PrimitiveType, StructField};
@@ -856,7 +854,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
@@ -891,7 +889,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
@@ -935,7 +933,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
@@ -996,7 +994,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
                 source_df,
@@ -1031,7 +1029,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(source_df, vec!["id".to_string()])
@@ -1063,7 +1061,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
@@ -1097,7 +1095,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let mut commit_props = CommitProperties::default();
         commit_props
@@ -1164,7 +1162,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         let (updated_table, metrics) = DeltaOps(table)
             .upsert(
@@ -1216,7 +1214,7 @@ mod tests {
             .unwrap();
 
         let ctx = SessionContext::new();
-        let source_df = ctx.read_batch(source_batch).unwrap();
+        let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         // Attempt upsert
         let result = DeltaOps(table)
