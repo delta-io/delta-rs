@@ -3,22 +3,21 @@
 //! All non-conflicting records are appended.
 
 use crate::delta_datafusion::DeltaSessionConfig;
-use crate::delta_datafusion::{register_store, DataFusionMixins};
+use crate::delta_datafusion::{register_store};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, Remove};
 use crate::logstore::LogStoreRef;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::state::DeltaTableState;
 use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use arrow_array::Array;
+use datafusion::common::JoinType;
 use datafusion::execution::SessionState;
+use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::{col, lit, Expr};
 use datafusion::prelude::{DataFrame, SessionContext};
-use datafusion::common::JoinType;
-use datafusion::logical_expr::expr::InList;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -461,7 +460,6 @@ impl UpsertBuilder {
 
     async fn files_to_remove(&self, conflicting_file_names: &Vec<String>) -> DeltaResult<Vec<Action>> {
         use futures::stream::StreamExt;
-        use futures::stream::TryStreamExt;
         
         let mut remove_actions = Vec::new();
         let mut file_stream = self.snapshot.file_views(&self.log_store, None);
@@ -856,7 +854,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -891,7 +889,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -935,7 +933,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -995,7 +993,7 @@ mod tests {
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -1031,7 +1029,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(source_df, vec!["id".to_string()])
             .await
             .unwrap();
@@ -1063,7 +1061,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -1102,7 +1100,7 @@ mod tests {
             .app_metadata
             .insert("test_key".to_string(), serde_json::json!("test_value"));
 
-        let (updated_table, _) = DeltaOps(table)
+        let (updated_table, _) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -1164,7 +1162,7 @@ mod tests {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
-        let (updated_table, metrics) = DeltaOps(table)
+        let (updated_table, metrics) = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],
@@ -1217,7 +1215,7 @@ mod tests {
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
 
         // Attempt upsert
-        let result = DeltaOps(table)
+        let result = table
             .upsert(
                 source_df,
                 vec!["workspace_id".to_string(), "id".to_string()],

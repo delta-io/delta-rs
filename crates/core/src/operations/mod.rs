@@ -240,6 +240,21 @@ impl DeltaTable {
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
     }
+
+    /// Upsert data from a source DataFrame into the target table
+    #[must_use]
+    pub fn upsert(
+        self,
+        source: datafusion::prelude::DataFrame,
+        join_keys: Vec<String>,
+    ) -> upsert::UpsertBuilder {
+        let snapshot = self
+            .state
+            .clone()
+            .map(|s| s.snapshot)
+            .expect("Table state is required for upsert");
+        upsert::UpsertBuilder::new(self.log_store(), snapshot, join_keys, source)
+    }
 }
 
 #[async_trait]
@@ -493,6 +508,7 @@ impl DeltaOps {
     /// Upsert data from a source DataFrame into the target table
     #[cfg(feature = "datafusion")]
     #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::upsert`] instead")]
     pub fn upsert(
         self,
         source: datafusion::prelude::DataFrame,
