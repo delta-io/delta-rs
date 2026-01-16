@@ -11,15 +11,14 @@ use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::WriterStatsConfig;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::state::DeltaTableState;
+use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use arrow_array::Array;
-use arrow_schema::DataType::{UInt16, Utf8};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{col, lit, Expr};
 use datafusion::prelude::{DataFrame, SessionContext};
-use datafusion_common::JoinType;
-use datafusion_expr::expr::InList;
-use datafusion_expr::ExprSchemable;
+use datafusion::common::JoinType;
+use datafusion::logical_expr::expr::InList;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -160,7 +159,7 @@ impl UpsertBuilder {
                 let config: datafusion::execution::context::SessionConfig =
                     DeltaSessionConfig::default().into();
                 let session = SessionContext::new_with_config(config);
-                register_store(self.log_store.clone(), session.runtime_env());
+                register_store(self.log_store.clone(), &session.runtime_env());
                 Arc::new(session.state())
             }
         }
@@ -281,7 +280,7 @@ impl UpsertBuilder {
         let scan_config = crate::delta_datafusion::DeltaScanConfigBuilder::default()
             .with_file_column_name(&FILE_PATH_COLUMN.to_string())
             .with_parquet_pushdown(true)
-            .with_schema(self.snapshot.schema())
+            .with_schema(self.snapshot.arrow_schema())
             .build(&self.snapshot)?;
 
         let target_provider = Arc::new(crate::delta_datafusion::DeltaTableProvider::try_new(
@@ -358,7 +357,7 @@ impl UpsertBuilder {
 
         let (add_actions, write_metrics) = write_execution_plan_v2(
             Some(&self.snapshot),
-            state.clone(),
+            state,
             physical_plan,
             partition_columns,
             self.log_store.object_store(None),
@@ -417,7 +416,7 @@ impl UpsertBuilder {
 
         let (add_actions, write_metrics) = write_execution_plan_v2(
             Some(&self.snapshot),
-            state.clone(),
+            state,
             physical_plan,
             partition_columns,
             self.log_store.object_store(None),
@@ -535,10 +534,7 @@ impl UpsertBuilder {
 
         let conflicting_paths = conflicts_df
             .clone()
-            .select([col(FILE_PATH_COLUMN).cast_to(
-                &arrow_schema::DataType::Dictionary(Box::new(UInt16), Box::new(Utf8)),
-                conflicts_df.schema(),
-            )?])?
+            .select(vec![col(FILE_PATH_COLUMN)])?
             .distinct()?
             .collect()
             .await?;
@@ -654,8 +650,8 @@ impl UpsertBuilder {
             })
         }
 
-        // Use the table snapshot input schema as canonical ordering
-        let canonical_schema = self.snapshot.schema();
+        // Use the table snapshot arrow schema as canonical ordering
+        let canonical_schema = self.snapshot.arrow_schema();
 
         // Reorder both sides
         let source_aligned = reorder_to_schema(self.source.clone(), canonical_schema.as_ref())?;
