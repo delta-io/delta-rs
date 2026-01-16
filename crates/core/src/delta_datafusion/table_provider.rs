@@ -28,6 +28,7 @@ use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
 use crate::kernel::{Add, EagerSnapshot, Snapshot, Version};
 use crate::logstore::{LogStore, LogStoreExt as _};
 use crate::table::normalize_table_url;
+use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod data_sink;
@@ -235,6 +236,21 @@ impl DeltaScanConfig {
         self.schema = Some(schema);
         self
     }
+
+    /// Configure whether to force view types for string and binary columns.
+    ///
+    /// When enabled, `Utf8`/`LargeUtf8` columns are read as `Utf8View`,
+    /// and `Binary`/`LargeBinary` columns are read as `BinaryView`.
+    ///
+    /// View types offer better performance for some operations but may not
+    /// be supported by all Arrow implementations (e.g., arrow-js).
+    /// Set to `false` if you need compatibility with such implementations.
+    ///
+    /// Defaults to `true` for better performance.
+    pub fn with_schema_force_view(mut self, force: bool) -> Self {
+        self.schema_force_view_types = force;
+        self
+    }
 }
 
 /// Builder for a datafusion [TableProvider] for a Delta table
@@ -252,6 +268,7 @@ pub struct TableProviderBuilder {
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
     file_selection: Option<next::FileSelection>,
+    schema_force_view_types: Option<bool>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -286,6 +303,7 @@ impl TableProviderBuilder {
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
+            schema_force_view_types: None,
         }
     }
 
@@ -384,6 +402,7 @@ impl TableProviderBuilder {
             table_version,
             file_skipping_predicates,
             file_selection,
+            schema_force_view_types,
         } = self;
 
         let mut config = session
@@ -393,6 +412,9 @@ impl TableProviderBuilder {
             });
         if let Some(file_column) = file_column {
             config = config.with_file_column_name(file_column);
+        }
+        if let Some(force_view) = schema_force_view_types {
+            config = config.with_schema_force_view(force_view);
         }
 
         let snapshot = match snapshot {
@@ -452,6 +474,21 @@ impl TableProviderBuilder {
 
         Ok(provider)
     }
+
+    /// Configure whether to force view types for string and binary columns.
+    ///
+    /// When enabled, `Utf8`/`LargeUtf8` columns are read as `Utf8View`,
+    /// and `Binary`/`LargeBinary` columns are read as `BinaryView`.
+    ///
+    /// View types offer better performance for some operations but may not
+    /// be supported by all Arrow implementations (e.g., arrow-js).
+    /// Set to `false` if you need compatibility with such implementations.
+    ///
+    /// Defaults to `true` for better performance.
+    pub fn with_schema_force_view(mut self, force: bool) -> Self {
+        self.schema_force_view_types = Some(force);
+        self
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -503,6 +540,138 @@ impl DeltaTable {
             self.log_store().as_ref(),
             None,
         )
+    }
+
+    /// Create a [`DeltaTable`] from a [`DeltaScan`] table provider.
+    ///
+    /// This allows you to retrieve a `DeltaTable` after registering a table with DataFusion,
+    /// enabling you to perform write operations (delete, update, merge, etc.) on the table.
+    ///
+    /// If the `DeltaScan` contains a lazy `Snapshot`, it will be converted to an `EagerSnapshot`
+    /// by loading the file list from the log store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The `DeltaScan` doesn't have a log store (e.g., it was deserialized)
+    /// - Failed to load files when converting a lazy snapshot to eager
+    ///
+    /// # Example
+    /// ```ignore
+    /// use deltalake::delta_datafusion::DeltaScan;
+    ///
+    /// // Register a table with DataFusion
+    /// let table = open_table(url).await?;
+    /// ctx.register_table("my_table", table.table_provider().await?)?;
+    ///
+    /// // Later, retrieve and modify
+    /// let provider = ctx.table_provider("my_table").await?;
+    /// let delta_scan = provider.as_any().downcast_ref::<DeltaScan>().unwrap();
+    /// let mut table = DeltaTable::from_delta_scan(delta_scan).await?;
+    /// table.delete().with_predicate("id = 5").await?;
+    /// ```
+    pub async fn from_delta_scan(scan: &next::DeltaScan) -> DeltaResult<Self> {
+        let log_store = scan
+            .log_store()
+            .ok_or_else(|| {
+                DeltaTableError::Generic(
+                    "Cannot create DeltaTable from DeltaScan: log store not available (was the DeltaScan deserialized?)".to_string()
+                )
+            })?
+            .clone();
+
+        // Get or create an eager snapshot
+        let eager_snapshot = if let Some(eager) = scan.eager_snapshot() {
+            // Already have an eager snapshot, use it directly
+            eager.as_ref().clone()
+        } else {
+            // Convert lazy snapshot to eager by loading files
+            let snapshot = scan.snapshot().clone();
+            EagerSnapshot::try_new_with_snapshot(log_store.as_ref(), Arc::new(snapshot)).await?
+        };
+
+        let state = DeltaTableState::new(eager_snapshot);
+        let config = state.load_config().clone();
+        Ok(Self {
+            state: Some(state),
+            log_store,
+            config,
+        })
+    }
+
+    /// Re-register this table with a DataFusion [`SessionContext`], replacing any existing registration.
+    ///
+    /// This is useful after performing write operations on a table retrieved via [`Self::from_delta_scan`],
+    /// to ensure subsequent queries see the updated state.
+    ///
+    /// The optional `schema_force_view` parameter controls whether string/binary columns use view types:
+    /// - `None`: Use default (`true`)
+    /// - `Some(true)`: `Utf8`/`LargeUtf8` → `Utf8View`, `Binary`/`LargeBinary` → `BinaryView` (better performance)
+    /// - `Some(false)`: Keep original types (needed for arrow-js compatibility)
+    ///
+    /// The table reference can be:
+    /// - A simple table name: `"my_table"`
+    /// - A schema-qualified name: `("my_schema", "my_table")`
+    /// - A fully-qualified name: `("my_catalog", "my_schema", "my_table")`
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Get table from registered provider
+    /// let provider = ctx.table_provider("my_table").await?;
+    /// let delta_scan = provider.as_any().downcast_ref::<DeltaScan>().unwrap();
+    /// let mut table = DeltaTable::from_delta_scan(delta_scan).await?;
+    ///
+    /// // Perform operations
+    /// table.delete().with_predicate("id = 5").await?;
+    ///
+    /// // Re-register with default settings
+    /// table.register_with_context("my_table", &ctx, None).await?;
+    ///
+    /// // Re-register with view types disabled (for arrow-js compatibility)
+    /// table.register_with_context("my_table", &ctx, Some(false)).await?;
+    ///
+    /// // Re-register to a specific schema
+    /// table.register_with_context(("my_schema", "my_table"), &ctx, None).await?;
+    /// ```
+    pub async fn register_with_context(
+        &self,
+        table_ref: impl Into<datafusion::common::TableReference>,
+        ctx: &datafusion::prelude::SessionContext,
+        schema_force_view: Option<bool>,
+    ) -> DeltaResult<()> {
+        use datafusion::common::TableReference;
+
+        let table_ref: TableReference = table_ref.into();
+
+        // DataFusion defaults: "datafusion" catalog and "public" schema
+        let resolved = table_ref.resolve("datafusion", "public");
+
+        // Deregister existing table (ignore error if not found)
+        let _ = ctx.deregister_table(resolved.clone());
+
+        // Get the catalog and schema, then register
+        let catalog = ctx.catalog(resolved.catalog.as_ref()).ok_or_else(|| {
+            DeltaTableError::Generic(format!("Catalog '{}' not found", resolved.catalog))
+        })?;
+
+        let schema = catalog.schema(resolved.schema.as_ref()).ok_or_else(|| {
+            DeltaTableError::Generic(format!(
+                "Schema '{}.{}' not found",
+                resolved.catalog, resolved.schema
+            ))
+        })?;
+
+        let mut builder = self.table_provider();
+        if let Some(force_view) = schema_force_view {
+            builder = builder.with_schema_force_view(force_view);
+        }
+        let provider = builder.await?;
+
+        schema
+            .register_table(resolved.table.to_string(), provider)
+            .map_err(|e| DeltaTableError::Generic(format!("Failed to register table: {}", e)))?;
+
+        Ok(())
     }
 }
 
