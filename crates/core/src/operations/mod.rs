@@ -69,6 +69,7 @@ pub mod set_tbl_properties;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
+pub mod upsert;
 
 impl DeltaTable {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given URL.
