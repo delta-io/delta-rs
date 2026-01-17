@@ -28,7 +28,8 @@ pub fn with_generated_columns(
         .map(|gc| {
             Ok::<_, DeltaTableError>((
                 gc.get_name(),
-                parse_predicate_expression(plan.schema(), &gc.generation_expr, session)?,
+                parse_predicate_expression(plan.schema(), &gc.generation_expr, session)?
+                    .alias(gc.get_name()),
             ))
         })
         .try_collect()?;
