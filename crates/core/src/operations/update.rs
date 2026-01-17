@@ -320,7 +320,13 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns().clone();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
+    let candidates = find_files(
+        snapshot.clone().into(),
+        log_store.clone(),
+        &session,
+        predicate.clone(),
+    )
+    .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {

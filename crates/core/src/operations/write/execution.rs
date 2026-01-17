@@ -217,7 +217,7 @@ pub(crate) async fn prepare_predicate_actions(
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
     let candidates = find_files(
-        snapshot,
+        snapshot.clone().into(),
         log_store.clone(),
         session,
         Some(predicate.clone()),

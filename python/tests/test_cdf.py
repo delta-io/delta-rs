@@ -668,7 +668,6 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Ta
 def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     import pyarrow as pa
     import pyarrow.compute as pc
-    import pyarrow.dataset as ds
 
     cdc_path = f"{tmp_path}/_change_data"
 
@@ -680,17 +679,10 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Tabl
         configuration={"delta.enableChangeDataFeed": "true"},
     )
 
-    batch2 = ds.dataset(sample_data_pyarrow).to_table(filter=(pc.field("int64") > 3))
+    batch2 = sample_data_pyarrow.filter(pc.field("int64") > 3)
 
     dt = DeltaTable(tmp_path)
-    write_deltalake(
-        dt,
-        data=batch2,
-        mode="overwrite",
-        predicate="int64 > 3",
-        partition_by=["int64"],
-        configuration={"delta.enableChangeDataFeed": "true"},
-    )
+    write_deltalake(dt, data=batch2, mode="overwrite", predicate="int64 > 3")
 
     table_schema = pa.schema(dt.schema())
     table_schema = table_schema.insert(
@@ -713,11 +705,16 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Tabl
         "_change_data shouldn't exist since a specific partition was overwritten"
     )
 
-    assert pa.table(dt.load_cdf().read_all()).drop_columns(
-        ["_commit_version", "_commit_timestamp"]
-    ).sort_by(sort_values).select(expected_data.column_names) == pa.concat_tables(
-        [first_batch, expected_data]
-    ).sort_by(sort_values)
+    left = (
+        pa.table(dt.load_cdf().read_all())
+        .drop_columns(["_commit_version", "_commit_timestamp"])
+        .sort_by(sort_values)
+        .select(expected_data.column_names)
+    )
+
+    right = pa.concat_tables([first_batch, expected_data]).sort_by(sort_values)
+
+    assert left == right
 
 
 def test_read_cdf_version_out_of_range():
