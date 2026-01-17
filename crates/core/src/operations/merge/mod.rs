@@ -88,7 +88,7 @@ use crate::operations::merge::barrier::find_node;
 use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
-    able_to_gc, add_generated_columns, add_missing_generated_columns,
+    add_generated_columns, add_missing_generated_columns, gc_is_enabled,
 };
 use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
@@ -801,7 +801,7 @@ async fn execute(
     let mut generated_col_exp = None;
     let mut missing_generated_col = None;
 
-    if able_to_gc(&snapshot)? {
+    if gc_is_enabled(&snapshot) {
         let generated_col_expressions = snapshot.schema().get_generated_columns()?;
         let (source_with_gc, missing_generated_columns) =
             add_missing_generated_columns(source, &generated_col_expressions)?;
@@ -1599,7 +1599,6 @@ mod tests {
     use crate::DeltaTable;
     use crate::TableProperty;
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
-    use crate::operations::load_cdf::collect_batches;
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
@@ -1617,6 +1616,7 @@ mod tests {
     use datafusion::logical_expr::col;
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
+    use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
@@ -4298,13 +4298,9 @@ mod tests {
             .await
             .expect("Failed to load CDF");
 
-        let mut batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await
-        .expect("Failed to collect batches");
+        let mut batches = collect(table, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
 
         let _ = arrow::util::pretty::print_batches(&batches);
 
@@ -4418,13 +4414,9 @@ mod tests {
             .await
             .expect("Failed to load CDF");
 
-        let mut batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await
-        .expect("Failed to collect batches");
+        let mut batches = collect(table, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
 
         let _ = arrow::util::pretty::print_batches(&batches);
 
@@ -4506,13 +4498,9 @@ mod tests {
             .await
             .expect("Failed to load CDF");
 
-        let mut batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await
-        .expect("Failed to collect batches");
+        let mut batches = collect(table, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
 
         let _ = arrow::util::pretty::print_batches(&batches);
 

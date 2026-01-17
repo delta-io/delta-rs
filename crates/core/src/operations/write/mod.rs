@@ -32,33 +32,33 @@ use std::vec;
 use arrow::array::RecordBatch;
 use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, DFSchema, Result, ScalarValue};
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, Extension, LogicalPlan, cast, lit, try_cast};
-use datafusion::prelude::DataFrame;
+use datafusion::common::{Column, Result, ScalarValue};
+use datafusion::datasource::{MemTable, provider_as_source};
+use datafusion::logical_expr::{
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
+};
+use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use futures::TryStreamExt as _;
-use futures::future::BoxFuture;
+use futures::{TryStreamExt as _, future::BoxFuture};
+use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
-use schema_evolution::try_cast_schema;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
 
 pub use self::configs::WriterStatsConfig;
 use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
-use self::generated_columns::{able_to_gc, add_generated_columns, add_missing_generated_columns};
+use self::generated_columns::{gc_is_enabled, with_generated_columns};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
+use self::schema_evolution::try_cast_schema;
 use super::cdc::CDC_COLUMN_NAME;
 use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::DataFusionMixins;
+use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
-use crate::delta_datafusion::{DataFusionMixins, session_state_from_session};
 use crate::delta_datafusion::{create_session, register_store};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
@@ -132,7 +132,7 @@ pub struct WriteBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// The input plan
-    input: Option<Arc<LogicalPlan>>,
+    input: Option<LogicalPlan>,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     /// SaveMode defines how to treat data already written to table location
@@ -239,7 +239,13 @@ impl WriteBuilder {
     }
 
     /// Logical execution plan that produces the data to be written to the delta table
-    pub fn with_input_execution_plan(mut self, plan: Arc<LogicalPlan>) -> Self {
+    #[deprecated(since = "0.31.0", note = "Use `with_input_plan` instead")]
+    pub fn with_input_execution_plan(self, plan: Arc<LogicalPlan>) -> Self {
+        self.with_input_plan(plan.as_ref().clone())
+    }
+
+    /// Logical plan that produces the data to be written to the delta table
+    pub fn with_input_plan(mut self, plan: LogicalPlan) -> Self {
         self.input = Some(plan);
         self
     }
@@ -314,13 +320,16 @@ impl WriteBuilder {
 
     /// Execution plan that produces the data to be written to the delta table
     pub fn with_input_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
-        let ctx = SessionContext::new();
         let batches: Vec<RecordBatch> = batches.into_iter().collect();
         if !batches.is_empty() {
             let table_provider: Arc<dyn TableProvider> =
                 Arc::new(MemTable::try_new(batches[0].schema(), vec![batches]).unwrap());
-            let df = ctx.read_table(table_provider).unwrap();
-            self.input = Some(Arc::new(df.logical_plan().clone()));
+            let source_plan =
+                LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(table_provider), None)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+            self.input = Some(source_plan);
         }
         self
     }
@@ -359,7 +368,7 @@ impl WriteBuilder {
 
         let input = self
             .input
-            .clone()
+            .as_ref()
             .ok_or::<DeltaTableError>(WriteError::MissingData.into())?;
         let schema: StructType = input.schema().as_arrow().try_into_kernel()?;
 
@@ -413,7 +422,7 @@ impl std::future::IntoFuture for WriteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let this = self;
+        let mut this = self;
         let table_uri = this.log_store.root_url().clone();
         let mode = this.mode;
 
@@ -430,29 +439,35 @@ impl std::future::IntoFuture for WriteBuilder {
                 // and should be created
                 let mut actions = this.check_preconditions().await?;
 
+                let Some(mut source) = this.input.take() else {
+                    return Err(WriteError::MissingData.into());
+                };
+
                 let partition_columns = this.get_partition_columns()?;
 
                 let session = this
                     .session
                     .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
                 register_store(this.log_store.clone(), session.runtime_env().as_ref());
-                let state = session_state_from_session(session.as_ref())?;
 
                 let mut schema_drift = false;
-                let mut generated_col_exp = None;
-                let mut missing_gen_col = None;
-                let mut source =
-                    DataFrame::new(state.clone(), this.input.unwrap().as_ref().clone());
+
+                let table_schema = if let Some(snapshot) = this.snapshot.as_ref() {
+                    snapshot.arrow_schema()
+                } else {
+                    source.schema().inner().clone()
+                };
+
                 if let Some(snapshot) = &this.snapshot
-                    && able_to_gc(snapshot)?
+                    && gc_is_enabled(snapshot)
                 {
-                    let generated_col_expressions = snapshot.schema().get_generated_columns()?;
-                    // Add missing generated columns to source_df
-                    let (source_with_gc, missing_generated_columns) =
-                        add_missing_generated_columns(source, &generated_col_expressions)?;
-                    source = source_with_gc;
-                    missing_gen_col = Some(missing_generated_columns);
-                    generated_col_exp = Some(generated_col_expressions);
+                    source = with_generated_columns(
+                        session.as_ref(),
+                        source,
+                        &table_schema,
+                        &snapshot.schema().get_generated_columns()?,
+                    )?
+                    .into();
                 }
 
                 let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
@@ -496,6 +511,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         )?);
                     }
                 }
+
                 if let Some(new_schema) = new_schema {
                     let mut schema_evolution_projection =
                         Vec::with_capacity(new_schema.fields().len());
@@ -522,45 +538,34 @@ impl std::future::IntoFuture for WriteBuilder {
                             );
                         }
                     }
-                    source = source.select(schema_evolution_projection)?;
+                    source = LogicalPlanBuilder::new(source)
+                        .project(schema_evolution_projection)?
+                        .build()?;
                 }
 
-                if let Some(generated_columns_exp) = generated_col_exp
-                    && let Some(missing_generated_col) = missing_gen_col
-                {
-                    source = add_generated_columns(
-                        source,
-                        &generated_columns_exp,
-                        &missing_generated_col,
-                        state,
-                    )?;
-                }
-
-                let source = LogicalPlan::Extension(Extension {
+                let mut source = LogicalPlan::Extension(Extension {
                     node: Arc::new(MetricObserver {
                         id: "write_source_count".into(),
-                        input: source.logical_plan().clone(),
+                        input: source,
                         enable_pushdown: false,
                     }),
                 });
-
-                let mut source = DataFrame::new(state.clone(), source);
-
-                let schema = Arc::new(source.schema().as_arrow().clone());
 
                 // Maybe create schema action based on schema_mode
                 if let Some(snapshot) = &this.snapshot {
                     let should_update_schema = match this.schema_mode {
                         Some(SchemaMode::Merge) if schema_drift => true,
                         Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
-                            let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
+                            let delta_schema: StructType =
+                                source.schema().as_arrow().try_into_kernel()?;
                             &delta_schema != snapshot.schema().as_ref()
                         }
                         _ => false,
                     };
 
                     if should_update_schema {
-                        let schema_struct: StructType = schema.clone().try_into_kernel()?;
+                        let schema_struct: StructType =
+                            source.schema().as_arrow().try_into_kernel()?;
                         // Verify if delta schema changed
                         if &schema_struct != snapshot.schema().as_ref() {
                             let current_protocol = snapshot.protocol();
@@ -591,7 +596,11 @@ impl std::future::IntoFuture for WriteBuilder {
                         let pred = match predicate {
                             Expression::DataFusion(expr) => expr,
                             Expression::String(s) => {
-                                let df_schema = DFSchema::try_from(schema.as_ref().to_owned())?;
+                                let df_schema = source
+                                    .schema()
+                                    .as_ref()
+                                    .clone()
+                                    .replace_qualifier(UNNAMED_TABLE);
                                 parse_predicate_expression(&df_schema, s, session.as_ref())?
                             }
                         };
@@ -643,9 +652,16 @@ impl std::future::IntoFuture for WriteBuilder {
 
                                 if let Some(cdf_df) = cdf_df {
                                     contains_cdc = true;
-                                    source = source
-                                        .with_column(CDC_COLUMN_NAME, lit("insert"))?
-                                        .union(cdf_df)?;
+                                    let mut projection = source
+                                        .schema()
+                                        .iter()
+                                        .map(|(_, field)| col(field.name()))
+                                        .collect_vec();
+                                    projection.push(lit("insert").alias(CDC_COLUMN_NAME));
+                                    source = LogicalPlanBuilder::new(source)
+                                        .project(projection)?
+                                        .union(cdf_df)?
+                                        .build()?;
                                 }
 
                                 if !predicate_actions.is_empty() {
@@ -668,7 +684,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .count();
                 }
 
-                let source_plan = source.clone().create_physical_plan().await?;
+                let source_plan = session.create_physical_plan(&source).await?;
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
@@ -751,7 +767,6 @@ mod tests {
     use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
     use crate::operations::collect_sendable_stream;
-    use crate::operations::load_cdf::collect_batches;
     use crate::protocol::SaveMode;
     use crate::test_utils::{TestResult, TestSchemas};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted, write_batch};
@@ -761,6 +776,7 @@ mod tests {
     };
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+    use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -1821,16 +1837,9 @@ mod tests {
             .await
             .expect("Failed to load CDF");
 
-        let mut batches = collect_batches(
-            cdf_scan
-                .properties()
-                .output_partitioning()
-                .partition_count(),
-            cdf_scan,
-            ctx,
-        )
-        .await
-        .expect("Failed to collect batches");
+        let mut batches = collect(cdf_scan, ctx.state().task_ctx())
+            .await
+            .expect("Failed to collect batches");
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
@@ -1947,16 +1956,15 @@ mod tests {
                 .await?;
 
             let ctx = SessionContext::new();
-            let plan = Arc::new(
-                ctx.sql("SELECT 1 as id")
-                    .await
-                    .unwrap()
-                    .logical_plan()
-                    .clone(),
-            );
+            let plan = ctx
+                .sql("SELECT 1 as id")
+                .await
+                .unwrap()
+                .logical_plan()
+                .clone();
             let writer =
                 WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot))
-                    .with_input_execution_plan(plan)
+                    .with_input_plan(plan)
                     .with_save_mode(SaveMode::Overwrite);
 
             let _ = writer.check_preconditions().await?;
