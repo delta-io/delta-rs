@@ -383,7 +383,16 @@ impl MergeBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `state` must wrap a concrete `datafusion::execution::context::SessionState`.
+    /// Other `datafusion::catalog::Session` implementations will cause the operation to return an
+    /// error at execution time.
+    ///
+    /// This strictness avoids subtle bugs where Delta object stores could be registered on one
+    /// runtime environment while execution uses a different `task_ctx()` / runtime environment.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
         self
@@ -1495,13 +1504,14 @@ fn modify_schema(
             Ok(target_field) => {
                 // This case is when there is an added column in an nested datatype
                 let new_field = merge_arrow_field(target_field, source_field, true)?;
-                if &new_field != target_field {
+                if new_field != **target_field {
                     ending_schema.try_merge(&Arc::new(new_field))?;
                 }
             }
             Err(_) => {
                 // This function is called multiple time with different operations so this handle any collisions
-                ending_schema.try_merge(&Arc::new(source_field.to_owned().with_nullable(true)))?;
+                ending_schema
+                    .try_merge(&Arc::new(source_field.as_ref().clone().with_nullable(true)))?;
             }
         }
     }

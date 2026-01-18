@@ -203,7 +203,7 @@ impl KernelScanPlan {
         } else {
             result_schema.clone()
         };
-        let parquet_read_schema = config.physical_arrow_schema(
+        let parquet_read_schema = config.parquet_file_schema(
             scan.snapshot().table_configuration(),
             &scan.physical_schema().as_ref().try_into_arrow()?,
         )?;
@@ -273,6 +273,43 @@ impl DeltaScanConfig {
                 .collect_vec(),
         ));
         Ok(table_schema)
+    }
+
+    fn parquet_file_schema(
+        &self,
+        table_config: &TableConfiguration,
+        base: &Schema,
+    ) -> Result<SchemaRef> {
+        // IMPORTANT: This schema is used for Parquet reading and predicate pushdown.
+        // It must NOT apply view-type conversions (Utf8View/BinaryView) because:
+        // 1. Parquet files store Utf8/Binary data, not view types
+        // 2. Predicate pushdown compares against physical Parquet data
+        // 3. View-type conversion happens AFTER reading, in the result schema
+        // See convert_view_types_to_base() for predicate literal conversion.
+        let cols = table_config.metadata().partition_columns();
+        let table_schema = Arc::new(Schema::new(
+            base.fields()
+                .iter()
+                .map(|f| self.map_field_for_parquet(f.clone(), cols))
+                .collect_vec(),
+        ));
+        Ok(table_schema)
+    }
+
+    fn map_field_for_parquet(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
+        if partition_cols.contains(field.name()) && self.wrap_partition_values {
+            return match field.data_type() {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
+                        .into()
+                }
+                _ => field,
+            };
+        }
+        field
     }
 
     fn map_field(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
@@ -593,7 +630,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         let filter =
-            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8View(Some("BME".to_string()))));
+            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8(Some("BME".to_string()))));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?
@@ -612,7 +649,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         let filter =
-            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8(Some("Timothy Lamb".to_string()))));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?
