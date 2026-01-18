@@ -39,15 +39,19 @@ use datafusion::{
     logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
+use delta_kernel::PredicateRef;
 use delta_kernel::table_configuration::TableConfiguration;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
 pub use self::scan::DeltaScanExec;
 use self::scan::KernelScanPlan;
+use crate::DeltaResult;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
-use crate::kernel::{EagerSnapshot, Snapshot};
+use crate::kernel::{EagerSnapshot, LogicalFileView, Snapshot};
+use crate::logstore::LogStore;
 
 mod scan;
 
@@ -85,17 +89,28 @@ impl From<EagerSnapshot> for SnapshotWrapper {
 }
 
 impl SnapshotWrapper {
-    fn table_configuration(&self) -> &TableConfiguration {
+    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.table_configuration(),
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot().table_configuration(),
         }
     }
 
-    fn snapshot(&self) -> &Snapshot {
+    pub(crate) fn snapshot(&self) -> &Snapshot {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
+        }
+    }
+
+    pub(crate) fn file_views(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        match self {
+            SnapshotWrapper::Snapshot(snap) => snap.file_views(log_store, predicate),
+            SnapshotWrapper::EagerSnapshot(esnap) => esnap.file_views(log_store, predicate),
         }
     }
 }
