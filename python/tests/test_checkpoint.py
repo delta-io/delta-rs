@@ -319,7 +319,7 @@ def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
             ),
             "binaryColumn": Array(
                 [b"a"],
-                ArrowField("binaryColumn", type=DataType.binary_view(), nullable=True),
+                ArrowField("binaryColumn", type=DataType.binary(), nullable=True),
             ),
         }
     )
