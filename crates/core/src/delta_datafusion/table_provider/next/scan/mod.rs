@@ -19,7 +19,7 @@ use std::{collections::VecDeque, pin::Pin, sync::Arc};
 use arrow::array::AsArray;
 use arrow_array::{ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{DataType, FieldRef, Schema, SchemaRef};
+use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
@@ -40,8 +40,10 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use datafusion_datasource::{
-    PartitionedFile, compute_all_files_statistics, file_groups::FileGroup,
-    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
+    PartitionedFile, compute_all_files_statistics,
+    file_groups::FileGroup,
+    file_scan_config::{FileScanConfigBuilder, wrap_partition_value_in_dict},
+    source::DataSourceExec,
 };
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
@@ -92,11 +94,11 @@ pub(super) async fn execution_plan(
                 },
             ))
         };
+
         let maybe_file_rows = files
             .iter()
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
-
         if let Ok(file_rows) = maybe_file_rows {
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
@@ -106,7 +108,7 @@ pub(super) async fn execution_plan(
                 config.retain_file_id().then_some(file_id_field),
                 metrics,
             );
-            return Ok(Arc::new(exec) as Arc<dyn ExecutionPlan>);
+            return Ok(Arc::new(exec) as _);
         }
     }
 
@@ -180,7 +182,7 @@ async fn get_data_scan_plan(
     // this is used to create a DataSourceExec plan for each store
     // To correlate the data with the original file, we add the file url as a partition value
     // This is required to apply the correct transform to the data in downstream processing.
-    let to_partitioned_file = |f: ScanFileContext| {
+    let to_partitioned_file = |mut f: ScanFileContext| {
         if let Some(part_stata) = &f.partitions {
             update_partition_stats(part_stata, &f.stats, &mut partition_stats)?;
         }
@@ -195,8 +197,17 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
+        let file_value =
+            wrap_partition_value_in_dict(ScalarValue::Utf8(Some(f.file_url.to_string())));
+        f.stats.column_statistics.push(ColumnStatistics {
+            null_count: Precision::Exact(0),
+            max_value: Precision::Exact(file_value.clone()),
+            min_value: Precision::Exact(file_value.clone()),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+        });
         partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
-        partitioned_file.partition_values = vec![ScalarValue::Utf8(Some(f.file_url.to_string()))];
+        partitioned_file.partition_values = vec![file_value];
         Ok::<_, DataFusionError>((
             f.file_url.as_object_store_url(),
             (partitioned_file, None::<Vec<bool>>),
@@ -296,6 +307,10 @@ async fn get_read_plan(
         ..Default::default()
     };
 
+    let mut full_read_schema = SchemaBuilder::from(physical_schema.as_ref().clone());
+    full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
+    let full_read_schema = Arc::new(full_read_schema.finish());
+
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             state.runtime_env().object_store(&store_url)?,
@@ -309,7 +324,7 @@ async fn get_read_plan(
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
         if !has_selection_vectors && let Some(pred) = predicate {
-            let physical = logical2physical(pred, physical_schema.as_ref());
+            let physical = logical2physical(pred, full_read_schema.as_ref());
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);
@@ -317,7 +332,7 @@ async fn get_read_plan(
 
         let file_group: FileGroup = files.into_iter().map(|file| file.0).collect();
         let (file_groups, statistics) =
-            compute_all_files_statistics(vec![file_group], physical_schema.clone(), true, false)?;
+            compute_all_files_statistics(vec![file_group], full_read_schema.clone(), true, false)?;
 
         let config =
             FileScanConfigBuilder::new(store_url, physical_schema.clone(), Arc::new(file_source))
@@ -331,7 +346,7 @@ async fn get_read_plan(
     }
 
     Ok(match plans.len() {
-        0 => Arc::new(EmptyExec::new(physical_schema.clone())),
+        0 => Arc::new(EmptyExec::new(full_read_schema.clone())),
         1 => plans.remove(0),
         _ => UnionExec::try_new(plans)?,
     })

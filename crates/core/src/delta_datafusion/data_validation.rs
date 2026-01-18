@@ -143,15 +143,6 @@ pub struct DataValidationExec {
 }
 
 impl DataValidationExec {
-    pub fn try_new_with_config(
-        session: &dyn Session,
-        input: Arc<dyn ExecutionPlan>,
-        config: &TableConfiguration,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let predicates = validation_predicates(session, Arc::clone(&input), config)?;
-        Self::try_new_with_predicates(session, input, predicates)
-    }
-
     /// Create a new [`DataValidationExec`] if there are any predicates to apply
     /// otherwise return the input execution plan as-is.
     pub fn try_new_with_predicates(

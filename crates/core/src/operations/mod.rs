@@ -27,11 +27,13 @@ use self::{
 };
 #[cfg(feature = "datafusion")]
 use self::{
-    constraints::ConstraintBuilder, datafusion_utils::Expression, delete::DeleteBuilder,
-    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
-    merge::MergeBuilder, optimize::OptimizeBuilder, update::UpdateBuilder, write::WriteBuilder,
+    constraints::ConstraintBuilder, delete::DeleteBuilder, drop_constraints::DropConstraintBuilder,
+    load::LoadBuilder, load_cdf::CdfLoadBuilder, merge::MergeBuilder, optimize::OptimizeBuilder,
+    update::UpdateBuilder, write::WriteBuilder,
 };
 use crate::DeltaTable;
+#[cfg(feature = "datafusion")]
+use crate::delta_datafusion::Expression;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
@@ -589,61 +591,5 @@ pub(crate) fn get_target_file_size(
             .get("delta.targetFileSize")
             .and_then(|v| v.clone().map(|v| v.parse::<u64>().unwrap()))
             .unwrap_or(crate::table::config::DEFAULT_TARGET_FILE_SIZE),
-    }
-}
-
-#[cfg(feature = "datafusion")]
-mod datafusion_utils {
-    use datafusion::logical_expr::Expr;
-    use datafusion::{catalog::Session, common::DFSchema};
-
-    use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
-
-    /// Used to represent user input of either a Datafusion expression or string expression
-    #[derive(Debug, Clone)]
-    pub enum Expression {
-        /// Datafusion Expression
-        DataFusion(Expr),
-        /// String Expression
-        String(String),
-    }
-
-    impl From<Expr> for Expression {
-        fn from(val: Expr) -> Self {
-            Expression::DataFusion(val)
-        }
-    }
-
-    impl From<&str> for Expression {
-        fn from(val: &str) -> Self {
-            Expression::String(val.to_string())
-        }
-    }
-    impl From<String> for Expression {
-        fn from(val: String) -> Self {
-            Expression::String(val)
-        }
-    }
-
-    pub(crate) fn into_expr(
-        expr: Expression,
-        schema: &DFSchema,
-        session: &dyn Session,
-    ) -> DeltaResult<Expr> {
-        match expr {
-            Expression::DataFusion(expr) => Ok(expr),
-            Expression::String(s) => parse_predicate_expression(schema, s, session),
-        }
-    }
-
-    pub(crate) fn maybe_into_expr(
-        expr: Option<Expression>,
-        schema: &DFSchema,
-        session: &dyn Session,
-    ) -> DeltaResult<Option<Expr>> {
-        Ok(match expr {
-            Some(predicate) => Some(into_expr(predicate, schema, session)?),
-            None => None,
-        })
     }
 }

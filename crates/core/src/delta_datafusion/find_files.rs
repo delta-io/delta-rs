@@ -101,11 +101,21 @@ pub(crate) async fn find_files(
     }
 }
 
-struct FindFilesExprProperties {
+pub(crate) struct FindFilesExprProperties {
     pub partition_columns: Vec<String>,
 
     pub partition_only: bool,
     pub result: DeltaResult<()>,
+}
+
+impl Default for FindFilesExprProperties {
+    fn default() -> Self {
+        Self {
+            partition_columns: Vec::new(),
+            partition_only: true,
+            result: Ok(()),
+        }
+    }
 }
 
 /// Ensure only expressions that make sense are accepted, check for
