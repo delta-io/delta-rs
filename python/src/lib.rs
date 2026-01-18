@@ -1778,7 +1778,7 @@ impl RawDeltaTable {
                 .build()
                 .map_err(PythonError::from)?;
 
-            builder = builder.with_input_execution_plan(Arc::new(plan));
+            builder = builder.with_input_plan(plan);
 
             if let Some(schema_mode) = schema_mode {
                 builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);

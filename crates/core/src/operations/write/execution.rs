@@ -9,11 +9,11 @@ use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
-use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
+use itertools::Itertools as _;
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
@@ -24,7 +24,7 @@ use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    generated_columns_to_exprs, session_state_from_session, validation_predicates,
+    generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
@@ -140,7 +140,7 @@ pub(crate) async fn execute_non_empty_expr(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
@@ -156,9 +156,9 @@ pub(crate) async fn execute_non_empty_expr(
             .with_files(rewrite.to_vec()),
     );
 
-    let target_provider = provider_as_source(target_provider);
-    let source =
-        Arc::new(LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?);
+    let source = Arc::new(
+        LogicalPlanBuilder::scan("target", provider_as_source(target_provider), None)?.build()?,
+    );
 
     let cdf_df = if !partition_scan {
         // Apply the negation of the filter and rewrite files
@@ -187,11 +187,17 @@ pub(crate) async fn execute_non_empty_expr(
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
         if should_write_cdc(snapshot)? {
-            let state = session_state_from_session(session)?;
-            let df = DataFrame::new(state.clone(), source.as_ref().clone());
+            let mut projection = source
+                .schema()
+                .iter()
+                .map(|(_, field)| col(field.name()))
+                .collect_vec();
+            projection.push(lit("delete").alias(CDC_COLUMN_NAME));
             Some(
-                df.filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?,
+                LogicalPlanBuilder::new_from_arc(source)
+                    .filter(expression.clone())?
+                    .project(projection)?
+                    .build()?,
             )
         } else {
             None
@@ -215,7 +221,7 @@ pub(crate) async fn prepare_predicate_actions(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     let candidates = find_files(
         snapshot,
         log_store.clone(),
