@@ -250,7 +250,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot,
-                session.as_ref().clone(),
+                &session.as_ref().clone(),
                 this.writer_properties_factory,
                 this.commit_properties,
                 operation_id,
@@ -422,7 +422,7 @@ async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    session: SessionState,
+    session: &dyn Session,
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     operation_id: Uuid,
@@ -436,7 +436,7 @@ async fn execute(
     let mut metrics = DeleteMetrics::default();
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), &session, predicate.clone()).await?;
+    let candidates = find_files(&snapshot, log_store.clone(), session, predicate.clone()).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let predicate = predicate.unwrap_or(lit(true));
@@ -446,7 +446,7 @@ async fn execute(
         let add = execute_non_empty_expr(
             &snapshot,
             log_store.clone(),
-            &session,
+            session,
             &predicate,
             &candidates.candidates,
             &mut metrics,
