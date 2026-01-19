@@ -144,14 +144,14 @@ mod local {
             .with_columns(table_schema.fields().cloned())
             .with_partition_columns(partitions)
             .await
-            .unwrap();
+            .expect("Failed to create table");
 
         for batch in batches {
             table = table
                 .write(vec![batch])
                 .with_save_mode(save_mode)
                 .await
-                .unwrap();
+                .expect("Failed to prepare when writing");
         }
 
         (table_dir, table)
