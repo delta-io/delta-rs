@@ -94,10 +94,9 @@ impl KernelScanPlan {
         // when can handle them (kernel scan and/or parquet scan)
         let (kernel_predicate, parquet_predicate) = process_filters(filters, table_config, config)?;
 
-        // combine the file skipping only predicate with the predicate poushed into the scan.
-        let scan_predicate = if let Some(sp) = skipping_predicate
-            && !sp.is_empty()
-        {
+        // if some dedicated file skipping predicate is supplied,
+        // we do not push the scan filters into the kernel scan.
+        let scan_predicate = if let Some(sp) = skipping_predicate {
             let (Some(pred), _) = process_filters(&sp, table_config, config)? else {
                 return exec_err!("Failed to convert file skipping perdicate to kernel.");
             };

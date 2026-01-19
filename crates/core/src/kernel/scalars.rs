@@ -275,7 +275,7 @@ impl ScalarExt for Scalar {
                     LargeBinary => {
                         cast_dict!(LargeBinaryArray, Binary, |v: &[u8]| v.to_vec())
                     }
-                    _ => return None,
+                    _ => None,
                 }
             }
             Float16

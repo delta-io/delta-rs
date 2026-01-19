@@ -350,14 +350,7 @@ async fn execute(
         return Ok((vec![], metrics));
     }
 
-    // Run a full table scan limiting
-    let table_source = provider_as_source(
-        DeltaScanNext::builder()
-            .with_eager_snapshot(snapshot.clone())
-            .with_file_skipping_predicates(skipping_pred.clone())
-            .with_file_column(FILE_ID_COLUMN_DEFAULT)
-            .await?,
-    );
+    // Run a table scan limiting the data to that originating from valid files.
     let file_list = valid_files
         .iter()
         .cloned()
