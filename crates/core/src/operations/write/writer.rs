@@ -157,7 +157,6 @@ impl WriterConfig {
         stats_columns: Option<Vec<String>>,
     ) -> Self {
         let writer_properties_factory = writer_properties_factory.unwrap_or_else(|| {
-            // Keep these compression defaults for backwards compatibility
             let wp = WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
                 .build();
@@ -329,7 +328,6 @@ impl PartitionWriterConfig {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
         let writer_properties_factory = writer_properties_factory.unwrap_or_else(|| {
-            // These particular compression settings are required by writer::tests::test_unflushed_row_group_size
             let wp = WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
                 .build();
