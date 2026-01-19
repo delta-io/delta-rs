@@ -2647,3 +2647,40 @@ def test_url_encoding_timestamp(tmp_path):
     write_deltalake(
         table_or_uri=tmp_path, data=data, mode="overwrite", predicate="value >= 10"
     )
+
+
+def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
+    """
+    Tables with deletion vectors should still be writeable even without writing deletion vectors directly
+    """
+    schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("price", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(
+        tmp_path,
+        schema,
+        name="test_name",
+        description="test_desc",
+        configuration={
+            "delta.enableDeletionVectors": "true",
+        },
+    )
+    assert dt.protocol().min_writer_version == 7
+    assert dt.version() == 0
+    print(dt.protocol().writer_features)
+
+    data = Table.from_pydict(
+        {
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(dt, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
