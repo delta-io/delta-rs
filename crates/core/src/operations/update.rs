@@ -344,8 +344,6 @@ async fn execute(
         .flatten()
         .collect();
 
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
-
     if valid_files.is_empty() {
         return Ok((vec![], metrics));
     }
@@ -360,6 +358,8 @@ async fn execute(
         .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
         .project_away([FILE_ID_COLUMN_DEFAULT])?
         .build()?;
+
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT satisfy the predicate.  The
@@ -459,7 +459,7 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-    if let Ok(true) = should_write_cdc(&snapshot) {
+    if let Ok(true) = should_write_cdc(snapshot) {
         match tracker.collect() {
             Ok(cdc_plan) => {
                 let cdc_exec = session.create_physical_plan(&cdc_plan).await?;

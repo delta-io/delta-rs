@@ -668,7 +668,7 @@ impl TableProviderBuilder {
     /// The file skipping predicates will thus not be pushed into the parquet
     /// scan. However any predicate that gets pushed into the scan during execution
     /// planning will be applied.
-    pub fn with_file_skipping_predicates(
+    pub(crate) fn with_file_skipping_predicates(
         mut self,
         file_skipping_predicates: impl IntoIterator<Item = Expr>,
     ) -> Self {
