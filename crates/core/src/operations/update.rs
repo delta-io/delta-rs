@@ -406,7 +406,7 @@ async fn execute(
 
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
-        Some(&snapshot),
+        Some(snapshot),
         session,
         physical_plan.clone(),
         table_partition_cols.clone(),
@@ -446,10 +446,8 @@ async fn execute(
                 .clone()
                 .join(f.path_raw())
                 .map_err(|e| exec_datafusion_err!("{e}"))?;
-            valid.contains(url.as_ref());
-            Ok(valid
-                .contains(url.as_ref())
-                .then(|| Action::Remove(f.remove_action(true))))
+            let is_valid = valid.contains(url.as_ref());
+            Ok(is_valid.then(|| Action::Remove(f.remove_action(true))))
         })
         .try_collect()
         .await?;
