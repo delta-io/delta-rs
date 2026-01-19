@@ -3,6 +3,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::DeltaSessionContext;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;
@@ -54,7 +55,7 @@ impl PyMergeBuilder {
         commit_properties: Option<PyCommitProperties>,
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
-        let ctx = SessionContext::new();
+        let ctx: SessionContext = DeltaSessionContext::default().into();
 
         let source = source
             .into_reader()
