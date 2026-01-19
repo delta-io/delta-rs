@@ -504,9 +504,9 @@ fn object_store_url(location: &Url) -> ObjectStoreUrl {
     };
 
     ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}{}",
-        location.scheme(),
+        "delta-rs://{}{}-{}{}",
         user_at,
+        location.scheme(),
         location.host_str().unwrap_or("-"),
         location.path().replace(DELIMITER, "-").replace(':', "-")
     ))
@@ -984,7 +984,10 @@ mod datafusion_tests {
             // Same scheme, different host, same path
             ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
             // Azure urls should encode the container
-            ("abfss://container1@host/table_1", "abfss://container2@host/table_1"),
+            (
+                "abfss://container1@host/table_1",
+                "abfss://container2@host/table_1",
+            ),
         ] {
             let url_1 = Url::parse(location_1).unwrap();
             let url_2 = Url::parse(location_2).unwrap();
