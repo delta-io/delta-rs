@@ -496,8 +496,16 @@ pub(crate) fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
 #[cfg(feature = "datafusion")]
 fn object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
+
+    // azure storage urls encode the container as user in the url
+    let user_at = match location.username() {
+        u if !u.is_empty() => format!("{u}@"),
+        _ => "".to_string(),
+    };
+
     ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
+        "delta-rs://{}{}-{}{}",
+        user_at,
         location.scheme(),
         location.host_str().unwrap_or("-"),
         location.path().replace(DELIMITER, "-").replace(':', "-")
@@ -975,6 +983,11 @@ mod datafusion_tests {
             ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
             // Same scheme, different host, same path
             ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
+            // Azure urls should encode the container
+            (
+                "abfss://container1@host/table_1",
+                "abfss://container2@host/table_1",
+            ),
         ] {
             let url_1 = Url::parse(location_1).unwrap();
             let url_2 = Url::parse(location_2).unwrap();

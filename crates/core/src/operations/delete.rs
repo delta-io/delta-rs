@@ -37,12 +37,15 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::DFSchema;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
 };
+use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
@@ -203,12 +206,19 @@ impl std::future::IntoFuture for DeleteBuilder {
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
             let predicate = match this.predicate {
-                Some(predicate) => match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => {
-                        Some(snapshot.parse_predicate_expression(s, session.as_ref())?)
-                    }
-                },
+                Some(predicate) => {
+                    let expr = match predicate {
+                        Expression::DataFusion(expr) => expr,
+                        Expression::String(s) => {
+                            snapshot.parse_predicate_expression(s, session.as_ref())?
+                        }
+                    };
+                    let df_schema = DFSchema::try_from(snapshot.arrow_schema())?;
+                    let context = SimplifyContext::new(&session.execution_props())
+                        .with_schema(Arc::new(df_schema));
+                    let simplifier = ExprSimplifier::new(context);
+                    Some(simplifier.simplify(expr)?)
+                }
                 None => None,
             };
 
@@ -484,6 +494,7 @@ mod tests {
     };
     use crate::{DeltaResult, DeltaTable, TableProperty};
     use arrow::array::Int32Array;
+    use arrow::datatypes::TimestampMicrosecondType;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
@@ -1139,5 +1150,63 @@ mod tests {
             batches.extend_from_slice(&data);
         }
         Ok(batches)
+    }
+
+    /// Test for expression simplification which is needed for casts with Datafusion, see:
+    /// <https://github.com/delta-io/delta-rs/issues/4093>
+    #[tokio::test]
+    async fn test_delete_with_predicate() -> DeltaResult<()> {
+        use arrow::array::ArrowPrimitiveType;
+        use arrow::array::TimestampMicrosecondArray;
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+                None,
+            )
+            .with_column(
+                "created_at",
+                DeltaDataType::Primitive(PrimitiveType::TimestampNtz),
+                true,
+                None,
+            )
+            .await?;
+        assert_eq!(table.version(), Some(0));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+                true,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(StringArray::from(vec![Some("one")])),
+                Arc::new(TimestampMicrosecondArray::new(
+                    vec![TimestampMicrosecondType::default_value()].into(),
+                    None,
+                )),
+            ],
+        )?;
+        let table = table
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(
+            table.version(),
+            Some(1),
+            "The first batch was not written successfully"
+        );
+
+        let predicate = "\"created_at\" < ARROW_CAST('2024-01-01 00:00:00+00:00', 'Timestamp(Microsecond, Some(\"UTC\"))')";
+        let (table, _metrics) = table.delete().with_predicate(predicate).await?;
+        assert_eq!(table.version(), Some(2), "The delete failed to execute");
+        Ok(())
     }
 }
