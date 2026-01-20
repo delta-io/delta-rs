@@ -1,18 +1,16 @@
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
-use arrow::compute::concat_batches;
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
-use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use futures::StreamExt as _;
+use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
@@ -309,9 +307,6 @@ pub(crate) async fn write_execution_plan_v2(
             writer_stats_config.stats_columns.clone(),
         );
 
-        let partition_streams: Vec<SendableRecordBatchStream> =
-            execute_stream_partitioned(plan, session.task_ctx())?;
-
         // sync channel for batches produced by partition stream
         let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
 
@@ -328,6 +323,7 @@ pub(crate) async fn write_execution_plan_v2(
         });
 
         // spawn one worker per partition stream to drive DataFusion concurrently
+        let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
         let mut worker_handles = Vec::with_capacity(partition_streams.len());
         let scan_start = std::time::Instant::now();
         for mut partition_stream in partition_streams {
@@ -409,9 +405,6 @@ pub(crate) async fn write_execution_plan_v2(
             writer_stats_config.stats_columns.clone(),
         );
 
-        // partition streams
-        let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
-
         // sync channel for batches produced by partition stream for normal and cdf batches
         let (tx_normal, mut rx_normal) = mpsc::channel::<RecordBatch>(channel_size());
         let (tx_cdf, mut rx_cdf) = mpsc::channel::<RecordBatch>(channel_size());
@@ -441,13 +434,13 @@ pub(crate) async fn write_execution_plan_v2(
         });
 
         // spawn partition workers that split batches and send to appropriate writer channel
+        let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
         let mut worker_handles = Vec::with_capacity(partition_streams.len());
         let scan_start = std::time::Instant::now();
         for mut partition_stream in partition_streams {
             let txn = tx_normal.clone();
             let txc = tx_cdf.clone();
             let session_ctx = SessionContext::new();
-            let cdf_schema_clone = cdf_schema.clone();
 
             let h = tokio::task::spawn(async move {
                 while let Some(maybe_batch) = partition_stream.next().await {
@@ -476,30 +469,35 @@ pub(crate) async fn write_execution_plan_v2(
                     ))?;
 
                     // Concatenate with the CDF_schema, since we need to keep the _change_type col
-                    let mut normal_batch =
-                        concat_batches(&cdf_schema_clone, &normal_df.collect().await?)?;
-
-                    // Drop the CDC_COLUMN ("_change_type")
-                    let mut idx: Option<usize> = None;
-                    for (i_field, field) in normal_batch.schema_ref().fields().iter().enumerate() {
-                        if field.name() == CDC_COLUMN_NAME {
-                            idx = Some(i_field);
-                            break;
+                    let mut normal_stream = normal_df.execute_stream().await?;
+                    while let Some(mut normal_batch) = normal_stream.try_next().await? {
+                        // Drop the CDC_COLUMN ("_change_type")
+                        let mut idx: Option<usize> = None;
+                        for (i_field, field) in
+                            normal_batch.schema_ref().fields().iter().enumerate()
+                        {
+                            if field.name() == CDC_COLUMN_NAME {
+                                idx = Some(i_field);
+                                break;
+                            }
                         }
+                        normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
+                            "idx of _change_type col not found. This shouldn't have happened.",
+                        ))?);
+
+                        txn.send(normal_batch).await.map_err(|_| {
+                            DeltaTableError::Generic(
+                                "normal writer closed unexpectedly".to_string(),
+                            )
+                        })?;
                     }
-                    normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
-                        "idx of _change_type col not found. This shouldn't have happened.",
-                    ))?);
 
-                    let cdf_batch = concat_batches(&cdf_schema_clone, &cdf_df.collect().await?)?;
-
-                    // send to writers channels
-                    txn.send(normal_batch).await.map_err(|_| {
-                        DeltaTableError::Generic("normal writer closed unexpectedly".to_string())
-                    })?;
-                    txc.send(cdf_batch).await.map_err(|_| {
-                        DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
-                    })?;
+                    let mut cdf_stream = cdf_df.execute_stream().await?;
+                    while let Some(cdf_batch) = cdf_stream.try_next().await? {
+                        txc.send(cdf_batch).await.map_err(|_| {
+                            DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
+                        })?;
+                    }
                 }
                 Ok::<(), DeltaTableError>(())
             });
