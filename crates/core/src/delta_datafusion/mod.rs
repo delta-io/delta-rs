@@ -63,12 +63,12 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
-pub(crate) use self::session::session_state_from_session;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
@@ -78,7 +78,9 @@ pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
     next::DeltaScanExec,
 };
-pub(crate) use table_provider::{DeltaScanBuilder, update_datafusion_session};
+pub(crate) use table_provider::{
+    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
+};
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -93,6 +95,7 @@ pub mod planner;
 mod schema_adapter;
 mod session;
 mod table_provider;
+pub(crate) mod utils;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {

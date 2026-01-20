@@ -32,38 +32,33 @@
 //!     .expect("Failed to delete");
 //! # })
 //! ````
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::{DFSchema, ScalarValue};
+use datafusion::common::DFSchema;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::{ExecutionProps, SessionState};
+use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::{Expr, col};
-
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+use datafusion::prelude::Expr;
 use futures::future::BoxFuture;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
-
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use uuid::Uuid;
 
 use super::Operation;
 use super::cdc::should_write_cdc;
-use super::datafusion_utils::Expression;
+use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
@@ -219,7 +214,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                         }
                     };
                     let df_schema = DFSchema::try_from(snapshot.arrow_schema())?;
-                    let context = SimplifyContext::new(&session.execution_props())
+                    let context = SimplifyContext::new(session.execution_props())
                         .with_schema(Arc::new(df_schema));
                     let simplifier = ExprSimplifier::new(context);
                     Some(simplifier.simplify(expr)?)
@@ -325,14 +320,7 @@ async fn execute_non_empty_expr(
         }),
     });
 
-    let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_properties().num_indexed_cols(),
-        snapshot
-            .table_properties()
-            .data_skipping_stats_columns
-            .as_ref()
-            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
-    );
+    let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
 
     if !partition_scan {
         // Apply the negation of the filter and rewrite files
@@ -370,12 +358,9 @@ async fn execute_non_empty_expr(
 
     // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
     if let Ok(true) = should_write_cdc(snapshot) {
-        let mut projection: Vec<_> = source.schema().iter().map(|(_, f)| col(f.name())).collect();
-        projection.push(lit(ScalarValue::Utf8(Some("delete".to_string()))).alias(CDC_COLUMN_NAME));
-
         let cdc_filter = LogicalPlanBuilder::new(source.clone())
             .filter(expression.clone())?
-            .project(projection)?
+            .with_column(CDC_COLUMN_NAME, lit("delete"))?
             .build()?;
         let cdc_filter = session.create_physical_plan(&cdc_filter).await?;
 

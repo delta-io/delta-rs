@@ -9,19 +9,16 @@ use delta_kernel::table_features::TableFeature;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 
-use super::datafusion_utils::into_expr;
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    DataValidationExec, DeltaScanNext, constraints_to_exprs, create_session,
-    update_datafusion_session,
+    DataValidationExec, DeltaScanNext, Expression, constraints_to_exprs, create_session,
+    expr::fmt_expr_to_sql, into_expr, update_datafusion_session,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
     EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
-use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};

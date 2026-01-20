@@ -53,8 +53,8 @@ use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
-    to_correct_scalar_value,
+    DataFusionMixins as _, FindFilesExprProperties, LogDataHandler, get_null_of_arrow_type,
+    register_store, to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -604,6 +604,8 @@ pub struct TableProviderBuilder {
     snapshot: Option<SnapshotWrapper>,
     file_column: Option<String>,
     table_version: Option<Version>,
+    /// Predicates used only for file skipping in kernel log replay
+    file_skipping_predicates: Option<Vec<Expr>>,
 }
 
 impl Default for TableProviderBuilder {
@@ -619,6 +621,7 @@ impl TableProviderBuilder {
             snapshot: None,
             file_column: None,
             table_version: None,
+            file_skipping_predicates: None,
         }
     }
 
@@ -654,6 +657,65 @@ impl TableProviderBuilder {
         self.file_column = Some(file_column.to_string());
         self
     }
+
+    /// Add predicates applied only during file skipping.
+    ///
+    /// There are cases where we may want to skip files that definitely do
+    /// not contain any data that matches a predicate, but read all data
+    /// if any records may match, to rewrite the file with updated records.
+    ///
+    /// The file skipping predicates will thus not be pushed into the parquet
+    /// scan. However any predicate that gets pushed into the scan during execution
+    /// planning will be applied.
+    pub(crate) fn with_file_skipping_predicates(
+        mut self,
+        file_skipping_predicates: impl IntoIterator<Item = Expr>,
+    ) -> Self {
+        self.file_skipping_predicates = Some(file_skipping_predicates.into_iter().collect());
+        self
+    }
+
+    pub async fn build(self) -> Result<next::DeltaScan> {
+        let mut config = DeltaScanConfig::new();
+        if let Some(file_column) = self.file_column {
+            config = config.with_file_column_name(file_column);
+        }
+
+        let snapshot = match self.snapshot {
+            Some(wrapper) => wrapper,
+            None => {
+                if let Some(log_store) = self.log_store.as_ref() {
+                    SnapshotWrapper::Snapshot(
+                        Snapshot::try_new(
+                            log_store,
+                            Default::default(),
+                            self.table_version.map(|v| v as i64),
+                        )
+                        .await?
+                        .into(),
+                    )
+                } else {
+                    return Err(DataFusionError::Plan(
+                    "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
+                ));
+                }
+            }
+        };
+
+        let mut provider = next::DeltaScan::new(snapshot, config)?;
+        if let Some(skipping) = self.file_skipping_predicates {
+            // validate that the expressions contain no illegal variants
+            // that are not eligible for file skipping, e.g. volatile functions.
+            for term in &skipping {
+                let mut visitor = FindFilesExprProperties::default();
+                term.visit(&mut visitor)?;
+                visitor.result?;
+            }
+            provider = provider.with_file_skipping_predicate(skipping);
+        }
+
+        Ok(provider)
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -662,36 +724,7 @@ impl std::future::IntoFuture for TableProviderBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
-        Box::pin(async move {
-            let mut config = DeltaScanConfig::new();
-            if let Some(file_column) = this.file_column {
-                config = config.with_file_column_name(file_column);
-            }
-
-            let snapshot = match this.snapshot {
-                Some(wrapper) => wrapper,
-                None => {
-                    if let Some(log_store) = this.log_store.as_ref() {
-                        SnapshotWrapper::Snapshot(
-                            Snapshot::try_new(
-                                log_store,
-                                Default::default(),
-                                this.table_version.map(|v| v as i64),
-                            )
-                            .await?
-                            .into(),
-                        )
-                    } else {
-                        return Err(DataFusionError::Plan(
-                        "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
-                    ));
-                    }
-                }
-            };
-
-            Ok(Arc::new(next::DeltaScan::new(snapshot, config)?) as Arc<dyn TableProvider>)
-        })
+        Box::pin(async move { Ok(Arc::new(this.build().await?) as _) })
     }
 }
 
