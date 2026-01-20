@@ -55,7 +55,7 @@ impl PyMergeBuilder {
         commit_properties: Option<PyCommitProperties>,
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
-        let ctx: SessionContext = create_session().into();
+        let ctx = create_session().into_inner();
 
         let source = source
             .into_reader()
