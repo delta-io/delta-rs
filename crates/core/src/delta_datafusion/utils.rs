@@ -63,12 +63,7 @@ pub(crate) struct DeltaScanVisitor {
 
 impl DeltaScanVisitor {
     fn pre_visit_delta_scan(&mut self, delta_scan_exec: &DeltaScanExec) -> Result<bool> {
-        // let Some(_metrics) = delta_scan_exec.metrics() else {
-        //     return Ok(true);
-        // };
-
         self.delta_plan = Some(delta_scan_exec.delta_plan().clone());
-
         Ok(true)
     }
 }

@@ -11,7 +11,7 @@ use itertools::Itertools;
 
 pub(crate) trait LogicalPlanBuilderExt: Sized {
     fn with_column(self, name: &str, expr: Expr) -> Result<Self>;
-    fn project_away(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
+    fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
 }
 
 pub(crate) trait ColumnReference: Sized {
@@ -47,7 +47,7 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
         self.project(projection)
     }
 
-    fn project_away(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self> {
+    fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self> {
         let away_names = cols
             .into_iter()
             .map(|c| c.col_name().to_string())

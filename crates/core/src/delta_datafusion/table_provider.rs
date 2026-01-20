@@ -707,14 +707,11 @@ impl TableProviderBuilder {
         if let Some(skipping) = self.file_skipping_predicates {
             // validate that the expressions contain no illegal variants
             // that are not eligible for file skipping, e.g. volatile functions.
-            let _valid: Vec<_> = skipping
-                .iter()
-                .map(|p| {
-                    let mut visitor = FindFilesExprProperties::default();
-                    p.visit(&mut visitor)?;
-                    visitor.result
-                })
-                .try_collect()?;
+            for term in &skipping {
+                let mut visitor = FindFilesExprProperties::default();
+                term.visit(&mut visitor)?;
+                visitor.result?;
+            }
             provider = provider.with_file_skipping_predicate(skipping);
         }
 

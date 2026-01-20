@@ -214,7 +214,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                         }
                     };
                     let df_schema = DFSchema::try_from(snapshot.arrow_schema())?;
-                    let context = SimplifyContext::new(&session.execution_props())
+                    let context = SimplifyContext::new(session.execution_props())
                         .with_schema(Arc::new(df_schema));
                     let simplifier = ExprSimplifier::new(context);
                     Some(simplifier.simplify(expr)?)

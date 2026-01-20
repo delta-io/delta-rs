@@ -328,15 +328,20 @@ async fn execute(
         .build()?;
     let files_exec = session.create_physical_plan(&files_plan).await?;
     let valid_files: HashSet<_> = execute_stream(files_exec, session.task_ctx())?
-        .map_ok(|f| {
-            let dict_arr = f.column(0).as_dictionary::<UInt16Type>();
-            let typed_dict = dict_arr.downcast_dict::<StringArray>().unwrap();
-            typed_dict
-                .values()
-                .iter()
-                .flatten()
-                .map(|s| s.to_string())
-                .collect_vec()
+        .map(|batch| {
+            let batch = batch?;
+            let dict_arr = batch.column(0).as_dictionary::<UInt16Type>();
+            let typed_dict = dict_arr
+                .downcast_dict::<StringArray>()
+                .ok_or_else(|| exec_datafusion_err!("expected file id col to be a string array"))?;
+            Ok::<_, DataFusionError>(
+                typed_dict
+                    .values()
+                    .iter()
+                    .flatten()
+                    .map(|s| s.to_string())
+                    .collect_vec(),
+            )
         })
         .try_collect::<Vec<_>>()
         .await?
@@ -356,7 +361,7 @@ async fn execute(
         .collect_vec();
     let plan = LogicalPlanBuilder::scan("target", table_source, None)?
         .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
-        .project_away([FILE_ID_COLUMN_DEFAULT])?
+        .drop_columns([FILE_ID_COLUMN_DEFAULT])?
         .build()?;
 
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
@@ -398,7 +403,7 @@ async fn execute(
 
     let plan_updated = LogicalPlanBuilder::new(plan_with_metrics)
         .project(expressions.clone())?
-        .project_away([UPDATE_PREDICATE_COLNAME])?
+        .drop_columns([UPDATE_PREDICATE_COLNAME])?
         .build()?;
 
     let physical_plan = session.create_physical_plan(&plan_updated).await?;
