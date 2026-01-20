@@ -11,7 +11,7 @@ use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::*;
 
-pub const CDC_COLUMN_NAME: &str = "_change_type";
+pub(crate) const CDC_COLUMN_NAME: &str = "_change_type";
 
 /// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
 /// associated with commits

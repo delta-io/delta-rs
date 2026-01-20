@@ -39,6 +39,8 @@ use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
+#[cfg(feature = "datafusion")]
+pub(crate) use cdc::CDC_COLUMN_NAME;
 
 pub mod add_column;
 pub mod add_feature;
@@ -194,6 +196,14 @@ impl DeltaTable {
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
         WriteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
             .with_input_batches(batches)
+    }
+
+    #[must_use]
+    pub fn write_df(self, dataframe: datafusion::prelude::DataFrame) -> WriteBuilder {
+        let (session, plan) = dataframe.into_parts();
+        WriteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+            .with_input_plan(plan)
+            .with_session_state(Arc::new(session))
     }
 
     /// Audit active files with files present on the filesystem

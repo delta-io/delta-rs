@@ -1,17 +1,36 @@
 use std::sync::Arc;
 
-use datafusion::common::DFSchemaRef;
+use arrow::array::AsArray as _;
+use arrow::datatypes::UInt16Type;
+use arrow_array::StringArray;
 use datafusion::common::tree_node::{Transformed, TreeNode as _};
+use datafusion::common::{DFSchemaRef, HashSet};
+use datafusion::datasource::provider_as_source;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::functions_aggregate::expr_fn::first_value;
 use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::{BinaryExpr, Expr, ExprSchemable as _};
+use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
+use datafusion::logical_expr::{
+    BinaryExpr, Expr, ExprSchemable as _, LogicalPlan, LogicalPlanBuilder,
+};
 use datafusion::logical_expr_common::operator::Operator;
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor};
+use datafusion::optimizer::simplify_expressions::{ExprSimplifier, simplify_predicates};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, execute_stream};
+use datafusion::prelude::{col, lit};
+use datafusion::scalar::ScalarValue;
 use datafusion::{catalog::Session, common::DFSchema};
+use datafusion_datasource::file_scan_config::wrap_partition_value_in_dict;
+use delta_kernel::Predicate;
+use futures::TryStreamExt as _;
+use itertools::Itertools as _;
 
-use crate::delta_datafusion::DeltaScanExec;
+use crate::delta_datafusion::engine::to_delta_predicate;
+use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
 use crate::delta_datafusion::table_provider::next::KernelScanPlan;
+use crate::delta_datafusion::{
+    DeltaScanExec, DeltaScanNext, FILE_ID_COLUMN_DEFAULT, FindFilesExprProperties,
+};
+use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 
 /// Used to represent user input of either a Datafusion expression or string expression
@@ -162,6 +181,107 @@ pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result
         }
     })
     .map(|transformed| transformed.data)
+}
+
+/// Create a table scan plan for reading data from
+/// all files which contain data matching a predicate.
+///
+/// This is useful for DML where we need to re-write files by
+/// updating/removing some records so we require all records
+/// but only from matching files.
+///
+///
+/// ## Returns
+///
+/// If no files contaon matching data, `None` is returned.
+///
+/// Otherwise:
+/// - The logical plan for reading data from matched files only.
+/// - The set of matched file URLs.
+/// - The potentially simplified predicate applied when matching data.
+/// - A kernel predicate (best effort) which can be used to filter log replays.
+pub(crate) async fn scan_for_rewrite(
+    session: &dyn Session,
+    snapshot: &EagerSnapshot,
+    predicate: Expr,
+) -> Result<Option<(LogicalPlan, HashSet<String>, Expr, Arc<Predicate>)>> {
+    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate))?;
+
+    // validate that the expressions contain no illegal variants
+    // that are not eligible for file skipping, e.g. volatile functions.
+    for term in &skipping_pred {
+        let mut visitor = FindFilesExprProperties::default();
+        term.visit(&mut visitor)?;
+        visitor.result?
+    }
+
+    // convert to a delta predicate that can be applied to kernel scans.
+    // This is a best effort predicate and downstream code needs to also
+    // apply the explicit file selection so we can ignore errors in the
+    // conversion.
+    let delta_predicate = Arc::new(Predicate::and_from(
+        skipping_pred
+            .iter()
+            .flat_map(|p| to_delta_predicate(p).ok()),
+    ));
+
+    let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
+
+    // Scan the delta table with a dedicated predicate applied for file skipping
+    // and with the source file path exosed as column.
+    let table_source = provider_as_source(
+        DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_file_skipping_predicates(skipping_pred.clone())
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .await?,
+    );
+
+    // the kernel scan only provides a best effort file skipping, in this case
+    // we want to determine the file we certainly need to rewrite. For this
+    // we perform an initial aggreagte scan to see if we can quickly find
+    // at least one matching record in the files.
+    let files_plan = LogicalPlanBuilder::scan("scan", table_source.clone(), None)?
+        .filter(predicate.clone())?
+        .aggregate(
+            [col(FILE_ID_COLUMN_DEFAULT)],
+            [first_value(lit(1_i32), vec![])],
+        )?
+        .build()?;
+    let files_exec = session.create_physical_plan(&files_plan).await?;
+    let valid_files: HashSet<_> = execute_stream(files_exec, session.task_ctx())?
+        .map_ok(|f| {
+            let dict_arr = f.column(0).as_dictionary::<UInt16Type>();
+            let typed_dict = dict_arr.downcast_dict::<StringArray>().unwrap();
+            typed_dict
+                .values()
+                .iter()
+                .flatten()
+                .map(|s| s.to_string())
+                .collect_vec()
+        })
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if valid_files.is_empty() {
+        return Ok(None);
+    }
+
+    // Crate a table scan limiting the data to that originating from valid files.
+    let file_list = valid_files
+        .iter()
+        .cloned()
+        .map(|v| lit(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(v)))))
+        .collect_vec();
+    let plan = LogicalPlanBuilder::scan("source", table_source, None)?
+        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
+        .drop_columns([FILE_ID_COLUMN_DEFAULT])?
+        .build()?;
+
+    Ok(Some((plan, valid_files, predicate, delta_predicate)))
 }
 
 #[cfg(test)]

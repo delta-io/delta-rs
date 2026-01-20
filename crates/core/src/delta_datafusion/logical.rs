@@ -9,6 +9,8 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UserDefinedLogic
 use datafusion::prelude::{Expr, col};
 use itertools::Itertools;
 
+use crate::operations::CDC_COLUMN_NAME;
+
 pub(crate) trait LogicalPlanBuilderExt: Sized {
     fn with_column(self, name: &str, expr: Expr) -> Result<Self>;
     fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
@@ -65,17 +67,28 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
 
 pub(crate) trait LogicalPlanExt: Sized {
     fn into_builder(self) -> LogicalPlanBuilder;
+    fn has_cdc_col(&self) -> bool;
 }
 
 impl LogicalPlanExt for LogicalPlan {
     fn into_builder(self) -> LogicalPlanBuilder {
         LogicalPlanBuilder::new(self)
     }
+
+    fn has_cdc_col(&self) -> bool {
+        self.schema()
+            .index_of_column_by_name(None, CDC_COLUMN_NAME)
+            .is_some()
+    }
 }
 
 impl LogicalPlanExt for Arc<LogicalPlan> {
     fn into_builder(self) -> LogicalPlanBuilder {
         LogicalPlanBuilder::new_from_arc(self)
+    }
+
+    fn has_cdc_col(&self) -> bool {
+        self.as_ref().has_cdc_col()
     }
 }
 
