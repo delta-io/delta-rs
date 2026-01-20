@@ -13,7 +13,9 @@ use async_trait::async_trait;
 
 use object_store::path::Path;
 use parquet::basic::Compression;
-use parquet::file::properties::{WriterProperties, WriterPropertiesBuilder};
+use parquet::file::properties::WriterProperties;
+#[cfg(feature = "datafusion")]
+use parquet::file::properties::WriterPropertiesBuilder;
 use parquet::schema::types::ColumnPath;
 use std::sync::Arc;
 use tracing::debug;

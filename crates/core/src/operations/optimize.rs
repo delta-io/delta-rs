@@ -266,23 +266,17 @@ pub fn create_session_state_for_optimize(
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
-        let file_format_options = snapshot
+        let writer_properties_factory = snapshot
             .as_ref()
-            .map(|ss| ss.load_config().file_format_options.clone());
-        let writer_properties_factory = match file_format_options.as_ref() {
-            None => {
+            .and_then(|ss| ss.load_config().file_format_options.clone())
+            .map(|ffo| ffo.writer_properties_factory())
+            .or_else(|| {
                 let wp = WriterProperties::builder()
                     .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build();
-                let wpf = wp.into_factory_ref();
-                Some(wpf)
-            }
-            Some(file_format_options) => file_format_options
-                .clone()
-                .map(|ffo| ffo.writer_properties_factory()),
-        };
-
+                Some(wp.into_factory_ref())
+            });
         Self {
             snapshot,
             log_store,
@@ -689,7 +683,7 @@ impl MergePlan {
                         debug!("  file {}", file.path);
                     }
                     let object_store_ref = object_store.clone();
-                    let file_format_options = Arc::new(ffo.clone());
+                    let file_format_options = ffo.clone();
                     let batch_stream = futures::stream::iter(files.clone())
                         .then(move |file| {
                             let object_store_ref = object_store_ref.clone();
@@ -697,7 +691,7 @@ impl MergePlan {
                             let file_format_options = file_format_options.clone();
                             async move {
                                 let decrypt: Option<Arc<FileDecryptionProperties>> =
-                                    match &*file_format_options {
+                                    match &file_format_options {
                                         Some(ffo) => get_file_decryption_properties(
                                             ffo,
                                             &meta.location,
