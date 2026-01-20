@@ -5,14 +5,15 @@ use arrow::compute::concat_batches;
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlanBuilder, col, lit, when};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
-use datafusion::prelude::DataFrame;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::StreamExt;
+use itertools::Itertools as _;
 use object_store::prefix::PrefixStore;
 use tokio::sync::mpsc;
 use tracing::log::*;
@@ -20,17 +21,15 @@ use uuid::Uuid;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaDataChecker, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    session_state_from_session,
+    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
+    generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
-use crate::table::Constraint as DeltaConstraint;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::file_format_options::WriterPropertiesFactoryRef;
 
@@ -141,7 +140,7 @@ pub(crate) async fn execute_non_empty_expr(
     writer_stats_config: WriterStatsConfig,
     partition_scan: bool,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
     let mut actions: Vec<Action> = Vec::new();
@@ -157,9 +156,9 @@ pub(crate) async fn execute_non_empty_expr(
             .with_files(rewrite.to_vec()),
     );
 
-    let target_provider = provider_as_source(target_provider);
-    let source =
-        Arc::new(LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?);
+    let source = Arc::new(
+        LogicalPlanBuilder::scan("target", provider_as_source(target_provider), None)?.build()?,
+    );
 
     let cdf_df = if !partition_scan {
         // Apply the negation of the filter and rewrite files
@@ -188,11 +187,17 @@ pub(crate) async fn execute_non_empty_expr(
         // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
         // based on the remove actions if a partition got deleted
         if should_write_cdc(snapshot)? {
-            let state = session_state_from_session(session)?;
-            let df = DataFrame::new(state.clone(), source.as_ref().clone());
+            let mut projection = source
+                .schema()
+                .iter()
+                .map(|(_, field)| col(field.name()))
+                .collect_vec();
+            projection.push(lit("delete").alias(CDC_COLUMN_NAME));
             Some(
-                df.filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?,
+                LogicalPlanBuilder::new_from_arc(source)
+                    .filter(expression.clone())?
+                    .project(projection)?
+                    .build()?,
             )
         } else {
             None
@@ -216,7 +221,7 @@ pub(crate) async fn prepare_predicate_actions(
     deletion_timestamp: i64,
     writer_stats_config: WriterStatsConfig,
     operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<DataFrame>)> {
+) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
     let candidates = find_files(
         snapshot,
         log_store.clone(),
@@ -275,25 +280,25 @@ pub(crate) async fn write_execution_plan_v2(
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
     let schema = plan.schema();
-    let mut checker = if let Some(snapshot) = snapshot {
-        DeltaDataChecker::new(snapshot)
+    let mut validations = if let Some(snapshot) = snapshot {
+        validation_predicates(session, plan.clone(), snapshot.table_configuration())?
     } else {
         debug!(
             "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."
         );
         let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-        DeltaDataChecker::new_with_generated_columns(
-            delta_schema.get_generated_columns().unwrap_or_default(),
-        )
+        let df_schema = schema.clone().to_dfschema()?;
+        generated_columns_to_exprs(session, &df_schema, &delta_schema.get_generated_columns()?)?
     };
 
     if let Some(mut pred) = predicate {
         if contains_cdc {
             pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
         }
-        let chk = DeltaConstraint::new("*", &fmt_expr_to_sql(&pred)?);
-        checker = checker.with_extra_constraints(vec![chk])
+        validations.push(pred);
     }
+
+    let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
 
     // Write data to disk
     // We drive partition streams concurrently and centralize writes via an mpsc channel.
@@ -307,8 +312,6 @@ pub(crate) async fn write_execution_plan_v2(
             writer_stats_config.num_indexed_cols,
             writer_stats_config.stats_columns.clone(),
         );
-
-        let checker_stream = checker.clone();
 
         let partition_streams: Vec<SendableRecordBatchStream> =
             execute_stream_partitioned(plan, session.task_ctx())?;
@@ -333,11 +336,9 @@ pub(crate) async fn write_execution_plan_v2(
         let scan_start = std::time::Instant::now();
         for mut partition_stream in partition_streams {
             let tx_clone = tx.clone();
-            let checker_clone = checker_stream.clone();
             let handle = tokio::task::spawn(async move {
                 while let Some(maybe_batch) = partition_stream.next().await {
                     let batch = maybe_batch?;
-                    checker_clone.check_batch(&batch).await?;
                     tx_clone.send(batch).await.map_err(|_| {
                         DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
                     })?;
@@ -412,8 +413,6 @@ pub(crate) async fn write_execution_plan_v2(
             writer_stats_config.stats_columns.clone(),
         );
 
-        let checker_stream = checker.clone();
-
         // partition streams
         let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
 
@@ -451,7 +450,6 @@ pub(crate) async fn write_execution_plan_v2(
         for mut partition_stream in partition_streams {
             let txn = tx_normal.clone();
             let txc = tx_cdf.clone();
-            let checker_clone = checker_stream.clone();
             let session_ctx = SessionContext::new();
             let cdf_schema_clone = cdf_schema.clone();
 
@@ -484,7 +482,6 @@ pub(crate) async fn write_execution_plan_v2(
                     // Concatenate with the CDF_schema, since we need to keep the _change_type col
                     let mut normal_batch =
                         concat_batches(&cdf_schema_clone, &normal_df.collect().await?)?;
-                    checker_clone.check_batch(&normal_batch).await?;
 
                     // Drop the CDC_COLUMN ("_change_type")
                     let mut idx: Option<usize> = None;
@@ -499,7 +496,6 @@ pub(crate) async fn write_execution_plan_v2(
                     ))?);
 
                     let cdf_batch = concat_batches(&cdf_schema_clone, &cdf_df.collect().await?)?;
-                    checker_clone.check_batch(&cdf_batch).await?;
 
                     // send to writers channels
                     txn.send(normal_batch).await.map_err(|_| {

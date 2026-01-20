@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use deltalake::{
     datafusion::{catalog::TableProvider, prelude::SessionContext},
-    delta_datafusion::{DeltaScanConfig, DeltaScanNext, DeltaSessionContext, SnapshotWrapper},
+    delta_datafusion::{DeltaScanConfig, DeltaScanNext, DeltaSessionContext},
 };
 use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatchReader;
@@ -43,10 +43,8 @@ impl PyQueryBuilder {
             .register_object_store(url, log_store.root_object_store(None));
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
-        let snapshot_wrapped = SnapshotWrapper::EagerSnapshot(Arc::new(snapshot));
-        let provider =
-            Arc::new(DeltaScanNext::new(snapshot_wrapped, config).map_err(PythonError::from)?)
-                as Arc<dyn TableProvider>;
+        let provider = Arc::new(DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?)
+            as Arc<dyn TableProvider>;
 
         self.ctx
             .register_table(table_name, provider)

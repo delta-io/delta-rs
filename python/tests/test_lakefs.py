@@ -9,7 +9,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, TableFeatures
 from deltalake._internal import Field, PrimitiveType, Schema
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
@@ -265,7 +265,7 @@ def test_add_constraint(lakefs_path, sample_table: Table, lakefs_storage_options
         # Invalid constraint
         dt.alter.add_constraint({"check_price": "price < 0"})
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception, match="Invalid data found:"):
         data = Table(
             {
                 "id": Array(

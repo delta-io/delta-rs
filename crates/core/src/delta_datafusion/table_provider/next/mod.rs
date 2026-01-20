@@ -61,6 +61,30 @@ pub enum SnapshotWrapper {
     EagerSnapshot(Arc<EagerSnapshot>),
 }
 
+impl From<Arc<Snapshot>> for SnapshotWrapper {
+    fn from(snap: Arc<Snapshot>) -> Self {
+        SnapshotWrapper::Snapshot(snap)
+    }
+}
+
+impl From<Snapshot> for SnapshotWrapper {
+    fn from(snap: Snapshot) -> Self {
+        SnapshotWrapper::Snapshot(snap.into())
+    }
+}
+
+impl From<Arc<EagerSnapshot>> for SnapshotWrapper {
+    fn from(esnap: Arc<EagerSnapshot>) -> Self {
+        SnapshotWrapper::EagerSnapshot(esnap)
+    }
+}
+
+impl From<EagerSnapshot> for SnapshotWrapper {
+    fn from(esnap: EagerSnapshot) -> Self {
+        SnapshotWrapper::EagerSnapshot(esnap.into())
+    }
+}
+
 impl SnapshotWrapper {
     fn table_configuration(&self) -> &TableConfiguration {
         match self {
@@ -95,7 +119,8 @@ pub struct DeltaScan {
 
 impl DeltaScan {
     // create new delta scan
-    pub fn new(snapshot: SnapshotWrapper, config: DeltaScanConfig) -> Result<Self> {
+    pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
+        let snapshot = snapshot.into();
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
         let full_schema = if config.retain_file_id() {
             let mut fields = scan_schema.fields().to_vec();

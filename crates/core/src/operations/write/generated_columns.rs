@@ -1,26 +1,72 @@
-use crate::kernel::EagerSnapshot;
-use datafusion::common::ScalarValue;
-use datafusion::logical_expr::{ExprSchemable, col, when};
+use arrow_schema::Schema;
+use datafusion::catalog::Session;
+use datafusion::common::{HashMap, Result, ScalarValue, plan_err};
+use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col, when};
 use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::table_features::TableFeature;
+use itertools::Itertools as _;
 use tracing::debug;
 
-use crate::{DeltaResult, kernel::DataCheck, table::GeneratedColumn};
+use crate::{
+    DeltaResult, DeltaTableError,
+    delta_datafusion::expr::parse_predicate_expression,
+    kernel::{DataCheck, EagerSnapshot},
+    table::GeneratedColumn,
+};
 
 /// check if the writer version is able to write generated columns
-pub fn able_to_gc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
-    if let Some(features) = &snapshot.protocol().writer_features() {
-        if snapshot.protocol().min_writer_version() < 4 {
-            return Ok(false);
-        }
-        if snapshot.protocol().min_writer_version() == 7
-            && !features.contains(&delta_kernel::table_features::TableFeature::GeneratedColumns)
-        {
-            return Ok(false);
-        }
+#[inline]
+pub fn gc_is_enabled(snapshot: &EagerSnapshot) -> bool {
+    snapshot
+        .table_configuration()
+        .is_feature_enabled(&TableFeature::GeneratedColumns)
+}
+
+pub fn with_generated_columns(
+    session: &dyn Session,
+    plan: LogicalPlan,
+    table_schema: &Schema,
+    generated_cols: &Vec<GeneratedColumn>,
+) -> Result<LogicalPlan> {
+    if generated_cols.is_empty() {
+        return Ok(plan);
     }
-    Ok(true)
+
+    let mut gen_lookup: HashMap<_, _> = generated_cols
+        .iter()
+        .map(|gc| {
+            Ok::<_, DeltaTableError>((
+                gc.get_name(),
+                parse_predicate_expression(plan.schema(), &gc.generation_expr, session)?
+                    .alias(gc.get_name()),
+            ))
+        })
+        .try_collect()?;
+
+    let projection: Vec<_> = table_schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let expr = if plan.schema().field_with_unqualified_name(f.name()).is_err() {
+                if let Some(expr) = gen_lookup.remove(f.name().as_str()) {
+                    debug!("Adding missing generated column {}.", f.name());
+                    expr.cast_to(f.data_type(), plan.schema())?
+                } else {
+                    return plan_err!(
+                        "Generated column expression for missing column {} not found.",
+                        f.name()
+                    );
+                }
+            } else {
+                col(f.name())
+            };
+            Ok(expr)
+        })
+        .try_collect()?;
+
+    Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
 }
 
 /// Add generated column expressions to a dataframe
@@ -79,4 +125,209 @@ pub fn add_generated_columns(
         )?
     }
     Ok(df)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
+    use arrow_array::RecordBatch;
+    use datafusion::catalog::MemTable;
+    use datafusion::datasource::provider_as_source;
+    use datafusion::execution::SessionState;
+    use datafusion::prelude::SessionContext;
+    use delta_kernel::schema::DataType as KernelDataType;
+    use std::sync::Arc;
+
+    fn create_test_session() -> SessionState {
+        SessionContext::new().state()
+    }
+
+    fn create_test_plan() -> LogicalPlan {
+        let schema = Arc::new(Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+        ]));
+
+        let id_array = Int32Array::from(vec![1, 2, 3]);
+        let value_array = Int32Array::from(vec![10, 20, 30]);
+
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(value_array)]).unwrap();
+
+        let source = provider_as_source(Arc::new(
+            MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap(),
+        ));
+        LogicalPlanBuilder::scan("test", source, None)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_empty_generated_columns() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+        ]);
+
+        let generated_cols = vec![];
+
+        let result = with_generated_columns(&session, plan.clone(), &table_schema, &generated_cols);
+        assert!(result.is_ok());
+        // When no generated columns, the plan should be returned unchanged
+        let result_plan = result.unwrap();
+        assert_eq!(
+            result_plan.schema().fields().len(),
+            plan.schema().fields().len()
+        );
+    }
+
+    #[test]
+    fn test_add_missing_generated_column() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        // Table schema includes a new generated column "computed"
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+            ArrowField::new("computed", ArrowDataType::Int32, false),
+        ]);
+
+        let generated_cols = vec![GeneratedColumn::new(
+            "computed",
+            "id + value",
+            &KernelDataType::INTEGER,
+        )];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        // Should have 3 fields now: id, value, computed
+        assert_eq!(result_plan.schema().fields().len(), 3);
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("computed")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_existing_columns_pass_through() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+        ]);
+
+        let generated_cols = vec![];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        assert_eq!(result_plan.schema().fields().len(), 2);
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("id")
+                .is_ok()
+        );
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("value")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_multiple_generated_columns() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+            ArrowField::new("sum", ArrowDataType::Int32, false),
+            ArrowField::new("product", ArrowDataType::Int32, false),
+        ]);
+
+        let generated_cols = vec![
+            GeneratedColumn::new("sum", "id + value", &KernelDataType::INTEGER),
+            GeneratedColumn::new("product", "id * value", &KernelDataType::INTEGER),
+        ];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        assert_eq!(result_plan.schema().fields().len(), 4);
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("sum")
+                .is_ok()
+        );
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("product")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_mixed_existing_and_generated_columns() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        // Mix of existing columns and new generated column
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("computed", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+        ]);
+
+        let generated_cols = vec![GeneratedColumn::new(
+            "computed",
+            "id * 2",
+            &KernelDataType::INTEGER,
+        )];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        assert_eq!(result_plan.schema().fields().len(), 3);
+
+        // Verify all columns are present
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("id")
+                .is_ok()
+        );
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("computed")
+                .is_ok()
+        );
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("value")
+                .is_ok()
+        );
+    }
 }
