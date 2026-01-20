@@ -23,6 +23,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext};
 
 use deltalake::errors::DeltaTableError;
@@ -1841,6 +1842,10 @@ impl RawDeltaTable {
         let name = CString::new("datafusion_table_provider").unwrap();
         let table = self.with_table(|t| Ok(t.clone()))?;
 
+        let log_store = table.log_store();
+        let object_store_url = log_store.root_url().as_object_store_url();
+        let object_store = log_store.root_object_store(None);
+
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let snapshot = table
             .snapshot()
@@ -1848,8 +1853,10 @@ impl RawDeltaTable {
             .snapshot()
             .clone();
         let scan = DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?;
-        let tokio_scan =
-            Arc::new(TokioDeltaScan::new(scan, handle.clone())) as Arc<dyn TableProvider>;
+        let tokio_scan = Arc::new(
+            TokioDeltaScan::new(scan, handle.clone())
+                .with_object_store(object_store_url, object_store),
+        ) as Arc<dyn TableProvider>;
         let provider = FFI_TableProvider::new(tokio_scan, false, Some(handle.clone()));
 
         PyCapsule::new(py, provider, Some(name.clone()))
