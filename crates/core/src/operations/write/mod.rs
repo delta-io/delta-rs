@@ -56,7 +56,7 @@ use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::Expression;
-use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::{create_session, register_store};
@@ -591,23 +591,19 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
 
-                let (predicate_str, predicate) = match this.predicate {
-                    Some(predicate) => {
-                        let pred = match predicate {
-                            Expression::DataFusion(expr) => expr,
-                            Expression::String(s) => {
-                                let df_schema = source
-                                    .schema()
-                                    .as_ref()
-                                    .clone()
-                                    .replace_qualifier(UNNAMED_TABLE);
-                                parse_predicate_expression(&df_schema, s, session.as_ref())?
-                            }
-                        };
-                        (Some(fmt_expr_to_sql(&pred)?), Some(pred))
-                    }
-                    _ => (None, None),
-                };
+                let df_schema = source
+                    .schema()
+                    .as_ref()
+                    .clone()
+                    .replace_qualifier(UNNAMED_TABLE);
+                let predicate = this
+                    .predicate
+                    .map(|p| p.resolve(session.as_ref(), Arc::new(df_schema)))
+                    .transpose()?;
+                let predicate_str = predicate
+                    .as_ref()
+                    .map(|pred| fmt_expr_to_sql(pred))
+                    .transpose()?;
 
                 let config = this
                     .snapshot
