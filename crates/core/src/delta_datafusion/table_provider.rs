@@ -44,7 +44,6 @@ use datafusion::{
 use delta_kernel::Version;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
-use itertools::Itertools as _;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
