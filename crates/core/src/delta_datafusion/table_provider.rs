@@ -1071,7 +1071,7 @@ pub(crate) fn simplify_expr(
     df_schema: DFSchemaRef,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let context = SimplifyContext::new(&session.execution_props()).with_schema(df_schema.clone());
+    let context = SimplifyContext::new(session.execution_props()).with_schema(df_schema.clone());
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }

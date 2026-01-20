@@ -37,15 +37,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::DFSchema;
+use datafusion::common::ToDFSchema as _;
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
-use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
 };
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
@@ -205,22 +203,10 @@ impl std::future::IntoFuture for DeleteBuilder {
 
             register_store(this.log_store.clone(), session.runtime_env().as_ref());
 
-            let predicate = match this.predicate {
-                Some(predicate) => {
-                    let expr = match predicate {
-                        Expression::DataFusion(expr) => expr,
-                        Expression::String(s) => {
-                            snapshot.parse_predicate_expression(s, session.as_ref())?
-                        }
-                    };
-                    let df_schema = DFSchema::try_from(snapshot.arrow_schema())?;
-                    let context = SimplifyContext::new(session.execution_props())
-                        .with_schema(Arc::new(df_schema));
-                    let simplifier = ExprSimplifier::new(context);
-                    Some(simplifier.simplify(expr)?)
-                }
-                None => None,
-            };
+            let predicate = this
+                .predicate
+                .map(|p| p.resolve(session.as_ref(), snapshot.arrow_schema().to_dfschema_ref()?))
+                .transpose()?;
 
             let (new_snapshot, metrics) = execute(
                 predicate,

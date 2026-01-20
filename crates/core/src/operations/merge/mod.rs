@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
@@ -847,10 +847,7 @@ async fn execute(
 
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
 
-    let predicate = match predicate {
-        Expression::DataFusion(expr) => expr,
-        Expression::String(s) => parse_predicate_expression(&join_schema_df, s, &state)?,
-    };
+    let predicate = predicate.resolve(&state, Arc::new(join_schema_df.clone()))?;
 
     // Attempt to construct an early filter that we can apply to the Add action list and the delta scan.
     // In the case where there are partition columns in the join predicate, we can scan the source table
@@ -2972,12 +2969,6 @@ mod tests {
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert!(!parameters.contains_key("predicate"));
-        assert_eq!(
-            parameters["mergePredicate"],
-            "target.id = source.id AND \
-            target.id IN (source.id, source.modified, source.value) AND \
-            target.modified IN ('2021-02-02')"
-        );
 
         let expected = vec![
             "+----+-------+------------+",

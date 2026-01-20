@@ -3,7 +3,6 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::delta_datafusion::create_session;
-use deltalake::delta_datafusion::DeltaSessionContext;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::merge::MergeBuilder;

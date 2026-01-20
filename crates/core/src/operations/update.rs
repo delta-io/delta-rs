@@ -23,27 +23,23 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 use arrow::{array::AsArray, datatypes::UInt16Type};
 use arrow_array::StringArray;
 use async_trait::async_trait;
+use datafusion::error::Result as DataFusionResult;
 use datafusion::{
     catalog::Session,
-    common::{Column, HashSet, ScalarValue, exec_datafusion_err},
+    common::{Column, HashSet, ScalarValue, ToDFSchema as _, exec_datafusion_err},
+    datasource::provider_as_source,
+    error::DataFusionError,
+    execution::context::SessionState,
     functions_aggregate::expr_fn::first_value,
     logical_expr::utils::{conjunction, split_conjunction_owned},
-    optimizer::simplify_expressions::simplify_predicates,
-    physical_plan::{execute_stream, visit_execution_plan},
-    prelude::Expr,
-};
-use datafusion::{common::DFSchema, error::Result as DataFusionResult};
-use datafusion::{
-    datasource::provider_as_source,
-    execution::context::SessionState,
-    physical_plan::{ExecutionPlan, metrics::MetricBuilder},
-    physical_planner::{ExtensionPlanner, PhysicalPlanner},
-};
-use datafusion::{
-    error::DataFusionError,
     logical_expr::{
         Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
     },
+    optimizer::simplify_expressions::simplify_predicates,
+    physical_plan::{ExecutionPlan, metrics::MetricBuilder},
+    physical_plan::{execute_stream, visit_execution_plan},
+    physical_planner::{ExtensionPlanner, PhysicalPlanner},
+    prelude::Expr,
 };
 use datafusion_datasource::file_scan_config::wrap_partition_value_in_dict;
 use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
@@ -62,11 +58,11 @@ use crate::delta_datafusion::{
     DeltaScanNext, DeltaScanVisitor, Expression, FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
 };
 use crate::kernel::resolve_snapshot;
+use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::{delta_datafusion::expr::parse_predicate_expression, logstore::LogStoreRef};
 use crate::{
     delta_datafusion::{
         DeltaColumn, create_session,
@@ -286,15 +282,10 @@ async fn execute(
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
 
-    let schema = DFSchema::try_from(snapshot.arrow_schema())?;
+    let schema = snapshot.arrow_schema().to_dfschema_ref()?;
     let updates: HashMap<_, _> = updates
         .into_iter()
-        .map(|(key, expr)| match expr {
-            Expression::DataFusion(e) => Ok((key.name, e)),
-            Expression::String(s) => {
-                parse_predicate_expression(&schema, s, session).map(|e| (key.name, e))
-            }
-        })
+        .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
         .try_collect()?;
 
     let current_metadata = snapshot.metadata();
@@ -521,16 +512,10 @@ impl std::future::IntoFuture for UpdateBuilder {
                 ));
             }
 
-            let schema = DFSchema::try_from(snapshot.arrow_schema())?;
-            let predicate = match this.predicate {
-                Some(predicate) => match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    Expression::String(s) => {
-                        Some(parse_predicate_expression(&schema, s, session.as_ref())?)
-                    }
-                },
-                None => None,
-            };
+            let predicate = this
+                .predicate
+                .map(|p| p.resolve(session.as_ref(), snapshot.arrow_schema().to_dfschema_ref()?))
+                .transpose()?;
 
             let predicate = predicate.unwrap_or(lit(true));
             let operation = DeltaOperation::Update {
