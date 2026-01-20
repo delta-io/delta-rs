@@ -33,9 +33,6 @@ async fn parquet_provider(
     Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
-// Disabled for now. Does not compile
-
-/*
 #[rstest]
 #[tokio::test]
 async fn scan_dat(
@@ -78,6 +75,3 @@ async fn scan_dat(
 
     Ok(())
 }
-
-
-*/

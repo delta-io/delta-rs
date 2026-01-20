@@ -7,9 +7,6 @@ use rstest::rstest;
 
 static SKIPPED_TESTS: &[&str; 1] = &["iceberg_compat_v1"];
 
-// Disabled for now. Does not compile
-
-/*
 #[rstest]
 #[tokio::test]
 async fn test_protocol_and_meta(
@@ -38,6 +35,3 @@ async fn test_protocol_and_meta(
 
     Ok(())
 }
-
-
-*/
