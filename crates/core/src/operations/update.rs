@@ -56,6 +56,9 @@ use super::{
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
+use crate::table::file_format_options::{
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
+};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::{
@@ -74,7 +77,7 @@ use crate::{
 };
 use crate::{
     delta_datafusion::{find_files, planner::DeltaPlanner, register_store},
-    kernel::resolve_snapshot,
+    kernel::resolve_snapshot_with_config,
 };
 
 /// Custom column name used for marking internal [RecordBatch] rows as updated
@@ -98,7 +101,7 @@ pub struct UpdateBuilder {
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -136,13 +139,18 @@ impl super::Operation for UpdateBuilder {
 impl UpdateBuilder {
     /// Create a new ['UpdateBuilder']
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let writer_properties_factory = snapshot
+            .as_ref()
+            .map(|ss| ss.load_config().file_format_options.clone())
+            .flatten()
+            .map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             updates: HashMap::new(),
             snapshot,
             log_store,
             session: None,
-            writer_properties: None,
+            writer_properties_factory,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
             custom_execute_handler: None,
@@ -179,7 +187,8 @@ impl UpdateBuilder {
 
     /// Writer properties passed to parquet writer for when fiiles are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -256,7 +265,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: SessionState,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     mut commit_properties: CommitProperties,
     _safe_cast: bool,
     operation_id: Uuid,
@@ -283,6 +292,9 @@ async fn execute(
         })
         .cloned()
         .collect();
+
+    let file_format_options = snapshot.load_config().file_format_options.clone();
+    let session = state_with_file_format_options(session, file_format_options.as_ref())?;
 
     let update_planner = DeltaPlanner::new();
 
@@ -400,6 +412,14 @@ async fn execute(
 
     let tracker = CDCTracker::new(df, updated_df);
 
+    let writer_properties_factory = if writer_properties_factory.is_some() {
+        writer_properties_factory
+    } else {
+        file_format_options
+            .clone()
+            .map(|ffo| ffo.writer_properties_factory())
+    };
+
     let add_actions = write_execution_plan(
         Some(&snapshot),
         &session,
@@ -408,7 +428,7 @@ async fn execute(
         log_store.object_store(Some(operation_id)).clone(),
         Some(snapshot.table_properties().target_file_size().get() as usize),
         None,
-        writer_properties.clone(),
+        writer_properties_factory.clone(),
         writer_stats_config.clone(),
     )
     .await?;
@@ -470,7 +490,7 @@ async fn execute(
                     log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_properties().target_file_size().get() as usize),
                     None,
-                    writer_properties,
+                    writer_properties_factory,
                     writer_stats_config,
                 )
                 .await?;
@@ -499,8 +519,15 @@ impl std::future::IntoFuture for UpdateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
@@ -523,7 +550,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.log_store.clone(),
                 snapshot,
                 state.clone(),
-                this.writer_properties,
+                this.writer_properties_factory,
                 this.commit_properties,
                 this.safe_cast,
                 operation_id,
