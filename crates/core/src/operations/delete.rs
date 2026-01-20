@@ -250,7 +250,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot,
-                &session.as_ref().clone(),
+                session.as_ref(),
                 this.writer_properties_factory,
                 this.commit_properties,
                 operation_id,
