@@ -4,14 +4,15 @@
 //! and applies Delta Lake protocol transformations to produce logical table data.
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayAccessor, AsArray, RecordBatch, StringArray};
+use arrow::array::{ArrayAccessor, RecordBatch, StringArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
-use arrow_array::BooleanArray;
+use arrow_array::{Array, BooleanArray};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
@@ -283,6 +284,7 @@ impl ExecutionPlan for DeltaScanExec {
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_column: self.file_id_column.clone(),
             return_file_ids: self.retain_file_ids,
+            pending: VecDeque::new(),
         }))
     }
 
@@ -342,8 +344,8 @@ impl ExecutionPlan for DeltaScanExec {
 /// - Schema projection: Projects to requested columns only
 /// - Type casting: Ensures output matches expected logical schema
 ///
-/// Each batch is processed independently, with transformations looked up by file ID
-/// from the batch's partition values.
+/// Input batches may contain rows from multiple file IDs (e.g., due to upstream coalescing).
+/// The stream splits such batches by contiguous file-id runs and applies per-file transforms.
 struct DeltaScanStream {
     scan_plan: Arc<KernelScanPlan>,
     /// Kernel data type for the data after transformations
@@ -360,21 +362,34 @@ struct DeltaScanStream {
     file_id_column: String,
     /// Denotes if file ids should be returned as part of the output
     return_file_ids: bool,
+    pending: VecDeque<RecordBatch>,
 }
 
 impl DeltaScanStream {
-    /// Apply the per-file transformation to a RecordBatch.
-    fn batch_project(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+    fn batch_project(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         if batch.num_rows() == 0 {
-            return Ok(RecordBatch::new_empty(Arc::clone(
+            return Ok(vec![RecordBatch::new_empty(Arc::clone(
                 &self.scan_plan.output_schema,
-            )));
+            ))]);
         }
 
-        let (file_id, file_id_idx) = extract_file_id(&batch, &self.file_id_column)?;
+        let file_id_idx = file_id_column_idx(&batch, &self.file_id_column)?;
+        let file_runs = split_by_file_id_runs(&batch, file_id_idx)?;
 
+        file_runs
+            .into_iter()
+            .map(|(file_id, slice)| self.batch_project_single_file(slice, file_id, file_id_idx))
+            .collect::<Result<Vec<_>>>()
+    }
+
+    fn batch_project_single_file(
+        &self,
+        batch: RecordBatch,
+        file_id: String,
+        file_id_idx: usize,
+    ) -> Result<RecordBatch> {
         let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
         {
             consume_dv_mask(&mut selection_vector, batch.num_rows())
@@ -395,8 +410,6 @@ impl DeltaScanStream {
             batch
         };
 
-        // NOTE: we remove the file id column after applying the selection vector
-        // to get the correct number of rows in case we need to return source file ids later.
         let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
@@ -432,15 +445,40 @@ impl Stream for DeltaScanStream {
     type Item = Result<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Some(batch) = self.pending.pop_front() {
+            return self
+                .baseline_metrics
+                .record_poll(Poll::Ready(Some(Ok(batch))));
+        }
+
         let poll = self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => Some(self.batch_project(batch)),
+            Some(Ok(batch)) => {
+                let projected = match self.batch_project(batch) {
+                    Ok(outputs) => {
+                        let mut outputs = outputs.into_iter();
+                        match outputs.next() {
+                            Some(first) => {
+                                self.pending.extend(outputs);
+                                Ok(first)
+                            }
+                            None => {
+                                Err(internal_datafusion_err!("batch_project returned no output"))
+                            }
+                        }
+                    }
+                    Err(err) => Err(err),
+                };
+                Some(projected)
+            }
             other => other,
         });
+
         self.baseline_metrics.record_poll(poll)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.input.size_hint()
+        let (low, _high) = self.input.size_hint();
+        (self.pending.len() + low, None)
     }
 }
 
@@ -450,14 +488,9 @@ impl RecordBatchStream for DeltaScanStream {
     }
 }
 
-fn extract_file_id(batch: &RecordBatch, file_id_column: &str) -> Result<(String, usize)> {
-    if batch.num_rows() == 0 {
-        return Err(internal_datafusion_err!(
-            "Cannot extract file_id from empty batch"
-        ));
-    }
-
-    let file_id_idx = batch
+#[inline]
+fn file_id_column_idx(batch: &RecordBatch, file_id_column: &str) -> Result<usize> {
+    batch
         .schema_ref()
         .fields()
         .iter()
@@ -467,25 +500,72 @@ fn extract_file_id(batch: &RecordBatch, file_id_column: &str) -> Result<(String,
                 "Expected column '{}' to be present in the input",
                 file_id_column
             )
+        })
+}
+
+/// Split batch into contiguous runs by file ID. Compares dictionary keys for efficiency.
+/// Returns zero-copy slices. Errors on null file IDs or unexpected column type.
+fn split_by_file_id_runs(
+    batch: &RecordBatch,
+    file_id_idx: usize,
+) -> Result<Vec<(String, RecordBatch)>> {
+    if batch.num_rows() == 0 {
+        return Ok(Vec::new());
+    }
+
+    let dict = batch
+        .column(file_id_idx)
+        .as_any()
+        .downcast_ref::<arrow_array::DictionaryArray<UInt16Type>>()
+        .ok_or_else(|| {
+            internal_datafusion_err!(
+                "Expected file id column '{}' to be Dictionary<UInt16, Utf8>, got {:?}",
+                batch.schema_ref().field(file_id_idx).name(),
+                batch.column(file_id_idx).data_type()
+            )
         })?;
 
-    let file_id = batch
-        .column(file_id_idx)
-        .as_dictionary::<UInt16Type>()
-        .downcast_dict::<StringArray>()
-        .ok_or_else(|| {
-            internal_datafusion_err!("Expected file id column to be a dictionary of strings")
-        })?
-        .value(0)
-        .to_string();
+    let typed = dict.downcast_dict::<StringArray>().ok_or_else(|| {
+        internal_datafusion_err!(
+            "Expected file id column '{}' to be Dictionary<UInt16, Utf8>, got {:?}",
+            batch.schema_ref().field(file_id_idx).name(),
+            batch.column(file_id_idx).data_type()
+        )
+    })?;
 
-    Ok((file_id, file_id_idx))
+    if dict.is_null(0) {
+        return Err(internal_datafusion_err!("file id value must not be null"));
+    }
+
+    let keys = typed.keys();
+    let mut prev_key = keys.value(0);
+    let mut start = 0usize;
+    let mut runs = Vec::new();
+
+    for i in 1..batch.num_rows() {
+        if dict.is_null(i) {
+            return Err(internal_datafusion_err!("file id value must not be null"));
+        }
+        let key = keys.value(i);
+        if key != prev_key {
+            let file_id = typed.value(start).to_string();
+            runs.push((file_id, batch.slice(start, i - start)));
+            start = i;
+            prev_key = key;
+        }
+    }
+
+    let file_id = typed.value(start).to_string();
+    runs.push((file_id, batch.slice(start, batch.num_rows() - start)));
+
+    Ok(runs)
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::AsArray;
     use arrow::datatypes::DataType;
     use arrow_array::Array;
     use datafusion::{
@@ -497,7 +577,7 @@ mod tests {
     use super::*;
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::session::create_session,
+        delta_datafusion::{session::create_session, table_provider::next::FILE_ID_COLUMN_DEFAULT},
         test_utils::{TestResult, open_fs_path},
     };
 
@@ -953,25 +1033,311 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_extract_file_id_empty_batch_returns_error() {
+    // DV test helpers
+    const DV_TABLE_PATH: &str = "../../dat/v0.0.3/reader_tests/generated/deletion_vectors/delta";
+
+    async fn dv_kernel_type_and_int32_scan_plan()
+    -> TestResult<(KernelDataType, Arc<KernelScanPlan>)> {
         use arrow::datatypes::{Field, Schema};
 
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "file_id",
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+        let table = open_fs_path(DV_TABLE_PATH);
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("Expected DeltaScanExec");
+
+        let kernel_type = Arc::clone(exec.delta_plan().scan.logical_schema()).into();
+
+        let mut scan_plan = exec.delta_plan().clone();
+        scan_plan.result_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
             false,
         )]));
-        let empty_batch = RecordBatch::new_empty(schema);
+        scan_plan.output_schema = Arc::clone(&scan_plan.result_schema);
+        scan_plan.result_projection = None;
+        scan_plan.parquet_read_schema = Arc::clone(&scan_plan.result_schema);
 
-        let result = super::extract_file_id(&empty_batch, "file_id");
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Cannot extract file_id from empty batch")
+        Ok((kernel_type, Arc::new(scan_plan)))
+    }
+
+    fn selection_vectors_f1_f2() -> Arc<DashMap<String, Vec<bool>>> {
+        let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
+        selection_vectors.insert("f1".to_string(), vec![true, false]);
+        selection_vectors.insert("f2".to_string(), vec![false, true]);
+        selection_vectors
+    }
+
+    fn value_and_file_id_batch(
+        values: &[i32],
+        file_ids: &[Option<&str>],
+        file_id_nullable: bool,
+    ) -> TestResult<RecordBatch> {
+        use arrow::datatypes::{Field, Schema};
+        use arrow_array::{DictionaryArray, Int32Array};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new(
+                FILE_ID_COLUMN_DEFAULT,
+                DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+                file_id_nullable,
+            ),
+        ]));
+
+        let mut file_id_builder =
+            arrow_array::builder::StringDictionaryBuilder::<UInt16Type>::new();
+        for file_id in file_ids {
+            match file_id {
+                Some(file_id) => file_id_builder.append_value(file_id),
+                None => file_id_builder.append_null(),
+            }
+        }
+        let file_id: DictionaryArray<UInt16Type> = file_id_builder.finish();
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(values.to_vec())),
+                Arc::new(file_id),
+            ],
+        )?;
+
+        Ok(batch)
+    }
+
+    fn test_scan_stream(
+        scan_plan: Arc<KernelScanPlan>,
+        kernel_type: KernelDataType,
+        selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        input_batches: Vec<RecordBatch>,
+        return_file_ids: bool,
+    ) -> DeltaScanStream {
+        use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+
+        let input_schema = input_batches
+            .first()
+            .map(|b| b.schema())
+            .unwrap_or_else(|| Arc::clone(&scan_plan.output_schema));
+
+        let input = Box::pin(RecordBatchStreamAdapter::new(
+            input_schema,
+            futures::stream::iter(input_batches.into_iter().map(Ok)),
+        ));
+
+        DeltaScanStream {
+            scan_plan,
+            kernel_type,
+            input,
+            baseline_metrics: BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+            transforms: Arc::new(HashMap::new()),
+            selection_vectors,
+            file_id_column: FILE_ID_COLUMN_DEFAULT.to_string(),
+            return_file_ids,
+            pending: VecDeque::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_splits_mixed_file_batches_for_dv_masks() -> TestResult {
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let selection_vectors = selection_vectors_f1_f2();
+
+        let batch = value_and_file_id_batch(
+            &[10, 11, 20, 21],
+            &[Some("f1"), Some("f1"), Some("f2"), Some("f2")],
+            false,
+        )?;
+
+        let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
+        let runs = split_by_file_id_runs(&batch, file_id_idx)?;
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].0, "f1");
+        assert_eq!(runs[1].0, "f2");
+        assert!(selection_vectors.contains_key("f1"));
+        assert!(selection_vectors.contains_key("f2"));
+
+        let stream = test_scan_stream(
+            Arc::clone(&scan_plan),
+            kernel_type,
+            selection_vectors,
+            Vec::new(),
+            false,
         );
+
+        let outputs = stream.batch_project(batch)?;
+        assert_eq!(outputs.len(), 2);
+
+        let out1 = outputs[0]
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let out2 = outputs[1]
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        assert_eq!(out1.values(), &[10]);
+        assert_eq!(out2.values(), &[21]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_next_buffers_fanout_batches() -> TestResult {
+        use futures::StreamExt;
+
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let selection_vectors = selection_vectors_f1_f2();
+
+        let batch = value_and_file_id_batch(
+            &[10, 11, 20, 21],
+            &[Some("f1"), Some("f1"), Some("f2"), Some("f2")],
+            false,
+        )?;
+
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            selection_vectors,
+            vec![batch],
+            false,
+        );
+
+        let batch1 = stream.next().await.transpose()?.expect("first batch");
+        let batch2 = stream.next().await.transpose()?.expect("second batch");
+        assert!(stream.next().await.is_none());
+
+        let out1 = batch1
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let out2 = batch2
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        assert_eq!(out1.values(), &[10]);
+        assert_eq!(out2.values(), &[21]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_handles_interleaved_file_ids() -> TestResult {
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let selection_vectors = selection_vectors_f1_f2();
+
+        let batch = value_and_file_id_batch(
+            &[10, 20, 11, 21],
+            &[Some("f1"), Some("f2"), Some("f1"), Some("f2")],
+            false,
+        )?;
+
+        let stream = test_scan_stream(
+            Arc::clone(&scan_plan),
+            kernel_type,
+            selection_vectors,
+            Vec::new(),
+            false,
+        );
+
+        let outputs = stream.batch_project(batch)?;
+        let kept: Vec<i32> = outputs
+            .iter()
+            .flat_map(|b| {
+                b.column(0)
+                    .as_primitive::<arrow::datatypes::Int32Type>()
+                    .values()
+                    .iter()
+                    .copied()
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+
+        assert_eq!(kept, vec![10, 21]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_by_file_id_runs_invalid_type_returns_error() -> TestResult {
+        use arrow::datatypes::{Field, Schema};
+        use arrow_array::Int32Array;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new(FILE_ID_COLUMN_DEFAULT, DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            ],
+        )?;
+
+        let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
+        let err = split_by_file_id_runs(&batch, file_id_idx).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("Dictionary<UInt16, Utf8>"));
+        assert!(message.contains("Int32"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_split_by_file_id_runs_null_file_id_returns_error() -> TestResult {
+        let batch = value_and_file_id_batch(&[1, 2], &[Some("f1"), None], true)?;
+
+        let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
+        let err = split_by_file_id_runs(&batch, file_id_idx).unwrap_err();
+        assert!(err.to_string().contains("file id value must not be null"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_next_fanout_preserves_file_ids() -> TestResult {
+        use futures::StreamExt;
+
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let selection_vectors = selection_vectors_f1_f2();
+
+        let batch = value_and_file_id_batch(
+            &[10, 11, 20, 21],
+            &[Some("f1"), Some("f1"), Some("f2"), Some("f2")],
+            false,
+        )?;
+
+        let mut stream =
+            test_scan_stream(scan_plan, kernel_type, selection_vectors, vec![batch], true);
+
+        let batch1 = stream.next().await.transpose()?.expect("first batch");
+        let batch2 = stream.next().await.transpose()?.expect("second batch");
+        assert!(stream.next().await.is_none());
+
+        assert_eq!(batch1.num_columns(), 2);
+        assert_eq!(batch2.num_columns(), 2);
+
+        let file_id1 = batch1
+            .column(1)
+            .as_dictionary::<UInt16Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_string();
+        let file_id2 = batch2
+            .column(1)
+            .as_dictionary::<UInt16Type>()
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .value(0)
+            .to_string();
+
+        assert_eq!(file_id1, "f1");
+        assert_eq!(file_id2, "f2");
+
+        Ok(())
     }
 
     #[test]
