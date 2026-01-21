@@ -411,10 +411,6 @@ pub(crate) struct MatchedFilesScan {
     /// we do not (yet) have full coverage to translate datafusion to
     /// kernel predicates.
     pub(crate) delta_predicate: Arc<Predicate>,
-    /// The predicate contains only partition column references
-    ///
-    /// This implies that for each matched file all data matches.
-    pub(crate) partition_only: bool,
 }
 
 impl MatchedFilesScan {
@@ -460,7 +456,6 @@ pub(crate) async fn scan_files_where_matches(
         .table_configuration()
         .metadata()
         .partition_columns();
-    let mut partition_only = true;
     // validate that the expressions contain no illegal variants
     // that are not eligible for file skipping, e.g. volatile functions.
     for term in &skipping_pred {
@@ -470,7 +465,6 @@ pub(crate) async fn scan_files_where_matches(
             result: Ok(()),
         };
         term.visit(&mut visitor)?;
-        partition_only = partition_only && visitor.partition_only;
         visitor.result?
     }
 
@@ -523,18 +517,6 @@ pub(crate) async fn scan_files_where_matches(
         .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
         .collect_vec();
 
-    // let files_source = provider_as_source(Arc::new(MemTable::try_new(
-    //     files_plan.schema().inner().clone(),
-    //     files_data,
-    // )?));
-    // let files_plan = LogicalPlanBuilder::scan("files_scan", files_source, None)?.build()?;
-    // let join_expr = col(Column::new(Some("scan"), FILE_ID_COLUMN_DEFAULT))
-    //     .eq(col(Column::new(Some("files_scan"), FILE_ID_COLUMN_DEFAULT)));
-    // let plan = LogicalPlanBuilder::scan("scan", table_source, None)?
-    //     .join_on(files_plan, JoinType::LeftAnti, [join_expr])?
-    //     .drop_columns([FILE_ID_COLUMN_DEFAULT])?
-    //     .build()?;
-
     // Crate a table scan limiting the data to that originating from valid files.
     let file_list = valid_files
         .iter()
@@ -551,6 +533,5 @@ pub(crate) async fn scan_files_where_matches(
         valid_files,
         predicate,
         delta_predicate,
-        partition_only,
     }))
 }
