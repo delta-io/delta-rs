@@ -5,9 +5,9 @@ use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::ToDFSchema;
-use datafusion::datasource::{MemTable, provider_as_source};
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
+use datafusion::logical_expr::{Expr, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
@@ -21,17 +21,13 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    generated_columns_to_exprs,
-    logical::{LogicalPlanBuilderExt as _, LogicalPlanExt as _},
-    validation_predicates,
+    DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
-use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
-use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
+use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
+use crate::logstore::{LogStore, ObjectStoreRef};
+use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
-use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -129,136 +125,6 @@ pub(crate) async fn write_execution_plan(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_non_empty_expr(
-    snapshot: &EagerSnapshot,
-    log_store: LogStoreRef,
-    session: &dyn Session,
-    partition_columns: Vec<String>,
-    expression: &Expr,
-    rewrite: &[Add],
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
-    partition_scan: bool,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
-    // For each identified file perform a parquet scan + filter + limit (1) + count.
-    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
-    let mut actions: Vec<Action> = Vec::new();
-
-    // Take the insert plan schema since it might have been schema evolved, if its not
-    // it is simply the table schema
-    let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(snapshot.input_schema())
-        .build(snapshot)?;
-
-    let target_provider = Arc::new(
-        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_files(rewrite.to_vec()),
-    );
-
-    let source = Arc::new(
-        LogicalPlanBuilder::scan("target", provider_as_source(target_provider), None)?.build()?,
-    );
-
-    let cdf_df = if !partition_scan {
-        // Apply the negation of the filter and rewrite files
-        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-        let filter = LogicalPlanBuilder::from(source.clone())
-            .filter(negated_expression)?
-            .build()?;
-        let filter = session.create_physical_plan(&filter).await?;
-
-        let add_actions: Vec<Action> = write_execution_plan(
-            Some(snapshot),
-            session,
-            filter,
-            partition_columns.clone(),
-            log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
-            None,
-            writer_properties.clone(),
-            writer_stats_config.clone(),
-        )
-        .await?;
-
-        actions.extend(add_actions);
-
-        // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-        // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
-        // based on the remove actions if a partition got deleted
-        if should_write_cdc(snapshot)? {
-            Some(
-                source
-                    .into_builder()
-                    .filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?
-                    .build()?,
-            )
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Ok((actions, cdf_df))
-}
-
-// This should only be called with a valid predicate
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn prepare_predicate_actions(
-    predicate: Expr,
-    log_store: LogStoreRef,
-    snapshot: &EagerSnapshot,
-    session: &dyn Session,
-    partition_columns: Vec<String>,
-    writer_properties: Option<WriterProperties>,
-    deletion_timestamp: i64,
-    writer_stats_config: WriterStatsConfig,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
-    let candidates = find_files(
-        snapshot,
-        log_store.clone(),
-        session,
-        Some(predicate.clone()),
-    )
-    .await?;
-
-    let (mut actions, cdf_df) = execute_non_empty_expr(
-        snapshot,
-        log_store,
-        session,
-        partition_columns,
-        &predicate,
-        &candidates.candidates,
-        writer_properties,
-        writer_stats_config,
-        candidates.partition_scan,
-        operation_id,
-    )
-    .await?;
-
-    let remove = candidates.candidates;
-
-    for action in remove {
-        actions.push(Action::Remove(Remove {
-            path: action.path,
-            deletion_timestamp: Some(deletion_timestamp),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values),
-            size: Some(action.size),
-            deletion_vector: action.deletion_vector,
-            tags: None,
-            base_row_id: action.base_row_id,
-            default_row_commit_version: action.default_row_commit_version,
-        }))
-    }
-    Ok((actions, cdf_df))
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
     session: &dyn Session,
@@ -276,7 +142,11 @@ pub(crate) async fn write_execution_plan_v2(
     // the schema and batches were prior constructed with this in mind.
     let schema = plan.schema();
     let mut validations = if let Some(snapshot) = snapshot {
-        validation_predicates(session, plan.clone(), snapshot.table_configuration())?
+        validation_predicates(
+            session,
+            &plan.schema().to_dfschema()?,
+            snapshot.table_configuration(),
+        )?
     } else {
         debug!(
             "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."
@@ -383,7 +253,7 @@ async fn write_data_plan(
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let config = WriterConfig::new(
-        plan.schema().clone(),
+        plan.schema(),
         partition_columns.clone(),
         writer_properties.clone(),
         target_file_size,
@@ -563,7 +433,6 @@ async fn write_cdc_plan(
                     false,
                 ))?;
 
-                // Concatenate with the CDF_schema, since we need to keep the _change_type col
                 let mut normal_stream = normal_df.execute_stream().await?;
                 while let Some(mut normal_batch) = normal_stream.try_next().await? {
                     // Drop the CDC_COLUMN ("_change_type")

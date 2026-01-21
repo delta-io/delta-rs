@@ -78,11 +78,7 @@ pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
     next::DeltaScanExec,
 };
-pub(crate) use table_provider::{
-    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
-};
-
-pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
+pub(crate) use table_provider::{next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session};
 
 pub mod cdf;
 mod data_validation;
@@ -610,6 +606,7 @@ impl From<Column> for DeltaColumn {
 #[cfg(test)]
 mod tests {
     use crate::DeltaTable;
+    use crate::delta_datafusion::table_provider::DeltaScanBuilder;
     use crate::logstore::ObjectStoreRef;
     use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
@@ -1391,8 +1388,8 @@ mod tests {
 
         let expected = vec![
             ObjectStoreOperation::Get(LocationType::Commit),
-            ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
-            ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
+            ObjectStoreOperation::GetRange(LocationType::Data, 943..951),
+            ObjectStoreOperation::GetRange(LocationType::Data, 312..943),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;

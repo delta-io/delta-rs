@@ -150,6 +150,7 @@ impl DeltaScanExec {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn delta_plan(&self) -> &KernelScanPlan {
         &self.scan_plan
     }

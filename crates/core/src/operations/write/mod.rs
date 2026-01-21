@@ -26,55 +26,52 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use std::vec;
 
 use arrow::array::RecordBatch;
 use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, Result, ScalarValue};
+use datafusion::common::plan_datafusion_err;
 use datafusion::datasource::{MemTable, provider_as_source};
-use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
-};
-use datafusion::prelude::col;
+use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use futures::{TryStreamExt as _, future::BoxFuture};
-use itertools::Itertools as _;
+use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::TableFeature;
+use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
+use uuid::Uuid;
 
 pub use self::configs::WriterStatsConfig;
-use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
-use self::generated_columns::{gc_is_enabled, with_generated_columns};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
-use self::schema_evolution::try_cast_schema;
-use super::cdc::CDC_COLUMN_NAME;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::Expression;
+use crate::delta_datafusion::create_session;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::logical::{
+    LogicalPlanBuilderExt, LogicalPlanExt as _, MetricObserver,
+};
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
-use crate::delta_datafusion::{create_session, register_store};
+use crate::delta_datafusion::{update_datafusion_session, validation_predicates};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
-    new_metadata,
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, new_metadata,
 };
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStore, LogStoreExt, LogStoreRef};
+use crate::operations::write::execution::write_exec_plan;
+use crate::operations::write::plan::{SchemaAction, plan_insert, plan_overwrite};
 use crate::protocol::{DeltaOperation, SaveMode};
 
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
-pub(crate) mod schema_evolution;
+mod plan;
 pub mod writer;
 
 #[derive(thiserror::Error, Debug)]
@@ -85,9 +82,7 @@ pub(crate) enum WriteError {
     #[error("A table already exists at: {0}")]
     AlreadyExists(Url),
 
-    #[error(
-        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}"
-    )]
+    #[error("Partitioning mispatch: expected: {expected:?}, got: {got:?}")]
     PartitionColumnMismatch {
         expected: Vec<String>,
         got: Vec<String>,
@@ -119,7 +114,8 @@ impl FromStr for SchemaMode {
             "overwrite" => Ok(SchemaMode::Overwrite),
             "merge" => Ok(SchemaMode::Merge),
             _ => Err(DeltaTableError::Generic(format!(
-                "Invalid schema write mode provided: {s}, only these are supported: ['overwrite', 'merge']"
+                "Invalid schema write mode provided: {s}, \
+                supported values are: ['overwrite', 'merge']"
             ))),
         }
     }
@@ -276,6 +272,10 @@ impl WriteBuilder {
     }
 
     /// Specify the writer properties to use when writing a parquet file
+    #[deprecated(
+        since = "0.31.0",
+        note = "No effect, parquet writer properties are set via datafusion session options"
+    )]
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
@@ -334,63 +334,69 @@ impl WriteBuilder {
         self
     }
 
-    fn get_partition_columns(&self) -> Result<Vec<String>, WriteError> {
-        // validate partition columns
-        let active_partitions = self
-            .snapshot
-            .as_ref()
-            .map(|s| s.metadata().partition_columns().clone());
-
-        if let Some(active_part) = active_partitions {
-            if let Some(ref partition_columns) = self.partition_columns {
-                if &active_part != partition_columns {
-                    Err(WriteError::PartitionColumnMismatch {
-                        expected: active_part,
-                        got: partition_columns.to_vec(),
-                    })
-                } else {
-                    Ok(partition_columns.clone())
-                }
-            } else {
-                Ok(active_part)
-            }
-        } else {
-            Ok(self.partition_columns.clone().unwrap_or_default())
-        }
-    }
-
-    async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
+    /// Gather and validate preconditions for the write operation
+    ///
+    /// Since we may be creating a new table, or writing to an existing one,
+    /// we need to decide how to gather the necessary information to proceed.
+    ///
+    /// This method does not perform any IO operations or attempts to create
+    /// a table. Consuming code needs to commit the actions if desired.
+    ///
+    /// ## Returns:
+    /// - A vector of actions to initialize the table (if new)
+    /// - The logical plan to be inserted into the table
+    /// - An optional snapshot of the existing table (if any)
+    /// - An optional table configuration (if new table)
+    fn check_preconditions(
+        &mut self,
+    ) -> DeltaResult<(
+        Vec<Action>,
+        LogicalPlan,
+        Option<EagerSnapshot>,
+        Option<TableConfiguration>,
+    )> {
         if self.schema_mode == Some(SchemaMode::Overwrite) && self.mode != SaveMode::Overwrite {
             return Err(DeltaTableError::Generic(
                 "Schema overwrite not supported for Append".to_string(),
             ));
         }
 
-        let input = self
-            .input
-            .as_ref()
-            .ok_or::<DeltaTableError>(WriteError::MissingData.into())?;
-        let schema: StructType = input.schema().as_arrow().try_into_kernel()?;
+        let Some(source) = self.input.take() else {
+            return Err(WriteError::MissingData.into());
+        };
 
-        match &self.snapshot {
+        let schema: StructType = source.schema().as_arrow().try_into_kernel()?;
+
+        match self.snapshot.take() {
             Some(snapshot) => {
                 if self.mode == SaveMode::Overwrite {
-                    PROTOCOL.check_append_only(snapshot)?;
+                    PROTOCOL.check_append_only(&snapshot)?;
                     if !snapshot.load_config().require_files {
                         return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
                 }
 
-                PROTOCOL.can_write_to(snapshot)?;
+                PROTOCOL.can_write_to(&snapshot)?;
+
+                if let Some(partitions) = self.partition_columns.as_ref() {
+                    let active_partitions = snapshot.metadata().partition_columns();
+                    if active_partitions != partitions {
+                        return Err(WriteError::PartitionColumnMismatch {
+                            expected: active_partitions.clone(),
+                            got: partitions.clone(),
+                        }
+                        .into());
+                    }
+                }
 
                 if self.schema_mode.is_none() {
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_timestamp_ntz(&snapshot, &schema)?;
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_url().clone()).into())
                     }
-                    _ => Ok(vec![]),
+                    _ => Ok((vec![], source, Some(snapshot), None)),
                 }
             }
             None => {
@@ -410,8 +416,38 @@ impl WriteBuilder {
                     builder = builder.with_comment(desc.clone());
                 };
 
-                let (_, actions, _, _) = builder.into_table_and_actions().await?;
-                Ok(actions)
+                let (_, actions, _) = builder.into_table_and_actions()?;
+                let protocol = actions
+                    .iter()
+                    .find_map(|a| match a {
+                        Action::Protocol(p) => Some(p),
+                        _ => None,
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("expected protocol action for new table.")
+                    })?;
+                let metadata = actions
+                    .iter()
+                    .find_map(|a| match a {
+                        Action::Metadata(m) => Some(m),
+                        _ => None,
+                    })
+                    .cloned()
+                    .ok_or_else(|| {
+                        plan_datafusion_err!("expected metadata action for new table.")
+                    })?;
+                Ok((
+                    actions,
+                    source,
+                    None,
+                    Some(TableConfiguration::try_new(
+                        metadata,
+                        protocol,
+                        self.log_store.table_root_url(),
+                        0,
+                    )?),
+                ))
             }
         }
     }
@@ -432,286 +468,38 @@ impl std::future::IntoFuture for WriteBuilder {
                 let operation_id = this.get_operation_id();
                 this.pre_execute(operation_id).await?;
 
-                let mut metrics = WriteMetrics::default();
-                let exec_start = Instant::now();
-
-                // Create table actions to initialize table in case it does not yet exist
-                // and should be created
-                let mut actions = this.check_preconditions().await?;
-
-                let Some(mut source) = this.input.take() else {
-                    return Err(WriteError::MissingData.into());
-                };
-
-                let partition_columns = this.get_partition_columns()?;
-
-                let session = this
-                    .session
-                    .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-                register_store(this.log_store.clone(), session.runtime_env().as_ref());
-
-                let mut schema_drift = false;
-
-                let table_schema = if let Some(snapshot) = this.snapshot.as_ref() {
-                    snapshot.arrow_schema()
+                let session = if let Some(session) = &this.session {
+                    session.clone()
                 } else {
-                    source.schema().inner().clone()
+                    Arc::new(create_session().into_inner().state())
+                };
+                update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
+
+                // Gather base information about the table. We either have an existing table
+                // or we are creating a new one. In the latter case we will not have a snapshot
+                // but we will have the thecofiguration the table will be created with.
+                let (init_actions, source, maybe_snapshot, maybe_config) =
+                    this.check_preconditions()?;
+                let table_config = if let Some(snapshot) = &maybe_snapshot {
+                    snapshot.table_configuration().clone()
+                } else if let Some(config) = maybe_config {
+                    config
+                } else {
+                    return Err(DeltaTableError::Generic(
+                        "Unable to determine table configuration".into(),
+                    ));
                 };
 
-                if let Some(snapshot) = &this.snapshot
-                    && gc_is_enabled(snapshot)
-                {
-                    source = with_generated_columns(
-                        session.as_ref(),
-                        source,
-                        &table_schema,
-                        &snapshot.schema().get_generated_columns()?,
-                    )?
-                    .into();
-                }
-
-                let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
-
-                // Schema merging code should be aware of columns that can be generated during write
-                // so they might be empty in the batch, but the will exist in the input_schema()
-                // in this case we have to insert the generated column and it's type in the schema of the batch
-                let mut new_schema = None;
-                if let Some(snapshot) = &this.snapshot {
-                    let table_schema = snapshot.input_schema();
-
-                    if let Err(schema_err) =
-                        try_cast_schema(source_schema.fields(), table_schema.fields())
-                    {
-                        schema_drift = true;
-                        if this.mode == SaveMode::Overwrite
-                            && this.schema_mode == Some(SchemaMode::Overwrite)
-                        {
-                            new_schema = None // we overwrite anyway, so no need to cast
-                        } else if this.schema_mode == Some(SchemaMode::Merge) {
-                            new_schema = Some(merge_arrow_schema(
-                                table_schema.clone(),
-                                source_schema.clone(),
-                                schema_drift,
-                            )?);
-                        } else {
-                            return Err(schema_err.into());
-                        }
-                    } else if this.mode == SaveMode::Overwrite
-                        && this.schema_mode == Some(SchemaMode::Overwrite)
-                    {
-                        new_schema = None // we overwrite anyway, so no need to cast
-                    } else {
-                        // Schema needs to be merged so that utf8/binary/list types are preserved from the batch side if both table
-                        // and batch contains such type. Other types are preserved from the table side.
-                        // At this stage it will never introduce more fields since try_cast_batch passed correctly.
-                        new_schema = Some(merge_arrow_schema(
-                            table_schema.clone(),
-                            source_schema.clone(),
-                            schema_drift,
-                        )?);
-                    }
-                }
-
-                if let Some(new_schema) = new_schema {
-                    let mut schema_evolution_projection =
-                        Vec::with_capacity(new_schema.fields().len());
-                    for field in new_schema.fields() {
-                        // If field exist in source data, we cast to new datatype
-                        if source_schema.index_of(field.name()).is_ok() {
-                            let cast_fn = if this.safe_cast { try_cast } else { cast };
-                            let cast_expr = cast_fn(
-                                Expr::Column(Column::from_name(field.name())),
-                                // col(field.name()),
-                                field.data_type().clone(),
-                            )
-                            .alias(field.name());
-                            schema_evolution_projection.push(cast_expr)
-                        // If field doesn't exist in source data, we insert the column
-                        // with null values
-                        } else {
-                            schema_evolution_projection.push(
-                                cast(
-                                    lit(ScalarValue::Null).alias(field.name()),
-                                    field.data_type().clone(),
-                                )
-                                .alias(field.name()),
-                            );
-                        }
-                    }
-                    source = LogicalPlanBuilder::new(source)
-                        .project(schema_evolution_projection)?
-                        .build()?;
-                }
-
-                let mut source = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MetricObserver {
-                        id: "write_source_count".into(),
-                        input: source,
-                        enable_pushdown: false,
-                    }),
-                });
-
-                // Maybe create schema action based on schema_mode
-                if let Some(snapshot) = &this.snapshot {
-                    let should_update_schema = match this.schema_mode {
-                        Some(SchemaMode::Merge) if schema_drift => true,
-                        Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
-                            let delta_schema: StructType =
-                                source.schema().as_arrow().try_into_kernel()?;
-                            &delta_schema != snapshot.schema().as_ref()
-                        }
-                        _ => false,
-                    };
-
-                    if should_update_schema {
-                        let schema_struct: StructType =
-                            source.schema().as_arrow().try_into_kernel()?;
-                        // Verify if delta schema changed
-                        if &schema_struct != snapshot.schema().as_ref() {
-                            let current_protocol = snapshot.protocol();
-                            let configuration = snapshot.metadata().configuration().clone();
-                            let new_protocol = current_protocol
-                                .clone()
-                                .apply_column_metadata_to_protocol(&schema_struct)?
-                                .move_table_properties_into_features(&configuration);
-
-                            let mut metadata =
-                                new_metadata(&schema_struct, &partition_columns, configuration)?;
-                            let existing_metadata_id = snapshot.metadata().id().to_string();
-
-                            if !existing_metadata_id.is_empty() {
-                                metadata = metadata.with_table_id(existing_metadata_id)?;
-                            }
-                            let schema_action = Action::Metadata(metadata);
-                            actions.push(schema_action);
-                            if current_protocol != &new_protocol {
-                                actions.push(new_protocol.into())
-                            }
-                        }
-                    }
-                }
-
-                let df_schema = source
-                    .schema()
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(UNNAMED_TABLE);
-                let predicate = this
+                // preppare some metadata to be included in the commit
+                let predicate_str = this
                     .predicate
-                    .map(|p| p.resolve(session.as_ref(), Arc::new(df_schema)))
-                    .transpose()?;
-                let predicate_str = predicate
                     .as_ref()
-                    .map(|pred| fmt_expr_to_sql(pred))
+                    .map(|p| match p {
+                        Expression::DataFusion(expr) => fmt_expr_to_sql(expr),
+                        Expression::String(s) => Ok(s.clone()),
+                    })
                     .transpose()?;
-
-                let config = this
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.table_properties());
-
-                let target_file_size = this.target_file_size.or_else(|| {
-                    Some(super::get_target_file_size(config, &this.configuration) as usize)
-                });
-                let (num_indexed_cols, stats_columns) =
-                    super::get_num_idx_cols_and_stats_columns(config, this.configuration);
-
-                let writer_stats_config = WriterStatsConfig {
-                    num_indexed_cols,
-                    stats_columns,
-                };
-
-                let mut contains_cdc = false;
-
-                // Collect remove actions if we are overwriting the table
-                if let Some(snapshot) = &this.snapshot {
-                    if matches!(this.mode, SaveMode::Overwrite) {
-                        let deletion_timestamp = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as i64;
-
-                        match &predicate {
-                            Some(pred) => {
-                                let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                                    pred.clone(),
-                                    this.log_store.clone(),
-                                    snapshot,
-                                    session.as_ref(),
-                                    partition_columns.clone(),
-                                    this.writer_properties.clone(),
-                                    deletion_timestamp,
-                                    writer_stats_config.clone(),
-                                    operation_id,
-                                )
-                                .await?;
-
-                                if let Some(cdf_df) = cdf_df {
-                                    contains_cdc = true;
-                                    let mut projection = source
-                                        .schema()
-                                        .iter()
-                                        .map(|(_, field)| col(field.name()))
-                                        .collect_vec();
-                                    projection.push(lit("insert").alias(CDC_COLUMN_NAME));
-                                    source = LogicalPlanBuilder::new(source)
-                                        .project(projection)?
-                                        .union(cdf_df)?
-                                        .build()?;
-                                }
-
-                                if !predicate_actions.is_empty() {
-                                    actions.extend(predicate_actions);
-                                }
-                            }
-                            _ => {
-                                let remove_actions = snapshot
-                                    .file_views(&this.log_store, None)
-                                    .map_ok(|p| p.remove_action(true).into())
-                                    .try_collect::<Vec<_>>()
-                                    .await?;
-                                actions.extend(remove_actions);
-                            }
-                        };
-                    }
-                    metrics.num_removed_files = actions
-                        .iter()
-                        .filter(|a| matches!(a, Action::Remove(_)))
-                        .count();
-                }
-
-                let source_plan = session.create_physical_plan(&source).await?;
-
-                // Here we need to validate if the new data conforms to a predicate if one is provided
-                let (add_actions, _) = write_execution_plan_v2(
-                    this.snapshot.as_ref(),
-                    session.as_ref(),
-                    source_plan.clone(),
-                    partition_columns.clone(),
-                    this.log_store.object_store(Some(operation_id)).clone(),
-                    target_file_size,
-                    this.write_batch_size,
-                    this.writer_properties,
-                    writer_stats_config.clone(),
-                    predicate.clone(),
-                    contains_cdc,
-                )
-                .await?;
-
-                let source_count =
-                    find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
-                        DeltaTableError::Generic("Unable to locate expected metric node".into())
-                    })?;
-                let source_count_metrics = source_count.metrics().unwrap();
-                let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
-                metrics.num_added_rows = num_added_rows;
-
-                metrics.num_added_files = add_actions.len();
-                actions.extend(add_actions);
-
-                metrics.execution_time_ms =
-                    Instant::now().duration_since(exec_start).as_millis() as u64;
-
+                let partition_columns = table_config.metadata().partition_columns().clone();
                 let operation = DeltaOperation::Write {
                     mode: this.mode,
                     partition_by: if !partition_columns.is_empty() {
@@ -721,6 +509,24 @@ impl std::future::IntoFuture for WriteBuilder {
                     },
                     predicate: predicate_str,
                 };
+
+                let (mut actions, metrics) = execute(
+                    session.as_ref(),
+                    &this.log_store,
+                    source,
+                    &table_config,
+                    maybe_snapshot,
+                    this.predicate.take(),
+                    this.mode,
+                    this.schema_mode,
+                    this.safe_cast,
+                    Some(operation_id),
+                )
+                .await?;
+
+                if !init_actions.is_empty() {
+                    actions = [init_actions, actions].concat();
+                }
 
                 let mut commit_properties = this.commit_properties.clone();
                 commit_properties.app_metadata.insert(
@@ -753,6 +559,153 @@ impl std::future::IntoFuture for WriteBuilder {
             )),
         )
     }
+}
+
+async fn execute(
+    session: &dyn Session,
+    log_store: &dyn LogStore,
+    source: LogicalPlan,
+    table_config: &TableConfiguration,
+    maybe_snapshot: Option<EagerSnapshot>,
+    maybe_predicate: Option<Expression>,
+    save_mode: SaveMode,
+    schema_mode: Option<SchemaMode>,
+    safe_cast: bool,
+    operation_id: Option<Uuid>,
+) -> DeltaResult<(Vec<Action>, WriteMetrics)> {
+    let mut metrics = WriteMetrics::default();
+    let exec_start = Instant::now();
+
+    // Prepare the source data for insertion into the table and determine the
+    // effective target schema and associated action against the current table.
+    // This may involve schema evolution or schema overwrite depending on the provided
+    // schema mode and the differences between source and table schema.
+    let (source, schema_action) =
+        plan_insert(session, source, table_config, schema_mode, safe_cast)?;
+
+    // Determine if the required schema changes can be applied to the table
+    // and generate the necessary actions to update the table protocol/metadata.
+    let mut actions = vec![];
+    match schema_action {
+        SchemaAction::NoChange => (),
+        SchemaAction::Evolve(to_schema) => {
+            if table_config.is_feature_enabled(&TableFeature::TypeWidening) {
+                // to support type widening we need to validate that all changes are
+                // compatible with type widening rules and add the necessary metadata to
+                // the respective fields in the schema.
+                return Err(DeltaTableError::generic(
+                    "Schema evolution via type widening is not yet supported.",
+                ));
+            }
+            actions.extend(schema_update_actions(to_schema.as_arrow(), &table_config)?);
+        }
+        SchemaAction::Overwrite(to_schema) if save_mode == SaveMode::Overwrite => {
+            actions.extend(schema_update_actions(to_schema.as_arrow(), &table_config)?);
+        }
+        SchemaAction::Overwrite(_) => {
+            return Err(DeltaTableError::generic(
+                "Schema overwrite is only supported in 'Overwrite' mode.",
+            ));
+        }
+    };
+
+    // Add a metric observer to count the number of input rows
+    let mut source = LogicalPlan::Extension(Extension {
+        node: Arc::new(MetricObserver {
+            id: SOURCE_COUNT_ID.into(),
+            input: source,
+            enable_pushdown: false,
+        }),
+    });
+
+    if let Some(snapshot) = &maybe_snapshot {
+        // If we are writing into an existing table, we need to validate data
+        // against the table constraints. The validation will also handle updating
+        // the nullability of columns after proving that the data conforms to the
+        // constraints defined in the table sdchema.
+        let predicates = validation_predicates(
+            session,
+            source.schema().as_ref(),
+            snapshot.table_configuration(),
+        )?;
+        source = source.into_builder().validate(predicates)?.build()?;
+    }
+
+    let predicate = maybe_predicate
+        .map(|p| p.resolve(session, source.schema().clone()))
+        .transpose()?;
+    let (removes, write_plan, contains_cdc) = if let Some(snapshot) = &maybe_snapshot
+        && save_mode == SaveMode::Overwrite
+    {
+        plan_overwrite(session, log_store, snapshot, source, predicate).await?
+    } else {
+        (vec![], source, false)
+    };
+
+    metrics.num_removed_files = removes.len();
+    actions.extend(removes);
+
+    let write_exec = session.create_physical_plan(&write_plan).await?;
+    let (add_actions, _) = write_exec_plan(
+        session,
+        log_store,
+        table_config,
+        write_exec.clone(),
+        operation_id,
+        contains_cdc,
+    )
+    .await?;
+
+    metrics.num_added_files = add_actions.len();
+    actions.extend(add_actions);
+
+    let source_count = find_metric_node(SOURCE_COUNT_ID, &write_exec)
+        .ok_or_else(|| DeltaTableError::generic("Unable to locate expected metric node"))?;
+    let source_count_metrics = source_count.metrics().unwrap();
+    let num_added_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+    metrics.num_added_rows = num_added_rows;
+
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
+
+    Ok((actions, metrics))
+}
+
+/// Generate the actions required to update the schema of A Delta Table
+///
+///
+/// ## Arguments
+/// - `to_schema`: the new schema to update to
+/// - `table_config`: the current table configuration
+///
+/// ## Returns
+/// - A vector of actions to be to the a commit for updating protocol and metadata
+fn schema_update_actions(
+    to_schema: &Schema,
+    table_config: &TableConfiguration,
+) -> DeltaResult<Vec<Action>> {
+    let schema_struct: StructType = to_schema.try_into_kernel()?;
+    let mut actions = vec![];
+
+    let current_protocol = table_config.protocol();
+    let configuration = table_config.metadata().configuration().clone();
+    let new_protocol = current_protocol
+        .clone()
+        .apply_column_metadata_to_protocol(&schema_struct)?
+        .move_table_properties_into_features(&configuration);
+
+    let partition_columns = table_config.metadata().partition_columns().clone();
+    let mut metadata = new_metadata(&schema_struct, &partition_columns, configuration)?;
+    let existing_metadata_id = table_config.metadata().id().to_string();
+    if !existing_metadata_id.is_empty() {
+        metadata = metadata.with_table_id(existing_metadata_id)?;
+    }
+
+    let schema_action = Action::Metadata(metadata);
+    actions.push(schema_action);
+    if current_protocol != &new_protocol {
+        actions.push(new_protocol.into())
+    }
+    Ok(actions)
 }
 
 #[cfg(test)]
@@ -1824,7 +1777,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(2));
 
-        let ctx = SessionContext::new();
+        let ctx = create_session().into_inner();
         let cdf_scan = table
             .clone()
             .scan_cdf()
@@ -1880,12 +1833,12 @@ mod tests {
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = table
+            let mut writer = table
                 .write(vec![batch])
                 .with_schema_mode(SchemaMode::Overwrite)
                 .with_save_mode(SaveMode::Append);
 
-            let check = writer.check_preconditions().await;
+            let check = writer.check_preconditions();
             assert!(check.is_err());
             Ok(())
         }
@@ -1899,9 +1852,9 @@ mod tests {
                 .with_configuration_property(TableProperty::AppendOnly, Some("true".to_string()))
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = table.write(vec![batch]).with_save_mode(SaveMode::Overwrite);
+            let mut writer = table.write(vec![batch]).with_save_mode(SaveMode::Overwrite);
 
-            let check = writer.check_preconditions().await;
+            let check = writer.check_preconditions();
             assert!(check.is_err());
             Ok(())
         }
@@ -1913,9 +1866,9 @@ mod tests {
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = table.write(vec![]);
+            let mut writer = table.write(vec![]);
 
-            match writer.check_preconditions().await {
+            match writer.check_preconditions() {
                 Ok(_) => panic!("Expected check_preconditions to fail!"),
                 Err(DeltaTableError::GenericError { .. }) => {}
                 Err(e) => panic!("Unexpected error returned: {e:#?}"),
@@ -1931,11 +1884,11 @@ mod tests {
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer = table
+            let mut writer = table
                 .write(vec![batch])
                 .with_save_mode(SaveMode::ErrorIfExists);
 
-            match writer.check_preconditions().await {
+            match writer.check_preconditions() {
                 Ok(_) => panic!("Expected check_preconditions to fail!"),
                 Err(DeltaTableError::GenericError { .. }) => {}
                 Err(e) => panic!("Unexpected error returned: {e:#?}"),
@@ -1958,12 +1911,12 @@ mod tests {
                 .unwrap()
                 .logical_plan()
                 .clone();
-            let writer =
+            let mut writer =
                 WriteBuilder::new(table.log_store.clone(), table.state.map(|f| f.snapshot))
                     .with_input_plan(plan)
                     .with_save_mode(SaveMode::Overwrite);
 
-            let _ = writer.check_preconditions().await?;
+            let _ = writer.check_preconditions()?;
             Ok(())
         }
 
@@ -1975,10 +1928,10 @@ mod tests {
                 .with_columns(table_schema.fields().cloned())
                 .await?;
             let batch = get_record_batch(None, false);
-            let writer =
+            let mut writer =
                 WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![batch]);
 
-            let actions = writer.check_preconditions().await?;
+            let (actions, _, _, _) = writer.check_preconditions()?;
             assert_eq!(
                 actions.len(),
                 2,
@@ -1995,10 +1948,10 @@ mod tests {
                 .create()
                 .with_columns(table_schema.fields().cloned())
                 .await?;
-            let writer =
+            let mut writer =
                 WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![]);
 
-            match writer.check_preconditions().await {
+            match writer.check_preconditions() {
                 Ok(_) => panic!("Expected check_preconditions to fail!"),
                 Err(DeltaTableError::GenericError { .. }) => {}
                 Err(e) => panic!("Unexpected error returned: {e:#?}"),

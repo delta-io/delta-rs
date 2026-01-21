@@ -37,15 +37,15 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
+use datafusion::common::ToDFSchema as _;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
+use futures::TryStreamExt;
 use futures::future::BoxFuture;
-use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use uuid::Uuid;
@@ -334,23 +334,8 @@ async fn execute(
         return Ok((vec![], metrics));
     };
 
-    let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
-    let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
-        .zip(stream::iter(std::iter::repeat((
-            root_url,
-            Arc::new(files_scan.files_set()),
-        ))))
-        .map(|(f, u)| f.map(|f| (f, u)))
-        .try_filter_map(|(f, (root, valid))| async move {
-            let url = root
-                .clone()
-                .join(f.path_raw())
-                .map_err(|e| exec_datafusion_err!("{e}"))?;
-            let is_valid = valid.contains(url.as_ref());
-            Ok(is_valid.then(|| Action::Remove(f.remove_action(true))))
-        })
-        .try_collect()
+    let removes = files_scan
+        .remove_actions(log_store.as_ref(), &snapshot)
         .await?;
     metrics.num_removed_files = removes.len();
 
@@ -376,7 +361,7 @@ async fn execute(
         .filter(files_scan.predicate.clone().is_not_true())?
         .build()?;
 
-    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
+    let (write_plan, write_cdc) = if should_write_cdc(&snapshot) {
         // create change set entries for all records we deleted
         let cdc_deletes = files_scan
             .scan()

@@ -71,12 +71,6 @@ pub(crate) struct KernelScanPlan {
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
     pub(crate) parquet_predicate: Option<Expr>,
-    /// Predicate passed to delta kernel for file skipping,
-    ///
-    /// If this is configured, the predicates pushed into the scan will
-    /// not be considered for file skipping. This is to handle file re-write
-    /// cases in UPDATE, MERGE, etc.
-    pub(crate) skipping_predicate: Option<PredicateRef>,
 }
 
 impl KernelScanPlan {
@@ -111,14 +105,7 @@ impl KernelScanPlan {
 
         let Some(projection) = projection else {
             let scan = Arc::new(scan_builder.build()?);
-            return Self::try_new_with_scan(
-                scan,
-                config,
-                table_schema,
-                None,
-                parquet_predicate,
-                scan_predicate,
-            );
+            return Self::try_new_with_scan(scan, config, table_schema, None, parquet_predicate);
         };
 
         // The table projection may not include all columns referenced in filters,
@@ -184,7 +171,6 @@ impl KernelScanPlan {
             result_schema,
             result_projection,
             parquet_predicate,
-            scan_predicate,
         )
     }
 
@@ -194,7 +180,6 @@ impl KernelScanPlan {
         result_schema: SchemaRef,
         result_projection: Option<Vec<usize>>,
         parquet_predicate: Option<Expr>,
-        skipping_predicate: Option<PredicateRef>,
     ) -> Result<Self> {
         let output_schema = if config.retain_file_id() {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
@@ -214,7 +199,6 @@ impl KernelScanPlan {
             result_projection,
             parquet_read_schema,
             parquet_predicate,
-            skipping_predicate,
         })
     }
 
