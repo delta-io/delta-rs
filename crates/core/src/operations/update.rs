@@ -20,28 +20,20 @@
 
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use arrow::{array::AsArray, datatypes::UInt16Type};
-use arrow_array::StringArray;
 use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::{
     catalog::Session,
-    common::{Column, HashSet, ScalarValue, ToDFSchema as _, exec_datafusion_err},
-    datasource::provider_as_source,
+    common::{Column, ScalarValue, ToDFSchema as _, exec_datafusion_err},
     error::DataFusionError,
     execution::context::SessionState,
-    functions_aggregate::expr_fn::first_value,
-    logical_expr::utils::{conjunction, split_conjunction_owned},
     logical_expr::{
         Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
     },
-    optimizer::simplify_expressions::simplify_predicates,
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
-    physical_plan::{execute_stream, visit_execution_plan},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
-use datafusion_datasource::file_scan_config::wrap_partition_value_in_dict;
 use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -54,9 +46,7 @@ use super::{
     CustomExecuteHandler, Operation,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
-use crate::delta_datafusion::{
-    DeltaScanNext, DeltaScanVisitor, Expression, FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
-};
+use crate::delta_datafusion::{Expression, scan_files_where_matches, update_datafusion_session};
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
@@ -293,76 +283,22 @@ async fn execute(
 
     let scan_start = Instant::now();
 
-    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate))?;
-    let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
-
-    // Scan the delta table with a dedicated predicate applied for file skipping
-    // and with the source file path exosed as column.
-    let table_source = provider_as_source(
-        DeltaScanNext::builder()
-            .with_eager_snapshot(snapshot.clone())
-            .with_file_skipping_predicates(skipping_pred.clone())
-            .with_file_column(FILE_ID_COLUMN_DEFAULT)
-            .await?,
-    );
-
-    // the kernel scan only provides a best effort file skipping, in this case
-    // we want to determine the file we certainly need to rewrite. For this
-    // we perform an initial aggreagte scan to see if we can quickly find
-    // at least one matching record in the files.
-    let files_plan = LogicalPlanBuilder::scan("scan", table_source.clone(), None)?
-        .filter(predicate.clone())?
-        .aggregate(
-            [col(FILE_ID_COLUMN_DEFAULT)],
-            [first_value(lit(1_i32), vec![])],
-        )?
-        .build()?;
-    let files_exec = session.create_physical_plan(&files_plan).await?;
-    let valid_files: HashSet<_> = execute_stream(files_exec, session.task_ctx())?
-        .map(|batch| {
-            let batch = batch?;
-            let dict_arr = batch.column(0).as_dictionary::<UInt16Type>();
-            let typed_dict = dict_arr
-                .downcast_dict::<StringArray>()
-                .ok_or_else(|| exec_datafusion_err!("expected file id col to be a string array"))?;
-            Ok::<_, DataFusionError>(
-                typed_dict
-                    .values()
-                    .iter()
-                    .flatten()
-                    .map(|s| s.to_string())
-                    .collect_vec(),
-            )
-        })
-        .try_collect::<Vec<_>>()
-        .await?
-        .into_iter()
-        .flatten()
-        .collect();
-
-    if valid_files.is_empty() {
-        return Ok((vec![], metrics));
-    }
-
-    // Run a table scan limiting the data to that originating from valid files.
-    let file_list = valid_files
-        .iter()
-        .cloned()
-        .map(|v| lit(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(v)))))
-        .collect_vec();
-    let plan = LogicalPlanBuilder::scan("target", table_source, None)?
-        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
-        .drop_columns([FILE_ID_COLUMN_DEFAULT])?
-        .build()?;
-
+    let maybe_scan_plan = scan_files_where_matches(session, snapshot, predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+
+    let Some(files_scan) = maybe_scan_plan else {
+        // no files contain data matching the predicate, so nothing more todo.
+        return Ok((vec![], metrics));
+    };
 
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT satisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
-    let predicate_null = when(predicate, lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
-    let input = plan
+    let predicate_null =
+        when(files_scan.predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
+    let input = files_scan
+        .scan()
         .clone()
         .into_builder()
         .with_column(UPDATE_PREDICATE_COLNAME, predicate_null)?
@@ -398,7 +334,7 @@ async fn execute(
         .build()?;
 
     let physical_plan = session.create_physical_plan(&plan_updated).await?;
-    let tracker = CDCTracker::new(plan, plan_updated);
+    let tracker = CDCTracker::new(files_scan.scan().clone(), plan_updated);
 
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
@@ -421,20 +357,12 @@ async fn execute(
     metrics.num_updated_rows = get_metric(&update_count_metrics, UPDATE_ROW_COUNT);
     metrics.num_copied_rows = get_metric(&update_count_metrics, COPIED_ROW_COUNT);
 
-    // extract the predicate from the execution plan as it may have been optimized
-    // via the passed seeion or altered otherwise. So we get a consistent result.
-    let mut visitor = DeltaScanVisitor::default();
-    visit_execution_plan(physical_plan.as_ref(), &mut visitor)?;
-    let delta_plan = visitor
-        .delta_plan
-        .ok_or_else(|| exec_datafusion_err!("Expected DeltaScan node to be in plan."))?;
-
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), delta_plan.skipping_predicate)
+        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
         .zip(stream::iter(std::iter::repeat((
             root_url,
-            Arc::new(valid_files),
+            Arc::new(files_scan.files_set()),
         ))))
         .map(|(f, u)| f.map(|f| (f, u)))
         .try_filter_map(|(f, (root, valid))| async move {
