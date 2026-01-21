@@ -8,7 +8,6 @@ use delta_kernel::schema::MetadataValue;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -246,9 +245,9 @@ impl CreateBuilder {
     }
 
     /// Consume self into uninitialized table with corresponding create actions and operation meta
-    pub(crate) async fn into_table_and_actions(
-        mut self,
-    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation, Uuid)> {
+    pub(crate) fn into_table_and_actions(
+        self,
+    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation)> {
         if self
             .actions
             .iter()
@@ -275,10 +274,6 @@ impl CreateBuilder {
                     .build()?,
             )
         };
-
-        self.log_store = Some(table.log_store());
-        let operation_id = self.get_operation_id();
-        self.pre_execute(operation_id).await?;
 
         let configuration = self
             .configuration
@@ -338,7 +333,7 @@ impl CreateBuilder {
                 .filter(|a| !matches!(a, Action::Protocol(_))),
         );
 
-        Ok((table, actions, operation, operation_id))
+        Ok((table, actions, operation))
     }
 }
 
@@ -351,8 +346,10 @@ impl std::future::IntoFuture for CreateBuilder {
         Box::pin(async move {
             let handler = this.custom_execute_handler.clone();
             let mode = &this.mode;
-            let (mut table, mut actions, operation, operation_id) =
-                this.clone().into_table_and_actions().await?;
+            let (mut table, mut actions, operation) = this.clone().into_table_and_actions()?;
+
+            let operation_id = this.get_operation_id();
+            this.pre_execute(operation_id).await?;
 
             let table_state = if table.log_store.is_delta_table_location().await? {
                 match mode {

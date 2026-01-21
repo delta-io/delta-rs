@@ -310,7 +310,7 @@ pub(crate) fn merge_arrow_schema(
     Ok(merged_schema)
 }
 
-fn merge_arrow_vec_fields(
+pub(crate) fn merge_arrow_vec_fields(
     table_fields: &Fields,
     batch_fields: &Fields,
     preserve_new_fields: bool,
