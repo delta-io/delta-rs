@@ -411,6 +411,10 @@ pub(crate) struct MatchedFilesScan {
     /// we do not (yet) have full coverage to translate datafusion to
     /// kernel predicates.
     pub(crate) delta_predicate: Arc<Predicate>,
+    /// The predicate contains only partition column references
+    ///
+    /// This implies that for each matched file all data matches.
+    pub(crate) partition_only: bool,
 }
 
 impl MatchedFilesScan {
@@ -458,12 +462,13 @@ pub(crate) async fn scan_files_where_matches(
         .partition_columns();
     // validate that the expressions contain no illegal variants
     // that are not eligible for file skipping, e.g. volatile functions.
+    let mut visitor = FindFilesExprProperties {
+        partition_columns: partition_columns.clone(),
+        partition_only: true,
+        result: Ok(()),
+    };
     for term in &skipping_pred {
-        let mut visitor = FindFilesExprProperties {
-            partition_columns: partition_columns.clone(),
-            partition_only: true,
-            result: Ok(()),
-        };
+        visitor.result = Ok(());
         term.visit(&mut visitor)?;
         visitor.result?
     }
@@ -533,5 +538,6 @@ pub(crate) async fn scan_files_where_matches(
         valid_files,
         predicate,
         delta_predicate,
+        partition_only: visitor.partition_only,
     }))
 }

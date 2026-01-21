@@ -306,7 +306,8 @@ impl CommitData {
             );
             app_metadata.extend(commit_info.info);
             commit_info.info = app_metadata.clone();
-            actions.push(Action::CommitInfo(commit_info))
+            // commit info should be the first action to support in-commit timestamps.
+            actions.insert(0, Action::CommitInfo(commit_info));
         }
 
         for txn in &app_transactions {
