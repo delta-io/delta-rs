@@ -870,16 +870,10 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
-        let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        let provider = table.table_provider().await.unwrap();
+        let ctx: SessionContext = create_session().into();
+        update_datafusion_session(table.log_store().as_ref(), &ctx.state(), None).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select ID, moDified, vaLue from test")
@@ -963,16 +957,10 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        update_datafusion_session(table.log_store().as_ref(), &ctx.state(), None).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx.sql("select col_1, col_2 from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1020,19 +1008,13 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
 
         let mut cfg = SessionConfig::default();
         cfg.options_mut().execution.parquet.pushdown_filters = true;
         let ctx = SessionContext::new_with_config(cfg);
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        update_datafusion_session(table.log_store().as_ref(), &ctx.state(), None).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1, col_2 from test WHERE col_1 = 'A'")
@@ -1117,16 +1099,10 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
-        let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        let provider = table.table_provider().await.unwrap();
+        let ctx: SessionContext = create_session().into();
+        update_datafusion_session(&table.log_store, &ctx.state(), None).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1.col_1a, col_1.col_1b from test")

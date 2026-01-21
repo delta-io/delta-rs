@@ -48,7 +48,9 @@ use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider};
+use crate::delta_datafusion::{
+    DeltaRuntimeEnvBuilder, DeltaSessionContext, scan_file_list, update_datafusion_session,
+};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
@@ -361,6 +363,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 .session
                 .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
                 .unwrap_or_else(|| create_session_state_for_optimize(None, None));
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -601,14 +605,14 @@ impl MergePlan {
     async fn read_zorder(
         files: MergeBin,
         context: Arc<zorder::ZOrderExecContext>,
-        table_provider: DeltaTableProvider,
+        snapshot: EagerSnapshot,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use datafusion::common::Column;
         use datafusion::logical_expr::expr::ScalarFunction;
         use datafusion::logical_expr::{Expr, ScalarUDF};
 
-        let provider = table_provider.with_files(files.files);
-        let df = context.ctx.read_table(Arc::new(provider))?;
+        let plan = scan_file_list(&snapshot, files.files.iter().map(|f| &f.path)).await?;
+        let df = context.ctx.execute_logical_plan(plan).await?;
 
         let cols = context
             .columns
@@ -699,15 +703,6 @@ impl MergePlan {
                 )?);
                 let task_parameters = self.task_parameters.clone();
 
-                use crate::delta_datafusion::DataFusionMixins;
-                use crate::delta_datafusion::DeltaScanConfigBuilder;
-                use crate::delta_datafusion::DeltaTableProvider;
-
-                let scan_config = DeltaScanConfigBuilder::default()
-                    .with_file_column(false)
-                    .with_schema(snapshot.input_schema())
-                    .build(snapshot)?;
-
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
                 let log_store = log_store.clone();
@@ -716,12 +711,7 @@ impl MergePlan {
                         let batch_stream = Self::read_zorder(
                             files.clone(),
                             exec_context.clone(),
-                            DeltaTableProvider::try_new(
-                                snapshot.clone(),
-                                log_store.clone(),
-                                scan_config.clone(),
-                            )
-                            .unwrap(),
+                            snapshot.clone(),
                         );
                         let rewrite_result = tokio::task::spawn(Self::rewrite_files(
                             task_parameters.clone(),
