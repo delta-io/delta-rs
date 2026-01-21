@@ -243,6 +243,10 @@ impl DeltaScanConfig {
         self.physical_arrow_schema(table_config, &table_schema)
     }
 
+    /// Converts the physical type of fields according to the configuration
+    ///
+    /// This includes dictionary encoding of partition columns
+    /// and conversion to view types if configured.
     fn physical_arrow_schema(
         &self,
         table_config: &TableConfiguration,

@@ -601,6 +601,8 @@ def test_write_predicate_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Ta
         ]
     )
     cdc_data = pq.read_table(cdc_path)
+    # we need to narmalize data types
+    cdc_data = cdc_data.cast(expected_data.schema)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
     assert cdc_data.sort_by([("_change_type", "ascending")]) == expected_data.sort_by(
