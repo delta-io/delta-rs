@@ -36,6 +36,7 @@ use arrow_schema::{
 };
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
@@ -696,32 +697,30 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
 
-        let mut parquet_scan = (*inputs)[0].clone();
-        if let Some(ds_exec) = parquet_scan.as_any().downcast_ref::<DataSourceExec>() {
-            if let Some(file_conf) = ds_exec
-                .data_source()
-                .as_any()
-                .downcast_ref::<FileScanConfig>()
-            {
-                if let Some(pq_source) = file_conf
-                    .file_source()
-                    .as_any()
-                    .downcast_ref::<ParquetSource>()
-                {
-                    let with_adapter_factory = pq_source
-                        .clone()
-                        .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
-                    let config_with_source = FileScanConfigBuilder::from(file_conf.clone())
-                        .with_source(with_adapter_factory)
-                        .build();
-                    parquet_scan = Arc::new(
-                        ds_exec
+        let parquet_scan = inputs[0]
+            .clone()
+            .transform_up(|node| {
+                if let Some(ds_exec) = node.as_any().downcast_ref::<DataSourceExec>() {
+                    if let Some((fscan, pq_src)) =
+                        ds_exec.downcast_to_file_source::<ParquetSource>()
+                    {
+                        let source = pq_src
                             .clone()
-                            .with_data_source(Arc::new(config_with_source)),
-                    );
+                            .with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
+                        let data_source = FileScanConfigBuilder::from(fscan.clone())
+                            .with_source(source)
+                            .build();
+                        Ok(Transformed::yes(Arc::new(
+                            ds_exec.clone().with_data_source(Arc::new(data_source)),
+                        )))
+                    } else {
+                        Ok(Transformed::no(node))
+                    }
+                } else {
+                    Ok(Transformed::no(node))
                 }
-            }
-        }
+            })?
+            .data;
 
         let delta_scan = DeltaScan {
             table_uri: wire.table_uri,
@@ -884,12 +883,16 @@ mod tests {
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
     use datafusion::prelude::{col, SessionConfig};
+    use datafusion_proto::bytes::{
+        physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
+    };
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-    use delta_kernel::schema::ArrayType;
+    use delta_kernel::schema::{ArrayType, DataType, PrimitiveType};
     use futures::{stream::BoxStream, StreamExt};
     use object_store::ObjectMeta;
     use object_store::{
@@ -1926,9 +1929,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_schema_adapter_kept_after_codec_roundtrip() {
-        // different columns in nested struct
-        assert!(true == false, "IMPLEMENT ME");
+    async fn test_schema_adapter_kept_after_codec_roundtrip() -> DataFusionResult<()> {
+        let table = crate::DeltaOps::new_in_memory()
+            .create()
+            .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
+            .await?;
+        let ctx = SessionContext::new();
+        ctx.register_table("snapshot", Arc::new(table))?;
+        let df = ctx.sql("select * from snapshot").await?;
+        let plan = df.create_physical_plan().await?;
+        assert!(plan.as_any().is::<DeltaScan>());
+        assert!(plan.children()[0].as_any().is::<RepartitionExec>());
+        assert!(plan.children()[0].children()[0]
+            .as_any()
+            .is::<DataSourceExec>());
+        let bytes = physical_plan_to_bytes_with_extension_codec(plan, &DeltaPhysicalCodec {})?;
+        let restored = physical_plan_from_bytes_with_extension_codec(
+            &bytes,
+            &ctx.task_ctx(),
+            &DeltaPhysicalCodec {},
+        )?;
+        let ds = restored.children()[0].children()[0]
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("DataSourceExec");
+        let (_, pq_src) = ds
+            .downcast_to_file_source::<ParquetSource>()
+            .expect("ParquetSource");
+        assert!(pq_src.schema_adapter_factory().is_some());
+        Ok(())
     }
 
     /// Records operations made by the inner object store on a channel obtained at construction
