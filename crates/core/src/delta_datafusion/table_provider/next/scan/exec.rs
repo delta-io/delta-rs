@@ -151,9 +151,8 @@ impl DeltaScanExec {
     }
 
     pub(crate) fn delta_plan(&self) -> &KernelScanPlan {
-        &self.scan_plan
+        self.scan_plan.as_ref()
     }
-
     /// Transform the statistics from the inner physical parquet read plan to the logical
     /// schema we expose via the table provider. We do not attempt to provide meaningful
     /// statistics for metadata columns as we do not expect these to be useful in planning.
