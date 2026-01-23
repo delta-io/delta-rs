@@ -28,6 +28,7 @@ arrow-schema = { workspace = true, features = ["serde"] }
 
 # datafusion
 datafusion-ffi = { workspace = true }
+datafusion-execution = { version = "52.0.0" }
 
 # serde
 serde = { workspace = true }
