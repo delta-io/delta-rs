@@ -205,6 +205,7 @@ async fn get_data_scan_plan(
             min_value: Precision::Exact(file_value.clone()),
             sum_value: Precision::Absent,
             distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
         });
         partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
         partitioned_file.partition_values = vec![file_value];
