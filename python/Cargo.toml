@@ -25,10 +25,11 @@ pyo3-arrow = { version = "0.14.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
+arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
-datafusion-execution = { version = "52.0.0" }
+datafusion-execution = { version = "52.1.0" }
 
 # serde
 serde = { workspace = true }
