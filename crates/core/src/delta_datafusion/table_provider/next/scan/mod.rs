@@ -329,8 +329,18 @@ async fn get_read_plan(
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
         if !has_selection_vectors && let Some(pred) = predicate {
+            // Normalize predicate literals for Parquet predicate evaluation.
+            // Parquet stats and filter evaluation operate on base string/binary types.
             let pred = convert_view_types_to_base(pred.clone())?;
-            let physical = logical2physical(&pred, physical_schema.as_ref());
+
+            let predicate_schema = if schema_has_view_types(full_read_schema.as_ref()) {
+                strip_view_types_from_schema(full_read_schema.as_ref())
+            } else {
+                full_read_schema.as_ref().clone()
+            };
+            // Predicate pushdown can reference the synthetic file-id partition column.
+            // Use the full read schema (data columns + file-id) when planning.
+            let physical = logical2physical(&pred, &predicate_schema);
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);
@@ -373,9 +383,18 @@ fn finalize_transformed_batch(
         batch
     };
     // NOTE: most data is read properly typed already, however columns added via
-    // literals in the transdormations may need to be cast to the physical expected type.
+    // literals in the transformations may need to be cast to the physical expected type.
     let result = cast_record_batch(result, &scan_plan.result_schema)?;
     if let Some((arr, field)) = file_id_col {
+        let arr = if arr.data_type() != field.data_type() {
+            let options = CastOptions {
+                safe: true,
+                ..Default::default()
+            };
+            cast_with_options(arr.as_ref(), field.data_type(), &options)?
+        } else {
+            arr
+        };
         let mut columns = result.columns().to_vec();
         columns.push(arr);
         let mut fields = result.schema().fields().to_vec();
@@ -424,6 +443,107 @@ fn convert_view_types_to_base(expr: Expr) -> Result<Expr> {
         Ok(Transformed::no(e))
     })
     .map(|t| t.data)
+}
+
+fn schema_has_view_types(schema: &Schema) -> bool {
+    schema
+        .fields()
+        .iter()
+        .any(|f| data_type_has_view_types(f.data_type()))
+}
+
+fn strip_view_types_from_schema(schema: &Schema) -> Schema {
+    Schema::new(
+        schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let dt = strip_view_types_from_data_type(f.data_type());
+                if &dt == f.data_type() {
+                    f.as_ref().clone()
+                } else {
+                    f.as_ref().clone().with_data_type(dt)
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn strip_view_types_from_data_type(dt: &DataType) -> DataType {
+    match dt {
+        DataType::Utf8View => DataType::Utf8,
+        DataType::BinaryView => DataType::Binary,
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .map(|f| {
+                    let dt = strip_view_types_from_data_type(f.data_type());
+                    if &dt == f.data_type() {
+                        f.clone()
+                    } else {
+                        f.as_ref().clone().with_data_type(dt).into()
+                    }
+                })
+                .collect(),
+        ),
+        DataType::List(inner) => DataType::List(Arc::new(
+            inner
+                .as_ref()
+                .clone()
+                .with_data_type(strip_view_types_from_data_type(inner.data_type())),
+        )),
+        DataType::LargeList(inner) => DataType::LargeList(Arc::new(
+            inner
+                .as_ref()
+                .clone()
+                .with_data_type(strip_view_types_from_data_type(inner.data_type())),
+        )),
+        DataType::ListView(inner) => DataType::ListView(Arc::new(
+            inner
+                .as_ref()
+                .clone()
+                .with_data_type(strip_view_types_from_data_type(inner.data_type())),
+        )),
+        DataType::FixedSizeList(inner, n) => DataType::FixedSizeList(
+            Arc::new(
+                inner
+                    .as_ref()
+                    .clone()
+                    .with_data_type(strip_view_types_from_data_type(inner.data_type())),
+            ),
+            *n,
+        ),
+        DataType::Dictionary(key, value) => DataType::Dictionary(
+            key.clone(),
+            Box::new(strip_view_types_from_data_type(value.as_ref())),
+        ),
+        DataType::Map(entry, sorted) => DataType::Map(
+            Arc::new(
+                entry
+                    .as_ref()
+                    .clone()
+                    .with_data_type(strip_view_types_from_data_type(entry.data_type())),
+            ),
+            *sorted,
+        ),
+        _ => dt.clone(),
+    }
+}
+
+fn data_type_has_view_types(dt: &DataType) -> bool {
+    match dt {
+        DataType::Utf8View | DataType::BinaryView => true,
+        DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
+        DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| data_type_has_view_types(f.data_type())),
+        DataType::List(inner)
+        | DataType::LargeList(inner)
+        | DataType::ListView(inner)
+        | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
+        _ => false,
+    }
 }
 
 fn convert_scalar_view_to_base(scalar: &ScalarValue) -> Option<ScalarValue> {

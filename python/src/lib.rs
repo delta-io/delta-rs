@@ -1857,10 +1857,9 @@ impl RawDeltaTable {
             TokioDeltaScan::new(scan, handle.clone())
                 .with_object_store(object_store_url, object_store),
         ) as Arc<dyn TableProvider>;
-        let ctx = Arc::new(SessionContext::new())
-            as Arc<dyn datafusion_execution::TaskContextProvider>;
-        let task_ctx_provider =
-            datafusion_ffi::execution::FFI_TaskContextProvider::from(&ctx);
+        let ctx =
+            Arc::new(SessionContext::new()) as Arc<dyn datafusion_execution::TaskContextProvider>;
+        let task_ctx_provider = datafusion_ffi::execution::FFI_TaskContextProvider::from(&ctx);
         let provider = FFI_TableProvider::new(
             tokio_scan,
             false,

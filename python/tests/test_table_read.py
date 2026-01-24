@@ -180,7 +180,6 @@ def test_load_as_version_datetime_with_logs_removed(
 
     for file_name, dt_epoch in log_mtime_pairs:
         file_path = log_path / file_name
-        print(file_path)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
     dt = DeltaTable(tmp_path, version=expected_version)

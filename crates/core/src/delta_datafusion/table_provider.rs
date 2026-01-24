@@ -152,7 +152,7 @@ impl DeltaScanConfigBuilder {
                 Some(name) => {
                     if column_names.contains(name) {
                         return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {name} exits"
+                            "Unable to add file path column since column with name {name} exists"
                         )));
                     }
 
@@ -180,7 +180,7 @@ impl DeltaScanConfigBuilder {
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
-            schema_force_view_types: false,
+            schema_force_view_types: true,
         })
     }
 }

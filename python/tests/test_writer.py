@@ -178,9 +178,7 @@ def test_merge_schema(existing_table: DeltaTable):
     read_data = existing_table.to_pyarrow_table().sort_by(
         [("utf8", "ascending"), ("new_x", "ascending")]
     )
-    print(repr(read_data.to_pylist()))
     concated = pa.concat_tables([old_table_data, new_data])
-    print(repr(concated.to_pylist()))
     assert read_data == concated
 
     write_deltalake(existing_table, new_data, mode="overwrite", schema_mode="overwrite")
@@ -2040,7 +2038,6 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     delta_table.update(predicate="utf8 = '1'", updates={"utf8": "'hello world'"})
 
     delta_table = DeltaTable(tmp_path)
-    print(os.listdir(tmp_path))
     # This is kind of a weak test to verify that CDFs were written
     assert os.path.isdir(os.path.join(tmp_path, "_change_data"))
 
@@ -2668,7 +2665,6 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
     )
     assert dt.protocol().min_writer_version == 7
     assert dt.version() == 0
-    print(dt.protocol().writer_features)
 
     data = Table.from_pydict(
         {

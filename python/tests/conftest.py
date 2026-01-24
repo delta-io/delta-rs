@@ -248,7 +248,7 @@ def sample_table() -> Table:
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                Field("id", type=DataType.string(), nullable=True),
+                Field("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)
@@ -275,7 +275,7 @@ def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
     return Table.from_pydict(
         {
-            "1id": Array(["1", "2", "3", "4", "5"], DataType.string()),
+            "1id": Array(["1", "2", "3", "4", "5"], DataType.string_view()),
             "price": Array(list(range(nrows)), DataType.int64()),
             "sold items": Array(list(range(nrows)), DataType.int32()),
             "deleted": Array(
@@ -285,7 +285,7 @@ def sample_table_with_spaces_numbers() -> Table:
         },
         schema=Schema(
             fields=[
-                Field("1id", type=DataType.string(), nullable=True),
+                Field("1id", type=DataType.string_view(), nullable=True),
                 Field("price", type=DataType.int64(), nullable=True),
                 Field("sold items", type=DataType.int32(), nullable=True),
                 Field("deleted", type=DataType.bool(), nullable=True),
