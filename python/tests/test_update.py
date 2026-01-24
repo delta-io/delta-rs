@@ -15,7 +15,7 @@ def sample_table():
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)),
@@ -46,7 +46,7 @@ def test_update_with_predicate(tmp_path: pathlib.Path, sample_table: Table):
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3, 4],
@@ -91,7 +91,7 @@ def test_update_wo_predicate(tmp_path: pathlib.Path, sample_table: Table):
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3, 4],
@@ -144,7 +144,7 @@ def test_update_wo_predicate_multiple_updates(
         {
             "id": Array(
                 ["1_1", "2_1", "3_1", "4_1", "5_1"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3, 4],
@@ -188,7 +188,7 @@ def test_update_with_predicate_and_new_values(
         {
             "id": Array(
                 ["1", "2", "3", "4", "new_id"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3, 4],
