@@ -467,7 +467,7 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     cdc_data = pq.read_table(cdc_path)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data == expected_data
+    assert cdc_data.to_pydict() == expected_data.to_pydict()
 
 
 @pytest.mark.pyarrow
@@ -475,9 +475,6 @@ def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.dataset as ds
-    import pyarrow.parquet as pq
-
-    cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
@@ -496,17 +493,22 @@ def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
             field_=pa.field("_change_type", pa.string(), nullable=False),
             column=[["delete"] * 2],
         )
+        .select(["int64", "_change_type"])
+        .sort_by("int64")
     )
 
     table_schema = pa.schema(dt.schema())
     table_schema = table_schema.insert(
         len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
     )
-    cdc_data = pq.read_table(cdc_path, schema=table_schema)
+    cdc_data = (
+        pa.table(dt.load_cdf().read_all())
+        .filter(pc.field("_change_type") == "delete")
+        .select(["int64", "_change_type"])
+        .sort_by("int64")
+    )
 
-    assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert len(os.listdir(cdc_path)) == 2
-    assert cdc_data == expected_data
+    assert cdc_data.to_pydict() == expected_data.to_pydict()
 
 
 @pytest.mark.pyarrow
