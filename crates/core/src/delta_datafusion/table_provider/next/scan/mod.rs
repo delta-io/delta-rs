@@ -342,12 +342,8 @@ async fn get_read_plan(
         }
 
         let file_group: FileGroup = files.into_iter().map(|file| file.0).collect();
-        let (file_groups, statistics) = compute_all_files_statistics(
-            vec![file_group],
-            full_table_schema,
-            true,
-            false,
-        )?;
+        let (file_groups, statistics) =
+            compute_all_files_statistics(vec![file_group], full_table_schema, true, false)?;
 
         let config = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
             .with_file_groups(file_groups)
