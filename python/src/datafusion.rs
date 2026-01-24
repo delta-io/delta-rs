@@ -268,6 +268,7 @@ mod tests {
         }
 
         fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            // DataFusion may need to restart a stream from the beginning (e.g. recursive CTEs).
             Arc::new(RwLock::new(TestBatchGenerator::new(self.data.clone())))
         }
     }
