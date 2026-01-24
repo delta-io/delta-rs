@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -9,18 +10,25 @@ use arrow_array::RecordBatch;
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::{DataType, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{DFSchema, Statistics, exec_err, plan_datafusion_err, plan_err};
+use datafusion::common::{
+    DFSchema, DFSchemaRef, Statistics, exec_err, plan_datafusion_err, plan_err,
+};
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion::execution::{
+    RecordBatchStream, SendableRecordBatchStream, SessionState, TaskContext,
+};
 use datafusion::logical_expr::utils::conjunction;
-use datafusion::logical_expr::{ColumnarValue, Operator};
+use datafusion::logical_expr::{
+    ColumnarValue, LogicalPlan, Operator, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+};
 use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
 };
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::{Expr, binary_expr, col};
 use datafusion::scalar::ScalarValue;
 use delta_kernel::table_configuration::TableConfiguration;
@@ -34,6 +42,91 @@ use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
 use crate::{DeltaTableError, StructTypeExt as _};
+
+#[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
+pub(crate) struct DataValidation {
+    input: LogicalPlan,
+    validations: Vec<Expr>,
+}
+
+impl UserDefinedLogicalNodeCore for DataValidation {
+    fn name(&self) -> &str {
+        "DataValidation"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![&self.input]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        self.input.schema()
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        self.validations.clone()
+    }
+
+    fn prevent_predicate_push_down_columns(&self) -> HashSet<String> {
+        HashSet::new()
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DataValidation validations={:?}", self.validations)
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        mut inputs: Vec<LogicalPlan>,
+    ) -> Result<Self> {
+        if inputs.len() != 1 {
+            return plan_err!(
+                "DataValidation node expects exactly one input, got: {}.",
+                inputs.len()
+            );
+        }
+        Ok(Self {
+            input: inputs.remove(0),
+            validations: exprs,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct DataValidationExtensionPlanner;
+
+impl DataValidationExtensionPlanner {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+
+#[async_trait::async_trait]
+impl ExtensionPlanner for DataValidationExtensionPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node.as_any().downcast_ref::<DataValidation>() {
+            if physical_inputs.len() != 1 {
+                return plan_err!(
+                    "DataValidation node expects exactly one input, got: {}.",
+                    physical_inputs.len()
+                );
+            }
+            return Ok(Some(DataValidationExec::try_new_with_predicates(
+                session_state,
+                physical_inputs[0].clone(),
+                node.validations.clone(),
+            )?));
+        }
+        Ok(None)
+    }
+}
 
 /// Generate validation predicates based on the table configuration
 ///
@@ -381,10 +474,14 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::delta_datafusion::create_session;
+
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use datafusion::catalog::{MemTable, TableProvider};
+    use datafusion::datasource::provider_as_source;
+    use datafusion::logical_expr::{Extension, LogicalPlanBuilder};
     // use datafusion::physical_plan::MemoryExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::{collect, displayable};
@@ -488,6 +585,46 @@ mod tests {
             DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
 
         let result = collect(validated_exec, ctx.task_ctx()).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid data found")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_check_constraint_fail_logical() -> Result<()> {
+        let schema = create_test_schema(true);
+        let batch = create_test_batch(
+            schema.clone(),
+            vec![Some(10), Some(2), Some(30)], // One value fails constraint
+            vec![Some("a"), Some("b"), Some("c")],
+        );
+
+        let ctx = create_session().into_inner();
+        let memory_table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+
+        // Create validation: id > 5
+        let validations = vec![col("id").gt(datafusion::prelude::lit(5i32))];
+
+        let input =
+            LogicalPlanBuilder::scan("scan", provider_as_source(Arc::new(memory_table)), None)?
+                .build()?;
+        let validated_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(DataValidation { input, validations }),
+        });
+
+        let result = ctx
+            .execute_logical_plan(validated_plan)
+            .await
+            .unwrap()
+            .collect()
+            .await;
+
         assert!(result.is_err());
         assert!(
             result

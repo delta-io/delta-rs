@@ -10,6 +10,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -27,7 +28,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
-use crate::logstore::{LogStoreRef, ObjectStoreRef};
+use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
@@ -316,6 +317,55 @@ pub(crate) async fn write_execution_plan_v2(
             write_batch_size,
             writer_properties,
             writer_stats_config,
+        )
+        .await
+    }
+}
+
+pub(crate) async fn write_exec_plan(
+    session: &dyn Session,
+    log_store: &dyn LogStore,
+    table_config: &TableConfiguration,
+    exec: Arc<dyn ExecutionPlan>,
+    operation_id: Option<Uuid>,
+    write_as_cdc: bool,
+) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    let writer_properties = session
+        .config_options()
+        .execution
+        .parquet
+        .into_writer_properties_builder()?
+        .build();
+    let stats_config = WriterStatsConfig::from_config(table_config);
+    let object_store = log_store.object_store(operation_id);
+    let target_file_size = table_config
+        .table_properties()
+        .target_file_size
+        .map(|v| v.get() as usize);
+    let partition_columns = table_config.metadata().partition_columns().clone();
+
+    if write_as_cdc {
+        write_cdc_plan(
+            session,
+            exec,
+            partition_columns,
+            object_store,
+            target_file_size,
+            None,
+            Some(writer_properties),
+            stats_config,
+        )
+        .await
+    } else {
+        write_data_plan(
+            session,
+            exec,
+            partition_columns,
+            object_store,
+            target_file_size,
+            None,
+            Some(writer_properties),
+            stats_config,
         )
         .await
     }
