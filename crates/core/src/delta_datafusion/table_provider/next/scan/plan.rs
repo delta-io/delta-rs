@@ -233,6 +233,8 @@ impl KernelScanPlan {
 
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
+        // NOTE: keep the synthetic file-id column as Dictionary<UInt16, Utf8>.
+        // Arrow's dictionary packing does not support Utf8View, and this column is internal.
         Arc::new(Field::new(
             self.file_column_name
                 .as_deref()
@@ -280,12 +282,10 @@ impl DeltaScanConfig {
         table_config: &TableConfiguration,
         base: &Schema,
     ) -> Result<SchemaRef> {
-        // IMPORTANT: This schema is used for Parquet reading and predicate pushdown.
-        // It must NOT apply view-type conversions (Utf8View/BinaryView) because:
-        // 1. Parquet files store Utf8/Binary data, not view types
-        // 2. Predicate pushdown compares against physical Parquet data
-        // 3. View-type conversion happens AFTER reading, in the result schema
-        // See convert_view_types_to_base() for predicate literal conversion.
+        // IMPORTANT: This schema is used for Parquet reading and predicate evaluation.
+        // DataFusion may choose to represent string/binary columns as view types
+        // (Utf8View/BinaryView) depending on `schema_force_view_types`, and the schema here
+        // must match the in-memory representation used during predicate evaluation.
         let cols = table_config.metadata().partition_columns();
         let table_schema = Arc::new(Schema::new(
             base.fields()
@@ -297,6 +297,36 @@ impl DeltaScanConfig {
     }
 
     fn map_field_for_parquet(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
+        let dt = match field.data_type() {
+            DataType::Struct(fields) => DataType::Struct(
+                fields
+                    .iter()
+                    .map(|f| self.map_field_for_parquet(f.clone(), partition_cols))
+                    .collect(),
+            ),
+            DataType::List(inner) => {
+                DataType::List(self.map_field_for_parquet(inner.clone(), partition_cols))
+            }
+            DataType::LargeList(inner) => {
+                DataType::LargeList(self.map_field_for_parquet(inner.clone(), partition_cols))
+            }
+            DataType::ListView(inner) => {
+                DataType::ListView(self.map_field_for_parquet(inner.clone(), partition_cols))
+            }
+            // Always use base types for Parquet reads/predicate evaluation.
+            // DataFusion's Parquet reader does not reliably produce view arrays even when enabled,
+            // and requesting view types here can cause schema/array mismatches.
+            DataType::Utf8View => DataType::Utf8,
+            DataType::BinaryView => DataType::Binary,
+            _ => field.data_type().clone(),
+        };
+
+        let field = if &dt != field.data_type() {
+            Arc::new(field.as_ref().clone().with_data_type(dt))
+        } else {
+            field
+        };
+
         if partition_cols.contains(field.name()) && self.wrap_partition_values {
             return match field.data_type() {
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
@@ -309,6 +339,7 @@ impl DeltaScanConfig {
                 _ => field,
             };
         }
+
         field
     }
 
@@ -387,9 +418,16 @@ pub(crate) fn supports_filters_pushdown(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    // Parquet predicate pushdown is exact only when we can safely apply it at read time.
+    // Deletion vectors require preserving row order for selection masks, and row tracking
+    // disables predicate pushdown in the read plan.
+    let parquet_pushdown_exact = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     filter
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field).pushdown)
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_exact).pushdown)
         .collect()
 }
 
@@ -411,9 +449,13 @@ fn process_filters(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    let parquet_pushdown_exact = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field))
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_exact))
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
     let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
@@ -440,6 +482,7 @@ fn process_predicate<'a>(
     expr: &'a Expr,
     config: &TableConfiguration,
     file_id_column: &str,
+    parquet_pushdown_exact: bool,
 ) -> ProcessedPredicate<'a> {
     let cols = config.metadata().partition_columns();
     let only_partition_refs = expr.column_refs().iter().all(|c| cols.contains(&c.name));
@@ -468,7 +511,14 @@ fn process_predicate<'a>(
             // push down any predicate to parquet
             (TableProviderFilterPushDown::Inexact, None)
         } else {
-            (TableProviderFilterPushDown::Inexact, Some(expr))
+            (
+                if parquet_pushdown_exact {
+                    TableProviderFilterPushDown::Exact
+                } else {
+                    TableProviderFilterPushDown::Inexact
+                },
+                Some(expr),
+            )
         };
         return ProcessedPredicate {
             pushdown,
@@ -488,7 +538,11 @@ fn process_predicate<'a>(
     }
 
     ProcessedPredicate {
-        pushdown: TableProviderFilterPushDown::Inexact,
+        pushdown: if parquet_pushdown_exact {
+            TableProviderFilterPushDown::Exact
+        } else {
+            TableProviderFilterPushDown::Inexact
+        },
         kernel_predicate: None,
         parquet_predicate: Some(expr),
     }
@@ -630,7 +684,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         let filter =
-            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8(Some("BME".to_string()))));
+            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8View(Some("BME".to_string()))));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?
@@ -649,7 +703,7 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         let filter =
-            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8(Some("Timothy Lamb".to_string()))));
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?

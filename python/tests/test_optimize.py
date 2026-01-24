@@ -188,7 +188,7 @@ def test_zorder_with_space_partition(tmp_path: pathlib.Path):
     partitioned_df = test_table.to_pandas(
         partitions=[("country", "=", "United States")],
     )
-    print(partitioned_df)
+    _ = partitioned_df
 
     test_table.optimize.z_order(columns=["user"])
 
