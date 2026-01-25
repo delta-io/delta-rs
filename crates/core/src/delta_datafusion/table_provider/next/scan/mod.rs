@@ -299,6 +299,8 @@ async fn get_read_plan(
     files_by_store: impl IntoIterator<Item = FilesByStore>,
     // Schema used for Parquet reads / predicate evaluation.
     // Note: this is not necessarily the final output schema.
+    // View types (e.g. Utf8View/BinaryView) and other output typing adjustments are applied
+    // later, at the DeltaScan boundary, not during Parquet read planning.
     parquet_read_schema: &SchemaRef,
     limit: Option<usize>,
     file_id_field: &FieldRef,
@@ -321,6 +323,9 @@ async fn get_read_plan(
             state.runtime_env().cache_manager.get_file_metadata_cache(),
         ));
 
+        // NOTE: In the "next" provider, DataFusion's Parquet scan partition fields are file-id
+        // only. Delta partition columns/values are injected via kernel transforms and handled
+        // above Parquet, so they are not part of the Parquet partition schema here.
         let table_schema =
             TableSchema::new(parquet_read_schema.clone(), vec![file_id_field.clone()]);
         let full_table_schema = table_schema.table_schema().clone();
@@ -459,7 +464,7 @@ impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
             //
             // See upstream TODO:
             // datafusion-physical-expr-adapter/src/schema_rewriter.rs
-            // "TODO: ... move the cast from the column to literal expressions ..." (52.1.0).
+            // "TODO: ... move the cast from the column to literal expressions ..."
             convert_physical_view_literals_to_base(expr)
         }
     }
