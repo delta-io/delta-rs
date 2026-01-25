@@ -203,10 +203,8 @@ impl KernelScanPlan {
         } else {
             result_schema.clone()
         };
-        let parquet_read_schema = config.parquet_file_schema(
-            scan.snapshot().table_configuration(),
-            &scan.physical_schema().as_ref().try_into_arrow()?,
-        )?;
+        let parquet_read_schema =
+            config.parquet_file_schema(&scan.physical_schema().as_ref().try_into_arrow()?)?;
         Ok(Self {
             scan,
             result_schema,
@@ -277,11 +275,7 @@ impl DeltaScanConfig {
         Ok(table_schema)
     }
 
-    fn parquet_file_schema(
-        &self,
-        table_config: &TableConfiguration,
-        base: &Schema,
-    ) -> Result<SchemaRef> {
+    fn parquet_file_schema(&self, base: &Schema) -> Result<SchemaRef> {
         // IMPORTANT: This schema is used for Parquet reading and predicate evaluation.
         //
         // DataFusion can materialize `Utf8View/BinaryView` when requested, but predicate
@@ -292,32 +286,34 @@ impl DeltaScanConfig {
         //
         // To keep pushdown stable, we request base `Utf8/Binary` here and only expose view
         // types at the DeltaScan boundary (see `map_field`).
-        let cols = table_config.metadata().partition_columns();
+        //
+        // NOTE: This Parquet read schema is intentionally not the same as the table provider
+        // output schema. The output schema may force view types (Utf8View/BinaryView) and other
+        // presentation-level physical types, but Parquet read + predicate pushdown must operate
+        // on the file's base types.
         let table_schema = Arc::new(Schema::new(
             base.fields()
                 .iter()
-                .map(|f| self.map_field_for_parquet(f.clone(), cols))
+                .map(|f| self.map_field_for_parquet(f.clone()))
                 .collect_vec(),
         ));
         Ok(table_schema)
     }
 
-    fn map_field_for_parquet(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
+    fn map_field_for_parquet(&self, field: FieldRef) -> FieldRef {
         let dt = match field.data_type() {
             DataType::Struct(fields) => DataType::Struct(
                 fields
                     .iter()
-                    .map(|f| self.map_field_for_parquet(f.clone(), partition_cols))
+                    .map(|f| self.map_field_for_parquet(f.clone()))
                     .collect(),
             ),
-            DataType::List(inner) => {
-                DataType::List(self.map_field_for_parquet(inner.clone(), partition_cols))
-            }
+            DataType::List(inner) => DataType::List(self.map_field_for_parquet(inner.clone())),
             DataType::LargeList(inner) => {
-                DataType::LargeList(self.map_field_for_parquet(inner.clone(), partition_cols))
+                DataType::LargeList(self.map_field_for_parquet(inner.clone()))
             }
             DataType::ListView(inner) => {
-                DataType::ListView(self.map_field_for_parquet(inner.clone(), partition_cols))
+                DataType::ListView(self.map_field_for_parquet(inner.clone()))
             }
             // Always use base types for the Parquet read schema.
             DataType::Utf8View => DataType::Utf8,
@@ -330,19 +326,6 @@ impl DeltaScanConfig {
         } else {
             field
         };
-
-        if partition_cols.contains(field.name()) && self.wrap_partition_values {
-            return match field.data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => {
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_data_type(wrap_partition_type_in_dict(field.data_type().clone()))
-                        .into()
-                }
-                _ => field,
-            };
-        }
 
         field
     }
@@ -597,6 +580,29 @@ mod tests {
 
     use super::*;
 
+    fn schema_has_view_types(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .any(|f| data_type_has_view_types(f.data_type()))
+    }
+
+    fn data_type_has_view_types(dt: &DataType) -> bool {
+        match dt {
+            DataType::Utf8View | DataType::BinaryView => true,
+            DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
+            DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|f| data_type_has_view_types(f.data_type())),
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::ListView(inner)
+            | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
+            _ => false,
+        }
+    }
+
     #[tokio::test]
     async fn test_rewrite_expression() -> TestResult {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
@@ -714,6 +720,32 @@ mod tests {
             .await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_view_types_only_exposed_in_result_schema() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = true;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = false;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(!schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
 
         Ok(())
     }
