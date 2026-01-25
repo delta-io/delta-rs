@@ -35,10 +35,11 @@ def _normalize_pyarrow_view_types_for_sort(tbl: "pa.Table") -> "pa.Table":
 
         if binary_view is not None and ty == binary_view():
             ty = pa.binary()
-            col = col.cast(ty)
+            # PyArrow 16.x lacks casts for view types, so rebuild the array.
+            col = pa.array(col.to_pylist(), type=ty)
         elif string_view is not None and ty == string_view():
             ty = pa.string()
-            col = col.cast(ty)
+            col = pa.array(col.to_pylist(), type=ty)
 
         fields.append(
             pa.field(field.name, ty, nullable=field.nullable, metadata=field.metadata)
@@ -535,16 +536,25 @@ def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
         .sort_by("int64")
     )
 
-    table_schema = pa.schema(dt.schema())
-    table_schema = table_schema.insert(
-        len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
+    # delta-rs returns Arrow view types (e.g. `string_view`) for zero-copy.
+    # PyArrow 16.x lacks compute kernels for view types, and even `Table.filter`
+    # can fail because it applies `take` across *all* columns.
+    # Convert the only columns we need to kernel-backed types.
+    raw_cdc_table = pa.table(dt.load_cdf().read_all())
+    change_type_py = raw_cdc_table.column(
+        raw_cdc_table.schema.get_field_index("_change_type")
+    ).to_pylist()
+    cdc_table = pa.table(
+        {
+            "int64": raw_cdc_table.column(
+                raw_cdc_table.schema.get_field_index("int64")
+            ),
+            "_change_type": pa.array(change_type_py, type=pa.string()),
+        }
     )
-    cdc_data = (
-        pa.table(dt.load_cdf().read_all())
-        .filter(pc.field("_change_type") == "delete")
-        .select(["int64", "_change_type"])
-        .sort_by("int64")
-    )
+
+    delete_mask = pa.array([(v == "delete") for v in change_type_py], type=pa.bool_())
+    cdc_data = cdc_table.filter(delete_mask).sort_by("int64")
 
     assert cdc_data.to_pydict() == expected_data.to_pydict()
 
