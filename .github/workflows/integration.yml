@@ -39,6 +39,7 @@ jobs:
       AZURE_STORAGE_ALLOW_HTTP: "1"
       AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
       AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+      NEXTEST_PROFILE: 'ci'
 
     steps:
       - uses: actions/checkout@v5
@@ -54,6 +55,7 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
 
       - name: Start emulated services
         run: docker compose up -d
@@ -61,7 +63,7 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
+          cargo llvm-cov nextest --cargo-profile=ci \
             --package deltalake-${{ matrix.target.name }} \
             --features integration_test \
             --codecov \
@@ -101,13 +103,15 @@ jobs:
           toolchain: stable
           cache: true
 
+      - uses: taiki-e/install-action@nextest
+
       - name: Start emulated services
         run: docker compose up -d
 
       - name: Run tests with native-tls
         run: |
           gmake setup-dat
-          cargo test --profile=ci \
+          cargo nextest r --cargo-profile=ci \
             --package deltalake-aws \
             --no-default-features \
             --features integration_test,native-tls
@@ -129,6 +133,7 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
 
       # Install Java and Hadoop for HDFS integration tests
       - uses: actions/setup-java@v4
@@ -145,7 +150,7 @@ jobs:
       - name: Run tests with rustls (default)
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
+          cargo llvm-cov nextest --cargo-profile=ci \
             --features integration_test \
             --package deltalake-hdfs \
             --codecov \
@@ -177,6 +182,7 @@ jobs:
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@nextest
 
       - name: Download Lakectl
         run: |
@@ -190,7 +196,7 @@ jobs:
       - name: Run tests
         run: |
           gmake setup-dat
-          cargo llvm-cov --profile=ci \
+          cargo llvm-cov nextest --cargo-profile=ci \
             --package deltalake-lakefs \
             --features integration_test_lakefs \
             --codecov \
