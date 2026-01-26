@@ -4,9 +4,9 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use deltalake_derive::DeltaConfig;
-use foyer::{DirectFsDeviceOptions, Engine, HybridCache, HybridCacheBuilder};
-use futures::stream::BoxStream;
+use foyer::{BlockEngineConfig, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder};
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
     Error as ObjectStoreError, GetOptions, GetResult, GetResultPayload, ListResult,
@@ -251,12 +251,12 @@ impl<T: ObjectStore + Clone> CommitCacheObjectStore<T> {
 
         let entry = self
             .cache
-            .fetch(cache_key, || async move {
+            .get_or_fetch(&cache_key, || async move {
                 let response = store.get_opts(&loc, options).await?;
                 let meta = response.meta.clone();
                 let data = response.bytes().await?;
                 let entry = Entry::new(data, meta.last_modified, meta.e_tag);
-                Ok(entry)
+                Ok::<Entry, ObjectStoreError>(entry)
             })
             .await
             .map_err(|_| CachedStoreError::CacheFetch)?;
@@ -360,10 +360,14 @@ pub async fn get_default_cache(
     Ok(Arc::new(
         HybridCacheBuilder::new()
             .memory(config.max_size_memory_mb * 1024 * 1024)
-            .storage(Engine::Large)
-            .with_device_options(
-                DirectFsDeviceOptions::new(cache_dir.as_path())
-                    .with_capacity(config.max_size_disk_mb * 1024 * 1024),
+            .storage()
+            .with_engine_config(
+                BlockEngineConfig::new(
+                    FsDeviceBuilder::new(cache_dir.as_path())
+                        .build()
+                        .map_err(|_| CachedStoreError::CacheInitialization)?,
+                )
+                .with_block_size(config.max_size_disk_mb * 1024 * 1024),
             )
             .build()
             .await
