@@ -14,8 +14,8 @@ use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::kernel::schema::cast_record_batch;
 use parking_lot::RwLock;
 
-use crate::datafusion::LazyTableProvider;
 use crate::DeltaResult;
+use crate::datafusion::LazyTableProvider;
 
 /// Convert an [ArrowArrayStreamReader] into a [LazyTableProvider]
 pub fn to_lazy_table(
