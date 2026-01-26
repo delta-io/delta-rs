@@ -40,6 +40,7 @@ parquet = { version = "57" }
 
 # datafusion
 datafusion = "51.0"
+datafusion-datasource = "51.0"
 datafusion-ffi = "51.0"
 datafusion-proto = "51.0"
 
@@ -145,3 +146,12 @@ inherits = "release"
 opt-level = 3
 codegen-units = 1
 lto = "fat"
+
+
+# Python wheel release profile ARM - for PyPI distribution
+# Usage: maturin build --profile python-release-arm (via .github/workflows/python_release.yml)
+[profile.python-release-arm]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "thin"

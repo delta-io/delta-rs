@@ -103,7 +103,7 @@ trait LogStoreFactoryExt {
     /// ## Parameters
     ///
     /// - `root_store`: and instance of [`ObjectStoreRef`] with no prefix o.a. applied.
-    ///   I.e. pointing to the root of the onject store.
+    ///   I.e. pointing to the root of the object store.
     /// - `location`: The location of the delta table (where the `_delta_log` directory is).
     /// - `options`: The options for the log store.
     fn with_options_internal(
@@ -216,16 +216,6 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
-/// The next commit that's available from underlying storage
-///
-#[derive(Debug)]
-pub enum PeekCommit {
-    /// The next commit version and associated actions
-    New(i64, Vec<Action>),
-    /// Provided DeltaVersion is up to date
-    UpToDate,
-}
-
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -307,19 +297,6 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: i64) -> DeltaResult<i64>;
-
-    /// Get the list of actions for the next commit
-    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
-        let next_version = current_version + 1;
-        let commit_log_bytes = match self.read_commit_entry(next_version).await {
-            Ok(Some(bytes)) => Ok(bytes),
-            Ok(None) => return Ok(PeekCommit::UpToDate),
-            Err(err) => Err(err),
-        }?;
-
-        let actions = crate::logstore::get_actions(next_version, &commit_log_bytes);
-        Ok(PeekCommit::New(next_version, actions?))
-    }
 
     /// Get object store, can pass operation_id for object stores linked to an operation
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
@@ -463,10 +440,6 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
         T::get_latest_version(self, start_version).await
     }
 
-    async fn peek_next_commit(&self, current_version: i64) -> DeltaResult<PeekCommit> {
-        T::peek_next_commit(self, current_version).await
-    }
-
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
         T::object_store(self, operation_id)
     }
@@ -523,8 +496,16 @@ pub(crate) fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
 #[cfg(feature = "datafusion")]
 fn object_store_url(location: &Url) -> ObjectStoreUrl {
     use object_store::path::DELIMITER;
+
+    // azure storage urls encode the container as user in the url
+    let user_at = match location.username() {
+        u if !u.is_empty() => format!("{u}@"),
+        _ => "".to_string(),
+    };
+
     ObjectStoreUrl::parse(format!(
-        "delta-rs://{}-{}{}",
+        "delta-rs://{}{}-{}{}",
+        user_at,
         location.scheme(),
         location.host_str().unwrap_or("-"),
         location.path().replace(DELIMITER, "-").replace(':', "-")
@@ -975,31 +956,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// <https://github.com/delta-io/delta-rs/issues/3297>:w
-    #[tokio::test]
-    async fn test_peek_with_invalid_json() -> DeltaResult<()> {
-        use crate::logstore::object_store::memory::InMemory;
-        let memory_store = Arc::new(InMemory::new());
-        let log_path = Path::from("delta-table/_delta_log/00000000000000000001.json");
-
-        let log_content = r#"{invalid_json"#;
-
-        memory_store
-            .put(&log_path, log_content.into())
-            .await
-            .expect("Failed to write log file");
-
-        let table_uri = url::Url::parse("memory:///delta-table").unwrap();
-        let table = crate::DeltaTableBuilder::from_url(table_uri.clone())
-            .unwrap()
-            .with_storage_backend(memory_store, table_uri)
-            .build()?;
-
-        let result = table.log_store().peek_next_commit(0).await;
-        assert!(result.is_err());
-        Ok(())
-    }
-
     /// Collect list stream
     pub(crate) async fn flatten_list_stream(
         storage: &object_store::DynObjectStore,
@@ -1027,6 +983,11 @@ mod datafusion_tests {
             ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
             // Same scheme, different host, same path
             ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
+            // Azure urls should encode the container
+            (
+                "abfss://container1@host/table_1",
+                "abfss://container2@host/table_1",
+            ),
         ] {
             let url_1 = Url::parse(location_1).unwrap();
             let url_2 = Url::parse(location_2).unwrap();

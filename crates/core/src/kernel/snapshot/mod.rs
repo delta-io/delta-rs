@@ -665,24 +665,7 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if !self.snapshot.load_config().require_files {
-            return self.snapshot.file_views(log_store, predicate);
-        }
-        self.snapshot
-            .files_from(
-                log_store,
-                predicate,
-                self.version() as u64,
-                Box::new(self.files.clone().into_iter()),
-                None,
-            )
-            .map_ok(|batch| {
-                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
-                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
-                })
-            })
-            .try_flatten()
-            .boxed()
+        self.snapshot.file_views(log_store, predicate)
     }
 
     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]

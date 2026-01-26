@@ -113,7 +113,7 @@ def test_optimize_schema_evolved_table(
         {
             "foo": Array(
                 ["1"],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -124,7 +124,7 @@ def test_optimize_schema_evolved_table(
         {
             "bar": Array(
                 ["1"],
-                ArrowField("bar", type=DataType.string(), nullable=True),
+                ArrowField("bar", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -144,11 +144,11 @@ def test_optimize_schema_evolved_table(
         {
             "foo": Array(
                 ["1", None],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [None, "1"],
-                ArrowField("bar", type=DataType.string(), nullable=True),
+                ArrowField("bar", type=DataType.string_view(), nullable=True),
             ),
         }
     )

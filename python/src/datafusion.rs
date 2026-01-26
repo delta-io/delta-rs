@@ -2,7 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_schema::Schema as ArrowSchema;
+use arrow_schema::{Schema as ArrowSchema, SchemaRef};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::execution_props::ExecutionProps;
 use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
@@ -14,10 +14,14 @@ use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
+use deltalake::datafusion::execution::object_store::ObjectStoreUrl;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
+use deltalake::delta_datafusion::DeltaScanNext;
+use deltalake::logstore::object_store::DynObjectStore;
 use deltalake::{datafusion, DeltaResult, DeltaTableError};
 use parking_lot::RwLock;
+use tokio::runtime::Handle;
 
 #[derive(Debug)]
 pub(crate) struct LazyTableProvider {
@@ -114,6 +118,84 @@ impl TableProvider for LazyTableProvider {
 
     fn statistics(&self) -> Option<Statistics> {
         None
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TokioDeltaScan {
+    inner: DeltaScanNext,
+    handle: Handle,
+    object_store_url: Option<ObjectStoreUrl>,
+    object_store: Option<Arc<DynObjectStore>>,
+}
+
+impl TokioDeltaScan {
+    pub fn new(inner: DeltaScanNext, handle: Handle) -> Self {
+        Self {
+            inner,
+            handle,
+            object_store_url: None,
+            object_store: None,
+        }
+    }
+
+    pub fn with_object_store(
+        mut self,
+        object_store_url: ObjectStoreUrl,
+        object_store: Arc<DynObjectStore>,
+    ) -> Self {
+        self.object_store_url = Some(object_store_url);
+        self.object_store = Some(object_store);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl TableProvider for TokioDeltaScan {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.inner.get_table_definition()
+    }
+
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
+        self.inner.get_logical_plan()
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        if let (Some(url), Some(store)) = (&self.object_store_url, &self.object_store) {
+            session
+                .runtime_env()
+                .register_object_store(url.as_ref(), store.clone());
+        }
+
+        let inner = &self.inner;
+
+        self.handle
+            .block_on(async { inner.scan(session, projection, filters, limit).await })
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filter)
     }
 }
 

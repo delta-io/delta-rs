@@ -66,7 +66,7 @@
 //!   let table = deltalake_core::open_table(table_url)
 //!       .await
 //!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
+//!   ctx.register_table("demo", table.table_provider().await.unwrap()).unwrap();
 //!
 //!   let batches = ctx
 //!       .sql("SELECT * FROM demo").await.unwrap()
@@ -196,7 +196,6 @@ mod tests {
     use futures::TryStreamExt as _;
 
     use super::*;
-    use crate::table::PeekCommit;
     use test_utils::file_paths_from;
 
     #[tokio::test]
@@ -621,39 +620,6 @@ mod tests {
             .expect("Cannot get table history")
             .collect();
         assert_eq!(history3.len(), 5);
-    }
-
-    #[tokio::test]
-    async fn test_poll_table_commits() -> DeltaResult<()> {
-        let table_path = std::path::Path::new("../test/tests/data/simple_table_with_checkpoint")
-            .canonicalize()
-            .unwrap();
-        let table_url = url::Url::from_directory_path(table_path).unwrap();
-        let mut table = crate::open_table_with_version(table_url, 9).await.unwrap();
-        assert_eq!(table.version(), Some(9));
-        let peek = table
-            .log_store()
-            .peek_next_commit(table.version().unwrap())
-            .await
-            .unwrap();
-        assert!(matches!(peek, PeekCommit::New(..)));
-
-        if let PeekCommit::New(version, actions) = peek {
-            assert_eq!(table.version(), Some(9));
-            assert_eq!(version, 10);
-            assert_eq!(actions.len(), 2);
-
-            table.update_incremental(None).await.unwrap();
-            assert_eq!(table.version(), Some(10));
-        };
-
-        let peek = table
-            .log_store()
-            .peek_next_commit(table.version().unwrap())
-            .await
-            .unwrap();
-        assert!(matches!(peek, PeekCommit::UpToDate));
-        Ok(())
     }
 
     #[tokio::test]

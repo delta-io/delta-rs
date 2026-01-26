@@ -4,22 +4,21 @@ use std::sync::Arc;
 
 use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
-use datafusion::execution::SendableRecordBatchStream;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::execute_stream;
 use delta_kernel::table_features::TableFeature;
-use futures::StreamExt;
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
 
-use super::datafusion_utils::into_expr;
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::{DeltaDataChecker, DeltaScanBuilder, create_session, register_store};
+use crate::delta_datafusion::{
+    DataValidationExec, DeltaScanNext, Expression, constraints_to_exprs, create_session,
+    expr::fmt_expr_to_sql, into_expr, update_datafusion_session,
+};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
     EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
-use crate::operations::datafusion_utils::Expression;
 use crate::protocol::DeltaOperation;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -147,13 +146,16 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let session = this
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            register_store(this.log_store.clone(), session.runtime_env().as_ref());
+            update_datafusion_session(
+                this.log_store.as_ref(),
+                session.as_ref(),
+                Some(operation_id),
+            )?;
 
-            let scan = DeltaScanBuilder::new(&snapshot, this.log_store.clone(), session.as_ref())
-                .build()
+            let proivider = DeltaScanNext::builder()
+                .with_eager_snapshot(snapshot.clone())
                 .await?;
-
-            let schema = scan.schema().to_dfschema()?;
+            let schema = proivider.schema().to_dfschema()?;
 
             // Create an Hashmap of the name to the processed expression
             let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
@@ -186,32 +188,20 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .map(|sql| Constraint::new("*", sql))
                 .collect();
 
-            // Checker built here with the one time constraint to check.
-            let checker = DeltaDataChecker::new_with_constraints(constraints_checker);
-            let plan: Arc<dyn ExecutionPlan> = Arc::new(scan);
-            let mut tasks = vec![];
-            for p in 0..plan.properties().output_partitioning().partition_count() {
-                let inner_plan = plan.clone();
-                let inner_checker = checker.clone();
-                let mut record_stream: SendableRecordBatchStream =
-                    inner_plan.execute(p, session.task_ctx())?;
-                let handle: tokio::task::JoinHandle<DeltaResult<()>> =
-                    tokio::task::spawn(async move {
-                        while let Some(maybe_batch) = record_stream.next().await {
-                            let batch = maybe_batch?;
-                            inner_checker.check_batch(&batch).await?;
-                        }
-                        Ok(())
-                    });
-                tasks.push(handle);
+            let plan = DataValidationExec::try_new_with_predicates(
+                session.as_ref(),
+                proivider.scan(session.as_ref(), None, &[], None).await?,
+                constraints_to_exprs(session.as_ref(), &schema, &constraints_checker)?,
+            )?;
+
+            // We must not just try to collect the plan here, because that would load
+            // everything into memory. Instead we stream the results and discard them.
+            let mut result_stream = execute_stream(plan, session.task_ctx())?;
+            while let Some(maybe_batch) = result_stream.next().await {
+                // No need to do anything with the data, if we get data back it means
+                // the constraints are satisfied. We do want to propagate any errors though.
+                let _result = maybe_batch?;
             }
-            futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|err| DeltaTableError::Generic(err.to_string()))?
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?;
 
             // We have validated the table passes it's constraints, now to add the constraint to
             // the table.

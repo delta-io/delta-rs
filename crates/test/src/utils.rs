@@ -87,7 +87,9 @@ impl IntegrationContext {
 
         let tmp_dir = tempdir()?;
         // create a fresh bucket in every context. THis is done via CLI...
-        integration.create_bucket()?;
+        integration
+            .create_bucket()
+            .expect("Failed to create the bucket!");
         let store = integration.object_store()?;
         let bucket = integration.bucket_name();
 

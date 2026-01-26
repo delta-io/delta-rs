@@ -2,22 +2,35 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_array::{Array, RecordBatch, StringArray};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use arrow::array::AsArray;
+use arrow::datatypes::StringViewType;
+use arrow_array::{Array, GenericByteViewArray, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::{Expr, Volatility, col};
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::common::{HashSet, Result};
+use datafusion::datasource::{MemTable, provider_as_source};
+use datafusion::execution::context::SessionContext;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
+use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility, col};
+use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
+use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
+use datafusion::prelude::{cast, lit};
+use datafusion::scalar::ScalarValue;
+use datafusion_datasource::file_scan_config::wrap_partition_value_in_dict;
+use delta_kernel::Predicate;
+use futures::TryStreamExt as _;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use tracing::*;
 
+use crate::delta_datafusion::engine::to_delta_predicate;
+use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
 use crate::delta_datafusion::{
-    DeltaScanBuilder, DeltaScanConfigBuilder, PATH_COLUMN, df_logical_schema, get_path_column,
+    DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, DeltaScanNext,
+    FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
@@ -86,7 +99,11 @@ pub(crate) async fn find_files(
         }
         None => {
             let result = FindFiles {
-                candidates: snapshot.log_data().iter().map(|f| f.add_action()).collect(),
+                candidates: snapshot
+                    .file_views(&log_store, None)
+                    .map_ok(|f| f.add_action())
+                    .try_collect()
+                    .await?,
                 partition_scan: true,
             };
             Span::current().record("partition_scan", result.partition_scan);
@@ -96,11 +113,21 @@ pub(crate) async fn find_files(
     }
 }
 
-struct FindFilesExprProperties {
+pub(crate) struct FindFilesExprProperties {
     pub partition_columns: Vec<String>,
 
     pub partition_only: bool,
     pub result: DeltaResult<()>,
+}
+
+impl Default for FindFilesExprProperties {
+    fn default() -> Self {
+        Self {
+            partition_columns: Vec::new(),
+            partition_only: true,
+            result: Ok(()),
+        }
+    }
 }
 
 /// Ensure only expressions that make sense are accepted, check for
@@ -170,6 +197,7 @@ fn join_batches_with_add_actions(
     mut actions: HashMap<String, Add>,
     path_column: &str,
     dict_array: bool,
+    decode_paths: bool,
 ) -> DeltaResult<Vec<Add>> {
     // Given RecordBatches that contains `__delta_rs_path` perform a hash join
     // with actions to obtain original add actions
@@ -196,9 +224,13 @@ fn join_batches_with_add_actions(
                 "{path_column} cannot be null"
             )))?;
 
-            let path = percent_decode_str(path).decode_utf8_lossy();
+            let key = if decode_paths {
+                percent_decode_str(path).decode_utf8_lossy()
+            } else {
+                std::borrow::Cow::Borrowed(path)
+            };
 
-            match actions.remove(path.as_ref()) {
+            match actions.remove(key.as_ref()) {
                 Some(action) => files.push(action),
                 None => {
                     return Err(DeltaTableError::Generic(
@@ -226,32 +258,39 @@ async fn find_files_scan(
     session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let candidate_map: HashMap<String, Add> = snapshot
-        .log_data()
-        .iter()
-        .map(|f| f.add_action())
-        .map(|add| {
-            let path = add.path.clone();
-            (path, add)
+    // let kernel_predicate = to_predicate(&expression).ok().map(Arc::new);
+    let candidate_map: HashMap<_, _> = snapshot
+        .file_views(&log_store, None)
+        .map_ok(|f| {
+            let add = f.add_action();
+            (add.path.clone(), add)
         })
-        .collect();
+        .try_collect()
+        .await?;
 
     Span::current().record("total_files", candidate_map.len());
 
     let scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
         .build(snapshot)?;
+    let file_column_name = scan_config
+        .file_column_name
+        .as_ref()
+        .ok_or(DeltaTableError::Generic(
+            "File column name must be set in scan config".to_string(),
+        ))?
+        .clone();
 
-    let logical_schema = df_logical_schema(snapshot, &scan_config.file_column_name, None)?;
+    let logical_schema = df_logical_schema(snapshot, &file_column_name)?;
 
     // Identify which columns we need to project
-    let mut used_columns = expression
+    let mut used_columns: Vec<_> = expression
         .column_refs()
         .into_iter()
         .map(|column| logical_schema.index_of(&column.name))
-        .collect::<Result<Vec<usize>, ArrowError>>()?;
+        .try_collect()?;
     // Add path column
-    used_columns.push(logical_schema.index_of(scan_config.file_column_name.as_ref().unwrap())?);
+    used_columns.push(logical_schema.index_of(&file_column_name)?);
 
     let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
@@ -261,9 +300,7 @@ async fn find_files_scan(
         .await?;
     let scan = Arc::new(scan);
 
-    let config = &scan.config;
     let input_dfschema = scan.logical_schema.as_ref().to_owned().try_into()?;
-
     let predicate_expr = session
         .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
 
@@ -271,15 +308,10 @@ async fn find_files_scan(
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
-    let task_ctx = Arc::new(TaskContext::from(session));
-    let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
+    let path_batches = datafusion::physical_plan::collect(limit, session.task_ctx()).await?;
 
-    let result = join_batches_with_add_actions(
-        path_batches,
-        candidate_map,
-        config.file_column_name.as_ref().unwrap(),
-        true,
-    )?;
+    let result =
+        join_batches_with_add_actions(path_batches, candidate_map, &file_column_name, true, false)?;
 
     Span::current().record("matching_files", result.len());
     Ok(result)
@@ -305,24 +337,20 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
             ))?
             .to_owned(),
     );
-    fields.push(Field::new(PATH_COLUMN, ArrowDataType::Utf8, false));
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
 
     for field in schema.fields() {
-        if field.name().starts_with("partition.") {
-            let name = field.name().strip_prefix("partition.").unwrap();
-
+        if let Some(name) = field.name().strip_prefix("partition.") {
             arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(Field::new(
-                name,
-                field.data_type().to_owned(),
-                field.is_nullable(),
-            ));
+            fields.push(field.as_ref().clone().with_name(name));
         }
     }
 
-    let schema = Arc::new(ArrowSchema::new(fields));
-    let batch = RecordBatch::try_new(schema, arrays)?;
-    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let schema = Arc::new(Schema::new(fields));
+    let mem_table = MemTable::try_new(
+        schema.clone(),
+        vec![vec![RecordBatch::try_new(schema, arrays)?]],
+    )?;
 
     let ctx = SessionContext::new();
     let mut df = ctx.read_table(Arc::new(mem_table))?;
@@ -333,11 +361,183 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
 
     let map = actions
         .into_iter()
-        .map(|action| {
-            let path = action.path.clone();
-            (path, action)
-        })
-        .collect::<HashMap<String, Add>>();
+        .map(|action| (action.path.clone(), action))
+        .collect::<HashMap<_, _>>();
 
-    join_batches_with_add_actions(batches, map, PATH_COLUMN, false)
+    join_batches_with_add_actions(batches, map, PATH_COLUMN, false, true)
+}
+
+/// The logical schema for a Deltatable is different from the protocol level schema since partition
+/// columns must appear at the end of the schema. This is to align with how partition are handled
+/// at the physical level
+fn df_logical_schema(
+    snapshot: &EagerSnapshot,
+    file_column_name: &String,
+) -> DeltaResult<SchemaRef> {
+    let input_schema = snapshot.input_schema();
+    let table_partition_cols = snapshot.metadata().partition_columns();
+
+    let mut fields: Vec<_> = input_schema
+        .fields()
+        .iter()
+        .filter(|f| !table_partition_cols.contains(f.name()))
+        .cloned()
+        .collect();
+
+    for partition_col in table_partition_cols.iter() {
+        fields.push(Arc::new(
+            input_schema
+                .field_with_name(partition_col)
+                .unwrap()
+                .to_owned(),
+        ));
+    }
+
+    fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
+
+    Ok(Arc::new(Schema::new(fields)))
+}
+
+pub(crate) struct MatchedFilesScan {
+    /// A logical plan to perform a scan over all matched filed
+    plan: LogicalPlan,
+    /// Arrays containing the matched file names.
+    valid_files: Vec<GenericByteViewArray<StringViewType>>,
+    /// The optimized predicate used to find files with some maatching data
+    pub(crate) predicate: Expr,
+    /// A kernel version of the predicate.
+    ///
+    /// This predicate may be a subset of the optimized predicate, since
+    /// we do not (yet) have full coverage to translate datafusion to
+    /// kernel predicates.
+    pub(crate) delta_predicate: Arc<Predicate>,
+    /// The predicate contains only partition column references
+    ///
+    /// This implies that for each matched file all data matches.
+    pub(crate) partition_only: bool,
+}
+
+impl MatchedFilesScan {
+    pub(crate) fn scan(&self) -> &LogicalPlan {
+        &self.plan
+    }
+
+    /// Create a HashSet containing all files included in this scan.
+    ///
+    /// Files are referenced using fully qualified URLs.
+    pub(crate) fn files_set(&self) -> HashSet<String> {
+        self.valid_files
+            .iter()
+            .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string()))
+            .collect()
+    }
+}
+
+/// Create a table scan plan for reading all data from
+/// all files which contain any data matching a predicate.
+///
+/// This is useful for DML where we need to re-write files by
+/// updating/removing some records so we require all records
+/// but only from matching files.
+///
+/// ## Returns
+///
+/// If no files contaon matching data, `None` is returned.
+///
+/// Otherwise:
+/// - The logical plan for reading data from matched files only.
+/// - The set of matched file URLs.
+/// - The potentially simplified predicate applied when matching data.
+/// - A kernel predicate (best effort) which can be used to filter log replays.
+pub(crate) async fn scan_files_where_matches(
+    session: &dyn Session,
+    snapshot: &EagerSnapshot,
+    predicate: Expr,
+) -> Result<Option<MatchedFilesScan>> {
+    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate))?;
+
+    let partition_columns = snapshot
+        .table_configuration()
+        .metadata()
+        .partition_columns();
+    // validate that the expressions contain no illegal variants
+    // that are not eligible for file skipping, e.g. volatile functions.
+    let mut visitor = FindFilesExprProperties {
+        partition_columns: partition_columns.clone(),
+        partition_only: true,
+        result: Ok(()),
+    };
+    for term in &skipping_pred {
+        visitor.result = Ok(());
+        term.visit(&mut visitor)?;
+        visitor.result?
+    }
+
+    // convert to a delta predicate that can be applied to kernel scans.
+    // This is a best effort predicate and downstream code needs to also
+    // apply the explicit file selection so we can ignore errors in the
+    // conversion.
+    let delta_predicate = Arc::new(Predicate::and_from(
+        skipping_pred
+            .iter()
+            .flat_map(|p| to_delta_predicate(p).ok()),
+    ));
+
+    let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
+
+    // Scan the delta table with a dedicated predicate applied for file skipping
+    // and with the source file path exosed as column.
+    let table_source = provider_as_source(
+        DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_file_skipping_predicates(skipping_pred.clone())
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .await?,
+    );
+
+    // the kernel scan only provides a best effort file skipping, in this case
+    // we want to determine the file we certainly need to rewrite. For this
+    // we perform an initial aggreagte scan to see if we can quickly find
+    // at least one matching record in the files.
+    let files_plan = LogicalPlanBuilder::scan("files_scan", table_source.clone(), None)?
+        .filter(predicate.clone())?
+        .project([
+            cast(col(FILE_ID_COLUMN_DEFAULT), DataType::Utf8View).alias(FILE_ID_COLUMN_DEFAULT)
+        ])?
+        .distinct()?
+        .build()?;
+
+    let files_exec = session.create_physical_plan(&files_plan).await?;
+    let files_data = collect_partitioned(files_exec, session.task_ctx()).await?;
+    let files_count = files_data
+        .iter()
+        .flat_map(|batches| batches.iter().map(|b| b.num_rows()))
+        .sum::<usize>();
+    if files_count == 0 {
+        return Ok(None);
+    }
+
+    let valid_files = files_data
+        .iter()
+        .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
+        .collect_vec();
+
+    // Crate a table scan limiting the data to that originating from valid files.
+    let file_list = valid_files
+        .iter()
+        .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string()))
+        .map(|v| lit(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(v)))))
+        .collect_vec();
+    let plan = LogicalPlanBuilder::scan("source", table_source, None)?
+        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
+        .drop_columns([FILE_ID_COLUMN_DEFAULT])?
+        .build()?;
+
+    Ok(Some(MatchedFilesScan {
+        plan,
+        valid_files,
+        predicate,
+        delta_predicate,
+        partition_only: visitor.partition_only,
+    }))
 }

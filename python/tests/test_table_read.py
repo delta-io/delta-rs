@@ -1127,11 +1127,11 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             {
                 "date": Array(
                     ["2021-01-01", "2021-01-02", "2021-01-03", "2021-12-31"],
-                    ArrowField("date", type=DataType.string(), nullable=True),
+                    ArrowField("date", type=DataType.string_view(), nullable=True),
                 ),
                 "value": Array(
                     ["a", "b", "c", "d"],
-                    ArrowField("value", type=DataType.string(), nullable=True),
+                    ArrowField("value", type=DataType.string_view(), nullable=True),
                 ),
             }
         ),
@@ -1142,7 +1142,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         {
             "date": Array(
                 ["2021-01-01", "2021-01-02", "2021-01-03"],
-                ArrowField("date", type=DataType.string(), nullable=True),
+                ArrowField("date", type=DataType.string_view(), nullable=True),
             ),
             "dayOfYear": Array(
                 [1, 2, 3],
@@ -1150,7 +1150,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             ),
             "value": Array(
                 ["a", "b", "c"],
-                ArrowField("value", type=DataType.string(), nullable=True),
+                ArrowField("value", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1169,3 +1169,11 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         .read_all()
     )
     assert expected == actual
+
+
+def test_read_deletion_vectors():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
+        "value"
+    ].to_pylist() == [1, 2, 3, 4, 5, 6, 7, 8]

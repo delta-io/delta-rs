@@ -120,7 +120,10 @@ pub async fn commit_actions(
         .await
         .unwrap()
         .version();
-    table.update_state().await.unwrap();
+    table
+        .update_state()
+        .await
+        .expect("Failed to commit_actions: {actions:?}");
     version
 }
 

@@ -5,12 +5,7 @@ use deltalake_test::{TestResult, acceptance::read_dat_case};
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 
-static SKIPPED_TESTS: &[&str; 4] = &[
-    "iceberg_compat_v1",
-    "column_mapping",
-    "check_constraints",
-    "deletion_vectors",
-];
+static SKIPPED_TESTS: &[&str; 1] = &["iceberg_compat_v1"];
 
 #[rstest]
 #[tokio::test]

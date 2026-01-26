@@ -23,7 +23,9 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
-use deltalake::delta_datafusion::DeltaCdfTableProvider;
+use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
+use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext};
+
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -67,6 +69,7 @@ use uuid::Uuid;
 
 use writer::maybe_lazy_cast_reader;
 
+use crate::datafusion::TokioDeltaScan;
 use crate::error::{to_rt_err, DeltaError, DeltaProtocolError, PythonError};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
@@ -1776,7 +1779,7 @@ impl RawDeltaTable {
                 .build()
                 .map_err(PythonError::from)?;
 
-            builder = builder.with_input_execution_plan(Arc::new(plan));
+            builder = builder.with_input_plan(plan);
 
             if let Some(schema_mode) = schema_mode {
                 builder = builder.with_schema_mode(schema_mode.parse().map_err(PythonError::from)?);
@@ -1835,12 +1838,26 @@ impl RawDeltaTable {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
-        // tokio runtime handle?
-        let handle = None;
+        let handle = rt().handle();
         let name = CString::new("datafusion_table_provider").unwrap();
+        let table = self.with_table(|t| Ok(t.clone()))?;
 
-        let table = self.with_table(|t| Ok(Arc::new(t.clone())))?;
-        let provider = FFI_TableProvider::new(table, false, handle);
+        let log_store = table.log_store();
+        let object_store_url = log_store.root_url().as_object_store_url();
+        let object_store = log_store.root_object_store(None);
+
+        let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+        let snapshot = table
+            .snapshot()
+            .map_err(PythonError::from)?
+            .snapshot()
+            .clone();
+        let scan = DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?;
+        let tokio_scan = Arc::new(
+            TokioDeltaScan::new(scan, handle.clone())
+                .with_object_store(object_store_url, object_store),
+        ) as Arc<dyn TableProvider>;
+        let provider = FFI_TableProvider::new(tokio_scan, false, Some(handle.clone()));
 
         PyCapsule::new(py, provider, Some(name.clone()))
     }

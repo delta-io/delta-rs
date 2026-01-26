@@ -7,6 +7,7 @@ use tokio::runtime::Handle;
 
 pub(crate) use self::expressions::*;
 use self::file_formats::DataFusionFileFormatHandler;
+pub use self::storage::AsObjectStoreUrl;
 use self::storage::DataFusionStorageHandler;
 use crate::kernel::ARROW_HANDLER;
 
@@ -24,6 +25,10 @@ pub struct DataFusionEngine {
 impl DataFusionEngine {
     pub fn new_from_session(session: &dyn Session) -> Arc<Self> {
         Self::new(session.task_ctx(), Handle::current()).into()
+    }
+
+    pub fn new_from_context(ctx: Arc<TaskContext>) -> Arc<Self> {
+        Self::new(ctx, Handle::current()).into()
     }
 
     pub fn new(ctx: Arc<TaskContext>, handle: Handle) -> Self {

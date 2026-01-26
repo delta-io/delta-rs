@@ -316,17 +316,19 @@ pub async fn create_initialized_table(table_path: &str, partition_cols: &[String
 
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
-    use crate::DeltaTable;
-    use crate::writer::SaveMode;
     use arrow_array::RecordBatch;
     use datafusion::prelude::SessionContext;
-    use std::sync::Arc;
+
+    use crate::DeltaTable;
+    use crate::writer::SaveMode;
 
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
         let table =
             DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
+        table.update_datafusion_session(&ctx.state()).unwrap();
+        ctx.register_table("test", table.table_provider().await.unwrap())
+            .unwrap();
         ctx.sql("select * from test")
             .await
             .unwrap()
@@ -341,7 +343,9 @@ pub mod datafusion {
             table.state.as_ref().unwrap().clone(),
         );
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
+        table.update_datafusion_session(&ctx.state()).unwrap();
+        ctx.register_table("test", table.table_provider().await.unwrap())
+            .unwrap();
         ctx.sql(&format!("select {columns} from test order by {columns}"))
             .await
             .unwrap()

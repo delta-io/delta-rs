@@ -1,6 +1,7 @@
 //! Auxiliary methods for dealing with kernel scalars
 use std::cmp::Ordering;
 
+use arrow::{array::AsArray, datatypes::UInt16Type};
 use arrow_array::Array;
 use arrow_schema::TimeUnit;
 use chrono::{DateTime, TimeZone, Utc};
@@ -235,7 +236,7 @@ impl ScalarExt for Scalar {
                     .iter()
                     .flat_map(|f| f.as_ref().try_into_kernel())
                     .collect::<Vec<_>>();
-                let struct_arr = arr.as_any().downcast_ref::<StructArray>()?;
+                let struct_arr = arr.as_struct();
                 if !struct_arr.is_valid(index) {
                     return None;
                 }
@@ -250,6 +251,32 @@ impl ScalarExt for Scalar {
                 Some(Self::Struct(
                     StructData::try_new(struct_fields, values).ok()?,
                 ))
+            }
+            Dictionary(kt, dt) if matches!(kt.as_ref(), UInt16) => {
+                let dict_arr = arr.as_dictionary::<UInt16Type>();
+                macro_rules! cast_dict {
+                    ($array_type:ty, $variant:ident, $conversion:expr) => {{
+                        let typed_dict = dict_arr.downcast_dict::<$array_type>()?;
+                        Some(checked(
+                            &typed_dict,
+                            index,
+                            Self::$variant($conversion(typed_dict.value(index))),
+                        ))
+                    }};
+                }
+                match dt.as_ref() {
+                    Utf8 => cast_dict!(StringArray, String, |v: &str| v.to_string()),
+                    Utf8View => cast_dict!(StringViewArray, String, |v: &str| v.to_string()),
+                    LargeUtf8 => {
+                        cast_dict!(LargeStringArray, String, |v: &str| v.to_string())
+                    }
+                    Binary => cast_dict!(BinaryArray, Binary, |v: &[u8]| v.to_vec()),
+                    BinaryView => cast_dict!(BinaryViewArray, Binary, |v: &[u8]| v.to_vec()),
+                    LargeBinary => {
+                        cast_dict!(LargeBinaryArray, Binary, |v: &[u8]| v.to_vec())
+                    }
+                    _ => None,
+                }
             }
             Float16
             | Decimal32(_, _)

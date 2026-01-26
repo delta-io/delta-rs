@@ -34,6 +34,7 @@ use datafusion::{
 };
 
 use crate::delta_datafusion::DataFusionResult;
+use crate::delta_datafusion::data_validation::DataValidationExtensionPlanner;
 use crate::operations::delete::DeleteMetricExtensionPlanner;
 use crate::operations::merge::MergeMetricExtensionPlanner;
 use crate::operations::update::UpdateMetricExtensionPlanner;
@@ -46,6 +47,7 @@ const DELTA_EXTENSION_PLANNERS: LazyLock<Vec<Arc<dyn ExtensionPlanner + Send + S
             WriteMetricExtensionPlanner::new(),
             DeleteMetricExtensionPlanner::new(),
             UpdateMetricExtensionPlanner::new(),
+            DataValidationExtensionPlanner::new(),
         ]
     });
 
