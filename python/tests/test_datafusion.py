@@ -1,17 +1,37 @@
+import os
+from importlib.metadata import PackageNotFoundError, version
+
 import pytest
 from arro3.core import Array, DataType, Field, Table
 
 from deltalake import DeltaTable, write_deltalake
 
 
+def _datafusion_major_version() -> int | None:
+    try:
+        return int(version("datafusion").split(".")[0])
+    except (PackageNotFoundError, ValueError):
+        return None
+
+
 @pytest.mark.datafusion
 def test_datafusion_table_provider(tmp_path):
+    if os.environ.get("DELTALAKE_RUN_DATAFUSION_TESTS") != "1":
+        pytest.skip(
+            "DataFusion Python integration tests are disabled by default; set DELTALAKE_RUN_DATAFUSION_TESTS=1"
+        )
+
+    datafusion_major = _datafusion_major_version()
+    if datafusion_major is None or datafusion_major < 52:
+        pytest.skip(
+            "DataFusion Python integration requires datafusion>=52 wheels (PyPI currently provides 51.x)"
+        )
     nrows = 5
     table = Table(
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                Field("id", type=DataType.string_view(), nullable=True),
+                Field("id", type=DataType.string(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)

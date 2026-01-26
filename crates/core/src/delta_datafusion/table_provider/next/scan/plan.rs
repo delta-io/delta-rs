@@ -49,7 +49,7 @@ use crate::kernel::{Scan, Snapshot};
 /// Manages three schemas:
 /// - **result_schema**: Logical schema exposed to query after all transformations
 /// - **output_schema**: Final schema including metadata columns (e.g., file_id)
-/// - **parquet_read_schema**: Physical schema for reading Parquet files
+/// - **parquet_read_schema**: Physical schema for Parquet reads + predicate evaluation
 ///
 /// # Predicate Pushdown
 ///
@@ -67,7 +67,7 @@ pub(crate) struct KernelScanPlan {
     /// If set, indicates a projection to apply to the
     /// scan output to obtain the result schema
     pub(crate) result_projection: Option<Vec<usize>>,
-    /// The schema the inner Parquet scan should read from data files.
+    /// Physical schema used for Parquet reads and predicate evaluation.
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
     pub(crate) parquet_predicate: Option<Expr>,
@@ -203,10 +203,8 @@ impl KernelScanPlan {
         } else {
             result_schema.clone()
         };
-        let parquet_read_schema = config.physical_arrow_schema(
-            scan.snapshot().table_configuration(),
-            &scan.physical_schema().as_ref().try_into_arrow()?,
-        )?;
+        let parquet_read_schema =
+            config.parquet_file_schema(&scan.physical_schema().as_ref().try_into_arrow()?)?;
         Ok(Self {
             scan,
             result_schema,
@@ -233,6 +231,8 @@ impl KernelScanPlan {
 
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
+        // NOTE: keep the synthetic file-id column as Dictionary<UInt16, Utf8>.
+        // Arrow's dictionary packing does not support Utf8View, and this column is internal.
         Arc::new(Field::new(
             self.file_column_name
                 .as_deref()
@@ -273,6 +273,61 @@ impl DeltaScanConfig {
                 .collect_vec(),
         ));
         Ok(table_schema)
+    }
+
+    fn parquet_file_schema(&self, base: &Schema) -> Result<SchemaRef> {
+        // IMPORTANT: This schema is used for Parquet reading and predicate evaluation.
+        //
+        // DataFusion can materialize `Utf8View/BinaryView` when requested, but predicate
+        // pushdown is evaluated against the physical file schema before schema-rewriter casts
+        // are applied, and those coercions are not consistently propagated through nested field
+        // accesses nor to literals. This can produce mismatches during evaluation such as:
+        // `Invalid comparison operation: Utf8 == Utf8View`.
+        //
+        // To keep pushdown stable, we request base `Utf8/Binary` here and only expose view
+        // types at the DeltaScan boundary (see `map_field`).
+        //
+        // NOTE: This Parquet read schema is intentionally not the same as the table provider
+        // output schema. The output schema may force view types (Utf8View/BinaryView) and other
+        // presentation-level physical types, but Parquet read + predicate pushdown must operate
+        // on the file's base types.
+        let table_schema = Arc::new(Schema::new(
+            base.fields()
+                .iter()
+                .map(|f| self.map_field_for_parquet(f.clone()))
+                .collect_vec(),
+        ));
+        Ok(table_schema)
+    }
+
+    fn map_field_for_parquet(&self, field: FieldRef) -> FieldRef {
+        let dt = match field.data_type() {
+            DataType::Struct(fields) => DataType::Struct(
+                fields
+                    .iter()
+                    .map(|f| self.map_field_for_parquet(f.clone()))
+                    .collect(),
+            ),
+            DataType::List(inner) => DataType::List(self.map_field_for_parquet(inner.clone())),
+            DataType::LargeList(inner) => {
+                DataType::LargeList(self.map_field_for_parquet(inner.clone()))
+            }
+            DataType::ListView(inner) => {
+                DataType::ListView(self.map_field_for_parquet(inner.clone()))
+            }
+            // Always use base types for the Parquet read schema.
+            DataType::Utf8View => DataType::Utf8,
+            DataType::BinaryView => DataType::Binary,
+            _ => field.data_type().clone(),
+        };
+
+        let field = if &dt != field.data_type() {
+            Arc::new(field.as_ref().clone().with_data_type(dt))
+        } else {
+            field
+        };
+
+        field
     }
 
     fn map_field(&self, field: FieldRef, partition_cols: &[String]) -> FieldRef {
@@ -350,9 +405,16 @@ pub(crate) fn supports_filters_pushdown(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    // Parquet predicate pushdown is enabled only when we can safely apply it at read time.
+    // Deletion vectors require preserving row order for selection masks, and row tracking
+    // disables predicate pushdown in the read plan.
+    let parquet_pushdown_enabled = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     filter
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field).pushdown)
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled).pushdown)
         .collect()
 }
 
@@ -374,9 +436,13 @@ fn process_filters(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    let parquet_pushdown_enabled = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field))
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled))
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
     let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
@@ -403,6 +469,7 @@ fn process_predicate<'a>(
     expr: &'a Expr,
     config: &TableConfiguration,
     file_id_column: &str,
+    parquet_pushdown_enabled: bool,
 ) -> ProcessedPredicate<'a> {
     let cols = config.metadata().partition_columns();
     let only_partition_refs = expr.column_refs().iter().all(|c| cols.contains(&c.name));
@@ -431,7 +498,13 @@ fn process_predicate<'a>(
             // push down any predicate to parquet
             (TableProviderFilterPushDown::Inexact, None)
         } else {
-            (TableProviderFilterPushDown::Inexact, Some(expr))
+            // For non-partition predicates we can *attempt* Parquet pushdown, but it is not a
+            // correctness boundary (it may be partially applied or skipped). Keep this Inexact so
+            // DataFusion retains a post-scan Filter.
+            (
+                TableProviderFilterPushDown::Inexact,
+                parquet_pushdown_enabled.then_some(expr),
+            )
         };
         return ProcessedPredicate {
             pushdown,
@@ -453,7 +526,7 @@ fn process_predicate<'a>(
     ProcessedPredicate {
         pushdown: TableProviderFilterPushDown::Inexact,
         kernel_predicate: None,
-        parquet_predicate: Some(expr),
+        parquet_predicate: parquet_pushdown_enabled.then_some(expr),
     }
 }
 
@@ -506,6 +579,29 @@ mod tests {
     };
 
     use super::*;
+
+    fn schema_has_view_types(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .any(|f| data_type_has_view_types(f.data_type()))
+    }
+
+    fn data_type_has_view_types(dt: &DataType) -> bool {
+        match dt {
+            DataType::Utf8View | DataType::BinaryView => true,
+            DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
+            DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|f| data_type_has_view_types(f.data_type())),
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::ListView(inner)
+            | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
+            _ => false,
+        }
+    }
 
     #[tokio::test]
     async fn test_rewrite_expression() -> TestResult {
@@ -624,6 +720,32 @@ mod tests {
             .await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_view_types_only_exposed_in_result_schema() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = true;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = false;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(!schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
 
         Ok(())
     }

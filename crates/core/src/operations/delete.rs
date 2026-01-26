@@ -151,7 +151,6 @@ impl DeleteBuilder {
         self
     }
 
-    /// The Datafusion session state to use
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
         self

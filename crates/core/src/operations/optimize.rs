@@ -58,7 +58,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version, to_kernel_predicate};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -329,7 +329,6 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// The Datafusion session state to use
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
         self
@@ -944,7 +943,17 @@ async fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
@@ -1056,7 +1065,17 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         let partition_values = file

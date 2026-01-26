@@ -12,8 +12,11 @@ use std::task::{Context, Poll};
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
-use arrow_array::{BooleanArray, DictionaryArray, RecordBatchOptions};
-use arrow_schema::{FieldRef, Fields, Schema};
+use arrow_array::{
+    ArrayRef, BooleanArray, DictionaryArray, RecordBatchOptions, StringArray, StringViewArray,
+    UInt16Array,
+};
+use arrow_schema::{DataType, FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::HashMap;
 use datafusion::common::config::ConfigOptions;
@@ -31,7 +34,7 @@ use datafusion::physical_plan::{
 use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef};
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::Stream;
-use itertools::{Itertools as _, repeat_n};
+use itertools::Itertools as _;
 
 use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
@@ -308,8 +311,30 @@ impl DeltaScanMetaStream {
         };
 
         if let Some(file_id_field) = &self.file_id_field {
+            let row_count = result.num_rows();
+
+            let keys = UInt16Array::from(vec![0u16; row_count]);
+            let values: ArrayRef = match file_id_field.data_type() {
+                DataType::Dictionary(_, value_type)
+                    if value_type.as_ref() == &DataType::Utf8View =>
+                {
+                    if row_count == 0 {
+                        Arc::new(StringViewArray::from_iter_values(std::iter::empty::<&str>()))
+                    } else {
+                        Arc::new(StringViewArray::from_iter_values([file_id.as_str()]))
+                    }
+                }
+                _ => {
+                    if row_count == 0 {
+                        Arc::new(StringArray::from(Vec::<Option<&str>>::new()))
+                    } else {
+                        Arc::new(StringArray::from(vec![Some(file_id.as_str())]))
+                    }
+                }
+            };
+
             let file_id_array: DictionaryArray<UInt16Type> =
-                repeat_n(file_id.as_str(), result.num_rows()).collect();
+                DictionaryArray::try_new(keys, values)?;
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,

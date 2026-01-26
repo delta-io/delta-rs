@@ -28,7 +28,7 @@ def test_merge_when_matched_delete_wo_predicate(
 
     source_table = Table(
         {
-            "id": Array(["5"], ArrowField("id", DataType.string(), nullable=True)),
+            "id": Array(["5"], ArrowField("id", DataType.string_view(), nullable=True)),
             "weight": Array([105], ArrowField("id", DataType.int32(), nullable=True)),
         }
     )
@@ -1921,7 +1921,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         {
             "foo": Array(
                 ["a", "b", None, None],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [1, 2, 3, None],
@@ -1961,7 +1961,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         {
             "foo": Array(
                 ["a"],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [10],

@@ -90,6 +90,40 @@ impl LazyBatchGenerator for ArrowStreamBatchGenerator {
             None => Ok(None), // End of stream
         }
     }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        Arc::new(RwLock::new(ExhaustedStreamGenerator))
+    }
+}
+
+/// Exhausted stream generator (consumed streams cannot be reset).
+#[derive(Debug)]
+struct ExhaustedStreamGenerator;
+
+impl std::fmt::Display for ExhaustedStreamGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ExhaustedStreamGenerator")
+    }
+}
+
+impl LazyBatchGenerator for ExhaustedStreamGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn generate_next_batch(
+        &mut self,
+    ) -> deltalake::datafusion::error::Result<Option<deltalake::arrow::array::RecordBatch>> {
+        Err(deltalake::datafusion::error::DataFusionError::Execution(
+            "Stream-based generator cannot be reset; the original stream has been consumed. \
+             Buffer input data if plan re-execution is required."
+                .to_string(),
+        ))
+    }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        Arc::new(RwLock::new(ExhaustedStreamGenerator))
+    }
 }
 
 /// A lazy casting wrapper around a RecordBatchReader

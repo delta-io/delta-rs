@@ -48,7 +48,16 @@ impl Default for DeltaSessionConfig {
     fn default() -> Self {
         DeltaSessionConfig {
             inner: SessionConfig::default()
-                .set_bool("datafusion.sql_parser.enable_ident_normalization", false),
+                .set_bool("datafusion.sql_parser.enable_ident_normalization", false)
+                .set_bool("datafusion.execution.parquet.schema_force_view_types", true)
+                // Workaround: hash-join dynamic filtering (IN-list pushdown) can panic when join
+                // keys include dictionary arrays (still reproducible with DF 52.1.x crates).
+                // Disable IN-list pushdown and fall back to hash lookups.
+                .set_usize("datafusion.optimizer.hash_join_inlist_pushdown_max_size", 0)
+                .set_usize(
+                    "datafusion.optimizer.hash_join_inlist_pushdown_max_distinct_values",
+                    0,
+                ),
         }
     }
 }

@@ -38,11 +38,12 @@ arrow-select = { version = "57" }
 object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
-# datafusion
-datafusion = "51.0"
-datafusion-datasource = "51.0"
-datafusion-ffi = "51.0"
-datafusion-proto = "51.0"
+# datafusion 52.1
+datafusion = { version = "52.1.0" }
+datafusion-datasource = { version = "52.1.0" }
+datafusion-ffi = { version = "52.1.0" }
+datafusion-proto = { version = "52.1.0" }
+datafusion-physical-expr-adapter = { version = "52.1.0" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

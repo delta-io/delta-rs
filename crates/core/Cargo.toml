@@ -38,6 +38,7 @@ object_store = { workspace = true }
 datafusion = { workspace = true, optional = true }
 datafusion-datasource = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
+datafusion-physical-expr-adapter = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -105,7 +106,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
-datafusion = ["dep:datafusion", "datafusion-datasource", "datafusion-proto"]
+datafusion = [
+    "dep:datafusion",
+    "datafusion-datasource",
+    "datafusion-proto",
+    "datafusion-physical-expr-adapter",
+]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
