@@ -145,7 +145,10 @@ async fn test_update_string_equality_non_partition() -> DeltaResult<()> {
     let (table, _metrics) = table
         .update()
         .with_predicate("utf8 = '1'")
-        .with_update("utf8", "CASE WHEN utf8 = '1' THEN 'hello world' ELSE utf8 END")
+        .with_update(
+            "utf8",
+            "CASE WHEN utf8 = '1' THEN 'hello world' ELSE utf8 END",
+        )
         .await?;
 
     let expected = [

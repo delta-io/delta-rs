@@ -495,9 +495,13 @@ struct ScalarValueFormat<'a> {
 impl fmt::Display for ScalarValueFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.scalar {
-            ScalarValue::Dictionary(_key_type, inner) => {
-                write!(f, "{}", ScalarValueFormat { scalar: inner.as_ref() })?
-            }
+            ScalarValue::Dictionary(_key_type, inner) => write!(
+                f,
+                "{}",
+                ScalarValueFormat {
+                    scalar: inner.as_ref()
+                }
+            )?,
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
             ScalarValue::Float64(e) => format_option!(f, e)?,
