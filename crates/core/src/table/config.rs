@@ -44,6 +44,10 @@ pub enum TableProperty {
     /// Parquet columns that use different names.
     ColumnMappingMode,
 
+    /// The maximum column ID that has been assigned to a column in the table.
+    /// Used to ensure unique column IDs when adding new columns during schema evolution.
+    ColumnMappingMaxColumnId,
+
     /// The number of columns for Delta Lake to collect statistics about for data skipping.
     /// A value of -1 means to collect statistics for all columns. Updating this property does
     /// not automatically collect statistics again; instead, it redefines the statistics schema
@@ -133,6 +137,7 @@ impl AsRef<str> for TableProperty {
             Self::CheckpointUseRunLengthEncoding => "delta-rs.checkpoint.useRunLengthEncoding",
             Self::CheckpointPolicy => "delta.checkpointPolicy",
             Self::ColumnMappingMode => "delta.columnMapping.mode",
+            Self::ColumnMappingMaxColumnId => "delta.columnMapping.maxColumnId",
             Self::DataSkippingNumIndexedCols => "delta.dataSkippingNumIndexedCols",
             Self::DataSkippingStatsColumns => "delta.dataSkippingStatsColumns",
             Self::DeletedFileRetentionDuration => "delta.deletedFileRetentionDuration",
@@ -166,6 +171,7 @@ impl FromStr for TableProperty {
             "delta-rs.checkpoint.useRunLengthEncoding" => Ok(Self::CheckpointUseRunLengthEncoding),
             "delta.checkpointPolicy" => Ok(Self::CheckpointPolicy),
             "delta.columnMapping.mode" => Ok(Self::ColumnMappingMode),
+            "delta.columnMapping.maxColumnId" => Ok(Self::ColumnMappingMaxColumnId),
             "delta.dataSkippingNumIndexedCols" => Ok(Self::DataSkippingNumIndexedCols),
             "delta.dataSkippingStatsColumns" => Ok(Self::DataSkippingStatsColumns),
             "delta.deletedFileRetentionDuration" | "deletedFileRetentionDuration" => {

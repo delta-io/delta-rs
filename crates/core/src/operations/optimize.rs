@@ -549,11 +549,9 @@ impl MergePlan {
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
-            Some(task_parameters.writer_properties.clone()),
-            Some(task_parameters.input_parameters.target_size as usize),
-            None,
-            None,
-        )?;
+        )?
+        .with_writer_properties(task_parameters.writer_properties.clone())
+        .with_target_file_size(task_parameters.input_parameters.target_size as usize);
         let mut writer = PartitionWriter::try_with_config(
             object_store,
             writer_config,

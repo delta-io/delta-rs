@@ -15,7 +15,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
     Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
-    new_metadata,
+    StructTypeExt, new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
@@ -280,11 +280,17 @@ impl CreateBuilder {
         let operation_id = self.get_operation_id();
         self.pre_execute(operation_id).await?;
 
-        let configuration = self
+        let configuration: HashMap<String, String> = self
             .configuration
             .iter()
             .filter_map(|(k, v)| Some((k.to_string(), v.as_ref()?.to_string())))
             .collect();
+
+        // Check if column mapping is enabled in configuration
+        let column_mapping_enabled = configuration
+            .get("delta.columnMapping.mode")
+            .map(|mode| mode == "name" || mode == "id")
+            .unwrap_or(false);
 
         let current_protocol = ProtocolInner {
             min_reader_version: PROTOCOL.default_reader_version(),
@@ -304,12 +310,38 @@ impl CreateBuilder {
             })
             .unwrap_or_else(|| current_protocol);
 
+        // Create schema, adding column mapping metadata if enabled
         let schema = StructType::try_new(self.columns)?;
+        let (schema, max_column_id) = if column_mapping_enabled {
+            let (schema, max_id) = schema.with_column_mapping_metadata_from(1)?;
+            (schema, Some(max_id))
+        } else {
+            (schema, None)
+        };
 
-        let protocol = protocol
+        // Apply protocol settings, enabling column mapping feature if needed
+        let mut protocol = protocol
             .apply_properties_to_protocol(&configuration, self.raise_if_key_not_exists)?
             .apply_column_metadata_to_protocol(&schema)?
             .move_table_properties_into_features(&configuration);
+
+        // Enable column mapping feature in protocol if needed
+        if column_mapping_enabled {
+            let inner = ProtocolInner::from_kernel(&protocol);
+            protocol = inner.enable_column_mapping().as_kernel();
+        }
+
+        // Add maxColumnId to configuration if column mapping is enabled
+        let configuration = if let Some(max_id) = max_column_id {
+            let mut config = configuration;
+            config.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                max_id.to_string(),
+            );
+            config
+        } else {
+            configuration
+        };
 
         let mut metadata = new_metadata(
             &schema,

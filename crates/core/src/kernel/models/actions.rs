@@ -583,6 +583,15 @@ impl ProtocolInner {
         }
         self
     }
+
+    /// Enable column mapping feature in the protocol
+    pub fn enable_column_mapping(mut self) -> Self {
+        // Column mapping requires reader features (min_reader_version=3)
+        // and writer features (min_writer_version=7)
+        self = self.append_reader_features([TableFeature::ColumnMapping]);
+        self = self.append_writer_features([TableFeature::ColumnMapping]);
+        self
+    }
 }
 
 /// High level table features

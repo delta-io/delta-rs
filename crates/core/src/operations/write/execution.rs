@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use std::vec;
 
@@ -11,6 +12,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, 
 use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -50,6 +52,30 @@ fn channel_size() -> usize {
 pub(crate) struct WriteExecutionPlanMetrics {
     pub scan_time_ms: u64,
     pub write_time_ms: u64,
+}
+
+/// Column mapping configuration for write operations
+#[derive(Clone)]
+struct ColumnMappingConfig {
+    mode: ColumnMappingMode,
+    logical_to_physical: HashMap<String, String>,
+    logical_to_id: HashMap<String, i32>,
+}
+
+impl Default for ColumnMappingConfig {
+    fn default() -> Self {
+        Self {
+            mode: ColumnMappingMode::None,
+            logical_to_physical: HashMap::new(),
+            logical_to_id: HashMap::new(),
+        }
+    }
+}
+
+impl ColumnMappingConfig {
+    fn is_enabled(&self) -> bool {
+        self.mode != ColumnMappingMode::None
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -272,6 +298,43 @@ pub(crate) async fn write_execution_plan_v2(
     predicate: Option<Expr>,
     contains_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    write_execution_plan_v3(
+        snapshot,
+        session,
+        plan,
+        partition_columns,
+        object_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        writer_stats_config,
+        predicate,
+        contains_cdc,
+        None, // No target schema for column mapping - use snapshot or default
+    )
+    .await
+}
+
+/// Version 3 of write_execution_plan that supports column mapping for new tables
+///
+/// This function handles both existing tables (using snapshot for column mapping info)
+/// and new tables (using target_schema_with_column_mapping for column mapping metadata).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_execution_plan_v3(
+    snapshot: Option<&EagerSnapshot>,
+    session: &dyn Session,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    writer_stats_config: WriterStatsConfig,
+    predicate: Option<Expr>,
+    contains_cdc: bool,
+    // Optional target schema with column mapping metadata for new tables
+    target_schema_with_column_mapping: Option<&StructType>,
+) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
     let schema = plan.schema();
@@ -295,6 +358,9 @@ pub(crate) async fn write_execution_plan_v2(
 
     let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
 
+    // Get column mapping configuration from snapshot or target schema
+    let column_mapping = get_column_mapping_config(snapshot, target_schema_with_column_mapping);
+
     if !contains_cdc {
         write_data_plan(
             session,
@@ -305,6 +371,7 @@ pub(crate) async fn write_execution_plan_v2(
             write_batch_size,
             writer_properties,
             writer_stats_config,
+            column_mapping,
         )
         .await
     } else {
@@ -317,11 +384,97 @@ pub(crate) async fn write_execution_plan_v2(
             write_batch_size,
             writer_properties,
             writer_stats_config,
+            column_mapping,
         )
         .await
     }
 }
 
+/// Extract column mapping configuration from snapshot or target schema
+fn get_column_mapping_config(
+    snapshot: Option<&EagerSnapshot>,
+    target_schema_with_column_mapping: Option<&StructType>,
+) -> ColumnMappingConfig {
+    if let Some(snapshot) = snapshot {
+        let mode = snapshot.table_configuration().column_mapping_mode();
+        if mode == ColumnMappingMode::None {
+            ColumnMappingConfig::default()
+        } else {
+            // When column mapping is enabled and target_schema_with_column_mapping is provided
+            // (schema evolution case), use it for column mappings as it contains both existing
+            // and new column mappings. This is important for merge with schema evolution + column mapping.
+            if let Some(target_schema) = target_schema_with_column_mapping {
+                let (physical_mapping, id_mapping) = target_schema.get_column_mappings();
+                ColumnMappingConfig {
+                    mode,
+                    logical_to_physical: physical_mapping,
+                    logical_to_id: id_mapping,
+                }
+            } else {
+                let (physical_mapping, id_mapping) = snapshot.schema().get_column_mappings();
+                ColumnMappingConfig {
+                    mode,
+                    logical_to_physical: physical_mapping,
+                    logical_to_id: id_mapping,
+                }
+            }
+        }
+    } else if let Some(target_schema) = target_schema_with_column_mapping {
+        // For new tables with column mapping, extract mappings from target schema metadata
+        let (physical_mapping, id_mapping) = target_schema.get_column_mappings();
+        if physical_mapping.is_empty() {
+            ColumnMappingConfig::default()
+        } else {
+            ColumnMappingConfig {
+                mode: ColumnMappingMode::Name,
+                logical_to_physical: physical_mapping,
+                logical_to_id: id_mapping,
+            }
+        }
+    } else {
+        ColumnMappingConfig::default()
+    }
+}
+
+/// Build a WriterConfig with common options and optional column mapping
+fn build_writer_config(
+    schema: Arc<Schema>,
+    partition_columns: Vec<String>,
+    writer_properties: Option<WriterProperties>,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_stats_config: &WriterStatsConfig,
+    column_mapping: &ColumnMappingConfig,
+) -> WriterConfig {
+    let mut config = WriterConfig::new(
+        schema,
+        partition_columns,
+        writer_stats_config.num_indexed_cols,
+    );
+    if let Some(props) = writer_properties {
+        config = config.with_writer_properties(props);
+    }
+    if let Some(size) = target_file_size {
+        config = config.with_target_file_size(size);
+    }
+    if let Some(size) = write_batch_size {
+        config = config.with_write_batch_size(size);
+    }
+    if let Some(columns) = writer_stats_config.stats_columns.clone() {
+        config = config.with_stats_columns(columns);
+    }
+    if column_mapping.is_enabled() {
+        config = config.with_column_mapping(
+            column_mapping.mode,
+            column_mapping.logical_to_physical.clone(),
+            column_mapping.logical_to_id.clone(),
+        );
+    }
+    config
+}
+
+/// Write execution plan with configuration from table configuration.
+/// This is a simplified entry point for write operations.
 pub(crate) async fn write_exec_plan(
     session: &dyn Session,
     log_store: &dyn LogStore,
@@ -344,6 +497,22 @@ pub(crate) async fn write_exec_plan(
         .map(|v| v.get() as usize);
     let partition_columns = table_config.metadata().partition_columns().clone();
 
+    // Get column mapping config from table configuration
+    let column_mapping = {
+        let mode = table_config.column_mapping_mode();
+        if mode == ColumnMappingMode::None {
+            ColumnMappingConfig::default()
+        } else {
+            let schema = table_config.schema();
+            let (physical_mapping, id_mapping) = schema.get_column_mappings();
+            ColumnMappingConfig {
+                mode,
+                logical_to_physical: physical_mapping,
+                logical_to_id: id_mapping,
+            }
+        }
+    };
+
     if write_as_cdc {
         write_cdc_plan(
             session,
@@ -354,6 +523,7 @@ pub(crate) async fn write_exec_plan(
             None,
             Some(writer_properties),
             stats_config,
+            column_mapping,
         )
         .await
     } else {
@@ -366,12 +536,14 @@ pub(crate) async fn write_exec_plan(
             None,
             Some(writer_properties),
             stats_config,
+            column_mapping,
         )
         .await
     }
 }
 
-// We drive partition streams concurrently and centralize writes via an mpsc channel.
+/// Write data without CDC - drives partition streams concurrently via mpsc channel
+#[allow(clippy::too_many_arguments)]
 async fn write_data_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
@@ -381,15 +553,16 @@ async fn write_data_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    column_mapping: ColumnMappingConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let config = WriterConfig::new(
+    let config = build_writer_config(
         plan.schema().clone(),
-        partition_columns.clone(),
-        writer_properties.clone(),
+        partition_columns,
+        writer_properties,
         target_file_size,
         write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
+        &writer_stats_config,
+        &column_mapping,
     );
 
     // sync channel for batches produced by partition stream
@@ -452,6 +625,8 @@ async fn write_data_plan(
     Ok((actions, metrics))
 }
 
+/// Write data with CDC - creates two writer tasks (normal + cdf) and drives partition streams concurrently
+#[allow(clippy::too_many_arguments)]
 async fn write_cdc_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
@@ -461,6 +636,7 @@ async fn write_cdc_plan(
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    column_mapping: ColumnMappingConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
 
@@ -480,24 +656,24 @@ async fn write_cdc_plan(
     ));
     let cdf_schema = plan.schema().clone();
 
-    let normal_config = WriterConfig::new(
+    let normal_config = build_writer_config(
         write_schema.clone(),
         partition_columns.clone(),
         writer_properties.clone(),
         target_file_size,
         write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
+        &writer_stats_config,
+        &column_mapping,
     );
 
-    let cdf_config = WriterConfig::new(
+    let cdf_config = build_writer_config(
         cdf_schema.clone(),
-        partition_columns.clone(),
-        writer_properties.clone(),
+        partition_columns,
+        writer_properties,
         target_file_size,
         write_batch_size,
-        writer_stats_config.num_indexed_cols,
-        writer_stats_config.stats_columns.clone(),
+        &writer_stats_config,
+        &column_mapping,
     );
 
     // sync channel for batches produced by partition stream for normal and cdf batches
@@ -563,7 +739,7 @@ async fn write_cdc_plan(
                     false,
                 ))?;
 
-                // Concatenate with the CDF_schema, since we need to keep the _change_type col
+                // Stream normal batches and send to writer
                 let mut normal_stream = normal_df.execute_stream().await?;
                 while let Some(mut normal_batch) = normal_stream.try_next().await? {
                     // Drop the CDC_COLUMN ("_change_type")
@@ -583,6 +759,7 @@ async fn write_cdc_plan(
                     })?;
                 }
 
+                // Stream CDF batches and send to writer
                 let mut cdf_stream = cdf_df.execute_stream().await?;
                 while let Some(cdf_batch) = cdf_stream.try_next().await? {
                     txc.send(cdf_batch).await.map_err(|_| {

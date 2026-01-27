@@ -115,18 +115,15 @@ impl DataSink for DeltaDataSink {
         let partition_columns = self.snapshot.metadata().partition_columns();
         let object_store = self.log_store.object_store(None);
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
-        let config = WriterConfig::new(
+        let mut config = WriterConfig::new(
             self.snapshot.read_schema(),
             partition_columns.clone(),
-            None,
-            Some(table_props.target_file_size().get() as usize),
-            None,
             table_props.num_indexed_cols(),
-            table_props
-                .data_skipping_stats_columns
-                .as_ref()
-                .map(|c| c.iter().map(|c| c.to_string()).collect_vec()),
-        );
+        )
+        .with_target_file_size(table_props.target_file_size().get() as usize);
+        if let Some(columns) = table_props.data_skipping_stats_columns.as_ref() {
+            config = config.with_stats_columns(columns.iter().map(|c| c.to_string()).collect_vec());
+        }
 
         let mut writer = DeltaWriter::new(object_store, config);
         let mut total_rows = 0u64;

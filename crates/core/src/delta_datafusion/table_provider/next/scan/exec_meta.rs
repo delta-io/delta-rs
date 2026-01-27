@@ -31,7 +31,6 @@ use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSe
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
-use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef};
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::Stream;
 use itertools::Itertools as _;
@@ -271,8 +270,6 @@ impl DeltaScanMetaStream {
     fn batch_project(&self, file_id: String, row_count: usize) -> Result<RecordBatch> {
         static EMPTY_SCHEMA: LazyLock<SchemaRef> =
             LazyLock::new(|| Arc::new(Schema::new(Fields::empty())));
-        static EMPTY_KERNEL_SCHEMA: LazyLock<KernelSchemaRef> =
-            LazyLock::new(|| Arc::new(KernelSchema::try_new(vec![]).unwrap()));
 
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
@@ -294,18 +291,55 @@ impl DeltaScanMetaStream {
             batch
         };
 
-        let result = if let Some(transform) = self.transforms.get(&file_id) {
-            let evaluator = ARROW_HANDLER
-                .new_expression_evaluator(
-                    EMPTY_KERNEL_SCHEMA.clone(),
-                    transform.clone(),
-                    self.scan_plan.scan.logical_schema().clone().into(),
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // Determine if we can skip the transform.
+        // For metadata-only scans (physical_schema is empty), the kernel's transform includes
+        // both column renaming AND partition value injection. For column mapping tables,
+        // the column renaming part fails when the input struct is empty.
+        //
+        // We can only skip the transform when:
+        // 1. The physical schema is empty (no data columns to read)
+        // 2. The result schema is also empty (no columns needed in output, e.g., COUNT(*))
+        //
+        // If the result schema has columns (e.g., SELECT partition_col), we need the transform
+        // to inject partition values, so we use EMPTY_KERNEL_SCHEMA as input and hope the
+        // transform handles it (works for non-column-mapping tables).
+        let has_physical_columns = self.scan_plan.scan.physical_schema().fields().len() > 0;
+        let result_needs_columns = self.scan_plan.result_schema.fields().len() > 0;
 
-            evaluator
-                .evaluate_arrow(batch)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?
+        let result = if let Some(transform) = self.transforms.get(&file_id) {
+            if has_physical_columns {
+                // Normal case: physical columns exist, use the physical schema
+                let evaluator = ARROW_HANDLER
+                    .new_expression_evaluator(
+                        self.scan_plan.scan.physical_schema().clone(),
+                        transform.clone(),
+                        self.scan_plan.scan.logical_schema().clone().into(),
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                evaluator
+                    .evaluate_arrow(batch)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else if result_needs_columns {
+                // Metadata-only scan but result needs columns (e.g., SELECT partition_col).
+                // The transform should inject partition values. Use logical schema as input
+                // since there are no physical columns to transform.
+                let evaluator = ARROW_HANDLER
+                    .new_expression_evaluator(
+                        self.scan_plan.scan.logical_schema().clone(),
+                        transform.clone(),
+                        self.scan_plan.scan.logical_schema().clone().into(),
+                    )
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                evaluator
+                    .evaluate_arrow(batch)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            } else {
+                // Metadata-only scan with no result columns (e.g., COUNT(*)).
+                // Skip the transform - just pass through the empty batch.
+                batch
+            }
         } else {
             batch
         };

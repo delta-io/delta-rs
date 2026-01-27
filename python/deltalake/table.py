@@ -58,8 +58,8 @@ NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
 SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
 
 MAX_SUPPORTED_READER_VERSION = 3
-NOT_SUPPORTED_READER_VERSION = 2
-SUPPORTED_READER_FEATURES = {"timestampNtz"}
+NOT_SUPPORTED_READER_VERSION = -1  # No longer blocking version 2 (column mapping)
+SUPPORTED_READER_FEATURES = {"timestampNtz", "columnMapping"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -68,6 +68,596 @@ FilterConjunctionType = list[FilterLiteralType]
 FilterDNFType = list[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = list[tuple[str, str, Union[str, list[str]]]]
+
+
+def _transform_field_type_to_physical(
+    field_type: "pyarrow.DataType",
+    logical_to_physical: dict[str, str],
+) -> "pyarrow.DataType":
+    """Recursively transform a PyArrow type to use physical column names."""
+    import pyarrow
+
+    if pyarrow.types.is_struct(field_type):
+        # Transform nested struct fields to physical names
+        new_fields = []
+        for i in range(field_type.num_fields):
+            child = field_type.field(i)
+            physical_name = logical_to_physical.get(child.name, child.name)
+            new_type = _transform_field_type_to_physical(
+                child.type, logical_to_physical
+            )
+            new_fields.append(pyarrow.field(physical_name, new_type, child.nullable))
+        return pyarrow.struct(new_fields)
+    elif pyarrow.types.is_list(field_type):
+        # Transform list element type if it's a struct
+        new_value_type = _transform_field_type_to_physical(
+            field_type.value_type, logical_to_physical
+        )
+        return pyarrow.list_(new_value_type)
+    elif pyarrow.types.is_large_list(field_type):
+        new_value_type = _transform_field_type_to_physical(
+            field_type.value_type, logical_to_physical
+        )
+        return pyarrow.large_list(new_value_type)
+    elif pyarrow.types.is_map(field_type):
+        # Transform map value type if it's a struct
+        new_key_type = _transform_field_type_to_physical(
+            field_type.key_type, logical_to_physical
+        )
+        new_value_type = _transform_field_type_to_physical(
+            field_type.item_type, logical_to_physical
+        )
+        return pyarrow.map_(new_key_type, new_value_type)
+    else:
+        return field_type
+
+
+def _transform_field_type_to_logical(
+    field_type: "pyarrow.DataType",
+    physical_to_logical: dict[str, str],
+) -> "pyarrow.DataType":
+    """Recursively transform a PyArrow type to use logical column names."""
+    import pyarrow
+
+    if pyarrow.types.is_struct(field_type):
+        # Transform nested struct fields to logical names
+        new_fields = []
+        for i in range(field_type.num_fields):
+            child = field_type.field(i)
+            logical_name = physical_to_logical.get(child.name, child.name)
+            new_type = _transform_field_type_to_logical(
+                child.type, physical_to_logical
+            )
+            new_fields.append(pyarrow.field(logical_name, new_type, child.nullable))
+        return pyarrow.struct(new_fields)
+    elif pyarrow.types.is_list(field_type):
+        new_value_type = _transform_field_type_to_logical(
+            field_type.value_type, physical_to_logical
+        )
+        return pyarrow.list_(new_value_type)
+    elif pyarrow.types.is_large_list(field_type):
+        new_value_type = _transform_field_type_to_logical(
+            field_type.value_type, physical_to_logical
+        )
+        return pyarrow.large_list(new_value_type)
+    elif pyarrow.types.is_map(field_type):
+        new_key_type = _transform_field_type_to_logical(
+            field_type.key_type, physical_to_logical
+        )
+        new_value_type = _transform_field_type_to_logical(
+            field_type.item_type, physical_to_logical
+        )
+        return pyarrow.map_(new_key_type, new_value_type)
+    else:
+        return field_type
+
+
+def _transform_array_to_logical(
+    array: "pyarrow.Array | pyarrow.ChunkedArray",
+    target_type: "pyarrow.DataType",
+    physical_to_logical: dict[str, str],
+) -> "pyarrow.Array | pyarrow.ChunkedArray":
+    """
+    Recursively transform an array to use logical column names for nested structs.
+    This is needed because PyArrow's cast() doesn't support renaming struct fields.
+    """
+    import pyarrow
+    import pyarrow.compute as pc
+
+    # Handle ChunkedArray by transforming each chunk
+    if isinstance(array, pyarrow.ChunkedArray):
+        transformed_chunks = [
+            _transform_array_to_logical(chunk, target_type, physical_to_logical)
+            for chunk in array.chunks
+        ]
+        return pyarrow.chunked_array(transformed_chunks)
+
+    # Handle StructArray - need to rebuild with new field names
+    if pyarrow.types.is_struct(array.type) and pyarrow.types.is_struct(target_type):
+        new_arrays = []
+        new_fields = []
+        for i in range(target_type.num_fields):
+            target_field = target_type.field(i)
+            # Get the corresponding source field by physical name
+            # The source has physical names, target has logical names
+            logical_to_physical = {v: k for k, v in physical_to_logical.items()}
+            physical_name = logical_to_physical.get(
+                target_field.name, target_field.name
+            )
+            # Find the source field by physical name
+            source_idx = None
+            for j in range(array.type.num_fields):
+                if array.type.field(j).name == physical_name:
+                    source_idx = j
+                    break
+            if source_idx is None:
+                # Fallback: try by position
+                source_idx = i
+
+            child_array = array.field(source_idx)
+            # Recursively transform nested structs
+            transformed_child = _transform_array_to_logical(
+                child_array, target_field.type, physical_to_logical
+            )
+            new_arrays.append(transformed_child)
+            new_fields.append(target_field)
+
+        return pyarrow.StructArray.from_arrays(
+            new_arrays,
+            fields=new_fields,
+            mask=array.is_null() if array.null_count > 0 else None,
+        )
+
+    # Handle ListArray - transform the values
+    if pyarrow.types.is_list(array.type) and pyarrow.types.is_list(target_type):
+        transformed_values = _transform_array_to_logical(
+            array.values, target_type.value_type, physical_to_logical
+        )
+        return pyarrow.ListArray.from_arrays(
+            array.offsets, transformed_values, mask=array.buffers()[0]
+        )
+
+    if pyarrow.types.is_large_list(array.type) and pyarrow.types.is_large_list(
+        target_type
+    ):
+        transformed_values = _transform_array_to_logical(
+            array.values, target_type.value_type, physical_to_logical
+        )
+        return pyarrow.LargeListArray.from_arrays(
+            array.offsets, transformed_values, mask=array.buffers()[0]
+        )
+
+    # Handle MapArray - transform the entries struct
+    if pyarrow.types.is_map(array.type) and pyarrow.types.is_map(target_type):
+        # Map entries is a struct with key and value fields
+        transformed_keys = _transform_array_to_logical(
+            array.keys, target_type.key_type, physical_to_logical
+        )
+        transformed_items = _transform_array_to_logical(
+            array.items, target_type.item_type, physical_to_logical
+        )
+        return pyarrow.MapArray.from_arrays(
+            array.offsets, transformed_keys, transformed_items
+        )
+
+    # For other types, return as-is
+    return array
+
+
+def _transform_schema_to_physical(
+    schema: "pyarrow.Schema",
+    logical_to_physical: dict[str, str],
+) -> "pyarrow.Schema":
+    """Transform an entire schema to use physical column names, including nested types."""
+    import pyarrow
+
+    physical_fields = []
+    for field in schema:
+        physical_name = logical_to_physical.get(field.name, field.name)
+        physical_type = _transform_field_type_to_physical(
+            field.type, logical_to_physical
+        )
+        physical_fields.append(
+            pyarrow.field(physical_name, physical_type, field.nullable, field.metadata)
+        )
+    return pyarrow.schema(physical_fields)
+
+
+class _ColumnMappingDataset:
+    """
+    A wrapper around PyArrow Dataset that renames columns from physical to logical names.
+
+    This is used when reading Delta tables with column mapping enabled, where the parquet
+    files contain physical column names (like 'col-xxx-xxx') but we want to expose the
+    logical column names (like 'user name') to the user.
+    """
+
+    def __init__(
+        self,
+        base_dataset: "pyarrow.dataset.Dataset",
+        physical_to_logical: dict[str, str],
+        logical_schema: "pyarrow.Schema",
+    ) -> None:
+        self._base_dataset = base_dataset
+        self._physical_to_logical = physical_to_logical
+        self._logical_schema = logical_schema
+
+    @property
+    def schema(self) -> "pyarrow.Schema":
+        """Return the logical schema with user-friendly column names."""
+        return self._logical_schema
+
+    def _translate_columns_to_physical(
+        self, columns: list[str] | None
+    ) -> list[str] | None:
+        """Translate logical column names to physical column names for reading."""
+        if columns is None:
+            return None
+        logical_to_physical = {v: k for k, v in self._physical_to_logical.items()}
+        return [logical_to_physical.get(col, col) for col in columns]
+
+    def _translate_filter_to_physical(
+        self, expr: "pyarrow.dataset.Expression | None"
+    ) -> "pyarrow.dataset.Expression | None":
+        """Translate logical column names to physical names in filter expression.
+
+        Uses string-based replacement since PyArrow Expression objects don't expose
+        their internal structure for traversal. The string representation of expressions
+        follows a predictable format that we can parse and rebuild.
+
+        Performance: O(n) where n is expression string length. Uses single-pass
+        token-based replacement to avoid multiple regex passes over the string.
+        """
+        if expr is None:
+            return None
+
+        import pyarrow.dataset as ds
+
+        logical_to_physical = {v: k for k, v in self._physical_to_logical.items()}
+
+        # If no columns need translation, return as-is
+        if not logical_to_physical:
+            return expr
+
+        # Check if it's a simple field reference (just a column name)
+        expr_str = str(expr).strip()
+        if expr_str in logical_to_physical:
+            return ds.field(logical_to_physical[expr_str])
+
+        # Single-pass replacement: scan through string once, replacing column names
+        # while respecting quoted strings. This is O(n) instead of O(n*k) where k = columns
+        translated_str = self._replace_column_names_single_pass(
+            expr_str, logical_to_physical
+        )
+
+        # Rebuild the expression by parsing the translated string
+        return self._parse_expression_string(translated_str)
+
+    def _replace_column_names_single_pass(
+        self, expr_str: str, logical_to_physical: dict[str, str]
+    ) -> str:
+        """Replace column names in expression string in a single pass.
+
+        Handles quoted strings correctly by tracking quote state.
+        Time complexity: O(n) where n = len(expr_str)
+        """
+        result = []
+        i = 0
+        n = len(expr_str)
+        in_double_quote = False
+        in_single_quote = False
+
+        while i < n:
+            char = expr_str[i]
+
+            # Track quote state
+            if char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                result.append(char)
+                i += 1
+            elif char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                result.append(char)
+                i += 1
+            elif in_double_quote or in_single_quote:
+                # Inside quotes - don't replace
+                result.append(char)
+                i += 1
+            elif char.isalnum() or char == "_" or char == "-":
+                # Potential column name - extract the full identifier
+                start = i
+                while i < n and (
+                    expr_str[i].isalnum() or expr_str[i] == "_" or expr_str[i] == "-"
+                ):
+                    i += 1
+                identifier = expr_str[start:i]
+
+                # Check if this identifier should be replaced
+                if identifier in logical_to_physical:
+                    result.append(logical_to_physical[identifier])
+                else:
+                    result.append(identifier)
+            else:
+                result.append(char)
+                i += 1
+
+        return "".join(result)
+
+    def _parse_expression_string(self, expr_str: str) -> "pyarrow.dataset.Expression":
+        """Parse an expression string and rebuild it as a PyArrow Expression.
+
+        This is a recursive descent parser for PyArrow expression strings.
+        Supported formats:
+        - Simple field: column_name
+        - Comparison: (column op value) where op is ==, !=, <, <=, >, >=
+        - Logical AND: ((expr1) and (expr2))
+        - Logical OR: ((expr1) or (expr2))
+        - Negation: ~(expr)
+        - is_null: (column is null)
+        - is_valid: (column is not null)
+        - isin: (column is in [...])
+        """
+        import pyarrow.dataset as ds
+
+        expr_str = expr_str.strip()
+
+        # Handle logical AND/OR at the top level
+        # Format: ((expr1) and (expr2)) or ((expr1) or (expr2))
+        if expr_str.startswith("(") and expr_str.endswith(")"):
+            inner = expr_str[1:-1].strip()
+
+            # Find the logical operator by tracking parentheses depth
+            depth = 0
+            i = 0
+            while i < len(inner):
+                if inner[i] == "(":
+                    depth += 1
+                elif inner[i] == ")":
+                    depth -= 1
+                elif depth == 0:
+                    # Check for 'and' or 'or' at this level
+                    if inner[i : i + 5] == " and ":
+                        left = inner[:i].strip()
+                        right = inner[i + 5 :].strip()
+                        return self._parse_expression_string(
+                            left
+                        ) & self._parse_expression_string(right)
+                    elif inner[i : i + 4] == " or ":
+                        left = inner[:i].strip()
+                        right = inner[i + 4 :].strip()
+                        return self._parse_expression_string(
+                            left
+                        ) | self._parse_expression_string(right)
+                i += 1
+
+            # No logical operator found, parse the inner expression
+            # Check for comparison operators
+            for op, method in [
+                (" == ", "__eq__"),
+                (" != ", "__ne__"),
+                (" >= ", "__ge__"),
+                (" <= ", "__le__"),
+                (" > ", "__gt__"),
+                (" < ", "__lt__"),
+            ]:
+                # Find operator outside of quotes
+                idx = self._find_operator_outside_quotes(inner, op)
+                if idx >= 0:
+                    col_name = inner[:idx].strip()
+                    value_str = inner[idx + len(op) :].strip()
+                    field = ds.field(col_name)
+                    value = self._parse_value(value_str)
+                    return getattr(field, method)(value)
+
+            # Check for 'is null' and 'is not null'
+            if " is null" in inner:
+                col_name = inner.replace(" is null", "").strip()
+                return ds.field(col_name).is_null()
+
+            if " is not null" in inner:
+                col_name = inner.replace(" is not null", "").strip()
+                return ds.field(col_name).is_valid()
+
+            # Check for 'is in [...]'
+            if " is in " in inner:
+                parts = inner.split(" is in ", 1)
+                col_name = parts[0].strip()
+                values_str = parts[1].strip()
+                # Parse the list of values
+                if values_str.startswith("[") and values_str.endswith("]"):
+                    values_inner = values_str[1:-1]
+                    values = [
+                        self._parse_value(v.strip())
+                        for v in self._split_list_values(values_inner)
+                    ]
+                    return ds.field(col_name).isin(values)
+
+        # Handle negation: ~(expr)
+        if expr_str.startswith("~"):
+            inner = expr_str[1:].strip()
+            return ~self._parse_expression_string(inner)
+
+        # Simple field reference (just a column name)
+        return ds.field(expr_str)
+
+    def _find_operator_outside_quotes(self, s: str, op: str) -> int:
+        """Find an operator in string s, but not inside quotes."""
+        in_double_quote = False
+        in_single_quote = False
+        i = 0
+        while i < len(s) - len(op) + 1:
+            if s[i] == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+            elif s[i] == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+            elif not in_double_quote and not in_single_quote:
+                if s[i : i + len(op)] == op:
+                    return i
+            i += 1
+        return -1
+
+    def _split_list_values(self, s: str) -> list[str]:
+        """Split a comma-separated list, respecting quotes."""
+        result = []
+        current = ""
+        in_double_quote = False
+        in_single_quote = False
+        for c in s:
+            if c == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                current += c
+            elif c == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                current += c
+            elif c == "," and not in_double_quote and not in_single_quote:
+                result.append(current.strip())
+                current = ""
+            else:
+                current += c
+        if current.strip():
+            result.append(current.strip())
+        return result
+
+    def _parse_value(self, value_str: str) -> Any:
+        """Parse a value string into the appropriate Python type."""
+        value_str = value_str.strip()
+
+        # String value (double-quoted)
+        if value_str.startswith('"') and value_str.endswith('"'):
+            return value_str[1:-1]
+
+        # String value (single-quoted)
+        if value_str.startswith("'") and value_str.endswith("'"):
+            return value_str[1:-1]
+
+        # Boolean
+        if value_str.lower() == "true":
+            return True
+        if value_str.lower() == "false":
+            return False
+
+        # None/null
+        if value_str.lower() in ("none", "null"):
+            return None
+
+        # Try integer
+        try:
+            return int(value_str)
+        except ValueError:
+            pass
+
+        # Try float
+        try:
+            return float(value_str)
+        except ValueError:
+            pass
+
+        # Return as string
+        return value_str
+
+    def to_table(
+        self,
+        columns: list[str] | None = None,
+        filter: "pyarrow.dataset.Expression | None" = None,
+        **kwargs: Any,
+    ) -> "pyarrow.Table":
+        """Read the dataset to a PyArrow Table, translating column names."""
+        import pyarrow
+
+        physical_columns = self._translate_columns_to_physical(columns)
+        physical_filter = self._translate_filter_to_physical(filter)
+
+        # Read with physical column names and translated filter
+        table = self._base_dataset.to_table(
+            columns=physical_columns,
+            filter=physical_filter,
+            **kwargs,
+        )
+
+        # Transform columns to use logical names (including nested struct fields)
+        logical_columns = []
+        for i, col in enumerate(table.columns):
+            physical_field = table.schema.field(i)
+            logical_name = self._physical_to_logical.get(
+                physical_field.name, physical_field.name
+            )
+            # Transform nested types to logical names
+            logical_type = _transform_field_type_to_logical(
+                physical_field.type, self._physical_to_logical
+            )
+            # Transform the array data if the type changed (nested struct field names)
+            if logical_type != physical_field.type:
+                col = _transform_array_to_logical(
+                    col, logical_type, self._physical_to_logical
+                )
+            logical_columns.append((logical_name, col))
+
+        # Rebuild table with logical names
+        table = pyarrow.table(dict(logical_columns))
+
+        # If specific columns were requested, preserve the order
+        if columns is not None:
+            table = table.select(columns)
+
+        return table
+
+    def to_batches(
+        self,
+        columns: list[str] | None = None,
+        filter: "pyarrow.dataset.Expression | None" = None,
+        **kwargs: Any,
+    ) -> Generator["pyarrow.RecordBatch", None, None]:
+        """Read the dataset as batches, translating column names."""
+        import pyarrow
+
+        physical_columns = self._translate_columns_to_physical(columns)
+        physical_filter = self._translate_filter_to_physical(filter)
+
+        # Read batches with physical column names, translated filter, and rename
+        for batch in self._base_dataset.to_batches(
+            columns=physical_columns,
+            filter=physical_filter,
+            **kwargs,
+        ):
+            # Build logical schema with nested type transformation
+            logical_fields = []
+            for field in batch.schema:
+                logical_name = self._physical_to_logical.get(field.name, field.name)
+                logical_type = _transform_field_type_to_logical(
+                    field.type, self._physical_to_logical
+                )
+                logical_fields.append(
+                    pyarrow.field(logical_name, logical_type, field.nullable)
+                )
+            logical_schema = pyarrow.schema(logical_fields)
+            yield batch.cast(logical_schema)
+
+    @property
+    def files(self) -> list[str]:
+        """Return the list of files in the dataset."""
+        return self._base_dataset.files
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate unsupported methods to the base dataset with a warning.
+
+        This wrapper only fully supports: to_table(), to_batches(), schema, files.
+        Other Dataset methods are delegated but may not handle column name translation.
+        """
+        import warnings
+
+        attr = getattr(self._base_dataset, name)
+        if callable(attr):
+            warnings.warn(
+                f"Method '{name}' is not fully supported by _ColumnMappingDataset. "
+                f"Column names may appear as physical names (col-xxx) instead of logical names. "
+                f"Use to_table() or to_batches() for full column mapping support.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return attr
+
+    def __repr__(self) -> str:
+        return f"_ColumnMappingDataset({self._base_dataset!r})"
 
 
 @dataclass(init=False)
@@ -425,6 +1015,29 @@ class DeltaTable:
             the current Schema registered in the transaction log
         """
         return self._table.schema
+
+    def get_column_mapping(self) -> dict[str, str]:
+        """
+        Get the column name mapping for tables with column mapping enabled.
+
+        Returns a dictionary mapping physical column names (used in parquet files)
+        to logical column names (user-facing names). Returns an empty dict if
+        column mapping is not enabled (physical names == logical names).
+
+        This is useful for tools like Polars that read parquet files directly and
+        need to rename columns from physical to logical names.
+
+        Returns:
+            dict mapping physical names to logical names, or empty dict if column
+            mapping is not enabled.
+
+        Example:
+            >>> import polars as pl
+            >>> dt = DeltaTable("path/to/table")
+            >>> # Works whether column mapping is enabled or not!
+            >>> df = pl.read_parquet(dt.file_uris()).rename(dt.get_column_mapping())
+        """
+        return self._table.get_physical_to_logical_column_mapping()
 
     def metadata(self) -> Metadata:
         """
@@ -861,15 +1474,6 @@ class DeltaTable:
 
         if (
             table_protocol.reader_features
-            and "columnMapping" in table_protocol.reader_features
-        ):
-            raise DeltaProtocolError(
-                "The table requires reader feature 'columnMapping' "
-                "but this is not supported using pyarrow Datasets."
-            )
-
-        if (
-            table_protocol.reader_features
             and "deletionVectors" in table_protocol.reader_features
         ):
             raise DeltaProtocolError(
@@ -896,10 +1500,22 @@ class DeltaTable:
             default_fragment_scan_options=ParquetFragmentScanOptions(pre_buffer=True),
         )
 
+        # Get column mapping info from Rust
+        physical_to_logical = self._table.get_physical_to_logical_column_mapping()
+        use_column_mapping = len(physical_to_logical) > 0
+
         if schema is None:
             schema = pyarrow.schema(
                 self.schema().to_arrow(as_large_types=as_large_types)
             )
+
+        # For column mapping, build physical schema for reading parquet files
+        # This includes transforming nested struct field names to physical names
+        if use_column_mapping:
+            logical_to_physical = {v: k for k, v in physical_to_logical.items()}
+            physical_schema = _transform_schema_to_physical(schema, logical_to_physical)
+        else:
+            physical_schema = schema
 
         partitions = self._stringify_partition_values(partitions)
 
@@ -916,14 +1532,20 @@ class DeltaTable:
 
         dictionary_columns = format.read_options.dictionary_columns or set()
         if dictionary_columns:
-            for index, field in enumerate(schema):
+            for index, field in enumerate(physical_schema):
                 if field.name in dictionary_columns:
                     dict_field = field.with_type(
                         pyarrow.dictionary(pyarrow.int32(), field.type)
                     )
-                    schema = schema.set(index, dict_field)
+                    physical_schema = physical_schema.set(index, dict_field)
 
-        return FileSystemDataset(fragments, schema, format, filesystem)
+        base_dataset = FileSystemDataset(fragments, physical_schema, format, filesystem)
+
+        # If column mapping is enabled, wrap the dataset to rename columns
+        if use_column_mapping:
+            return _ColumnMappingDataset(base_dataset, physical_to_logical, schema)
+
+        return base_dataset
 
     def to_pyarrow_table(
         self,

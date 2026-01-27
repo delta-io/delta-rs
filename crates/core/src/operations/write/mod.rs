@@ -47,7 +47,7 @@ use tracing::Instrument;
 use url::Url;
 
 pub use self::configs::WriterStatsConfig;
-use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
+use self::execution::{prepare_predicate_actions, write_execution_plan_v3};
 use self::generated_columns::{gc_is_enabled, with_generated_columns};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use self::schema_evolution::try_cast_schema;
@@ -569,7 +569,45 @@ impl std::future::IntoFuture for WriteBuilder {
                         // Verify if delta schema changed
                         if &schema_struct != snapshot.schema().as_ref() {
                             let current_protocol = snapshot.protocol();
-                            let configuration = snapshot.metadata().configuration().clone();
+                            let mut configuration = snapshot.metadata().configuration().clone();
+
+                            // Handle column mapping metadata for new fields during schema evolution
+                            let column_mapping_mode =
+                                snapshot.snapshot().table_configuration().column_mapping_mode();
+                            let schema_struct =
+                                if column_mapping_mode != delta_kernel::table_features::ColumnMappingMode::None
+                                {
+                                    // First, copy existing column mapping metadata from the table schema
+                                    // to the new schema for fields that exist in both
+                                    let schema_with_existing_metadata = schema_struct
+                                        .with_column_mapping_metadata_from_schema(snapshot.schema().as_ref())?;
+
+                                    // Get the current max column ID from configuration, or from schema
+                                    let current_max_id = configuration
+                                        .get("delta.columnMapping.maxColumnId")
+                                        .and_then(|s| s.parse::<i64>().ok())
+                                        .or_else(|| snapshot.schema().get_max_column_id())
+                                        .unwrap_or(0);
+
+                                    // Add column mapping metadata to new fields (those without existing metadata)
+                                    let (schema_with_mapping, new_max_id) = schema_with_existing_metadata
+                                        .with_column_mapping_metadata_for_new_fields(
+                                            current_max_id + 1,
+                                        )?;
+
+                                    // Update maxColumnId in configuration if new IDs were assigned
+                                    if new_max_id > current_max_id {
+                                        configuration.insert(
+                                            "delta.columnMapping.maxColumnId".to_string(),
+                                            new_max_id.to_string(),
+                                        );
+                                    }
+
+                                    schema_with_mapping
+                                } else {
+                                    schema_struct
+                                };
+
                             let new_protocol = current_protocol
                                 .clone()
                                 .apply_column_metadata_to_protocol(&schema_struct)?
@@ -682,8 +720,30 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let source_plan = session.create_physical_plan(&source).await?;
 
+                // Extract schema with column mapping metadata for:
+                // 1. New tables with column mapping enabled
+                // 2. Existing tables with schema evolution and column mapping
+                let target_schema_with_column_mapping: Option<StructType> = {
+                    // Check if there's a Metadata action with schema (either new table or schema evolution)
+                    let schema_from_actions = actions.iter().find_map(|a| {
+                        if let Action::Metadata(m) = a {
+                            // Parse the schema and check if it has column mapping metadata
+                            m.parse_schema().ok()
+                        } else {
+                            None
+                        }
+                    });
+
+                    // Use schema from actions if it has column mapping metadata
+                    // This handles both new tables and schema evolution cases
+                    schema_from_actions.filter(|schema| {
+                        // Only use if schema has column mapping metadata
+                        !schema.get_logical_to_physical_mapping().is_empty()
+                    })
+                };
+
                 // Here we need to validate if the new data conforms to a predicate if one is provided
-                let (add_actions, _) = write_execution_plan_v2(
+                let (add_actions, _) = write_execution_plan_v3(
                     this.snapshot.as_ref(),
                     session.as_ref(),
                     source_plan.clone(),
@@ -695,6 +755,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     writer_stats_config.clone(),
                     predicate.clone(),
                     contains_cdc,
+                    target_schema_with_column_mapping.as_ref(),
                 )
                 .await?;
 

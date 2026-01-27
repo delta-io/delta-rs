@@ -16,6 +16,7 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
@@ -35,12 +36,12 @@ use deltalake::kernel::{
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
-use deltalake::operations::CustomExecuteHandler;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
-use deltalake::operations::optimize::{OptimizeType, create_session_state_for_optimize};
+use deltalake::operations::optimize::{create_session_state_for_optimize, OptimizeType};
 use deltalake::operations::update_table_metadata::TableMetadataUpdate;
 use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
+use deltalake::operations::CustomExecuteHandler;
 use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
@@ -48,12 +49,12 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
-use deltalake::{DeltaResult, DeltaTable, DeltaTableBuilder, init_client_version};
+use deltalake::{init_client_version, DeltaResult, DeltaTable, DeltaTableBuilder};
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
-use pyo3::{IntoPyObjectExt, prelude::*};
+use pyo3::{prelude::*, IntoPyObjectExt};
 use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
 use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
 use schema::PySchema;
@@ -70,13 +71,13 @@ use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
 
 use crate::datafusion::TokioDeltaScan;
-use crate::error::{DeltaError, DeltaProtocolError, PythonError, to_rt_err};
+use crate::error::{to_rt_err, DeltaError, DeltaProtocolError, PythonError};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::reader::convert_stream_to_reader;
-use crate::schema::{Field, schema_to_pyobject};
+use crate::schema::{schema_to_pyobject, Field};
 use crate::utils::rt;
 use crate::writer::to_lazy_table;
 
@@ -87,6 +88,54 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Build a mapping from physical column names to logical column names for a snapshot.
+/// Returns an empty HashMap if column mapping is not enabled.
+/// This function recursively collects mappings from nested struct, array, and map types.
+fn build_physical_to_logical_mapping(snapshot: &EagerSnapshot) -> HashMap<String, String> {
+    use delta_kernel::schema::{DataType, StructType};
+
+    let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+    if column_mapping_mode == ColumnMappingMode::None {
+        return HashMap::new();
+    }
+
+    fn collect_mappings(
+        schema: &StructType,
+        mapping_mode: ColumnMappingMode,
+        result: &mut HashMap<String, String>,
+    ) {
+        for field in schema.fields() {
+            let logical_name = field.name().to_string();
+            let physical_name = field.physical_name(mapping_mode).to_string();
+            if logical_name != physical_name {
+                result.insert(physical_name, logical_name);
+            }
+
+            // Recursively handle nested types that can contain structs
+            match field.data_type() {
+                DataType::Struct(nested) => {
+                    collect_mappings(nested.as_ref(), mapping_mode, result);
+                }
+                DataType::Array(inner) => {
+                    if let DataType::Struct(elem_struct) = inner.element_type() {
+                        collect_mappings(elem_struct.as_ref(), mapping_mode, result);
+                    }
+                }
+                DataType::Map(inner) => {
+                    if let DataType::Struct(val_struct) = inner.value_type() {
+                        collect_mappings(val_struct.as_ref(), mapping_mode, result);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut mappings = HashMap::new();
+    collect_mappings(snapshot.schema().as_ref(), column_mapping_mode, &mut mappings);
+    mappings
+}
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -459,6 +508,26 @@ impl RawDeltaTable {
             Ok(snapshot.schema().clone())
         })?;
         schema_to_pyobject(schema, py)
+    }
+
+    /// Get the column mapping mode for this table.
+    /// Returns "none", "name", or "id".
+    pub fn get_column_mapping_mode(&self) -> PyResult<String> {
+        let snapshot = self.cloned_state()?;
+        let mode = snapshot.table_configuration().column_mapping_mode();
+        Ok(match mode {
+            ColumnMappingMode::None => "none".to_string(),
+            ColumnMappingMode::Name => "name".to_string(),
+            ColumnMappingMode::Id => "id".to_string(),
+        })
+    }
+
+    /// Get a mapping from physical column names to logical column names.
+    /// This is useful for reading parquet files with column mapping enabled.
+    /// Returns an empty dict if column mapping is not enabled.
+    pub fn get_physical_to_logical_column_mapping(&self) -> PyResult<HashMap<String, String>> {
+        let snapshot = self.cloned_state()?;
+        Ok(build_physical_to_logical_mapping(&snapshot))
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
@@ -1121,6 +1190,10 @@ impl RawDeltaTable {
 
         let schema = schema.into_inner();
 
+        // Get physical-to-logical column name mapping for column mapping support
+        let snapshot = self.cloned_state()?;
+        let physical_to_logical = build_physical_to_logical_mapping(&snapshot);
+
         let inclusion_stats_cols = if let Some(stats_cols) = stats_cols {
             stats_cols
         } else if num_index_cols == -1 {
@@ -1141,7 +1214,7 @@ impl RawDeltaTable {
             )))?;
         };
 
-        self.cloned_state()?
+        snapshot
             .log_data()
             .iter()
             .filter_map(|f| {
@@ -1152,8 +1225,13 @@ impl RawDeltaTable {
                 }
             })
             .map(|(path, f)| {
-                let expression =
-                    filestats_to_expression_next(py, &schema, &inclusion_stats_cols, f)?;
+                let expression = filestats_to_expression_next(
+                    py,
+                    &schema,
+                    &inclusion_stats_cols,
+                    f,
+                    &physical_to_logical,
+                )?;
                 Ok((path, expression))
             })
             .collect()
@@ -2121,12 +2199,21 @@ fn filestats_to_expression_next<'py>(
     schema: &SchemaRef,
     stats_columns: &[String],
     file_info: LogicalFileView,
+    physical_to_logical: &HashMap<String, String>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
     let py_field = ds.getattr("field")?;
     let pa = PyModule::import(py, "pyarrow")?;
     let py_date = Python::import(py, "datetime")?.getattr("date")?;
     let mut expressions = Vec::new();
+
+    // Helper to translate physical column name to logical name
+    let to_logical_name = |physical_name: &str| -> String {
+        physical_to_logical
+            .get(physical_name)
+            .cloned()
+            .unwrap_or_else(|| physical_name.to_string())
+    };
 
     let cast_to_type = |column_name: &String, value: &Bound<'py, PyAny>, schema: &ArrowSchema| {
         let column_type = schema
@@ -2147,18 +2234,20 @@ fn filestats_to_expression_next<'py>(
             .iter()
             .zip(partitions_values.values().iter())
         {
-            let column = column.name().to_string();
+            // Translate physical column name to logical name for column mapping support
+            let physical_name = column.name();
+            let logical_name = to_logical_name(physical_name);
             if !value.is_null() {
                 // value is a string, but needs to be parsed into appropriate type
                 let converted_value =
-                    cast_to_type(&column, &scalar_to_py(value, &py_date)?, schema)?;
+                    cast_to_type(&logical_name, &scalar_to_py(value, &py_date)?, schema)?;
                 expressions.push(
                     py_field
-                        .call1((&column,))?
+                        .call1((&logical_name,))?
                         .call_method1("__eq__", (converted_value,)),
                 );
             } else {
-                expressions.push(py_field.call1((column,))?.call_method0("is_null"));
+                expressions.push(py_field.call1((&logical_name,))?.call_method0("is_null"));
             }
         }
     }
@@ -2166,16 +2255,18 @@ fn filestats_to_expression_next<'py>(
     let mut has_nulls_set: HashSet<String> = HashSet::new();
 
     // NOTE: null_counts should always return a struct scalar.
+    // Stats use physical column names when column mapping is enabled
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            if stats_columns.contains(field.name()) {
+            let logical_name = to_logical_name(field.name());
+            if stats_columns.contains(&logical_name) {
                 if let Scalar::Long(val) = value {
                     if *val == 0 {
-                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_valid"));
+                        expressions.push(py_field.call1((&logical_name,))?.call_method0("is_valid"));
                     } else if Some(*val as usize) == file_info.num_records() {
-                        expressions.push(py_field.call1((field.name(),))?.call_method0("is_null"));
+                        expressions.push(py_field.call1((&logical_name,))?.call_method0("is_null"));
                     } else {
-                        has_nulls_set.insert(field.name().to_string());
+                        has_nulls_set.insert(logical_name);
                     }
                 }
             }
@@ -2185,17 +2276,18 @@ fn filestats_to_expression_next<'py>(
     // NOTE: min_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.min_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            if stats_columns.contains(field.name()) {
+            let logical_name = to_logical_name(field.name());
+            if stats_columns.contains(&logical_name) {
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_minimum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
+                            cast_to_type(&logical_name, &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(minimum) = maybe_minimum {
-                            let field_expr = py_field.call1((field.name(),))?;
+                            let field_expr = py_field.call1((&logical_name,))?;
                             let expr = field_expr.call_method1("__ge__", (minimum,));
-                            let expr = if has_nulls_set.contains(field.name()) {
+                            let expr = if has_nulls_set.contains(&logical_name) {
                                 // col >= min_value OR col is null
                                 let is_null_expr = field_expr.call_method0("is_null");
                                 expr?.call_method1("__or__", (is_null_expr?,))
@@ -2214,17 +2306,18 @@ fn filestats_to_expression_next<'py>(
     // NOTE: max_values should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.max_values() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
-            if stats_columns.contains(field.name()) {
+            let logical_name = to_logical_name(field.name());
+            if stats_columns.contains(&logical_name) {
                 match value {
                     // TODO: Handle nested field statistics.
                     Scalar::Struct(_) => {}
                     _ => {
                         let maybe_maximum =
-                            cast_to_type(field.name(), &scalar_to_py(value, &py_date)?, schema);
+                            cast_to_type(&logical_name, &scalar_to_py(value, &py_date)?, schema);
                         if let Ok(maximum) = maybe_maximum {
-                            let field_expr = py_field.call1((field.name(),))?;
+                            let field_expr = py_field.call1((&logical_name,))?;
                             let expr = field_expr.call_method1("__le__", (maximum,));
-                            let expr = if has_nulls_set.contains(field.name()) {
+                            let expr = if has_nulls_set.contains(&logical_name) {
                                 // col <= max_value OR col is null
                                 let is_null_expr = field_expr.call_method0("is_null");
                                 expr?.call_method1("__or__", (is_null_expr?,))
