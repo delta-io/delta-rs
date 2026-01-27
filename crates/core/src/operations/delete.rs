@@ -53,12 +53,12 @@ use uuid::Uuid;
 use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::{
     LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
-use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::{Expression, update_datafusion_session};
 use crate::delta_datafusion::{create_session, scan_files_where_matches};
 use crate::errors::DeltaResult;
