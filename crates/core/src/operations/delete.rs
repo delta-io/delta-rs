@@ -1059,6 +1059,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_custom_session_schema_force_view_types_disabled() -> DeltaResult<()> {
+        // Integration guardrail: user-supplied DataFusion sessions may disable view types.
+        // Predicate resolution must respect the provided session's config.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["alice", "bob", "charlie"])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        let config: datafusion::prelude::SessionConfig =
+            crate::delta_datafusion::DeltaSessionConfig::default().into();
+        let config = config.set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let runtime_env = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .build_arc()
+            .unwrap();
+        let state = datafusion::execution::SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_query_planner(crate::delta_datafusion::planner::DeltaPlanner::new())
+            .build();
+        let session = Arc::new(state);
+
+        let (table, _metrics) = table
+            .delete()
+            .with_session_state(session)
+            .with_predicate("name = 'bob'")
+            .await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("name = 'bob'"));
+
+        let expected = [
+            "+---------+-------+",
+            "| name    | value |",
+            "+---------+-------+",
+            "| alice   | 1     |",
+            "| charlie | 3     |",
+            "+---------+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_failure_nondeterministic_query() {
         // Deletion requires a deterministic predicate
 
