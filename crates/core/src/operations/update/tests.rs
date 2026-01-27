@@ -2,8 +2,7 @@ use super::*;
 
 use crate::kernel::{Action, PrimitiveType, StructField, StructType};
 use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-use crate::writer::test_utils::datafusion::get_data;
-use crate::writer::test_utils::datafusion::write_batch;
+use crate::writer::test_utils::datafusion::{get_data, write_batch};
 use crate::writer::test_utils::{
     get_arrow_schema, get_delta_schema, get_record_batch, setup_table_with_configuration,
 };
@@ -121,6 +120,48 @@ async fn test_update_predicate_left_in_data() -> DeltaResult<()> {
             "Expected the Parquet file to only have three fields in the schema, something is amiss!"
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_update_string_equality_non_partition() -> DeltaResult<()> {
+    // Regression test: DF52 view types can cause predicate evaluation to compare
+    // Utf8 against Utf8View for string equality predicates.
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("utf8", DataType::Utf8, true),
+        Field::new("int32", DataType::Int32, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from(vec![Some("0"), Some("1"), Some("2")])),
+            Arc::new(Int32Array::from(vec![0, 1, 2])),
+        ],
+    )?;
+
+    let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+    let (table, _metrics) = table
+        .update()
+        .with_predicate("utf8 = '1'")
+        .with_update(
+            "utf8",
+            "CASE WHEN utf8 = '1' THEN 'hello world' ELSE utf8 END",
+        )
+        .await?;
+
+    let expected = [
+        "+-------------+-------+",
+        "| utf8        | int32 |",
+        "+-------------+-------+",
+        "| 0           | 0     |",
+        "| 2           | 2     |",
+        "| hello world | 1     |",
+        "+-------------+-------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
     Ok(())
 }
 

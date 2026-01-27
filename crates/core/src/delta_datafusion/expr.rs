@@ -495,6 +495,13 @@ struct ScalarValueFormat<'a> {
 impl fmt::Display for ScalarValueFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.scalar {
+            ScalarValue::Dictionary(_key_type, inner) => write!(
+                f,
+                "{}",
+                ScalarValueFormat {
+                    scalar: inner.as_ref()
+                }
+            )?,
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
             ScalarValue::Float64(e) => format_option!(f, e)?,
@@ -760,6 +767,24 @@ mod test {
                 expr: col("_binary").eq(lit(ScalarValue::Binary(Some(vec![0xAA, 0x00, 0xFF])))),
                 expected: "_binary = decode('aa00ff', 'hex')".to_string(),
                 override_expected_expr: Some(col("_binary").eq(decode(lit("aa00ff"), lit("hex")))),
+            },
+            ParseTest {
+                expr: col("id").eq(lit(ScalarValue::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ScalarValue::Utf8(Some("A".into()))),
+                ))),
+                expected: "id = 'A'".to_string(),
+                // Parsing canonicalizes away dictionary wrappers.
+                override_expected_expr: Some(col("id").eq(lit(ScalarValue::Utf8(Some("A".into()))))),
+            },
+            ParseTest {
+                expr: col("value").eq(lit(ScalarValue::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ScalarValue::Int32(Some(3))),
+                ))),
+                expected: "value = 3".to_string(),
+                // Parsing canonicalizes away dictionary wrappers.
+                override_expected_expr: Some(col("value").eq(lit(ScalarValue::Int64(Some(3))))),
             },
             simple!(
                 col("value").between(lit(20_i64), lit(30_i64)),

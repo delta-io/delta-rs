@@ -46,7 +46,9 @@ use super::{
     CustomExecuteHandler, Operation,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
-use crate::delta_datafusion::{Expression, scan_files_where_matches, update_datafusion_session};
+use crate::delta_datafusion::{
+    DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
+};
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
@@ -272,7 +274,10 @@ async fn execute(
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
 
-    let schema = snapshot.arrow_schema().to_dfschema_ref()?;
+    let scan_config = DeltaScanConfig::new_from_session(session);
+    let schema = scan_config
+        .table_schema(snapshot.table_configuration())?
+        .to_dfschema_ref()?;
     let updates: HashMap<_, _> = updates
         .into_iter()
         .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
@@ -442,7 +447,13 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             let predicate = this
                 .predicate
-                .map(|p| p.resolve(session.as_ref(), snapshot.arrow_schema().to_dfschema_ref()?))
+                .map(|p| {
+                    let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
+                    let predicate_schema = scan_config
+                        .table_schema(snapshot.table_configuration())?
+                        .to_dfschema_ref()?;
+                    p.resolve(session.as_ref(), predicate_schema)
+                })
                 .transpose()?;
 
             let predicate = predicate.unwrap_or(lit(true));
