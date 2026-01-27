@@ -24,14 +24,12 @@ use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
-    common::tree_node::{Transformed, TreeNode},
     common::{ColumnStatistics, HashMap, Result, Statistics, plan_err, stats::Precision},
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
     physical_expr::planner::logical2physical,
-    physical_expr::{PhysicalExpr, expressions::Literal as PhysicalLiteral},
     physical_plan::{
         ExecutionPlan,
         empty::EmptyExec,
@@ -46,10 +44,6 @@ use datafusion_datasource::{
     file_groups::FileGroup,
     file_scan_config::{FileScanConfigBuilder, wrap_partition_value_in_dict},
     source::DataSourceExec,
-};
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory,
-    schema_rewriter::{PhysicalExprAdapter, PhysicalExprAdapterFactory},
 };
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
@@ -85,7 +79,8 @@ pub(super) async fn execution_plan(
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (files, transforms, dvs, metrics) = replay_files(engine, &scan_plan, stream).await?;
+    let (files, transforms, dvs, metrics) =
+        replay_files(engine, &scan_plan, config.clone(), stream).await?;
 
     let file_id_field = config.file_id_field();
     if scan_plan.is_metadata_only() {
@@ -135,6 +130,7 @@ pub(super) async fn execution_plan(
 async fn replay_files(
     engine: Arc<dyn Engine>,
     scan_plan: &KernelScanPlan,
+    scan_config: DeltaScanConfig,
     stream: ScanMetadataStream,
 ) -> Result<(
     Vec<ScanFileContext>,
@@ -142,7 +138,7 @@ async fn replay_files(
     DashMap<String, Vec<bool>>,
     ExecutionPlanMetricsSet,
 )> {
-    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, stream);
+    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, scan_config, stream);
     let mut files = Vec::new();
     while let Some(file) = stream.try_next().await? {
         files.extend(file);
@@ -297,10 +293,6 @@ type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
-    // Schema used for Parquet reads / predicate evaluation.
-    // Note: this is not necessarily the final output schema.
-    // View types (e.g. Utf8View/BinaryView) and other output typing adjustments are applied
-    // later, at the DeltaScan boundary, not during Parquet read planning.
     parquet_read_schema: &SchemaRef,
     limit: Option<usize>,
     file_id_field: &FieldRef,
@@ -354,7 +346,6 @@ async fn get_read_plan(
             .with_file_groups(file_groups)
             .with_statistics(statistics)
             .with_limit(limit)
-            .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory)))
             .build();
 
         plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
@@ -427,104 +418,9 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
     .into())
 }
 
-#[derive(Debug)]
-struct DeltaPhysicalExprAdapterFactory;
-
-#[derive(Debug)]
-struct DeltaPhysicalExprAdapter {
-    inner: Arc<dyn PhysicalExprAdapter>,
-    physical_has_view_types: bool,
-}
-
-impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
-    fn create(
-        &self,
-        logical_file_schema: SchemaRef,
-        physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        let physical_has_view_types = schema_has_view_types(physical_file_schema.as_ref());
-        let inner =
-            DefaultPhysicalExprAdapterFactory.create(logical_file_schema, physical_file_schema);
-        Arc::new(DeltaPhysicalExprAdapter {
-            inner,
-            physical_has_view_types,
-        })
-    }
-}
-
-impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
-    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        let expr = self.inner.rewrite(expr)?;
-        if self.physical_has_view_types {
-            Ok(expr)
-        } else {
-            // DataFusion's DefaultPhysicalExprAdapter inserts casts on columns, but does not
-            // currently rewrite literals to match the physical schema. Parquet predicate
-            // evaluation/pushdown happens against the physical file schema prior to those casts.
-            //
-            // See upstream TODO:
-            // datafusion-physical-expr-adapter/src/schema_rewriter.rs
-            // "TODO: ... move the cast from the column to literal expressions ..."
-            convert_physical_view_literals_to_base(expr)
-        }
-    }
-}
-
-fn convert_physical_view_literals_to_base(
-    expr: Arc<dyn PhysicalExpr>,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    expr.transform_up(|e| {
-        if let Some(lit) = e.as_any().downcast_ref::<PhysicalLiteral>()
-            && let Some(converted) = convert_scalar_view_to_base(lit.value())
-        {
-            return Ok(Transformed::yes(
-                Arc::new(PhysicalLiteral::new(converted)) as _
-            ));
-        }
-        Ok(Transformed::no(e))
-    })
-    .map(|t| t.data)
-}
-
-fn convert_scalar_view_to_base(scalar: &ScalarValue) -> Option<ScalarValue> {
-    match scalar {
-        ScalarValue::Utf8View(v) => Some(ScalarValue::Utf8(v.clone())),
-        ScalarValue::BinaryView(v) => Some(ScalarValue::Binary(v.clone())),
-        ScalarValue::Dictionary(key_type, inner) => {
-            convert_scalar_view_to_base(inner).map(|converted_inner| {
-                ScalarValue::Dictionary(key_type.clone(), Box::new(converted_inner))
-            })
-        }
-        _ => None,
-    }
-}
-
-fn schema_has_view_types(schema: &Schema) -> bool {
-    schema
-        .fields()
-        .iter()
-        .any(|f| data_type_has_view_types(f.data_type()))
-}
-
-fn data_type_has_view_types(dt: &DataType) -> bool {
-    match dt {
-        DataType::Utf8View | DataType::BinaryView => true,
-        DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
-        DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
-        DataType::Struct(fields) => fields
-            .iter()
-            .any(|f| data_type_has_view_types(f.data_type())),
-        DataType::List(inner)
-        | DataType::LargeList(inner)
-        | DataType::ListView(inner)
-        | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use arrow_array::{BinaryArray, Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
         physical_plan::collect,
@@ -937,169 +833,6 @@ mod tests {
             "+----+-------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_predicate_pushdown_allows_view_literal_against_base_parquet_schema() -> TestResult
-    {
-        use datafusion::scalar::ScalarValue;
-
-        let store = Arc::new(InMemory::new());
-        let store_url = Url::parse("memory:///")?;
-        let session = Arc::new(create_session().into_inner());
-        session
-            .runtime_env()
-            .register_object_store(&store_url, store.clone());
-
-        // Parquet read schema uses base types; view types are applied at the DeltaScan boundary.
-        let arrow_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("name", DataType::Utf8, true),
-        ]));
-        let data = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(StringArray::from(vec![
-                    Some("alice"),
-                    Some("bob"),
-                    Some("charlie"),
-                ])),
-            ],
-        )?;
-
-        let mut buffer = Vec::new();
-        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
-        arrow_writer.write(&data)?;
-        arrow_writer.close()?;
-
-        let path = Path::from("test_view_literal.parquet");
-        store.put(&path, buffer.into()).await?;
-        let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_view_literal.parquet".to_string(),
-            ))));
-
-        let files_by_store = vec![(
-            store_url.as_object_store_url(),
-            vec![(file, None::<Vec<bool>>)],
-        )];
-
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
-
-        let predicate = col("name").eq(lit(ScalarValue::Utf8View(Some("bob".to_string()))));
-        let plan = get_read_plan(
-            &session.state(),
-            files_by_store,
-            &arrow_schema,
-            None,
-            &file_id_field,
-            Some(&predicate),
-        )
-        .await?;
-        let batches = collect(plan, session.task_ctx()).await?;
-
-        let expected = vec![
-            "+----+------+-------------------------------------+",
-            "| id | name | __delta_rs_file_id__                |",
-            "+----+------+-------------------------------------+",
-            "| 2  | bob  | memory:///test_view_literal.parquet |",
-            "+----+------+-------------------------------------+",
-        ];
-        assert_batches_sorted_eq!(&expected, &batches);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_predicate_pushdown_allows_binaryview_literal_against_base_parquet_schema()
-    -> TestResult {
-        use datafusion::scalar::ScalarValue;
-
-        let store = Arc::new(InMemory::new());
-        let store_url = Url::parse("memory:///")?;
-        let session = Arc::new(create_session().into_inner());
-        session
-            .runtime_env()
-            .register_object_store(&store_url, store.clone());
-
-        let arrow_schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("data", DataType::Binary, true),
-        ]));
-        let data = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(BinaryArray::from_opt_vec(vec![
-                    Some(b"aaa".as_slice()),
-                    Some(b"bbb".as_slice()),
-                    Some(b"ccc".as_slice()),
-                ])),
-            ],
-        )?;
-
-        let mut buffer = Vec::new();
-        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
-        arrow_writer.write(&data)?;
-        arrow_writer.close()?;
-
-        let path = Path::from("test_binary_view.parquet");
-        store.put(&path, buffer.into()).await?;
-        let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_binary_view.parquet".to_string(),
-            ))));
-
-        let files_by_store = vec![(
-            store_url.as_object_store_url(),
-            vec![(file, None::<Vec<bool>>)],
-        )];
-
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
-
-        let predicate = col("data").eq(lit(ScalarValue::BinaryView(Some(b"bbb".to_vec()))));
-        let plan = get_read_plan(
-            &session.state(),
-            files_by_store,
-            &arrow_schema,
-            None,
-            &file_id_field,
-            Some(&predicate),
-        )
-        .await?;
-        let batches = collect(plan, session.task_ctx()).await?;
-
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 1);
-        let id_col = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap();
-        assert_eq!(id_col.value(0), 2);
-
-        let data_col = batches[0]
-            .column(1)
-            .as_any()
-            .downcast_ref::<BinaryArray>()
-            .unwrap();
-        assert_eq!(data_col.value(0), b"bbb");
-
-        assert_eq!(batches[0].num_columns(), 3);
-        assert_eq!(batches[0].schema().field(2).name(), FILE_ID_COLUMN_DEFAULT);
 
         Ok(())
     }
