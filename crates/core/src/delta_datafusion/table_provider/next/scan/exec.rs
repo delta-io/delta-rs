@@ -151,9 +151,6 @@ impl DeltaScanExec {
         }
     }
 
-    pub(crate) fn delta_plan(&self) -> &KernelScanPlan {
-        self.scan_plan.as_ref()
-    }
     /// Transform the statistics from the inner physical parquet read plan to the logical
     /// schema we expose via the table provider. We do not attempt to provide meaningful
     /// statistics for metadata columns as we do not expect these to be useful in planning.
@@ -1086,9 +1083,9 @@ mod tests {
             .downcast_ref::<DeltaScanExec>()
             .expect("Expected DeltaScanExec");
 
-        let kernel_type = Arc::clone(exec.delta_plan().scan.logical_schema()).into();
+        let kernel_type = Arc::clone(exec.scan_plan.scan.logical_schema()).into();
 
-        let mut scan_plan = exec.delta_plan().clone();
+        let mut scan_plan = exec.scan_plan.as_ref().clone();
         scan_plan.result_schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int32,
