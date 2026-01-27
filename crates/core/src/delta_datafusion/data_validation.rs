@@ -661,7 +661,7 @@ pub(crate) fn collect_non_nullable_fields(schema: &Schema) -> Vec<ColumnName> {
     let mut non_nullable_paths = Vec::new();
 
     for field in schema.fields() {
-        let path = vec![field.name().to_string()];
+        let path = vec![field.name()];
         collect_non_nullable_fields_recursive(field, path, &mut non_nullable_paths);
     }
 
@@ -671,7 +671,7 @@ pub(crate) fn collect_non_nullable_fields(schema: &Schema) -> Vec<ColumnName> {
 /// Recursively collect non-nullable field paths.
 fn collect_non_nullable_fields_recursive(
     field: &Field,
-    current_path: Vec<String>,
+    current_path: Vec<&String>,
     non_nullable_paths: &mut Vec<ColumnName>,
 ) {
     // If this field is non-nullable, add it to the collection
@@ -684,21 +684,16 @@ fn collect_non_nullable_fields_recursive(
         DataType::Struct(fields) => {
             for child in fields.iter() {
                 let mut child_path = current_path.clone();
-                child_path.push(child.name().to_string());
+                child_path.push(child.name());
                 collect_non_nullable_fields_recursive(child, child_path, non_nullable_paths);
             }
         }
-        // DataType::List(child) | DataType::LargeList(child) => {
-        //     let mut child_path = current_path.clone();
-        //     child_path.push("element".to_string());
-        //     collect_non_nullable_fields_recursive(child, child_path, non_nullable_paths);
-        // }
         DataType::Map(child, _) => {
             // Map's child is a struct with "key" and "value" fields
             if let DataType::Struct(fields) = child.data_type() {
                 for map_field in fields.iter() {
                     let mut map_path = current_path.clone();
-                    map_path.push(map_field.name().to_string());
+                    map_path.push(map_field.name());
                     collect_non_nullable_fields_recursive(map_field, map_path, non_nullable_paths);
                 }
             }
