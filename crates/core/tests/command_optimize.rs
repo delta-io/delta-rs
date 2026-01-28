@@ -301,7 +301,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        df_context.state(),
+        &df_context.state(),
     )
     .await?;
 
@@ -319,6 +319,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
 
     let maybe_metrics = plan
         .execute(
+            &df_context.state(),
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
@@ -368,7 +369,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
-        df_context.state(),
+        &df_context.state(),
     )
     .await?;
 
@@ -385,6 +386,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let metrics = plan
         .execute(
+            &df_context.state(),
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
@@ -432,12 +434,13 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
-        context.state(),
+        &context.state(),
     )
     .await?;
 
     let metrics = plan
         .execute(
+            &context.state(),
             dt.log_store(),
             dt.snapshot()?.snapshot(),
             1,
