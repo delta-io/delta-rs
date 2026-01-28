@@ -24,12 +24,17 @@ use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
-    common::{ColumnStatistics, HashMap, Result, Statistics, plan_err, stats::Precision},
+    common::{
+        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, plan_err, stats::Precision,
+    },
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
-    physical_expr::planner::logical2physical,
+    physical_expr::{PhysicalExpr, PhysicalExprSimplifier},
+    physical_expr_adapter::{
+        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
+    },
     physical_plan::{
         ExecutionPlan,
         empty::EmptyExec,
@@ -70,6 +75,68 @@ mod plan;
 mod replay;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
+
+fn align_file_stats_to_schema(mut stats: Statistics, schema: &SchemaRef) -> Statistics {
+    // DataFusion expects `column_statistics` to have exactly one entry per field in the schema the
+    // stats refer to. If the widths don't match, don't risk mis-associating stats with the wrong
+    // columns (which could lead to incorrect pruning decisions or type errors during constant
+    // folding). Fall back to unknown column stats.
+    if stats.column_statistics.len() != schema.fields().len() {
+        stats.column_statistics = Statistics::unknown_column(schema.as_ref());
+        return stats;
+    }
+
+    for idx in 0..schema.fields().len() {
+        let data_type = schema.field(idx).data_type();
+        let col_stats = &mut stats.column_statistics[idx];
+        let min_value = std::mem::replace(&mut col_stats.min_value, Precision::Absent);
+        let max_value = std::mem::replace(&mut col_stats.max_value, Precision::Absent);
+        let sum_value = std::mem::replace(&mut col_stats.sum_value, Precision::Absent);
+        col_stats.min_value = align_precision_scalar_to_type(min_value, data_type);
+        col_stats.max_value = align_precision_scalar_to_type(max_value, data_type);
+        col_stats.sum_value = align_precision_scalar_to_type(sum_value, data_type);
+    }
+    stats
+}
+
+fn align_precision_scalar_to_type(
+    precision: Precision<ScalarValue>,
+    data_type: &DataType,
+) -> Precision<ScalarValue> {
+    match precision {
+        Precision::Exact(v) => Precision::Exact(align_scalar_to_type(v, data_type)),
+        Precision::Inexact(v) => Precision::Inexact(align_scalar_to_type(v, data_type)),
+        Precision::Absent => Precision::Absent,
+    }
+}
+
+fn align_scalar_to_type(value: ScalarValue, data_type: &DataType) -> ScalarValue {
+    match (data_type, value) {
+        // Base -> view types (needed when schema_force_view_types=true)
+        (DataType::Utf8View, ScalarValue::Utf8(v)) => ScalarValue::Utf8View(v),
+        (DataType::Utf8View, ScalarValue::LargeUtf8(v)) => ScalarValue::Utf8View(v),
+        (DataType::BinaryView, ScalarValue::Binary(v)) => ScalarValue::BinaryView(v),
+        (DataType::BinaryView, ScalarValue::LargeBinary(v)) => ScalarValue::BinaryView(v),
+
+        // View -> base types (useful when schema_force_view_types=false)
+        (DataType::Utf8, ScalarValue::Utf8View(v)) => ScalarValue::Utf8(v),
+        (DataType::Utf8, ScalarValue::LargeUtf8(v)) => ScalarValue::Utf8(v),
+        (DataType::LargeUtf8, ScalarValue::Utf8View(v)) => ScalarValue::LargeUtf8(v),
+        (DataType::LargeUtf8, ScalarValue::Utf8(v)) => ScalarValue::LargeUtf8(v),
+        (DataType::Binary, ScalarValue::BinaryView(v)) => ScalarValue::Binary(v),
+        (DataType::Binary, ScalarValue::LargeBinary(v)) => ScalarValue::Binary(v),
+        (DataType::LargeBinary, ScalarValue::BinaryView(v)) => ScalarValue::LargeBinary(v),
+        (DataType::LargeBinary, ScalarValue::Binary(v)) => ScalarValue::LargeBinary(v),
+
+        // Dictionary values align their inner scalar to the dictionary value type.
+        (DataType::Dictionary(_, value_type), ScalarValue::Dictionary(key_type, value)) => {
+            let aligned_value = align_scalar_to_type(*value, value_type);
+            ScalarValue::Dictionary(key_type, Box::new(aligned_value))
+        }
+
+        (_, v) => v,
+    }
+}
 
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
@@ -179,6 +246,7 @@ async fn get_data_scan_plan(
     retain_file_ids: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
+    let parquet_read_schema = scan_plan.parquet_read_schema.clone();
 
     // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
     // this is used to create a DataSourceExec plan for each store
@@ -204,7 +272,11 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        // DataFusion's ParquetOpener may replace constant columns with literals using file stats.
+        // Align scalar types (e.g. Utf8 -> Utf8View) to match the Parquet read schema so literal
+        // replacement doesn't produce arrays with mismatched types.
+        let stats = align_file_stats_to_schema(f.stats, &parquet_read_schema);
+        partitioned_file = partitioned_file.with_statistics(Arc::new(stats));
         Ok::<_, DataFusionError>((
             f.file_url.as_object_store_url(),
             (partitioned_file, None::<Vec<bool>>),
@@ -293,6 +365,10 @@ type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
+    // Schema of physical file columns to read from Parquet (no Delta partitions, no file-id).
+    //
+    // This is also the schema used for Parquet pruning/pushdown. It may include view types
+    // (e.g. Utf8View/BinaryView) depending on `DeltaScanConfig`.
     parquet_read_schema: &SchemaRef,
     limit: Option<usize>,
     file_id_field: &FieldRef,
@@ -308,6 +384,7 @@ async fn get_read_plan(
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
     let full_read_schema = Arc::new(full_read_schema.finish());
+    let full_read_df_schema = full_read_schema.clone().to_dfschema()?;
 
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
@@ -332,7 +409,7 @@ async fn get_read_plan(
         if !has_selection_vectors && let Some(pred) = predicate {
             // Predicate pushdown can reference the synthetic file-id partition column.
             // Use the full read schema (data columns + file-id) when planning.
-            let physical = logical2physical(pred, full_read_schema.as_ref());
+            let physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);
@@ -405,6 +482,7 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
         }
         return Ok(batch);
     }
+
     let options = CastOptions {
         safe: true,
         ..Default::default()
@@ -418,9 +496,42 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
     .into())
 }
 
+#[derive(Debug)]
+struct DeltaPhysicalExprAdapterFactory;
+
+#[derive(Debug)]
+struct DeltaPhysicalExprAdapter {
+    inner: Arc<dyn PhysicalExprAdapter>,
+    physical_file_schema: SchemaRef,
+}
+
+impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
+    fn create(
+        &self,
+        logical_file_schema: SchemaRef,
+        physical_file_schema: SchemaRef,
+    ) -> Arc<dyn PhysicalExprAdapter> {
+        let inner = DefaultPhysicalExprAdapterFactory
+            .create(logical_file_schema, physical_file_schema.clone());
+        Arc::new(DeltaPhysicalExprAdapter {
+            inner,
+            physical_file_schema,
+        })
+    }
+}
+
+impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
+    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+        let expr = self.inner.rewrite(expr)?;
+        let simplifier = PhysicalExprSimplifier::new(self.physical_file_schema.as_ref());
+        simplifier.simplify(expr)
+    }
+}
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, Int32Array, RecordBatch, StringArray, StructArray,
+    };
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
         physical_plan::collect,
@@ -437,6 +548,180 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn test_align_scalar_to_type_string_views() -> Result<()> {
+        let base = ScalarValue::Utf8(Some("a".to_string()));
+        assert_eq!(
+            align_scalar_to_type(base, &DataType::Utf8View),
+            ScalarValue::Utf8View(Some("a".to_string()))
+        );
+
+        let base = ScalarValue::LargeUtf8(Some("b".to_string()));
+        assert_eq!(
+            align_scalar_to_type(base, &DataType::Utf8View),
+            ScalarValue::Utf8View(Some("b".to_string()))
+        );
+
+        let view = ScalarValue::Utf8View(Some("c".to_string()));
+        assert_eq!(
+            align_scalar_to_type(view, &DataType::Utf8),
+            ScalarValue::Utf8(Some("c".to_string()))
+        );
+
+        let view = ScalarValue::Utf8View(Some("d".to_string()));
+        assert_eq!(
+            align_scalar_to_type(view, &DataType::LargeUtf8),
+            ScalarValue::LargeUtf8(Some("d".to_string()))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_scalar_to_type_binary_views() -> Result<()> {
+        let base = ScalarValue::Binary(Some(vec![1, 2, 3]));
+        assert_eq!(
+            align_scalar_to_type(base, &DataType::BinaryView),
+            ScalarValue::BinaryView(Some(vec![1, 2, 3]))
+        );
+
+        let base = ScalarValue::LargeBinary(Some(vec![4, 5, 6]));
+        assert_eq!(
+            align_scalar_to_type(base, &DataType::BinaryView),
+            ScalarValue::BinaryView(Some(vec![4, 5, 6]))
+        );
+
+        let view = ScalarValue::BinaryView(Some(vec![7, 8, 9]));
+        assert_eq!(
+            align_scalar_to_type(view, &DataType::Binary),
+            ScalarValue::Binary(Some(vec![7, 8, 9]))
+        );
+
+        let view = ScalarValue::BinaryView(Some(vec![10, 11, 12]));
+        assert_eq!(
+            align_scalar_to_type(view, &DataType::LargeBinary),
+            ScalarValue::LargeBinary(Some(vec![10, 11, 12]))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_scalar_to_type_dictionary_inner() -> Result<()> {
+        let scalar = ScalarValue::Dictionary(
+            Box::new(DataType::UInt16),
+            Box::new(ScalarValue::Utf8(Some("a".to_string()))),
+        );
+        let dt = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        assert_eq!(
+            align_scalar_to_type(scalar, &dt),
+            ScalarValue::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(ScalarValue::Utf8View(Some("a".to_string())))
+            )
+        );
+
+        let scalar = ScalarValue::Dictionary(
+            Box::new(DataType::UInt16),
+            Box::new(ScalarValue::Utf8View(Some("b".to_string()))),
+        );
+        let dt = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
+        assert_eq!(
+            align_scalar_to_type(scalar, &dt),
+            ScalarValue::Dictionary(
+                Box::new(DataType::UInt16),
+                Box::new(ScalarValue::Utf8(Some("b".to_string())))
+            )
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_file_stats_to_schema_string_views() -> Result<()> {
+        let col_stats = ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("a".to_string()))))
+            .with_max_value(Precision::Exact(ScalarValue::Utf8(Some("b".to_string()))))
+            .with_sum_value(Precision::Exact(ScalarValue::Utf8(Some("c".to_string()))));
+        let stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![col_stats],
+        };
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8View,
+            true,
+        )]));
+        let aligned = align_file_stats_to_schema(stats, &schema);
+        assert_eq!(aligned.column_statistics.len(), 1);
+        let col_stats = &aligned.column_statistics[0];
+
+        assert_eq!(
+            col_stats.min_value,
+            Precision::Exact(ScalarValue::Utf8View(Some("a".to_string())))
+        );
+        assert_eq!(
+            col_stats.max_value,
+            Precision::Exact(ScalarValue::Utf8View(Some("b".to_string())))
+        );
+        assert_eq!(
+            col_stats.sum_value,
+            Precision::Exact(ScalarValue::Utf8View(Some("c".to_string())))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_align_file_stats_to_schema_length_mismatch_drops_column_stats() -> Result<()> {
+        let col0 = ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("a".to_string()))));
+        let col1 = ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("b".to_string()))));
+        let stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![col0, col1],
+        };
+
+        // Schema has fewer fields than stats. We drop column stats to unknown to avoid mis-association.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col",
+            DataType::Utf8View,
+            true,
+        )]));
+        let aligned = align_file_stats_to_schema(stats, &schema);
+        assert_eq!(aligned.column_statistics.len(), 1);
+        assert_eq!(aligned.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[0].max_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[0].sum_value, Precision::Absent);
+
+        // Schema has more fields than stats. We drop column stats to unknown to avoid mis-association.
+        let col0 = ColumnStatistics::new_unknown()
+            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("c".to_string()))));
+        let stats = Statistics {
+            num_rows: Precision::Absent,
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![col0],
+        };
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("col0", DataType::Utf8View, true),
+            Field::new("col1", DataType::Utf8View, true),
+        ]));
+        let aligned = align_file_stats_to_schema(stats, &schema);
+        assert_eq!(aligned.column_statistics.len(), 2);
+        assert_eq!(aligned.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[0].max_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[0].sum_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[1].min_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[1].max_value, Precision::Absent);
+        assert_eq!(aligned.column_statistics[1].sum_value, Precision::Absent);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_parquet_plan() -> TestResult {
@@ -833,6 +1118,255 @@ mod tests {
             "+----+-------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_view_literal_against_base_parquet_file() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        // Write a Parquet file with base types, but read it with a view-typed schema.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    Some("charlie"),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_view_literal.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_view_literal.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("name").eq(lit(ScalarValue::Utf8View(Some("bob".to_string()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+----+------+-------------------------------------+",
+            "| id | name | __delta_rs_file_id__                |",
+            "+----+------+-------------------------------------+",
+            "| 2  | bob  | memory:///test_view_literal.parquet |",
+            "+----+------+-------------------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_sql_literal_against_view_schema() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        // Write a Parquet file with base types, but read it with a view-typed schema.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    Some("charlie"),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_sql_literal.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_sql_literal.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("name").eq(lit("bob"));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+----+------+------------------------------------+",
+            "| id | name | __delta_rs_file_id__               |",
+            "+----+------+------------------------------------+",
+            "| 2  | bob  | memory:///test_sql_literal.parquet |",
+            "+----+------+------------------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_binaryview_literal_against_base_parquet_file()
+    -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Binary, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::BinaryView, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"aaa".as_slice()),
+                    Some(b"bbb".as_slice()),
+                    Some(b"ccc".as_slice()),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_binary_view.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_binary_view.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("data").eq(lit(ScalarValue::BinaryView(Some(b"bbb".to_vec()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let id_col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.value(0), 2);
+
+        let data_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        assert_eq!(data_col.value(0), b"bbb");
+
+        assert_eq!(batches[0].num_columns(), 3);
+        assert_eq!(batches[0].schema().field(2).name(), FILE_ID_COLUMN_DEFAULT);
 
         Ok(())
     }
