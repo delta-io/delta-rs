@@ -1048,29 +1048,6 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let source_uri = Url::parse(self.table_uri.as_str())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let url_key = object_store_url(&source_uri);
-        let runtime = context.runtime_env();
-        // self.config
-        if runtime.object_store(url_key).is_err() {
-            let storage_config = StorageConfig::parse_options(
-                self.config.options.clone()
-            )?;
-            let source_store = logstore_for(source_uri,storage_config)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let object_store_url = source_store.object_store_url();
-
-            // check if delta store is already registered
-            if runtime.object_store(object_store_url.clone()).is_err() {
-                runtime.register_object_store(
-                    object_store_url.as_ref(),
-                    source_store.object_store(None),
-                );
-            }
-        }
-        // Now that everything is set up, execute the inner Delta
-
         self.parquet_scan.execute(partition, context)
     }
 
