@@ -317,6 +317,10 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Max number of concurrent tasks
+    #[deprecated(
+        since = "0.31.0",
+        note = "This setting is no longer used and handled on the daatfusion session."
+    )]
     pub fn with_max_concurrent_tasks(mut self, max_concurrent_tasks: usize) -> Self {
         self.max_concurrent_tasks = max_concurrent_tasks;
         self
@@ -383,7 +387,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     &session,
                     this.log_store.clone(),
                     &snapshot,
-                    this.max_concurrent_tasks,
                     this.min_commit_interval,
                     this.commit_properties.clone(),
                     operation_id,
@@ -563,8 +566,6 @@ impl MergePlan {
             task_parameters.stats_columns.clone(),
         )?;
 
-        // let mut read_stream = read_stream.await?;
-
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
 
@@ -631,14 +632,12 @@ impl MergePlan {
         session: &SessionState,
         log_store: LogStoreRef,
         snapshot: &EagerSnapshot,
-        max_concurrent_tasks: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
-        info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
         let task_parameters = self.task_parameters.clone();
 
@@ -702,8 +701,6 @@ impl MergePlan {
                     .boxed()
             }
         };
-
-        // let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
         let mut table =
             DeltaTable::new_with_state(log_store.clone(), DeltaTableState::new(snapshot.clone()));
