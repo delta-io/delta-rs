@@ -52,7 +52,7 @@ use deltalake::{DeltaResult, DeltaTable, DeltaTableBuilder, init_client_version}
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet};
+use pyo3::types::{PyCapsule, PyDict, PyFrozenSet, PyModule};
 use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
 use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
@@ -114,6 +114,17 @@ struct RawDeltaTableMetaData {
 }
 
 type StringVec = Vec<String>;
+
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 52;
+
+fn datafusion_python_version(py: Python<'_>) -> Option<String> {
+    let importlib_metadata = PyModule::import(py, "importlib.metadata").ok()?;
+    importlib_metadata
+        .call_method1("version", ("datafusion",))
+        .ok()?
+        .extract()
+        .ok()
+}
 
 /// Segmented impl for RawDeltaTable to avoid these methods being exposed via the pymethods macro.
 ///
@@ -1838,6 +1849,24 @@ impl RawDeltaTable {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyCapsule>> {
+        let found_version = datafusion_python_version(py);
+        let found_major = found_version
+            .as_deref()
+            .and_then(|version| version.split('.').next()?.parse().ok());
+        if found_major != Some(REQUIRED_DATAFUSION_PY_MAJOR) {
+            let found = found_version.unwrap_or_else(|| "not installed".to_string());
+            return Err(PyRuntimeError::new_err(format!(
+                "DataFusion Python integration requires datafusion=={required}.x (found: {found}).\n\n\
+This deltalake build exports a DataFusion {required}.x FFI TableProvider; mismatched majors can segfault.\n\n\
+Workaround (no DataFusion-Python required): use deltalake.QueryBuilder:\n\n\
+    from deltalake import DeltaTable, QueryBuilder\n\n\
+    dt = DeltaTable('path/to/table')\n\
+    data = QueryBuilder().register('tbl', dt).execute('SELECT * FROM tbl')\n\n\
+Install datafusion=={required}.* (matching major) to use DataFusion SessionContext registration, or keep using QueryBuilder.",
+                required = REQUIRED_DATAFUSION_PY_MAJOR,
+            )));
+        }
+
         let handle = rt().handle();
         let name = CString::new("datafusion_table_provider").unwrap();
         let table = self.with_table(|t| Ok(t.clone()))?;
