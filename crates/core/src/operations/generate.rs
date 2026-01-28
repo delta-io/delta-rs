@@ -81,7 +81,7 @@ use tracing::log::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
-use crate::logstore::object_store::PutPayload;
+use crate::logstore::object_store::{ObjectStoreExt, PutPayload};
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

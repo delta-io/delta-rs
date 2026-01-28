@@ -29,8 +29,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use chrono::{DateTime, Utc};
 use futures::TryStreamExt;
 use futures::future::BoxFuture;
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt};
 use serde::Serialize;
 use uuid::Uuid;
 
