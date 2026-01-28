@@ -8,7 +8,7 @@ use arrow_array::{Array, GenericByteViewArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
-use datafusion::common::{HashSet, Result};
+use datafusion::common::{HashSet, Result, plan_err};
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
@@ -25,6 +25,7 @@ use futures::TryStreamExt as _;
 use itertools::Itertools;
 use percent_encoding::percent_decode_str;
 use tracing::*;
+use url::Url;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
@@ -540,4 +541,63 @@ pub(crate) async fn scan_files_where_matches(
         delta_predicate,
         partition_only: visitor.partition_only,
     }))
+}
+
+pub(crate) async fn scan_file_list(
+    snapshot: &EagerSnapshot,
+    file_list: impl IntoIterator<Item = impl ToString>,
+) -> Result<LogicalPlan> {
+    let table_source = provider_as_source(
+        DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .await?,
+    );
+
+    // Crate a table scan limiting the data to that originating from valid files.
+    let root_url = snapshot.table_configuration().table_root();
+    let file_list_expr = file_list
+        .into_iter()
+        .map(|p| path_to_url(root_url, p.to_string()))
+        .map_ok(|v| lit(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(v)))))
+        .try_collect()?;
+    let plan = LogicalPlanBuilder::scan("source", table_source, None)?
+        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list_expr, false))?
+        .drop_columns([FILE_ID_COLUMN_DEFAULT])?
+        .build()?;
+
+    Ok(plan)
+}
+
+fn path_to_url(root: &Url, path: impl AsRef<str>) -> Result<String> {
+    if let Ok(url) = root.join(path.as_ref()) {
+        return Ok(url.to_string());
+    }
+    if let Ok(url) = Url::parse(path.as_ref()) {
+        return Ok(url.to_string());
+    }
+    plan_err!(
+        "Failed to construct URL from root '{root}' and path '{}'",
+        path.as_ref()
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_path_to_url() {
+        let root = Url::parse("s3://my-bucket/delta-table/").unwrap();
+        let path = "part-00001-abcde.parquet";
+        let url = path_to_url(&root, path).unwrap();
+        assert_eq!(url, "s3://my-bucket/delta-table/part-00001-abcde.parquet");
+
+        let path = "s3://other-bucket/other-table/part-00002-fghij.parquet";
+        let url = path_to_url(&root, path).unwrap();
+        assert_eq!(
+            url,
+            "s3://other-bucket/other-table/part-00002-fghij.parquet"
+        );
+    }
 }
