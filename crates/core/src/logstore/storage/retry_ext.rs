@@ -1,7 +1,7 @@
 //! Retry extension for [`ObjectStore`]
 
 use ::object_store::path::Path;
-use ::object_store::{Error, ObjectStore, PutPayload, PutResult, Result};
+use ::object_store::{Error, ObjectStore, ObjectStoreExt, PutPayload, PutResult, Result};
 use tracing::*;
 
 #[cfg(feature = "cloud")]

@@ -1503,14 +1503,6 @@ mod tests {
     // Currently only read operations are recorded. Extend as necessary.
     #[async_trait::async_trait]
     impl ObjectStore for RecordingObjectStore {
-        async fn put(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-        ) -> object_store::Result<PutResult> {
-            self.inner.put(location, payload).await
-        }
-
         async fn put_opts(
             &self,
             location: &Path,
@@ -1520,26 +1512,12 @@ mod tests {
             self.inner.put_opts(location, payload, opts).await
         }
 
-        async fn put_multipart(
-            &self,
-            location: &Path,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart(location).await
-        }
-
         async fn put_multipart_opts(
             &self,
             location: &Path,
             opts: PutMultipartOptions,
         ) -> object_store::Result<Box<dyn MultipartUpload>> {
             self.inner.put_multipart_opts(location, opts).await
-        }
-
-        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::Get(location.into()))
-                .unwrap();
-            self.inner.get(location).await
         }
 
         async fn get_opts(
@@ -1551,20 +1529,6 @@ mod tests {
                 .send(ObjectStoreOperation::GetOpts(location.into()))
                 .unwrap();
             self.inner.get_opts(location, options).await
-        }
-
-        async fn get_range(
-            &self,
-            location: &Path,
-            range: Range<u64>,
-        ) -> object_store::Result<Bytes> {
-            self.operations
-                .send(ObjectStoreOperation::GetRange(
-                    location.into(),
-                    range.clone(),
-                ))
-                .unwrap();
-            self.inner.get_range(location, range).await
         }
 
         async fn get_ranges(
@@ -1579,14 +1543,6 @@ mod tests {
                 ))
                 .unwrap();
             self.inner.get_ranges(location, ranges).await
-        }
-
-        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-            self.inner.head(location).await
-        }
-
-        async fn delete(&self, location: &Path) -> object_store::Result<()> {
-            self.inner.delete(location).await
         }
 
         fn delete_stream<'a>(
@@ -1618,20 +1574,8 @@ mod tests {
             self.inner.list_with_delimiter(prefix).await
         }
 
-        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy(from, to).await
-        }
-
-        async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename(from, to).await
-        }
-
-        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy_if_not_exists(from, to).await
-        }
-
-        async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename_if_not_exists(from, to).await
+        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+            self.inner.copy_opts(from, to, options).await
         }
     }
 }
