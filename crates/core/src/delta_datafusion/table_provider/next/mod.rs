@@ -30,9 +30,13 @@ use std::any::Any;
 use std::{borrow::Cow, sync::Arc};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use datafusion::common::Result;
+use datafusion::common::{Result, plan_err};
 use datafusion::datasource::TableType;
+use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::datasource::physical_plan::{FileGroup, FileSinkConfig};
+use datafusion::datasource::sink::DataSinkExec;
 use datafusion::logical_expr::TableProviderFilterPushDown;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::prelude::Expr;
 use datafusion::{
     catalog::{Session, TableProvider},
@@ -40,15 +44,19 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
 use crate::delta_datafusion::DeltaScanConfig;
+use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
+use crate::delta_datafusion::table_provider::next::data_sink::DeltaDataSink;
 use crate::kernel::{EagerSnapshot, Snapshot};
 
+mod data_sink;
 mod scan;
 
 /// Default column name for the file id column we add to files read from disk.
@@ -225,6 +233,53 @@ impl TableProvider for DeltaScan {
             self.snapshot.table_configuration(),
             &self.config,
         ))
+    }
+
+    /// Insert the data into the delta table
+    /// Insert operation is only supported for Append and Overwrite
+    /// Return the execution plan
+    async fn insert_into(
+        &self,
+        _state: &dyn Session,
+        input: Arc<dyn ExecutionPlan>,
+        insert_op: InsertOp,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if insert_op == InsertOp::Replace {
+            return plan_err!("Insert operation '{insert_op}' is not supported.");
+        }
+
+        let table_root = self.snapshot.snapshot().table_configuration().table_root();
+
+        let parsed_url = ListingTableUrl::parse(table_root)?;
+        let keep_partition_by_columns = self
+            .snapshot
+            .table_configuration()
+            .is_feature_enabled(&TableFeature::MaterializePartitionColumns);
+
+        // TODO: adopt output schema to adhere to table configuration
+        // * handle partition columns (e.g. physical types / dict encoding)
+        // * handle column mapping
+        let output_schema = self.snapshot.snapshot().arrow_schema();
+
+        let config = FileSinkConfig {
+            original_url: table_root.to_string(),
+            object_store_url: table_root.as_object_store_url(),
+            table_paths: vec![parsed_url],
+            output_schema,
+            table_partition_cols: vec![],
+            insert_op,
+            keep_partition_by_columns,
+            file_extension: "parquet".to_string(),
+            file_group: FileGroup::default(),
+        };
+
+        let data_sink = DeltaDataSink::new(self.snapshot.clone(), config);
+
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            Arc::new(data_sink),
+            None,
+        )))
     }
 }
 
