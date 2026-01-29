@@ -25,7 +25,7 @@ use datafusion_proto::bytes::{
 };
 use deltalake_core::DeltaTableBuilder;
 use deltalake_core::delta_datafusion::{
-    DeltaScan, DeltaScanConfigBuilder, DeltaTableFactory, DeltaTableProvider,
+    DeltaScan, DeltaScanConfigBuilder, DeltaSessionExt, DeltaTableFactory, DeltaTableProvider,
 };
 use deltalake_core::kernel::{DataType, MapType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::create::CreateBuilder;
@@ -406,7 +406,8 @@ mod local {
         .with_input_plan(source_scan)
         .with_session_state(Arc::new(state))
         .await?;
-        target_table.update_datafusion_session(&ctx.state())?;
+        ctx.state()
+            .ensure_object_store_registered_for_table(&target_table, None)?;
         ctx.register_table("target", target_table.table_provider().await.unwrap())?;
 
         // Check results
