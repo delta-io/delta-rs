@@ -1,189 +1,246 @@
 use std::sync::Arc;
 
-use dashmap::{DashMap, mapref::one::Ref};
-use datafusion::execution::{
-    TaskContext,
-    object_store::{ObjectStoreRegistry, ObjectStoreUrl},
-};
-use delta_kernel::engine::parse_json as arrow_parse_json;
-use delta_kernel::{
-    EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, JsonHandler,
-    ParquetHandler, PredicateRef,
-    engine::default::{
-        executor::tokio::{TokioBackgroundExecutor, TokioMultiThreadExecutor},
-        json::DefaultJsonHandler,
-        parquet::DefaultParquetHandler,
+use arrow_schema::SchemaRef as ArrowSchemaRef;
+use datafusion::{
+    config::TableParquetOptions,
+    datasource::physical_plan::{
+        JsonSource, ParquetSource, parquet::CachedParquetFileReaderFactory,
     },
-    error::DeltaResult as KernelResult,
-    schema::SchemaRef,
+    execution::{TaskContext, object_store::ObjectStoreUrl},
+    physical_expr::planner::logical2physical,
+    physical_plan::{ExecutionPlan, execute_stream},
+    prelude::Expr,
 };
-use itertools::Itertools;
-use tokio::runtime::{Handle, RuntimeFlavor};
+use datafusion_datasource::{
+    PartitionedFile, file_groups::FileGroup, file_scan_config::FileScanConfigBuilder,
+    source::DataSourceExec,
+};
+use delta_kernel::{
+    DeltaResult, EngineData, Error, FileDataReadResultIterator, FileMeta, FilteredEngineData,
+    JsonHandler, ParquetHandler, PredicateRef,
+    engine::{
+        arrow_conversion::TryIntoArrow as _, arrow_data::ArrowEngineData,
+        parse_json as arrow_parse_json, to_json_bytes,
+    },
+    schema::{DataType, SchemaRef},
+};
+use futures::TryStreamExt;
+use itertools::Itertools as _;
+use object_store::{PutMode, path::Path};
+use tracing::instrument;
+use url::Url;
 
-use super::storage::{AsObjectStoreUrl, group_by_store};
+use crate::delta_datafusion::engine::{
+    AsObjectStoreUrl as _, BlockingStreamIterator, TracedHandle, predicate_to_df,
+};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DataFusionFileFormatHandler {
+    handle: TracedHandle,
     ctx: Arc<TaskContext>,
-    pq_registry: Arc<DashMap<ObjectStoreUrl, Arc<dyn ParquetHandler>>>,
-    json_registry: Arc<DashMap<ObjectStoreUrl, Arc<dyn JsonHandler>>>,
-    handle: Handle,
 }
 
 impl DataFusionFileFormatHandler {
-    /// Create a new [`DatafusionParquetHandler`] instance.
-    pub fn new(ctx: Arc<TaskContext>, handle: Handle) -> Self {
-        Self {
-            ctx,
-            pq_registry: DashMap::new().into(),
-            json_registry: DashMap::new().into(),
-            handle,
-        }
-    }
-
-    fn registry(&self) -> Arc<dyn ObjectStoreRegistry> {
-        self.ctx.runtime_env().object_store_registry.clone()
-    }
-
-    fn get_or_create_pq(
-        &self,
-        url: ObjectStoreUrl,
-    ) -> KernelResult<Ref<'_, ObjectStoreUrl, Arc<dyn ParquetHandler>>> {
-        if let Some(handler) = self.pq_registry.get(&url) {
-            return Ok(handler);
-        }
-        let store = self
-            .registry()
-            .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
-
-        let handler: Arc<dyn ParquetHandler> = match self.handle.runtime_flavor() {
-            RuntimeFlavor::MultiThread => Arc::new(DefaultParquetHandler::new(
-                store,
-                Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-            )),
-            RuntimeFlavor::CurrentThread => Arc::new(DefaultParquetHandler::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            )),
-            _ => panic!("unsupported runtime flavor"),
-        };
-
-        self.pq_registry.insert(url.clone(), handler);
-        Ok(self.pq_registry.get(&url).unwrap())
-    }
-
-    fn get_or_create_json(
-        &self,
-        url: ObjectStoreUrl,
-    ) -> KernelResult<Ref<'_, ObjectStoreUrl, Arc<dyn JsonHandler>>> {
-        if let Some(handler) = self.json_registry.get(&url) {
-            return Ok(handler);
-        }
-        let store = self
-            .registry()
-            .get_store(url.as_ref())
-            .map_err(delta_kernel::Error::generic_err)?;
-
-        let handler: Arc<dyn JsonHandler> = match self.handle.runtime_flavor() {
-            RuntimeFlavor::MultiThread => Arc::new(DefaultJsonHandler::new(
-                store,
-                Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-            )),
-            RuntimeFlavor::CurrentThread => Arc::new(DefaultJsonHandler::new(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            )),
-            _ => panic!("unsupported runtime flavor"),
-        };
-
-        self.json_registry.insert(url.clone(), handler);
-        Ok(self.json_registry.get(&url).unwrap())
+    pub fn new(ctx: Arc<TaskContext>, handle: super::TracedHandle) -> Self {
+        Self { handle, ctx }
     }
 }
 
 impl ParquetHandler for DataFusionFileFormatHandler {
+    #[instrument(skip(self, physical_schema))]
     fn read_parquet_files(
         &self,
         files: &[FileMeta],
         physical_schema: SchemaRef,
         predicate: Option<PredicateRef>,
-    ) -> KernelResult<FileDataReadResultIterator> {
-        let grouped_files = group_by_store(files.to_vec());
-        Ok(Box::new(
-            grouped_files
-                .into_iter()
-                .map(|(url, files)| {
-                    self.get_or_create_pq(url)?.read_parquet_files(
-                        &files.to_vec(),
-                        physical_schema.clone(),
-                        predicate.clone(),
-                    )
-                })
-                // TODO: this should not do any blocking operations, since this should
-                // happen when the iterators are polled and we are just creating a vec of iterators.
-                // Is this correct?
-                .try_collect::<_, Vec<_>, _>()?
-                .into_iter()
-                .flatten(),
-        ))
+    ) -> DeltaResult<FileDataReadResultIterator> {
+        if files.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+
+        let store_url = files
+            .first()
+            .expect("files is not empty")
+            .location
+            .as_object_store_url();
+        let files = to_partitioned_files((store_url.clone(), files.iter().collect()))?.1;
+
+        let arrow_schema: ArrowSchemaRef = Arc::new(physical_schema.as_ref().try_into_arrow()?);
+        let exec = parquet_exec(
+            &self.ctx,
+            files,
+            arrow_schema,
+            predicate
+                .map(|p| predicate_to_df(p.as_ref(), &DataType::BOOLEAN))
+                .transpose()
+                .map_err(Error::generic_err)?,
+            store_url,
+        )?;
+
+        execute_iter(exec, self.ctx.clone(), self.handle.clone())
+    }
+
+    fn read_parquet_footer(&self, _file: &FileMeta) -> DeltaResult<delta_kernel::ParquetFooter> {
+        todo!()
     }
 
     fn write_parquet_file(
         &self,
         _location: url::Url,
-        _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
-    ) -> KernelResult<()> {
-        todo!("write parquet file")
-    }
-
-    fn read_parquet_footer(&self, _file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
-        todo!("read parquet footer")
+        _data: Box<dyn Iterator<Item = DeltaResult<Box<dyn EngineData>>> + Send>,
+    ) -> DeltaResult<()> {
+        todo!()
     }
 }
 
 impl JsonHandler for DataFusionFileFormatHandler {
+    #[instrument(skip_all)]
     fn parse_json(
         &self,
         json_strings: Box<dyn EngineData>,
         output_schema: SchemaRef,
-    ) -> KernelResult<Box<dyn EngineData>> {
+    ) -> DeltaResult<Box<dyn EngineData>> {
         arrow_parse_json(json_strings, output_schema)
     }
 
+    #[instrument(skip(self, physical_schema))]
     fn read_json_files(
         &self,
         files: &[FileMeta],
         physical_schema: SchemaRef,
-        predicate: Option<PredicateRef>,
-    ) -> KernelResult<FileDataReadResultIterator> {
-        let grouped_files = group_by_store(files.to_vec());
-        Ok(Box::new(
-            grouped_files
-                .into_iter()
-                .map(|(url, files)| {
-                    self.get_or_create_json(url)?.read_json_files(
-                        &files.to_vec(),
-                        physical_schema.clone(),
-                        predicate.clone(),
-                    )
-                })
-                // TODO: this should not do any blocking operations, since this should
-                // happen when the iterators are polled and we are just creating a vec of iterators.
-                // Is this correct?
-                .try_collect::<_, Vec<_>, _>()?
-                .into_iter()
-                .flatten(),
-        ))
+        _predicate: Option<PredicateRef>,
+    ) -> DeltaResult<FileDataReadResultIterator> {
+        if files.is_empty() {
+            return Ok(Box::new(std::iter::empty()));
+        }
+
+        let store_url = files
+            .first()
+            .expect("files is not empty")
+            .location
+            .as_object_store_url();
+        let files = to_partitioned_files((store_url.clone(), files.iter().collect()))?.1;
+
+        let arrow_schema: ArrowSchemaRef = Arc::new(physical_schema.as_ref().try_into_arrow()?);
+        let exec = json_exec(store_url, files, arrow_schema);
+
+        execute_iter(exec, self.ctx.clone(), self.handle.clone())
     }
 
+    // note: for now we just buffer all the data and write it out all at once
+    #[instrument(skip(self, data))]
     fn write_json_file(
         &self,
-        path: &url::Url,
-        data: Box<dyn Iterator<Item = KernelResult<FilteredEngineData>> + Send + '_>,
+        path: &Url,
+        data: Box<dyn Iterator<Item = DeltaResult<FilteredEngineData>> + Send + '_>,
         overwrite: bool,
-    ) -> KernelResult<()> {
-        self.get_or_create_json(path.as_object_store_url())?
-            .write_json_file(path, data, overwrite)
+    ) -> DeltaResult<()> {
+        let buffer = to_json_bytes(data)?;
+        let put_mode = if overwrite {
+            PutMode::Overwrite
+        } else {
+            PutMode::Create
+        };
+
+        let store_url = path.as_object_store_url();
+        let store = self
+            .ctx
+            .runtime_env()
+            .object_store(store_url)
+            .map_err(Error::generic_err)?;
+
+        let path = Path::from_url_path(path.path())?;
+        let path_str = path.to_string();
+        self.handle
+            .block_on(async move { store.put_opts(&path, buffer.into(), put_mode.into()).await })
+            .map_err(|e| match e {
+                object_store::Error::AlreadyExists { .. } => Error::FileAlreadyExists(path_str),
+                e => e.into(),
+            })?;
+
+        Ok(())
     }
+}
+
+fn execute_iter(
+    exec: Arc<dyn ExecutionPlan>,
+    ctx: Arc<TaskContext>,
+    task_executor: TracedHandle,
+) -> DeltaResult<FileDataReadResultIterator> {
+    let stream = execute_stream(exec, ctx)
+        .map_err(Error::generic_err)?
+        .map_err(Error::generic_err)
+        .map_ok(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>);
+
+    Ok(Box::new(BlockingStreamIterator {
+        stream: Some(Box::pin(stream)),
+        handle: task_executor,
+    }))
+}
+
+fn parquet_exec(
+    ctx: &Arc<TaskContext>,
+    files: Vec<PartitionedFile>,
+    read_schema: ArrowSchemaRef,
+    predicate: Option<Expr>,
+    store_url: ObjectStoreUrl,
+) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    let pq_options = TableParquetOptions {
+        global: ctx.session_config().options().execution.parquet.clone(),
+        ..Default::default()
+    };
+
+    let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+        ctx.runtime_env()
+            .object_store(&store_url)
+            .map_err(Error::generic_err)?,
+        ctx.runtime_env().cache_manager.get_file_metadata_cache(),
+    ));
+    let mut file_source =
+        ParquetSource::new(pq_options.clone()).with_parquet_file_reader_factory(reader_factory);
+
+    if let Some(pred) = predicate {
+        let physical = logical2physical(&pred, read_schema.as_ref());
+        file_source = file_source
+            .with_predicate(physical)
+            .with_pushdown_filters(true);
+    }
+
+    let file_group: FileGroup = files.into_iter().collect();
+
+    let config = FileScanConfigBuilder::new(store_url, read_schema.clone(), Arc::new(file_source))
+        .with_file_group(file_group)
+        .build();
+
+    Ok(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>)
+}
+
+fn json_exec(
+    store_url: ObjectStoreUrl,
+    files: Vec<PartitionedFile>,
+    arrow_schema: ArrowSchemaRef,
+) -> Arc<dyn ExecutionPlan> {
+    let config =
+        FileScanConfigBuilder::new(store_url, arrow_schema, Arc::new(JsonSource::default()))
+            .with_file_group(files.into_iter().collect())
+            .build();
+    DataSourceExec::from_data_source(config)
+}
+
+fn to_partitioned_files(
+    arg: (ObjectStoreUrl, Vec<&FileMeta>),
+) -> DeltaResult<(ObjectStoreUrl, Vec<PartitionedFile>)> {
+    let (url, files) = arg;
+    let part_files = files
+        .into_iter()
+        .map(|f| {
+            let path = Path::from_url_path(f.location.path())?;
+            let mut partitioned_file = PartitionedFile::new(path.to_string(), f.size);
+            // NB: we need to reassign the location since the 'new' method does
+            // incorrect or inconsistent encoding internally.
+            partitioned_file.object_meta.location = path;
+            Ok::<_, Error>(partitioned_file)
+        })
+        .try_collect::<_, Vec<_>, _>()?;
+    Ok::<_, Error>((url, part_files))
 }
