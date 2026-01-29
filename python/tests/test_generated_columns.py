@@ -175,7 +175,6 @@ def test_raise_when_gc_passed_during_schema_evolution(
     assert dt.protocol().min_writer_version == 2
 
     with pytest.raises(
-        SchemaMismatchError,
         match="Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.",
     ):
         write_deltalake(

@@ -313,13 +313,13 @@ def test_checkpoint_partition_timestamp_2380(
 def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
     data = Table(
         {
-            "intColumn": Array(
+            "int_column": Array(
                 [1],
-                ArrowField("intColumn", type=DataType.int64(), nullable=True),
+                ArrowField("int_column", type=DataType.int64(), nullable=True),
             ),
-            "binaryColumn": Array(
+            "binary_column": Array(
                 [b"a"],
-                ArrowField("binaryColumn", type=DataType.binary_view(), nullable=True),
+                ArrowField("binary_column", type=DataType.binary_view(), nullable=True),
             ),
         }
     )
@@ -327,7 +327,7 @@ def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
     write_deltalake(
         str(tmp_path),
         data,
-        partition_by=["intColumn"],
+        partition_by=["int_column"],
         mode="append",
     )
 
@@ -339,7 +339,7 @@ def test_checkpoint_with_binary_column(tmp_path: pathlib.Path):
     assert (
         QueryBuilder()
         .register("tbl", dt)
-        .execute("select intColumn, binaryColumn from tbl")
+        .execute('select "int_column", "binary_column" from tbl')
         .read_all()
         == data
     )

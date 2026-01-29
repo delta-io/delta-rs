@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::{
     catalog::Session,
-    common::{Column, ScalarValue, ToDFSchema as _, exec_datafusion_err},
+    common::{Column, ScalarValue, ToDFSchema as _},
     error::DataFusionError,
     execution::context::SessionState,
     logical_expr::{
@@ -34,7 +34,7 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
-use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
+use futures::future::BoxFuture;
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -362,24 +362,7 @@ async fn execute(
     metrics.num_updated_rows = get_metric(&update_count_metrics, UPDATE_ROW_COUNT);
     metrics.num_copied_rows = get_metric(&update_count_metrics, COPIED_ROW_COUNT);
 
-    let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
-    let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
-        .zip(stream::iter(std::iter::repeat((
-            root_url,
-            Arc::new(files_scan.files_set()),
-        ))))
-        .map(|(f, u)| f.map(|f| (f, u)))
-        .try_filter_map(|(f, (root, valid))| async move {
-            let url = root
-                .clone()
-                .join(f.path_raw())
-                .map_err(|e| exec_datafusion_err!("{e}"))?;
-            let is_valid = valid.contains(url.as_ref());
-            Ok(is_valid.then(|| Action::Remove(f.remove_action(true))))
-        })
-        .try_collect()
-        .await?;
+    let removes = files_scan.remove_actions(&log_store, snapshot).await?;
 
     metrics.num_added_files = actions.len();
     metrics.num_removed_files = removes.len();
@@ -388,7 +371,7 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-    if let Ok(true) = should_write_cdc(snapshot) {
+    if should_write_cdc(snapshot) {
         match tracker.collect() {
             Ok(cdc_plan) => {
                 let cdc_exec = session.create_physical_plan(&cdc_plan).await?;
@@ -445,21 +428,24 @@ impl std::future::IntoFuture for UpdateBuilder {
                 ));
             }
 
+            let operation = DeltaOperation::Update {
+                predicate: this
+                    .predicate
+                    .as_ref()
+                    .map(|p| match p {
+                        Expression::DataFusion(e) => fmt_expr_to_sql(e),
+                        Expression::String(s) => Ok(s.clone()),
+                    })
+                    .transpose()?,
+            };
+
+            let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
+            let scan_schema = scan_config.table_schema(snapshot.table_configuration())?;
             let predicate = this
                 .predicate
-                .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
-                    let predicate_schema = scan_config
-                        .table_schema(snapshot.table_configuration())?
-                        .to_dfschema_ref()?;
-                    p.resolve(session.as_ref(), predicate_schema)
-                })
+                .map(|p| p.resolve(session.as_ref(), scan_schema.to_dfschema_ref()?))
                 .transpose()?;
-
             let predicate = predicate.unwrap_or(lit(true));
-            let operation = DeltaOperation::Update {
-                predicate: Some(fmt_expr_to_sql(&predicate)?),
-            };
 
             let (actions, metrics) = execute(
                 predicate,

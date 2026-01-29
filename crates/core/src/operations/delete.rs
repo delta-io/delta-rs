@@ -37,15 +37,15 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
+use datafusion::common::ToDFSchema as _;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
+use futures::TryStreamExt;
 use futures::future::BoxFuture;
-use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use uuid::Uuid;
@@ -53,13 +53,12 @@ use uuid::Uuid;
 use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
-use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::{
     LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
-use crate::delta_datafusion::{Expression, update_datafusion_session};
+use crate::delta_datafusion::{DeltaScanConfig, Expression, update_datafusion_session};
 use crate::delta_datafusion::{create_session, scan_files_where_matches};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -199,20 +198,23 @@ impl std::future::IntoFuture for DeleteBuilder {
             };
             update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
 
+            let operation = DeltaOperation::Delete {
+                predicate: this
+                    .predicate
+                    .as_ref()
+                    .map(|p| match p {
+                        Expression::DataFusion(e) => fmt_expr_to_sql(e),
+                        Expression::String(s) => Ok(s.clone()),
+                    })
+                    .transpose()?,
+            };
+
+            let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
+            let scan_schema = scan_config.table_schema(snapshot.table_configuration())?;
             let predicate = this
                 .predicate
-                .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
-                    let predicate_schema = scan_config
-                        .table_schema(snapshot.table_configuration())?
-                        .to_dfschema_ref()?;
-                    p.resolve(session.as_ref(), predicate_schema)
-                })
+                .map(|p| p.resolve(session.as_ref(), scan_schema.to_dfschema_ref()?))
                 .transpose()?;
-
-            let operation = DeltaOperation::Delete {
-                predicate: predicate.as_ref().map(|p| fmt_expr_to_sql(p)).transpose()?,
-            };
 
             let (actions, metrics) = execute(
                 predicate,
@@ -340,23 +342,8 @@ async fn execute(
         return Ok((vec![], metrics));
     };
 
-    let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
-    let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
-        .zip(stream::iter(std::iter::repeat((
-            root_url,
-            Arc::new(files_scan.files_set()),
-        ))))
-        .map(|(f, u)| f.map(|f| (f, u)))
-        .try_filter_map(|(f, (root, valid))| async move {
-            let url = root
-                .clone()
-                .join(f.path_raw())
-                .map_err(|e| exec_datafusion_err!("{e}"))?;
-            let is_valid = valid.contains(url.as_ref());
-            Ok(is_valid.then(|| Action::Remove(f.remove_action(true))))
-        })
-        .try_collect()
+    let removes = files_scan
+        .remove_actions(log_store.as_ref(), &snapshot)
         .await?;
     metrics.num_removed_files = removes.len();
 
@@ -382,7 +369,7 @@ async fn execute(
         .filter(files_scan.predicate.clone().is_not_true())?
         .build()?;
 
-    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
+    let (write_plan, write_cdc) = if should_write_cdc(&snapshot) {
         // create change set entries for all records we deleted
         let cdc_deletes = files_scan
             .scan()
