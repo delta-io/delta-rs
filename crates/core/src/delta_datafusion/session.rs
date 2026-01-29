@@ -23,25 +23,7 @@ pub fn create_session() -> DeltaSessionContext {
     DeltaSessionContext::default()
 }
 
-pub trait DeltaSessionExt: DataFusionSession {
-    /// Ensure the session's `RuntimeEnv` has the table's object store registered.
-    ///
-    /// This is required when a DataFusion plan references files via fully-qualified URLs
-    /// (e.g. `s3://bucket/path/to/table/...`) and DataFusion needs to resolve the underlying
-    /// object store for I/O.
-    ///
-    /// This method is idempotent and will not overwrite an existing object store mapping for the
-    /// URL. If the session already has a (stale/incorrect) object store registered for the table
-    /// URL, it is up to the caller to update it via `RuntimeEnv::register_object_store`.
-    fn ensure_object_store_registered_for_table(
-        &self,
-        table: &crate::DeltaTable,
-        operation_id: Option<Uuid>,
-    ) -> DeltaResult<()> {
-        let log_store = table.log_store();
-        self.ensure_object_store_registered(log_store.as_ref(), operation_id)
-    }
-
+pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// Ensure the session's `RuntimeEnv` has the object store registered for the log store's
     /// root URL.
     ///
@@ -396,15 +378,15 @@ mod tests {
     }
 
     #[test]
-    fn ensure_object_store_registered_for_table_is_idempotent() {
+    fn ensure_object_store_registered_is_idempotent() {
         let table = crate::DeltaTable::new_in_memory();
         let session = create_session().state();
 
         session
-            .ensure_object_store_registered_for_table(&table, None)
+            .ensure_object_store_registered(table.log_store().as_ref(), None)
             .unwrap();
         session
-            .ensure_object_store_registered_for_table(&table, None)
+            .ensure_object_store_registered(table.log_store().as_ref(), None)
             .unwrap();
 
         let url = table.log_store().root_url().as_object_store_url();

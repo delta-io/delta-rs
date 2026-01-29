@@ -60,9 +60,10 @@ use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
+pub(crate) use self::session::DeltaSessionExt;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
-    DeltaSessionExt, create_session,
+    create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub(crate) use self::utils::*;
@@ -1171,9 +1172,8 @@ mod tests {
             .unwrap();
 
         let datafusion = SessionContext::new();
-        datafusion
-            .state()
-            .ensure_object_store_registered_for_table(&table, None)
+        table
+            .update_datafusion_session(&datafusion.state())
             .unwrap();
 
         datafusion
@@ -1422,9 +1422,7 @@ mod tests {
                 None,
             )
             .await?;
-        ctx.state()
-            .ensure_object_store_registered_for_table(&table, None)
-            .unwrap();
+        table.update_datafusion_session(&ctx.state()).unwrap();
 
         ctx.register_table("snapshot", table.table_provider().await.unwrap())
             .unwrap();

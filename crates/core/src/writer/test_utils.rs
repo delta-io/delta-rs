@@ -320,16 +320,13 @@ pub mod datafusion {
     use datafusion::prelude::SessionContext;
 
     use crate::DeltaTable;
-    use crate::delta_datafusion::DeltaSessionExt;
     use crate::writer::SaveMode;
 
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
         let table =
             DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
         let ctx = SessionContext::new();
-        ctx.state()
-            .ensure_object_store_registered_for_table(&table, None)
-            .unwrap();
+        table.update_datafusion_session(&ctx.state()).unwrap();
         ctx.register_table("test", table.table_provider().await.unwrap())
             .unwrap();
         ctx.sql("select * from test")
@@ -346,9 +343,7 @@ pub mod datafusion {
             table.state.as_ref().unwrap().clone(),
         );
         let ctx = SessionContext::new();
-        ctx.state()
-            .ensure_object_store_registered_for_table(&table, None)
-            .unwrap();
+        table.update_datafusion_session(&ctx.state()).unwrap();
         ctx.register_table("test", table.table_provider().await.unwrap())
             .unwrap();
         ctx.sql(&format!("select {columns} from test order by {columns}"))

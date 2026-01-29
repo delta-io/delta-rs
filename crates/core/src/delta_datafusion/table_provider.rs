@@ -810,26 +810,26 @@ impl DeltaTable {
 
     /// Ensure the provided DataFusion session is prepared to read this table.
     ///
-    /// Prefer using the session-first pattern:
+    /// This registers the table's root object store with the session's `RuntimeEnv` if missing.
+    /// Registration is idempotent and will not overwrite an existing mapping.
+    ///
     /// ```rust,no_run
     /// use datafusion::prelude::SessionContext;
     /// use deltalake_core::{DeltaResult, DeltaTable};
-    /// use deltalake_core::delta_datafusion::DeltaSessionExt;
     ///
     /// # fn main() -> DeltaResult<()> {
     /// let table = DeltaTable::new_in_memory();
     /// let ctx = SessionContext::new();
-    /// ctx.state().ensure_object_store_registered_for_table(&table, None)?;
+    /// let state = ctx.state();
+    /// table.update_datafusion_session(&state)?;
     /// # Ok(())
     /// # }
     /// ```
-    #[deprecated(
-        since = "0.31.0",
-        note = "Use `DeltaSessionExt::ensure_object_store_registered_for_table` (e.g. `session.ensure_object_store_registered_for_table(&table, None)`). See delta-io/delta-rs#4139."
-    )]
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered_for_table(
-            session, self, None,
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+            session,
+            self.log_store().as_ref(),
+            None,
         )
     }
 }
