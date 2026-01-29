@@ -57,7 +57,6 @@ use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
-use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 

@@ -58,7 +58,9 @@ use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
 use crate::delta_datafusion::SessionResolveContext;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver};
+use crate::delta_datafusion::logical::{
+    LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
+};
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
     Expression, create_session, resolve_session_state, scan_files_where_matches,

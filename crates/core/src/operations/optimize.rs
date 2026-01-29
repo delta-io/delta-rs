@@ -50,7 +50,7 @@ use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
     DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
-    SessionResolveContext, create_session, resolve_session_state,
+    SessionResolveContext, resolve_session_state,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
