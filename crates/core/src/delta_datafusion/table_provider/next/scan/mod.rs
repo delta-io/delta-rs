@@ -31,10 +31,6 @@ use datafusion::{
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
-    physical_expr::{PhysicalExpr, PhysicalExprSimplifier},
-    physical_expr_adapter::{
-        DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
-    },
     physical_plan::{
         ExecutionPlan,
         empty::EmptyExec,
@@ -496,37 +492,6 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
     .into())
 }
 
-#[derive(Debug)]
-struct DeltaPhysicalExprAdapterFactory;
-
-#[derive(Debug)]
-struct DeltaPhysicalExprAdapter {
-    inner: Arc<dyn PhysicalExprAdapter>,
-    physical_file_schema: SchemaRef,
-}
-
-impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
-    fn create(
-        &self,
-        logical_file_schema: SchemaRef,
-        physical_file_schema: SchemaRef,
-    ) -> Arc<dyn PhysicalExprAdapter> {
-        let inner = DefaultPhysicalExprAdapterFactory
-            .create(logical_file_schema, physical_file_schema.clone());
-        Arc::new(DeltaPhysicalExprAdapter {
-            inner,
-            physical_file_schema,
-        })
-    }
-}
-
-impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
-    fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        let expr = self.inner.rewrite(expr)?;
-        let simplifier = PhysicalExprSimplifier::new(self.physical_file_schema.as_ref());
-        simplifier.simplify(expr)
-    }
-}
 #[cfg(test)]
 mod tests {
     use arrow_array::{
