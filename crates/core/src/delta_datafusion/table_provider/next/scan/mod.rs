@@ -72,68 +72,6 @@ mod replay;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 
-fn align_file_stats_to_schema(mut stats: Statistics, schema: &SchemaRef) -> Statistics {
-    // DataFusion expects `column_statistics` to have exactly one entry per field in the schema the
-    // stats refer to. If the widths don't match, don't risk mis-associating stats with the wrong
-    // columns (which could lead to incorrect pruning decisions or type errors during constant
-    // folding). Fall back to unknown column stats.
-    if stats.column_statistics.len() != schema.fields().len() {
-        stats.column_statistics = Statistics::unknown_column(schema.as_ref());
-        return stats;
-    }
-
-    for idx in 0..schema.fields().len() {
-        let data_type = schema.field(idx).data_type();
-        let col_stats = &mut stats.column_statistics[idx];
-        let min_value = std::mem::replace(&mut col_stats.min_value, Precision::Absent);
-        let max_value = std::mem::replace(&mut col_stats.max_value, Precision::Absent);
-        let sum_value = std::mem::replace(&mut col_stats.sum_value, Precision::Absent);
-        col_stats.min_value = align_precision_scalar_to_type(min_value, data_type);
-        col_stats.max_value = align_precision_scalar_to_type(max_value, data_type);
-        col_stats.sum_value = align_precision_scalar_to_type(sum_value, data_type);
-    }
-    stats
-}
-
-fn align_precision_scalar_to_type(
-    precision: Precision<ScalarValue>,
-    data_type: &DataType,
-) -> Precision<ScalarValue> {
-    match precision {
-        Precision::Exact(v) => Precision::Exact(align_scalar_to_type(v, data_type)),
-        Precision::Inexact(v) => Precision::Inexact(align_scalar_to_type(v, data_type)),
-        Precision::Absent => Precision::Absent,
-    }
-}
-
-fn align_scalar_to_type(value: ScalarValue, data_type: &DataType) -> ScalarValue {
-    match (data_type, value) {
-        // Base -> view types (needed when schema_force_view_types=true)
-        (DataType::Utf8View, ScalarValue::Utf8(v)) => ScalarValue::Utf8View(v),
-        (DataType::Utf8View, ScalarValue::LargeUtf8(v)) => ScalarValue::Utf8View(v),
-        (DataType::BinaryView, ScalarValue::Binary(v)) => ScalarValue::BinaryView(v),
-        (DataType::BinaryView, ScalarValue::LargeBinary(v)) => ScalarValue::BinaryView(v),
-
-        // View -> base types (useful when schema_force_view_types=false)
-        (DataType::Utf8, ScalarValue::Utf8View(v)) => ScalarValue::Utf8(v),
-        (DataType::Utf8, ScalarValue::LargeUtf8(v)) => ScalarValue::Utf8(v),
-        (DataType::LargeUtf8, ScalarValue::Utf8View(v)) => ScalarValue::LargeUtf8(v),
-        (DataType::LargeUtf8, ScalarValue::Utf8(v)) => ScalarValue::LargeUtf8(v),
-        (DataType::Binary, ScalarValue::BinaryView(v)) => ScalarValue::Binary(v),
-        (DataType::Binary, ScalarValue::LargeBinary(v)) => ScalarValue::Binary(v),
-        (DataType::LargeBinary, ScalarValue::BinaryView(v)) => ScalarValue::LargeBinary(v),
-        (DataType::LargeBinary, ScalarValue::Binary(v)) => ScalarValue::LargeBinary(v),
-
-        // Dictionary values align their inner scalar to the dictionary value type.
-        (DataType::Dictionary(_, value_type), ScalarValue::Dictionary(key_type, value)) => {
-            let aligned_value = align_scalar_to_type(*value, value_type);
-            ScalarValue::Dictionary(key_type, Box::new(aligned_value))
-        }
-
-        (_, v) => v,
-    }
-}
-
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
@@ -242,7 +180,6 @@ async fn get_data_scan_plan(
     retain_file_ids: bool,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
-    let parquet_read_schema = scan_plan.parquet_read_schema.clone();
 
     // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
     // this is used to create a DataSourceExec plan for each store
@@ -268,11 +205,7 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        // DataFusion's ParquetOpener may replace constant columns with literals using file stats.
-        // Align scalar types (e.g. Utf8 -> Utf8View) to match the Parquet read schema so literal
-        // replacement doesn't produce arrays with mismatched types.
-        let stats = align_file_stats_to_schema(f.stats, &parquet_read_schema);
-        partitioned_file = partitioned_file.with_statistics(Arc::new(stats));
+        partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
         Ok::<_, DataFusionError>((
             f.file_url.as_object_store_url(),
             (partitioned_file, None::<Vec<bool>>),
@@ -513,180 +446,6 @@ mod tests {
     };
 
     use super::*;
-
-    #[test]
-    fn test_align_scalar_to_type_string_views() -> Result<()> {
-        let base = ScalarValue::Utf8(Some("a".to_string()));
-        assert_eq!(
-            align_scalar_to_type(base, &DataType::Utf8View),
-            ScalarValue::Utf8View(Some("a".to_string()))
-        );
-
-        let base = ScalarValue::LargeUtf8(Some("b".to_string()));
-        assert_eq!(
-            align_scalar_to_type(base, &DataType::Utf8View),
-            ScalarValue::Utf8View(Some("b".to_string()))
-        );
-
-        let view = ScalarValue::Utf8View(Some("c".to_string()));
-        assert_eq!(
-            align_scalar_to_type(view, &DataType::Utf8),
-            ScalarValue::Utf8(Some("c".to_string()))
-        );
-
-        let view = ScalarValue::Utf8View(Some("d".to_string()));
-        assert_eq!(
-            align_scalar_to_type(view, &DataType::LargeUtf8),
-            ScalarValue::LargeUtf8(Some("d".to_string()))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_align_scalar_to_type_binary_views() -> Result<()> {
-        let base = ScalarValue::Binary(Some(vec![1, 2, 3]));
-        assert_eq!(
-            align_scalar_to_type(base, &DataType::BinaryView),
-            ScalarValue::BinaryView(Some(vec![1, 2, 3]))
-        );
-
-        let base = ScalarValue::LargeBinary(Some(vec![4, 5, 6]));
-        assert_eq!(
-            align_scalar_to_type(base, &DataType::BinaryView),
-            ScalarValue::BinaryView(Some(vec![4, 5, 6]))
-        );
-
-        let view = ScalarValue::BinaryView(Some(vec![7, 8, 9]));
-        assert_eq!(
-            align_scalar_to_type(view, &DataType::Binary),
-            ScalarValue::Binary(Some(vec![7, 8, 9]))
-        );
-
-        let view = ScalarValue::BinaryView(Some(vec![10, 11, 12]));
-        assert_eq!(
-            align_scalar_to_type(view, &DataType::LargeBinary),
-            ScalarValue::LargeBinary(Some(vec![10, 11, 12]))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_align_scalar_to_type_dictionary_inner() -> Result<()> {
-        let scalar = ScalarValue::Dictionary(
-            Box::new(DataType::UInt16),
-            Box::new(ScalarValue::Utf8(Some("a".to_string()))),
-        );
-        let dt = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
-        assert_eq!(
-            align_scalar_to_type(scalar, &dt),
-            ScalarValue::Dictionary(
-                Box::new(DataType::UInt16),
-                Box::new(ScalarValue::Utf8View(Some("a".to_string())))
-            )
-        );
-
-        let scalar = ScalarValue::Dictionary(
-            Box::new(DataType::UInt16),
-            Box::new(ScalarValue::Utf8View(Some("b".to_string()))),
-        );
-        let dt = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
-        assert_eq!(
-            align_scalar_to_type(scalar, &dt),
-            ScalarValue::Dictionary(
-                Box::new(DataType::UInt16),
-                Box::new(ScalarValue::Utf8(Some("b".to_string())))
-            )
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_align_file_stats_to_schema_string_views() -> Result<()> {
-        let col_stats = ColumnStatistics::new_unknown()
-            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("a".to_string()))))
-            .with_max_value(Precision::Exact(ScalarValue::Utf8(Some("b".to_string()))))
-            .with_sum_value(Precision::Exact(ScalarValue::Utf8(Some("c".to_string()))));
-        let stats = Statistics {
-            num_rows: Precision::Absent,
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![col_stats],
-        };
-
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Utf8View,
-            true,
-        )]));
-        let aligned = align_file_stats_to_schema(stats, &schema);
-        assert_eq!(aligned.column_statistics.len(), 1);
-        let col_stats = &aligned.column_statistics[0];
-
-        assert_eq!(
-            col_stats.min_value,
-            Precision::Exact(ScalarValue::Utf8View(Some("a".to_string())))
-        );
-        assert_eq!(
-            col_stats.max_value,
-            Precision::Exact(ScalarValue::Utf8View(Some("b".to_string())))
-        );
-        assert_eq!(
-            col_stats.sum_value,
-            Precision::Exact(ScalarValue::Utf8View(Some("c".to_string())))
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_align_file_stats_to_schema_length_mismatch_drops_column_stats() -> Result<()> {
-        let col0 = ColumnStatistics::new_unknown()
-            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("a".to_string()))));
-        let col1 = ColumnStatistics::new_unknown()
-            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("b".to_string()))));
-        let stats = Statistics {
-            num_rows: Precision::Absent,
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![col0, col1],
-        };
-
-        // Schema has fewer fields than stats. We drop column stats to unknown to avoid mis-association.
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::Utf8View,
-            true,
-        )]));
-        let aligned = align_file_stats_to_schema(stats, &schema);
-        assert_eq!(aligned.column_statistics.len(), 1);
-        assert_eq!(aligned.column_statistics[0].min_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[0].max_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[0].sum_value, Precision::Absent);
-
-        // Schema has more fields than stats. We drop column stats to unknown to avoid mis-association.
-        let col0 = ColumnStatistics::new_unknown()
-            .with_min_value(Precision::Exact(ScalarValue::Utf8(Some("c".to_string()))));
-        let stats = Statistics {
-            num_rows: Precision::Absent,
-            total_byte_size: Precision::Absent,
-            column_statistics: vec![col0],
-        };
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("col0", DataType::Utf8View, true),
-            Field::new("col1", DataType::Utf8View, true),
-        ]));
-        let aligned = align_file_stats_to_schema(stats, &schema);
-        assert_eq!(aligned.column_statistics.len(), 2);
-        assert_eq!(aligned.column_statistics[0].min_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[0].max_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[0].sum_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[1].min_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[1].max_value, Precision::Absent);
-        assert_eq!(aligned.column_statistics[1].sum_value, Precision::Absent);
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_parquet_plan() -> TestResult {
