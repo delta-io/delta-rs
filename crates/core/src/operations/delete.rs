@@ -54,13 +54,16 @@ use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
 use crate::delta_datafusion::DeltaScanConfig;
+use crate::delta_datafusion::DeltaSessionExt;
+use crate::delta_datafusion::SessionFallbackPolicy;
+use crate::delta_datafusion::SessionResolveContext;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::{
-    LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
-};
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver};
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
-use crate::delta_datafusion::{Expression, update_datafusion_session};
-use crate::delta_datafusion::{create_session, scan_files_where_matches};
+use crate::delta_datafusion::{
+    Expression, create_session, resolve_session_state, scan_files_where_matches,
+    update_datafusion_session,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
@@ -86,6 +89,7 @@ pub struct DeleteBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
@@ -140,6 +144,7 @@ impl DeleteBuilder {
             snapshot,
             log_store,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
             custom_execute_handler: None,
@@ -152,8 +157,25 @@ impl DeleteBuilder {
         self
     }
 
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -192,21 +214,27 @@ impl std::future::IntoFuture for DeleteBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let session = if let Some(session) = this.session {
-                session
-            } else {
-                Arc::new(create_session().into_inner().state())
-            };
-            update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session().state(),
+                SessionResolveContext {
+                    operation: "delete",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+            session.ensure_log_store_registered(this.log_store.as_ref())?;
 
             let predicate = this
                 .predicate
                 .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
+                    let scan_config = DeltaScanConfig::new_from_session(&session);
                     let predicate_schema = scan_config
                         .table_schema(snapshot.table_configuration())?
                         .to_dfschema_ref()?;
-                    p.resolve(session.as_ref(), predicate_schema)
+                    p.resolve(&session, predicate_schema)
                 })
                 .transpose()?;
 
@@ -218,7 +246,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot.clone(),
-                session.as_ref(),
+                &session,
                 operation_id,
             )
             .await?;

@@ -752,7 +752,12 @@ mod tests {
         assert_eq!(Some(6), table.version());
 
         let ctx = SessionContext::new();
-        table.update_datafusion_session(&ctx.state()).unwrap();
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered_for_table(
+            &ctx.state(),
+            &table,
+            None,
+        )
+        .unwrap();
         ctx.register_table("test", table.table_provider().await.unwrap())
             .unwrap();
         let _batches = ctx

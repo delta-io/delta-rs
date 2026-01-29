@@ -28,7 +28,7 @@ use datafusion::physical_plan::union::UnionExec;
 use tracing::log;
 
 use crate::DeltaTableError;
-use crate::delta_datafusion::{DataFusionMixins, register_store};
+use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, resolve_snapshot};
@@ -349,7 +349,7 @@ impl CdfLoadBuilder {
         PROTOCOL.can_read_from(&snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let partition_values = snapshot.metadata().partition_columns().clone();
         let schema = snapshot.input_schema();

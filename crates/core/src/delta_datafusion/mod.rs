@@ -42,7 +42,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -52,7 +51,6 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
-use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
@@ -307,14 +305,6 @@ impl DeltaTableState {
     pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
         self.snapshot.log_data().statistics()
     }
-}
-
-// Each delta table must register a specific object store, since paths are internally handled
-// relative to the table root.
-pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
-    let object_store_url = store.object_store_url();
-    let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store(None));
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
