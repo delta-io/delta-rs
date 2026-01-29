@@ -50,12 +50,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_datafusion::engine::AsObjectStoreUrl;
-
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, FindFilesExprProperties, LogDataHandler, get_null_of_arrow_type,
-    register_store, to_correct_scalar_value,
+    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
+    get_null_of_arrow_type, to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -810,8 +808,29 @@ impl DeltaTable {
         builder
     }
 
+    /// Ensure the provided DataFusion session is prepared to read this table.
+    ///
+    /// Prefer using the session-first pattern:
+    /// ```rust,no_run
+    /// use datafusion::prelude::SessionContext;
+    /// use deltalake_core::{DeltaResult, DeltaTable};
+    /// use deltalake_core::delta_datafusion::DeltaSessionExt;
+    ///
+    /// # fn main() -> DeltaResult<()> {
+    /// let table = DeltaTable::new_in_memory();
+    /// let ctx = SessionContext::new();
+    /// ctx.state().ensure_object_store_registered_for_table(&table, None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[deprecated(
+        since = "0.31.0",
+        note = "Use `DeltaSessionExt::ensure_object_store_registered_for_table` (e.g. `session.ensure_object_store_registered_for_table(&table, None)`). See delta-io/delta-rs#4139."
+    )]
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        update_datafusion_session(self.log_store().as_ref(), session, None)
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered_for_table(
+            session, self, None,
+        )
     }
 }
 
@@ -820,13 +839,11 @@ pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let url = log_store.root_url().as_object_store_url();
-    if session.runtime_env().object_store(&url).is_err() {
-        session
-            .runtime_env()
-            .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
-    }
-    Ok(())
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+        session,
+        log_store,
+        operation_id,
+    )
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
@@ -894,7 +911,7 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
@@ -932,7 +949,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), state.runtime_env().as_ref());
+        state.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,

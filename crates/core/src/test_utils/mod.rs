@@ -1,5 +1,8 @@
 mod factories;
 
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) mod datafusion;
+
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
 use url::Url;

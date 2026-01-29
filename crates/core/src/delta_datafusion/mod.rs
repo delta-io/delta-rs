@@ -65,7 +65,7 @@ use crate::{open_table, open_table_with_storage_options};
 
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
-    create_session,
+    DeltaSessionExt, create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
 pub(crate) use self::utils::*;
@@ -93,6 +93,8 @@ pub mod logical;
 pub mod physical;
 pub mod planner;
 mod session;
+pub use session::SessionFallbackPolicy;
+pub(crate) use session::{SessionResolveContext, resolve_session_state};
 mod table_provider;
 pub(crate) mod utils;
 
@@ -307,8 +309,8 @@ impl DeltaTableState {
     }
 }
 
-// each delta table must register a specific object store, since paths are internally
-// handled relative to the table root.
+// Each delta table must register a specific object store, since paths are internally handled
+// relative to the table root.
 pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
     let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
@@ -641,6 +643,7 @@ mod tests {
     use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::Range;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+    use url::Url;
 
     use super::*;
 
@@ -1179,8 +1182,9 @@ mod tests {
             .unwrap();
 
         let datafusion = SessionContext::new();
-        table
-            .update_datafusion_session(&datafusion.state())
+        datafusion
+            .state()
+            .ensure_object_store_registered_for_table(&table, None)
             .unwrap();
 
         datafusion
@@ -1429,7 +1433,9 @@ mod tests {
                 None,
             )
             .await?;
-        table.update_datafusion_session(&ctx.state()).unwrap();
+        ctx.state()
+            .ensure_object_store_registered_for_table(&table, None)
+            .unwrap();
 
         ctx.register_table("snapshot", table.table_provider().await.unwrap())
             .unwrap();
