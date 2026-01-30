@@ -404,9 +404,9 @@ mod local {
             target_table.snapshot().ok().map(|s| s.snapshot()).cloned(),
         )
         .with_input_plan(source_scan)
-        .with_session_state(Arc::new(state))
+        .with_session_state(Arc::new(state.clone()))
         .await?;
-        target_table.update_datafusion_session(&ctx.state())?;
+        target_table.update_datafusion_session(&state)?;
         ctx.register_table("target", target_table.table_provider().await.unwrap())?;
 
         // Check results

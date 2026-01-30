@@ -72,6 +72,9 @@ pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 
+#[cfg(all(test, feature = "datafusion"))]
+mod session_fallback_policy_tests;
+
 impl DeltaTable {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given URL.
     ///
