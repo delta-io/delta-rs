@@ -333,13 +333,20 @@ pub(crate) async fn write_exec_plan(
     exec: Arc<dyn ExecutionPlan>,
     operation_id: Option<Uuid>,
     write_as_cdc: bool,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = session
-        .config_options()
-        .execution
-        .parquet
-        .into_writer_properties_builder()?
-        .build();
+    let writer_properties_factory = match writer_properties_factory {
+        Some(factory) => factory,
+        None => {
+            let writer_properties = session
+                .config_options()
+                .execution
+                .parquet
+                .into_writer_properties_builder()?
+                .build();
+            writer_properties.into_factory_ref()
+        }
+    };
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
     let target_file_size = table_config
@@ -348,7 +355,6 @@ pub(crate) async fn write_exec_plan(
         .map(|v| v.get() as usize);
     let partition_columns = table_config.metadata().partition_columns().clone();
 
-    let writer_properties_factory = writer_properties.into_factory_ref();
     if write_as_cdc {
         write_cdc_plan(
             session,
