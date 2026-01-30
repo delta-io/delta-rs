@@ -434,6 +434,9 @@ async fn execute(
     metrics.num_removed_files = removes.len();
 
     if files_scan.partition_only {
+        // Note: Partition-only predicates are handled earlier using Add-action metadata.
+        // This branch is kept defensively in case `scan_files_where_matches` ever determines
+        // a predicate is partition-only after simplification.
         // if we are deleting entire files only, no need to rescue any data or write cdc files.
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((removes, metrics));
@@ -1536,8 +1539,6 @@ mod tests {
             ],
         )
         .unwrap();
-
-        println!("protodol: {:?}", table.snapshot().unwrap().protocol());
 
         let table = table
             .write(vec![batch])
