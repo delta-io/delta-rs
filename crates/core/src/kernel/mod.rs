@@ -22,6 +22,7 @@ pub use error::*;
 pub use models::*;
 pub use schema::*;
 pub use snapshot::*;
+pub(crate) use snapshot::{resolve_snapshot, resolve_snapshot_with_config};
 
 pub(crate) static ARROW_HANDLER: LazyLock<Arc<ArrowEvaluationHandler>> =
     LazyLock::new(|| Arc::new(ArrowEvaluationHandler {}));

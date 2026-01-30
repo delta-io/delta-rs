@@ -68,12 +68,14 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, resolve_snapshot_with_config};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::execution::write_exec_plan;
+use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
     IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
@@ -277,7 +279,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot.clone(),
-                &session,
+                session.as_ref(),
                 this.writer_properties_factory,
                 operation_id,
             )
@@ -370,6 +372,7 @@ async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: &dyn Session,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let exec_start = Instant::now();
@@ -442,8 +445,34 @@ async fn execute(
         .filter(files_scan.predicate.clone().is_not_true())?
         .build()?;
 
-    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
-        // create change set entries for all records we deleted
+    let table_partition_cols = snapshot.metadata().partition_columns().clone();
+    let target_file_size = snapshot.table_properties().target_file_size.map(|v| v.get() as usize);
+    let writer_stats_config = WriterStatsConfig::new(
+        snapshot.table_properties().num_indexed_cols(),
+        snapshot
+            .table_properties()
+            .data_skipping_stats_columns
+            .as_ref()
+            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+    );
+
+    // Write rescued data (rows to keep)
+    let exec = session.create_physical_plan(&rescued_data).await?;
+    let mut actions: Vec<Action> = write_execution_plan(
+        Some(&snapshot),
+        session,
+        exec.clone(),
+        table_partition_cols.clone(),
+        log_store.object_store(Some(operation_id)),
+        target_file_size,
+        None,
+        writer_properties_factory.clone(),
+        writer_stats_config.clone(),
+    )
+    .await?;
+
+    // Write CDC entries for deleted rows if CDC is enabled
+    if should_write_cdc(&snapshot)? {
         let cdc_deletes = files_scan
             .scan()
             .clone()
@@ -451,28 +480,21 @@ async fn execute(
             .filter(files_scan.predicate)?
             .with_column(CDC_COLUMN_NAME, lit("delete"))?
             .build()?;
-        (
-            rescued_data
-                .into_builder()
-                .with_column(CDC_COLUMN_NAME, lit(""))?
-                .union(cdc_deletes)?
-                .build()?,
-            true,
+        let cdc_exec = session.create_physical_plan(&cdc_deletes).await?;
+        let cdc_actions = write_execution_plan_cdc(
+            Some(&snapshot),
+            session,
+            cdc_exec,
+            table_partition_cols,
+            log_store.object_store(Some(operation_id)),
+            target_file_size,
+            None,
+            writer_properties_factory,
+            writer_stats_config,
         )
-    } else {
-        (rescued_data, false)
-    };
-
-    let exec = session.create_physical_plan(&write_plan).await?;
-    let (mut actions, _) = write_exec_plan(
-        session,
-        log_store.as_ref(),
-        snapshot.table_configuration(),
-        exec.clone(),
-        Some(operation_id),
-        write_cdc,
-    )
-    .await?;
+        .await?;
+        actions.extend(cdc_actions);
+    }
 
     if let Some(source_count) = find_metric_node(SOURCE_COUNT_ID, &exec) {
         let source_count_metrics = source_count.metrics().unwrap();

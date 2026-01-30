@@ -31,7 +31,7 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::WriterPropertiesFactoryRef;
+use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -348,6 +348,7 @@ pub(crate) async fn write_exec_plan(
         .map(|v| v.get() as usize);
     let partition_columns = table_config.metadata().partition_columns().clone();
 
+    let writer_properties_factory = writer_properties.into_factory_ref();
     if write_as_cdc {
         write_cdc_plan(
             session,
@@ -356,7 +357,7 @@ pub(crate) async fn write_exec_plan(
             object_store,
             target_file_size,
             None,
-            Some(writer_properties),
+            Some(writer_properties_factory),
             stats_config,
         )
         .await
@@ -368,7 +369,7 @@ pub(crate) async fn write_exec_plan(
             object_store,
             target_file_size,
             None,
-            Some(writer_properties),
+            Some(writer_properties_factory),
             stats_config,
         )
         .await
@@ -383,13 +384,13 @@ async fn write_data_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let config = WriterConfig::new(
         plan.schema().clone(),
         partition_columns.clone(),
-        writer_properties.clone(),
+        writer_properties_factory.clone(),
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,
@@ -463,7 +464,7 @@ async fn write_cdc_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));

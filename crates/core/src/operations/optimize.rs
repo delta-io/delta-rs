@@ -398,12 +398,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let writer_properties = this.writer_properties.unwrap_or_else(|| {
-                WriterProperties::builder()
-                    .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
-                    .set_created_by(format!("delta-rs version {}", crate_version()))
-                    .build()
-            });
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
                 this.session_fallback_policy,

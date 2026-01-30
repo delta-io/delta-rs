@@ -54,7 +54,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
 use crate::protocol::DeltaOperation;
 use crate::table::file_format_options::{
-    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
 };
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};

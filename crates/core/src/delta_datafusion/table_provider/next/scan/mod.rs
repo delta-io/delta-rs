@@ -928,6 +928,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1008,6 +1009,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1088,6 +1090,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
