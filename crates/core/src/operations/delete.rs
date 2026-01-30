@@ -37,6 +37,7 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
@@ -78,6 +79,22 @@ use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
+
+fn remove_from_add(add: crate::kernel::Add) -> crate::kernel::Remove {
+    use chrono::Utc;
+    crate::kernel::Remove {
+        path: add.path,
+        data_change: true,
+        deletion_timestamp: Some(Utc::now().timestamp_millis()),
+        extended_file_metadata: Some(true),
+        partition_values: Some(add.partition_values),
+        size: Some(add.size),
+        tags: None,
+        deletion_vector: add.deletion_vector,
+        base_row_id: None,
+        default_row_commit_version: None,
+    }
+}
 
 /// Delete Records from the Delta Table.
 /// See this module's documentation for more information
@@ -361,6 +378,42 @@ async fn execute(
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
         return Ok((removes, metrics));
     };
+
+    let partition_columns = snapshot
+        .table_configuration()
+        .metadata()
+        .partition_columns()
+        .clone();
+    let mut props = crate::delta_datafusion::FindFilesExprProperties {
+        partition_columns,
+        partition_only: true,
+        result: Ok(()),
+    };
+    TreeNode::visit(&predicate, &mut props)?;
+    props.result?;
+
+    if props.partition_only {
+        // Partition-only delete: select files via Add-action partition values (no data-file scan).
+        let candidates = crate::delta_datafusion::find_files(
+            &snapshot,
+            log_store.clone(),
+            session,
+            Some(predicate.clone()),
+        )
+        .await?
+        .candidates;
+
+        metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+
+        let removes: Vec<_> = candidates
+            .into_iter()
+            .map(|add| Action::Remove(remove_from_add(add)))
+            .collect();
+        metrics.num_removed_files = removes.len();
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
+
+        return Ok((removes, metrics));
+    }
 
     let maybe_scan_plan = scan_files_where_matches(session, &snapshot, predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
