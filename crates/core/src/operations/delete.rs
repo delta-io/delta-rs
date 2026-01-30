@@ -41,7 +41,9 @@ use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
+use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
@@ -79,22 +81,6 @@ use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
-
-fn remove_from_add(add: crate::kernel::Add) -> crate::kernel::Remove {
-    use chrono::Utc;
-    crate::kernel::Remove {
-        path: add.path,
-        data_change: true,
-        deletion_timestamp: Some(Utc::now().timestamp_millis()),
-        extended_file_metadata: Some(true),
-        partition_values: Some(add.partition_values),
-        size: Some(add.size),
-        tags: None,
-        deletion_vector: add.deletion_vector,
-        base_row_id: None,
-        default_row_commit_version: None,
-    }
-}
 
 /// Delete Records from the Delta Table.
 /// See this module's documentation for more information
@@ -376,9 +362,11 @@ async fn execute(
             .await?;
         metrics.num_removed_files = removes.len();
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((removes, metrics));
     };
 
+    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate.clone()))?;
     let partition_columns = snapshot
         .table_configuration()
         .metadata()
@@ -389,20 +377,26 @@ async fn execute(
         partition_only: true,
         result: Ok(()),
     };
-    TreeNode::visit(&predicate, &mut props)?;
-    props.result?;
+    for term in &skipping_pred {
+        props.result = Ok(());
+        term.visit(&mut props)?;
+        props.result?;
+    }
 
     if props.partition_only {
         // Partition-only delete: select files via Add-action partition values (no data-file scan).
-        let candidates =
-            crate::delta_datafusion::find_files_by_partition_predicate(&snapshot, &predicate)
-                .await?;
+        let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
+        let candidates = crate::delta_datafusion::find_files_by_partition_predicate(
+            &snapshot,
+            &partition_predicate,
+        )
+        .await?;
 
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
         let removes: Vec<_> = candidates
             .into_iter()
-            .map(|add| Action::Remove(remove_from_add(add)))
+            .map(|add| Action::Remove(add.remove_action(true)))
             .collect();
         metrics.num_removed_files = removes.len();
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
@@ -415,6 +409,7 @@ async fn execute(
 
     let Some(files_scan) = maybe_scan_plan else {
         // no files contain data matching the predicate, so nothing more todo.
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((vec![], metrics));
     };
 
@@ -884,18 +879,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_partition_only_removes_empty_files_in_matching_partitions() -> DeltaResult<()> {
+    async fn test_delete_partition_only_removes_empty_files_in_matching_partitions()
+    -> DeltaResult<()> {
         use std::collections::HashMap;
         use std::sync::Arc;
 
         use arrow_array::{Int32Array, RecordBatch, StringArray};
         use arrow_schema::{DataType, Field, Schema};
         use chrono::Utc;
-        use object_store::path::Path as ObjectStorePath;
         use object_store::PutPayload;
+        use object_store::path::Path as ObjectStorePath;
 
         use crate::DeltaTable;
-        use crate::kernel::{Action, Add, DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+        use crate::kernel::{
+            Action, Add, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
 
         // Partition columns match the issue report shape: dt + hour.
         let table_schema = StructType::try_new(vec![
@@ -991,13 +989,22 @@ mod tests {
         // never returns a row for the empty file.
         let store = table.object_store();
         store
-            .put(&ObjectStorePath::from(file_empty), PutPayload::from(empty_bytes))
+            .put(
+                &ObjectStorePath::from(file_empty),
+                PutPayload::from(empty_bytes),
+            )
             .await?;
         store
-            .put(&ObjectStorePath::from(file_nonempty), PutPayload::from(nonempty_bytes))
+            .put(
+                &ObjectStorePath::from(file_nonempty),
+                PutPayload::from(nonempty_bytes),
+            )
             .await?;
         store
-            .put(&ObjectStorePath::from(file_other), PutPayload::from(other_bytes))
+            .put(
+                &ObjectStorePath::from(file_other),
+                PutPayload::from(other_bytes),
+            )
             .await?;
 
         let state = table.snapshot()?;
