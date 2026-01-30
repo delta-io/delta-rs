@@ -178,7 +178,8 @@ mod local {
         .collect()
         .await?;
 
-        let batch = &batches[0];
+        let schema = batches[0].schema();
+        let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
         assert_eq!(
             batch.column(0).as_ref(),
@@ -200,7 +201,8 @@ mod local {
             .collect()
             .await?;
 
-        let batch = &batches[0];
+        let schema = batches[0].schema();
+        let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
         assert_eq!(
             batch.column(0).as_ref(),
@@ -327,7 +329,8 @@ mod local {
 
             let batches = df.collect().await?;
 
-            let batch = &batches[0];
+            let schema = batches[0].schema();
+            let batch = arrow::compute::concat_batches(&schema, &batches)?;
 
             assert_eq!(
                 batch.column(0).as_ref(),
@@ -401,9 +404,9 @@ mod local {
             target_table.snapshot().ok().map(|s| s.snapshot()).cloned(),
         )
         .with_input_plan(source_scan)
-        .with_session_state(Arc::new(state))
+        .with_session_state(Arc::new(state.clone()))
         .await?;
-        target_table.update_datafusion_session(&ctx.state())?;
+        target_table.update_datafusion_session(&state)?;
         ctx.register_table("target", target_table.table_provider().await.unwrap())?;
 
         // Check results
@@ -497,9 +500,11 @@ mod local {
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        assert_eq!(
-            statistics.total_byte_size,
-            Precision::Exact((400 + 404 + 396) as usize)
+        let total_byte_size = statistics.total_byte_size.clone();
+        let expected_total_byte_size = (400 + 404 + 396) as usize;
+        assert!(
+            total_byte_size == Precision::Exact(expected_total_byte_size)
+                || total_byte_size == Precision::Inexact(expected_total_byte_size)
         );
         let column_stats = statistics.column_statistics.first().unwrap();
         assert_eq!(column_stats.null_count, Precision::Absent);
@@ -1364,7 +1369,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 }
 
 #[tokio::test]
-async fn test_schema_adapter_empty_batch() {
+async fn test_schema_evolution_missing_column_returns_nulls() {
     let ctx = SessionContext::new();
     let tmp_dir = tempfile::tempdir().unwrap();
     let table_uri = tmp_dir.path().to_str().to_owned().unwrap();

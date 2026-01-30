@@ -12,14 +12,15 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchemaRef, Result, Statistics, ToDFSchema};
+use datafusion::common::{Column, ColumnStatistics, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    FileGroup, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
@@ -49,12 +50,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_datafusion::engine::AsObjectStoreUrl;
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, LogDataHandler, get_null_of_arrow_type, register_store,
-    to_correct_scalar_value,
+    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
+    get_null_of_arrow_type, to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -151,7 +150,7 @@ impl DeltaScanConfigBuilder {
                 Some(name) => {
                     if column_names.contains(name) {
                         return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {name} exits"
+                            "Unable to add file path column since column with name {name} exists"
                         )));
                     }
 
@@ -186,7 +185,7 @@ impl DeltaScanConfigBuilder {
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             table_parquet_options,
-            schema_force_view_types: false,
+            schema_force_view_types: true,
         })
     }
 }
@@ -550,6 +549,71 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
+        // DF52's TableSchema outputs columns as: file_schema + partition_columns
+        // Source stats are indexed by TableConfiguration.schema() field order, which may differ
+        // from the scan schema order. We need name-based remapping, not index-based.
+        let partition_col_names = self.snapshot.metadata().partition_columns();
+
+        // Build name -> ColumnStatistics map from source stats (keyed by TableConfiguration schema order)
+        let source_schema = self.snapshot.schema();
+        let stats_by_name: HashMap<String, ColumnStatistics> = source_schema
+            .fields()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                stats
+                    .column_statistics
+                    .get(idx)
+                    .map(|s| (field.name().to_string(), s.clone()))
+            })
+            .collect();
+
+        // Build stats in DF52 order: file_schema columns first, then partition_columns
+        // file_schema columns are in file_schema field order (non-partition from logical_schema)
+        let file_col_stats: Vec<ColumnStatistics> = file_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                stats_by_name
+                    .get(f.name())
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        // Partition columns must be in metadata.partition_columns() order (not schema encounter order)
+        let partition_col_stats: Vec<ColumnStatistics> = partition_col_names
+            .iter()
+            .map(|name| {
+                stats_by_name
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        // Combine: file columns first, then partition columns
+        let mut reordered_stats = file_col_stats;
+        reordered_stats.extend(partition_col_stats);
+
+        let stats = Statistics {
+            num_rows: stats.num_rows,
+            total_byte_size: stats.total_byte_size,
+            column_statistics: reordered_stats,
+        };
+
+        // Add unknown stats for file_column if present (it's added as partition field but not in original schema)
+        let stats = if config.file_column_name.is_some() {
+            let mut col_stats = stats.column_statistics;
+            col_stats.push(ColumnStatistics::new_unknown());
+            Statistics {
+                num_rows: stats.num_rows,
+                total_byte_size: stats.total_byte_size,
+                column_statistics: col_stats,
+            }
+        } else {
+            stats
+        };
+
         let parquet_options: TableParquetOptions = config
             .table_parquet_options
             .clone()
@@ -569,7 +633,12 @@ impl<'a> DeltaScanBuilder<'a> {
             })
             .transpose()?;
 
-        let mut file_source = ParquetSource::new(parquet_options);
+        let partition_fields: Vec<Arc<Field>> =
+            table_partition_cols.into_iter().map(Arc::new).collect();
+        let table_schema = TableSchema::new(file_schema, partition_fields);
+
+        let mut file_source =
+            ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
         if let Some(encryption_factory) = encryption_factory {
             file_source = file_source.with_encryption_factory(encryption_factory);
@@ -583,11 +652,9 @@ impl<'a> DeltaScanBuilder<'a> {
         {
             file_source = file_source.with_predicate(predicate);
         };
-        let file_source =
-            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
 
         let file_scan_config =
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(file_source))
                 .with_file_groups(
                     // If all files were filtered out, we still need to emit at least one partition to
                     // pass datafusion sanity checks.
@@ -600,9 +667,8 @@ impl<'a> DeltaScanBuilder<'a> {
                     },
                 )
                 .with_statistics(stats)
-                .with_projection_indices(self.projection.cloned())
+                .with_projection_indices(self.projection.cloned())?
                 .with_limit(self.limit)
-                .with_table_partition_cols(table_partition_cols)
                 .build();
 
         let metrics = ExecutionPlanMetricsSet::new();
@@ -634,6 +700,8 @@ pub struct TableProviderBuilder {
     snapshot: Option<SnapshotWrapper>,
     file_column: Option<String>,
     table_version: Option<Version>,
+    /// Predicates used only for file skipping in kernel log replay
+    file_skipping_predicates: Option<Vec<Expr>>,
 }
 
 impl Default for TableProviderBuilder {
@@ -649,6 +717,7 @@ impl TableProviderBuilder {
             snapshot: None,
             file_column: None,
             table_version: None,
+            file_skipping_predicates: None,
         }
     }
 
@@ -684,6 +753,70 @@ impl TableProviderBuilder {
         self.file_column = Some(file_column.to_string());
         self
     }
+
+    /// Add predicates applied only during file skipping.
+    ///
+    /// There are cases where we may want to skip files that definitely do
+    /// not contain any data that matches a predicate, but read all data
+    /// if any records may match, to rewrite the file with updated records.
+    ///
+    /// The file skipping predicates will thus not be pushed into the parquet
+    /// scan. However any predicate that gets pushed into the scan during execution
+    /// planning will be applied.
+    pub(crate) fn with_file_skipping_predicates(
+        mut self,
+        file_skipping_predicates: impl IntoIterator<Item = Expr>,
+    ) -> Self {
+        self.file_skipping_predicates = Some(file_skipping_predicates.into_iter().collect());
+        self
+    }
+
+    pub async fn build(self) -> Result<next::DeltaScan> {
+        let mut config = DeltaScanConfig::new();
+        if let Some(file_column) = self.file_column {
+            config = config.with_file_column_name(file_column);
+        }
+
+        let snapshot = match self.snapshot {
+            Some(wrapper) => wrapper,
+            None => {
+                if let Some(log_store) = self.log_store.as_ref() {
+                    SnapshotWrapper::Snapshot(
+                        Snapshot::try_new(
+                            log_store,
+                            Default::default(),
+                            self.table_version.map(|v| v as i64),
+                        )
+                        .await?
+                        .into(),
+                    )
+                } else {
+                    return Err(DataFusionError::Plan(
+                    "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
+                ));
+                }
+            }
+        };
+
+        // Set table_parquet_options from the snapshot's file_format_options
+        if let Some(file_format_options) = &snapshot.load_config().file_format_options {
+            config.table_parquet_options = Some(file_format_options.table_options().parquet);
+        }
+
+        let mut provider = next::DeltaScan::new(snapshot, config)?;
+        if let Some(skipping) = self.file_skipping_predicates {
+            // validate that the expressions contain no illegal variants
+            // that are not eligible for file skipping, e.g. volatile functions.
+            for term in &skipping {
+                let mut visitor = FindFilesExprProperties::default();
+                term.visit(&mut visitor)?;
+                visitor.result?;
+            }
+            provider = provider.with_file_skipping_predicate(skipping);
+        }
+
+        Ok(provider)
+    }
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -692,41 +825,7 @@ impl std::future::IntoFuture for TableProviderBuilder {
 
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
-
-        Box::pin(async move {
-            let mut config = DeltaScanConfig::new();
-            if let Some(file_column) = this.file_column {
-                config = config.with_file_column_name(file_column);
-            }
-
-            let snapshot = match this.snapshot {
-                Some(wrapper) => wrapper,
-                None => {
-                    if let Some(log_store) = this.log_store.as_ref() {
-                        SnapshotWrapper::Snapshot(
-                            Snapshot::try_new(
-                                log_store,
-                                Default::default(),
-                                this.table_version.map(|v| v as i64),
-                            )
-                            .await?
-                            .into(),
-                        )
-                    } else {
-                        return Err(DataFusionError::Plan(
-                        "Either a log store or a snapshot must be provided to build a Delta TableProvider".to_string(),
-                    ));
-                    }
-                }
-            };
-
-            // Set table_parquet_options from the snapshot's file_format_options
-            if let Some(file_format_options) = &snapshot.load_config().file_format_options {
-                config.table_parquet_options = Some(file_format_options.table_options().parquet);
-            }
-
-            Ok(Arc::new(next::DeltaScan::new(snapshot, config)?) as Arc<dyn TableProvider>)
-        })
+        Box::pin(async move { Ok(Arc::new(this.build().await?) as _) })
     }
 }
 
@@ -744,8 +843,33 @@ impl DeltaTable {
         builder
     }
 
+    /// Ensure the provided DataFusion session is prepared to read this table.
+    ///
+    /// This registers the table's root object store with the session's `RuntimeEnv` if missing.
+    /// Registration is idempotent and will not overwrite an existing mapping.
+    ///
+    /// If the session already has an object store registered for the table's URL but it is stale or
+    /// incorrect, this method will not replace it. To override an existing mapping, call
+    /// `RuntimeEnv::register_object_store` directly.
+    ///
+    /// ```rust,no_run
+    /// use datafusion::prelude::SessionContext;
+    /// use deltalake_core::{DeltaResult, DeltaTable};
+    ///
+    /// # fn main() -> DeltaResult<()> {
+    /// let table = DeltaTable::new_in_memory();
+    /// let ctx = SessionContext::new();
+    /// let state = ctx.state();
+    /// table.update_datafusion_session(&state)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        update_datafusion_session(self.log_store().as_ref(), session, None)
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+            session,
+            self.log_store().as_ref(),
+            None,
+        )
     }
 }
 
@@ -754,13 +878,11 @@ pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let url = log_store.root_url().as_object_store_url();
-    if session.runtime_env().object_store(&url).is_err() {
-        session
-            .runtime_env()
-            .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
-    }
-    Ok(())
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+        session,
+        log_store,
+        operation_id,
+    )
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
@@ -828,11 +950,10 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
         if let Some(format_options) = &self.snapshot.load_config().file_format_options {
             format_options.update_session(session)?;
         }
-
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
@@ -870,7 +991,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), state.runtime_env().as_ref());
+        state.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,
@@ -1077,7 +1198,7 @@ pub(crate) fn simplify_expr(
     df_schema: DFSchemaRef,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let context = SimplifyContext::new(&session.execution_props()).with_schema(df_schema.clone());
+    let context = SimplifyContext::new(session.execution_props()).with_schema(df_schema.clone());
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }

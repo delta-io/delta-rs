@@ -15,7 +15,7 @@ def sample_table():
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)),

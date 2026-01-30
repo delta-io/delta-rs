@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.3.2"
+version = "1.4.1"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
@@ -9,7 +9,7 @@ homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 
 [lib]
@@ -25,9 +25,11 @@ pyo3-arrow = { version = "0.14.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
+arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
+datafusion-execution = { version = "52.1.0" }
 
 # serde
 serde = { workspace = true }

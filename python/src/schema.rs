@@ -12,13 +12,13 @@ use deltalake::kernel::{
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::types::PyCapsule;
-use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::error::PyArrowResult;
-use pyo3_arrow::export::{Arro3DataType, Arro3Field, Arro3Schema};
-use pyo3_arrow::ffi::to_schema_pycapsule;
+use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3_arrow::PyDataType;
 use pyo3_arrow::PyField;
 use pyo3_arrow::PySchema as PyArrow3Schema;
+use pyo3_arrow::error::PyArrowResult;
+use pyo3_arrow::export::{Arro3DataType, Arro3Field, Arro3Schema};
+use pyo3_arrow::ffi::to_schema_pycapsule;
 use std::collections::HashMap;
 use std::sync::Arc;
 

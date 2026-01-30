@@ -13,7 +13,7 @@ use crate::kernel::scalars::ScalarExt;
 ///
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
-pub(crate) fn to_predicate(expr: &Expr) -> Result<Predicate> {
+pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
     match to_delta_expression(expr)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
@@ -264,7 +264,7 @@ fn flatten_junction_expr(expr: &Expr, target_op: Operator) -> Result<Vec<Predica
             Ok(left_exprs)
         }
         _ => {
-            let delta_expr = to_predicate(expr)?;
+            let delta_expr = to_delta_predicate(expr)?;
             Ok(vec![delta_expr])
         }
     }

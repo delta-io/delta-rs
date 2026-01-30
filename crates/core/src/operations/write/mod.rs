@@ -52,14 +52,17 @@ use self::generated_columns::{gc_is_enabled, with_generated_columns};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use self::schema_evolution::try_cast_schema;
 use super::cdc::CDC_COLUMN_NAME;
-use super::datafusion_utils::Expression;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::delta_datafusion::DataFusionMixins;
-use crate::delta_datafusion::expr::{fmt_expr_to_sql, parse_predicate_expression};
+use crate::delta_datafusion::Expression;
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
-use crate::delta_datafusion::{create_session, register_store};
+use crate::delta_datafusion::{
+    DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
+    resolve_session_state, update_datafusion_session,
+};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::merge_arrow_schema;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
@@ -138,6 +141,7 @@ pub struct WriteBuilder {
     input: Option<LogicalPlan>,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
@@ -201,6 +205,7 @@ impl WriteBuilder {
             log_store,
             input: None,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             mode: SaveMode::Append,
             partition_columns: None,
             predicate: None,
@@ -257,9 +262,25 @@ impl WriteBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -447,16 +468,25 @@ impl std::future::IntoFuture for WriteBuilder {
                 // and should be created
                 let mut actions = this.check_preconditions().await?;
 
+                let partition_columns = this.get_partition_columns()?;
+
                 let Some(mut source) = this.input.take() else {
                     return Err(WriteError::MissingData.into());
                 };
 
-                let partition_columns = this.get_partition_columns()?;
+                let (session, _) = resolve_session_state(
+                    this.session.as_deref(),
+                    this.session_fallback_policy,
+                    || create_session().state(),
+                    SessionResolveContext {
+                        operation: "write",
+                        table_uri: Some(this.log_store.root_url()),
+                        cdc: false,
+                    },
+                )?;
 
-                let session = this
-                    .session
-                    .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-                register_store(this.log_store.clone(), session.runtime_env().as_ref());
+                update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+                session.ensure_log_store_registered(this.log_store.as_ref())?;
 
                 let mut schema_drift = false;
 
@@ -470,7 +500,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     && gc_is_enabled(snapshot)
                 {
                     source = with_generated_columns(
-                        session.as_ref(),
+                        &session,
                         source,
                         &table_schema,
                         &snapshot.schema().get_generated_columns()?,
@@ -599,23 +629,19 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
 
-                let (predicate_str, predicate) = match this.predicate {
-                    Some(predicate) => {
-                        let pred = match predicate {
-                            Expression::DataFusion(expr) => expr,
-                            Expression::String(s) => {
-                                let df_schema = source
-                                    .schema()
-                                    .as_ref()
-                                    .clone()
-                                    .replace_qualifier(UNNAMED_TABLE);
-                                parse_predicate_expression(&df_schema, s, session.as_ref())?
-                            }
-                        };
-                        (Some(fmt_expr_to_sql(&pred)?), Some(pred))
-                    }
-                    _ => (None, None),
-                };
+                let df_schema = source
+                    .schema()
+                    .as_ref()
+                    .clone()
+                    .replace_qualifier(UNNAMED_TABLE);
+                let predicate = this
+                    .predicate
+                    .map(|p| p.resolve(&session, Arc::new(df_schema)))
+                    .transpose()?;
+                let predicate_str = predicate
+                    .as_ref()
+                    .map(|pred| fmt_expr_to_sql(pred))
+                    .transpose()?;
 
                 let config = this
                     .snapshot
@@ -649,7 +675,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                     pred.clone(),
                                     this.log_store.clone(),
                                     snapshot,
-                                    session.as_ref(),
+                                    &session,
                                     partition_columns.clone(),
                                     this.writer_properties_factory.clone(),
                                     deletion_timestamp,
@@ -697,7 +723,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
-                    session.as_ref(),
+                    &session,
                     source_plan.clone(),
                     partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),

@@ -42,7 +42,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
@@ -52,23 +51,22 @@ use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
-use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
-use crate::logstore::{LogStore, LogStoreRef};
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
-pub(crate) use self::session::session_state_from_session;
+pub(crate) use self::session::DeltaSessionExt;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
 pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
@@ -78,7 +76,9 @@ pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
     next::DeltaScanExec,
 };
-pub(crate) use table_provider::{DeltaScanBuilder, update_datafusion_session};
+pub(crate) use table_provider::{
+    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
+};
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
@@ -90,9 +90,11 @@ mod find_files;
 pub mod logical;
 pub mod physical;
 pub mod planner;
-mod schema_adapter;
 mod session;
+pub use session::SessionFallbackPolicy;
+pub(crate) use session::{SessionResolveContext, resolve_session_state};
 mod table_provider;
+pub(crate) mod utils;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -303,14 +305,6 @@ impl DeltaTableState {
     pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
         self.snapshot.log_data().statistics()
     }
-}
-
-// each delta table must register a specific object store, since paths are internally
-// handled relative to the table root.
-pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
-    let object_store_url = store.object_store_url();
-    let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store(None));
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -639,6 +633,7 @@ mod tests {
     use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::Range;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+    use url::Url;
 
     use super::*;
 

@@ -32,58 +32,52 @@
 //!     .expect("Failed to delete");
 //! # })
 //! ````
+use std::sync::Arc;
+use std::time::Instant;
 
-use arrow_schema::Schema;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::{DFSchema, ScalarValue, exec_datafusion_err};
-use datafusion::datasource::provider_as_source;
+use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::{ExecutionProps, SessionState};
-use datafusion::logical_expr::simplify::SimplifyContext;
-use datafusion::logical_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, lit,
-};
-use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
+use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::{Expr, col};
-
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+use datafusion::prelude::Expr;
 use futures::future::BoxFuture;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use uuid::Uuid;
-
+use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
+use uuid::Uuid;
 
 use super::Operation;
 use super::cdc::should_write_cdc;
-use super::datafusion_utils::Expression;
+use crate::DeltaTable;
+use crate::delta_datafusion::DeltaScanConfig;
+use crate::delta_datafusion::DeltaSessionExt;
+use crate::delta_datafusion::SessionFallbackPolicy;
+use crate::delta_datafusion::SessionResolveContext;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
+use crate::delta_datafusion::logical::{
+    LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
+};
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaScanConfigBuilder, DeltaTableProvider, create_session, find_files,
-    register_store,
+    Expression, create_session, resolve_session_state, scan_files_where_matches,
+    update_datafusion_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, Add, EagerSnapshot, Remove, resolve_snapshot_with_config};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::WriterStatsConfig;
-use crate::operations::write::execution::{write_execution_plan, write_execution_plan_cdc};
+use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
-use crate::table::config::TablePropertiesExt as _;
+use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
     IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
 };
-use crate::table::state::DeltaTableState;
-use crate::{DeltaTable, DeltaTableError};
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
@@ -100,6 +94,7 @@ pub struct DeleteBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Commit properties and configuration
@@ -159,6 +154,7 @@ impl DeleteBuilder {
             snapshot,
             log_store,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties_factory,
             custom_execute_handler: None,
@@ -171,9 +167,25 @@ impl DeleteBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -202,7 +214,7 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let this = self;
+        let mut this = self;
 
         Box::pin(async move {
             let base_config = this.snapshot.as_ref().map(|s| s.load_config());
@@ -220,12 +232,29 @@ impl std::future::IntoFuture for DeleteBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let session = this
-                .session
-                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session().state(),
+                SessionResolveContext {
+                    operation: "delete",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+            session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-            register_store(this.log_store.clone(), session.runtime_env().as_ref());
-
+            let predicate = this
+                .predicate
+                .map(|p| {
+                    let scan_config = DeltaScanConfig::new_from_session(&session);
+                    let predicate_schema = scan_config
+                        .table_schema(snapshot.table_configuration())?
+                        .to_dfschema_ref()?;
+                    p.resolve(&session, predicate_schema)
+                })
+                .transpose()?;
             let file_format_options = &snapshot.load_config().file_format_options;
             let session_state =
                 session
@@ -240,42 +269,51 @@ impl std::future::IntoFuture for DeleteBuilder {
                 file_format_options.as_ref(),
             )?);
 
-            let predicate = match this.predicate {
-                Some(predicate) => {
-                    let expr = match predicate {
-                        Expression::DataFusion(expr) => expr,
-                        Expression::String(s) => {
-                            snapshot.parse_predicate_expression(s, session.as_ref())?
-                        }
-                    };
-                    let df_schema = DFSchema::try_from(snapshot.arrow_schema())?;
-                    let context = SimplifyContext::new(&session.execution_props())
-                        .with_schema(Arc::new(df_schema));
-                    let simplifier = ExprSimplifier::new(context);
-                    Some(simplifier.simplify(expr)?)
-                }
-                None => None,
+            let operation = DeltaOperation::Delete {
+                predicate: predicate.as_ref().map(|p| fmt_expr_to_sql(p)).transpose()?,
             };
 
-            let (new_snapshot, metrics) = execute(
+            let (actions, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
-                snapshot,
-                session.as_ref(),
+                snapshot.clone(),
+                &session,
                 this.writer_properties_factory,
-                this.commit_properties,
                 operation_id,
-                this.custom_execute_handler.as_ref(),
             )
             .await?;
 
+            // Do not make a commit when there are zero updates to the state
+            if actions.is_empty() {
+                return Ok((
+                    DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
+                    metrics,
+                ));
+            }
+
+            let mut props = this.commit_properties;
+            props
+                .app_metadata
+                .insert("readVersion".to_owned(), snapshot.version().into());
+            props.app_metadata.insert(
+                "operationMetrics".to_owned(),
+                serde_json::to_value(&metrics)?,
+            );
+
+            let handle = this.custom_execute_handler.take();
+            let commit = CommitBuilder::from(props)
+                .with_actions(actions)
+                .with_operation_id(operation_id)
+                .with_post_commit_hook_handler(handle.clone())
+                .build(Some(&snapshot), this.log_store.clone(), operation)
+                .await?;
+
+            if let Some(handler) = handle {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
+
             Ok((
-                DeltaTable::new_with_state(
-                    this.log_store,
-                    DeltaTableState {
-                        snapshot: new_snapshot,
-                    },
-                ),
+                DeltaTable::new_with_state(this.log_store, commit.snapshot()),
                 metrics,
             ))
         })
@@ -319,210 +357,136 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_non_empty_expr(
-    snapshot: &EagerSnapshot,
-    log_store: LogStoreRef,
-    session: &dyn Session,
-    expression: &Expr,
-    rewrite: &[Add],
-    metrics: &mut DeleteMetrics,
-    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
-    partition_scan: bool,
-    operation_id: Uuid,
-) -> DeltaResult<Vec<Action>> {
-    // For each identified file perform a parquet scan + filter + limit (1) + count.
-    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
-    let mut actions: Vec<Action> = Vec::new();
-    let table_partition_cols = snapshot.metadata().partition_columns().clone();
-
-    let scan_config = DeltaScanConfigBuilder::default()
-        .with_file_column(false)
-        .with_schema(snapshot.input_schema())
-        .build(snapshot)?;
-
-    let target_provider = Arc::new(
-        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_files(rewrite.to_vec()),
-    );
-    let target_provider = provider_as_source(target_provider);
-    let source = LogicalPlanBuilder::scan("target", target_provider.clone(), None)?.build()?;
-
-    let source = LogicalPlan::Extension(Extension {
-        node: Arc::new(MetricObserver {
-            id: "delete_source_count".into(),
-            input: source,
-            enable_pushdown: false,
-        }),
-    });
-
-    let writer_stats_config = WriterStatsConfig::new(
-        snapshot.table_properties().num_indexed_cols(),
-        snapshot
-            .table_properties()
-            .data_skipping_stats_columns
-            .as_ref()
-            .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
-    );
-
-    if !partition_scan {
-        // Apply the negation of the filter and rewrite files
-        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-        let filter = LogicalPlanBuilder::from(source.clone())
-            .filter(negated_expression)?
-            .build()?;
-        let filter = session.create_physical_plan(&filter).await?;
-
-        let add_actions: Vec<Action> = write_execution_plan(
-            Some(snapshot),
-            session,
-            filter.clone(),
-            table_partition_cols.clone(),
-            log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
-            None,
-            writer_properties_factory.clone(),
-            writer_stats_config.clone(),
-        )
-        .await?;
-
-        actions.extend(add_actions);
-
-        let source_count = find_metric_node(SOURCE_COUNT_ID, &filter).ok_or_else(|| {
-            DeltaTableError::Generic("Unable to locate expected metric node".into())
-        })?;
-        let source_count_metrics = source_count.metrics().unwrap();
-        let read_records = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
-        let filter_records = filter.metrics().and_then(|m| m.output_rows()).unwrap_or(0);
-
-        metrics.num_copied_rows = filter_records;
-        metrics.num_deleted_rows = read_records - filter_records;
-    }
-
-    // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-    if let Ok(true) = should_write_cdc(snapshot) {
-        let mut projection: Vec<_> = source.schema().iter().map(|(_, f)| col(f.name())).collect();
-        projection.push(lit(ScalarValue::Utf8(Some("delete".to_string()))).alias(CDC_COLUMN_NAME));
-
-        let cdc_filter = LogicalPlanBuilder::new(source.clone())
-            .filter(expression.clone())?
-            .project(projection)?
-            .build()?;
-        let cdc_filter = session.create_physical_plan(&cdc_filter).await?;
-
-        let cdc_actions = write_execution_plan_cdc(
-            Some(snapshot),
-            session,
-            cdc_filter,
-            table_partition_cols.clone(),
-            log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
-            None,
-            writer_properties_factory,
-            writer_stats_config,
-        )
-        .await?;
-        actions.extend(cdc_actions)
-    }
-
-    Ok(actions)
-}
-
-#[allow(clippy::too_many_arguments)]
-#[tracing::instrument(skip_all, fields(operation = "delete", version = snapshot.version(), table_uri = %log_store.root_url()))]
+#[tracing::instrument(
+    skip_all,
+    fields(
+        operation = "delete",
+        version = snapshot.version(),
+        table_uri = %log_store.root_url(),
+    )
+)]
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
     session: &dyn Session,
-    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
-    mut commit_properties: CommitProperties,
     operation_id: Uuid,
-    handle: Option<&Arc<dyn CustomExecuteHandler>>,
-) -> DeltaResult<(EagerSnapshot, DeleteMetrics)> {
-    if !&snapshot.load_config().require_files {
-        return Err(DeltaTableError::NotInitializedWithFiles("DELETE".into()));
-    }
-
+) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics::default();
+    metrics.num_removed_files = 0;
+    metrics.num_added_files = 0;
 
     let scan_start = Instant::now();
-    let candidates = find_files(&snapshot, log_store.clone(), session, predicate.clone()).await?;
+
+    let Some(predicate) = predicate else {
+        // no predicate, so we are just dropping all files.
+        // we also don't need to write cdc actions if we are fropping all files.
+        let removes: Vec<_> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|f| f.remove_action(true).into())
+            .try_collect()
+            .await?;
+        metrics.num_removed_files = removes.len();
+        metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+        return Ok((removes, metrics));
+    };
+
+    let maybe_scan_plan = scan_files_where_matches(session, &snapshot, predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
-    let predicate = predicate.unwrap_or(lit(true));
-
-    let mut actions = {
-        let write_start = Instant::now();
-        let add = execute_non_empty_expr(
-            &snapshot,
-            log_store.clone(),
-            session,
-            &predicate,
-            &candidates.candidates,
-            &mut metrics,
-            writer_properties_factory.clone(),
-            candidates.partition_scan,
-            operation_id,
-        )
-        .await?;
-        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis() as u64;
-        add
+    let Some(files_scan) = maybe_scan_plan else {
+        // no files contain data matching the predicate, so nothing more todo.
+        return Ok((vec![], metrics));
     };
-    let remove = candidates.candidates;
 
-    let deletion_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
+    let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
+    let removes: Vec<_> = snapshot
+        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .zip(stream::iter(std::iter::repeat((
+            root_url,
+            Arc::new(files_scan.files_set()),
+        ))))
+        .map(|(f, u)| f.map(|f| (f, u)))
+        .try_filter_map(|(f, (root, valid))| async move {
+            let url = root
+                .clone()
+                .join(f.path_raw())
+                .map_err(|e| exec_datafusion_err!("{e}"))?;
+            let is_valid = valid.contains(url.as_ref());
+            Ok(is_valid.then(|| Action::Remove(f.remove_action(true))))
+        })
+        .try_collect()
+        .await?;
+    metrics.num_removed_files = removes.len();
 
-    metrics.num_removed_files = remove.len();
-    metrics.num_added_files = actions.len();
-
-    for action in remove {
-        actions.push(Action::Remove(Remove {
-            path: action.path,
-            deletion_timestamp: Some(deletion_timestamp),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values),
-            size: Some(action.size),
-            deletion_vector: action.deletion_vector,
-            tags: None,
-            base_row_id: action.base_row_id,
-            default_row_commit_version: action.default_row_commit_version,
-        }))
+    if files_scan.partition_only {
+        // if we are deleting entire files only, no need to rescue any data or write cdc files.
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
+        return Ok((removes, metrics));
     }
+
+    let counted_scan = LogicalPlan::Extension(Extension {
+        node: Arc::new(MetricObserver {
+            id: SOURCE_COUNT_ID.into(),
+            input: files_scan.scan().clone(),
+            enable_pushdown: false,
+        }),
+    });
+
+    // We only want to delete data where our predicate evaluates to `true`,
+    // so we need to retain all data from the removed files where the predicate
+    // is `false` or `NULL` (i.e. is not true)
+    let rescued_data = counted_scan
+        .into_builder()
+        .filter(files_scan.predicate.clone().is_not_true())?
+        .build()?;
+
+    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
+        // create change set entries for all records we deleted
+        let cdc_deletes = files_scan
+            .scan()
+            .clone()
+            .into_builder()
+            .filter(files_scan.predicate)?
+            .with_column(CDC_COLUMN_NAME, lit("delete"))?
+            .build()?;
+        (
+            rescued_data
+                .into_builder()
+                .with_column(CDC_COLUMN_NAME, lit(""))?
+                .union(cdc_deletes)?
+                .build()?,
+            true,
+        )
+    } else {
+        (rescued_data, false)
+    };
+
+    let exec = session.create_physical_plan(&write_plan).await?;
+    let (mut actions, _) = write_exec_plan(
+        session,
+        log_store.as_ref(),
+        snapshot.table_configuration(),
+        exec.clone(),
+        Some(operation_id),
+        write_cdc,
+    )
+    .await?;
+
+    if let Some(source_count) = find_metric_node(SOURCE_COUNT_ID, &exec) {
+        let source_count_metrics = source_count.metrics().unwrap();
+        let read_records = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+        let filter_records = exec.metrics().and_then(|m| m.output_rows()).unwrap_or(0);
+        metrics.num_copied_rows = filter_records;
+        metrics.num_deleted_rows = read_records - filter_records;
+    };
+
+    metrics.num_added_files = actions.len();
+    actions.extend(removes);
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
-
-    commit_properties
-        .app_metadata
-        .insert("readVersion".to_owned(), snapshot.version().into());
-    commit_properties.app_metadata.insert(
-        "operationMetrics".to_owned(),
-        serde_json::to_value(&metrics)?,
-    );
-
-    // Do not make a commit when there are zero updates to the state
-    let operation = DeltaOperation::Delete {
-        predicate: Some(fmt_expr_to_sql(&predicate)?),
-    };
-    if actions.is_empty() {
-        return Ok((snapshot.clone(), metrics));
-    }
-
-    let commit = CommitBuilder::from(commit_properties)
-        .with_actions(actions)
-        .with_operation_id(operation_id)
-        .with_post_commit_hook_handler(handle.cloned())
-        .build(Some(&snapshot), log_store.clone(), operation)
-        .await?;
-
-    if let Some(handler) = handle {
-        handler.post_execute(&log_store, operation_id).await?;
-    }
-    Ok((commit.snapshot().snapshot, metrics))
+    Ok((actions, metrics))
 }
 
 #[cfg(test)]
@@ -543,6 +507,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
+    use arrow_array::BinaryArray;
     use arrow_array::StringArray;
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;
@@ -550,8 +515,12 @@ mod tests {
     use arrow_schema::Fields;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
+    use datafusion::scalar::ScalarValue;
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::PrimitiveType;
+    use delta_kernel::schema::StructType;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
@@ -1014,6 +983,201 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_partition_string_predicate_dictionary_formatting() -> DeltaResult<()> {
+        // Regression test: resolving predicates against the execution scan schema can
+        // dictionary-encode partition columns, so fmt_expr_to_sql must support
+        // ScalarValue::Dictionary scalars.
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["id"])).await;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+            ],
+        )?;
+
+        let table = write_batch(table, batch).await;
+
+        let (table, _metrics) = table.delete().with_predicate("id = 'A'").await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = 'A'"));
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 2     | 2021-02-02 |",
+            "| C  | 4     | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_binary_equality_non_partition() -> DeltaResult<()> {
+        // Regression test: DF52 view types can cause predicate evaluation to compare
+        // Binary against BinaryView for equality predicates.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("data", DataType::Binary, true),
+            Field::new("int32", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"aaa".as_slice()),
+                    Some(b"bbb".as_slice()),
+                    Some(b"ccc".as_slice()),
+                ])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![0, 1, 2])) as ArrayRef,
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        let (table, _metrics) = table
+            .delete()
+            .with_predicate(col("data").eq(lit(ScalarValue::Binary(Some(b"bbb".to_vec())))))
+            .await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(
+            parameters["predicate"],
+            json!("data = decode('626262', 'hex')")
+        );
+
+        let mut values = Vec::new();
+        for batch in get_data(&table).await {
+            let int32 = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for idx in 0..batch.num_rows() {
+                values.push(int32.value(idx));
+            }
+        }
+        values.sort();
+        assert_eq!(values, vec![0, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_string_equality_utf8view_regression_4125() -> DeltaResult<()> {
+        // Direct regression test for GitHub issue #4125:
+        // https://github.com/delta-io/delta-rs/issues/4125
+        //
+        // Non-partition string column with default session (view types enabled in DF52+).
+        // Was failing with: Invalid comparison operation: Utf8 == Utf8View
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["alice", "bob", "charlie"])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        // This was the failing operation in issue #4125
+        let (table, _metrics) = table.delete().with_predicate("name = 'bob'").await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("name = 'bob'"));
+
+        let expected = [
+            "+---------+-------+",
+            "| name    | value |",
+            "+---------+-------+",
+            "| alice   | 1     |",
+            "| charlie | 3     |",
+            "+---------+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_custom_session_schema_force_view_types_disabled() -> DeltaResult<()> {
+        // Integration guardrail: user-supplied DataFusion sessions may disable view types.
+        // Predicate resolution must respect the provided session's config.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["alice", "bob", "charlie"])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        let config: datafusion::prelude::SessionConfig =
+            crate::delta_datafusion::DeltaSessionConfig::default().into();
+        let config = config.set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let runtime_env = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .build_arc()
+            .unwrap();
+        let state = datafusion::execution::SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_query_planner(crate::delta_datafusion::planner::DeltaPlanner::new())
+            .build();
+        let session = Arc::new(state);
+
+        let (table, _metrics) = table
+            .delete()
+            .with_session_state(session)
+            .with_predicate("name = 'bob'")
+            .await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("name = 'bob'"));
+
+        let expected = [
+            "+---------+-------+",
+            "| name    | value |",
+            "+---------+-------+",
+            "| alice   | 1     |",
+            "| charlie | 3     |",
+            "+---------+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_failure_nondeterministic_query() {
         // Deletion requires a deterministic predicate
 
@@ -1152,7 +1316,7 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(2));
 
-        let ctx = SessionContext::new();
+        let ctx = create_session().into_inner();
         let table = table
             .scan_cdf()
             .with_starting_version(0)
@@ -1179,6 +1343,81 @@ mod tests {
             "| 2     | 2020 | delete       | 2               |",
             "| 2     | 2020 | insert       | 1               |",
             "| 3     | 2024 | insert       | 1               |",
+            "+-------+------+--------------+-----------------+",
+        ], &batches }
+    }
+
+    #[tokio::test]
+    async fn delete_partitioned_cdf() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("year", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+        let kernel_schema: StructType = schema.as_ref().try_into_kernel().unwrap();
+
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(kernel_schema.fields().cloned())
+            .with_partition_columns(vec!["year"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("2020"),
+                    Some("2020"),
+                    Some("2024"),
+                    Some("2025"),
+                ])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])),
+            ],
+        )
+        .unwrap();
+
+        println!("protodol: {:?}", table.snapshot().unwrap().protocol());
+
+        let table = table
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), Some(1));
+
+        let (table, _metrics) = table
+            .delete()
+            .with_predicate(col("value").gt(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(2));
+
+        let ctx = create_session().into_inner();
+        let table = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect(table, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
+
+        // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(4)).collect();
+
+        assert_batches_sorted_eq! {[
+            "+-------+------+--------------+-----------------+",
+            "| value | year | _change_type | _commit_version |",
+            "+-------+------+--------------+-----------------+",
+            "| 1     | 2020 | insert       | 1               |",
+            "| 2     | 2020 | insert       | 1               |",
+            "| 3     | 2024 | delete       | 2               |",
+            "| 3     | 2024 | insert       | 1               |",
+            "| 4     | 2025 | delete       | 2               |",
+            "| 4     | 2025 | insert       | 1               |",
             "+-------+------+--------------+-----------------+",
         ], &batches }
     }
@@ -1249,7 +1488,7 @@ mod tests {
             "The first batch was not written successfully"
         );
 
-        let predicate = "\"created_at\" < ARROW_CAST('2024-01-01 00:00:00+00:00', 'Timestamp(Microsecond, Some(\"UTC\"))')";
+        let predicate = "\"created_at\" < ARROW_CAST('2024-01-01 00:00:00+00:00', 'Timestamp(Microsecond, None)')";
         let (table, _metrics) = table.delete().with_predicate(predicate).await?;
         assert_eq!(table.version(), Some(2), "The delete failed to execute");
         Ok(())

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow_schema::{Schema as ArrowSchema, SchemaRef};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion::physical_expr::{PhysicalExpr, create_physical_expr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
@@ -14,10 +14,12 @@ use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
+use deltalake::datafusion::execution::object_store::ObjectStoreUrl;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
 use deltalake::delta_datafusion::DeltaScanNext;
-use deltalake::{datafusion, DeltaResult, DeltaTableError};
+use deltalake::logstore::object_store::DynObjectStore;
+use deltalake::{DeltaResult, DeltaTableError, datafusion};
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
 
@@ -123,11 +125,28 @@ impl TableProvider for LazyTableProvider {
 pub struct TokioDeltaScan {
     inner: DeltaScanNext,
     handle: Handle,
+    object_store_url: Option<ObjectStoreUrl>,
+    object_store: Option<Arc<DynObjectStore>>,
 }
 
 impl TokioDeltaScan {
     pub fn new(inner: DeltaScanNext, handle: Handle) -> Self {
-        Self { inner, handle }
+        Self {
+            inner,
+            handle,
+            object_store_url: None,
+            object_store: None,
+        }
+    }
+
+    pub fn with_object_store(
+        mut self,
+        object_store_url: ObjectStoreUrl,
+        object_store: Arc<DynObjectStore>,
+    ) -> Self {
+        self.object_store_url = Some(object_store_url);
+        self.object_store = Some(object_store);
+        self
     }
 }
 
@@ -160,6 +179,12 @@ impl TableProvider for TokioDeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        if let (Some(url), Some(store)) = (&self.object_store_url, &self.object_store) {
+            session
+                .runtime_env()
+                .register_object_store(url.as_ref(), store.clone());
+        }
+
         let inner = &self.inner;
 
         self.handle
@@ -240,6 +265,11 @@ mod tests {
             } else {
                 Ok(None)
             }
+        }
+
+        fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            // DataFusion may need to restart a stream from the beginning (e.g. recursive CTEs).
+            Arc::new(RwLock::new(TestBatchGenerator::new(self.data.clone())))
         }
     }
 

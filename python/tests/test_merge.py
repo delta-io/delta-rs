@@ -28,7 +28,7 @@ def test_merge_when_matched_delete_wo_predicate(
 
     source_table = Table(
         {
-            "id": Array(["5"], ArrowField("id", DataType.string(), nullable=True)),
+            "id": Array(["5"], ArrowField("id", DataType.string_view(), nullable=True)),
             "weight": Array([105], ArrowField("id", DataType.int32(), nullable=True)),
         }
     )
@@ -1921,7 +1921,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         {
             "foo": Array(
                 ["a", "b", None, None],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [1, 2, 3, None],
@@ -1961,7 +1961,7 @@ def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: b
         {
             "foo": Array(
                 ["a"],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [10],
@@ -2056,6 +2056,65 @@ def test_merge_field_special_characters_delete_2438(tmp_path: pathlib.Path):
     assert (
         QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     ) == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_preserves_casing_in_quoted_identifiers(
+    tmp_path: pathlib.Path, streaming: bool
+):
+    data = Table(
+        {
+            "fooBar": Array(
+                ["A001", "A002"],
+                ArrowField("fooBar", type=DataType.string_view(), nullable=True),
+            )
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    source_table = Table(
+        {
+            "fooBar": Array(
+                ["A003"],
+                ArrowField("fooBar", type=DataType.string_view(), nullable=True),
+            )
+        }
+    )
+
+    (
+        dt.merge(
+            source=source_table,
+            predicate='target."fooBar" = source."fooBar"',
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    expected = Table(
+        {
+            "fooBar": Array(
+                ["A001", "A002", "A003"],
+                ArrowField("fooBar", type=DataType.string_view(), nullable=True),
+            )
+        }
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute('select * from tbl order by "fooBar" asc')
+        .read_all()
+    )
+
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
 
 
 @pytest.mark.pandas

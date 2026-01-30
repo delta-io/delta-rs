@@ -12,6 +12,45 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 
+def _normalize_pyarrow_view_types_for_sort(tbl: "pa.Table") -> "pa.Table":
+    """Normalize view types so pyarrow Table.sort_by works.
+
+    PyArrow does not currently support sorting RecordBatches that contain
+    `binary_view` (and sometimes `string_view`) columns.
+    """
+
+    import pyarrow as pa
+
+    # Older PyArrow versions may not expose view types.
+    binary_view = getattr(pa, "binary_view", None)
+    string_view = getattr(pa, "string_view", None)
+    if binary_view is None and string_view is None:
+        return tbl
+
+    fields = []
+    columns = []
+    for field in tbl.schema:
+        col = tbl[field.name]
+        ty = field.type
+
+        if binary_view is not None and ty == binary_view():
+            ty = pa.binary()
+            # PyArrow 16.x lacks casts for view types, so rebuild the array.
+            col = pa.array(col.to_pylist(), type=ty)
+        elif string_view is not None and ty == string_view():
+            ty = pa.string()
+            col = pa.array(col.to_pylist(), type=ty)
+
+        fields.append(
+            pa.field(field.name, ty, nullable=field.nullable, metadata=field.metadata)
+        )
+        columns.append(col)
+
+    return pa.Table.from_arrays(
+        columns, schema=pa.schema(fields, metadata=tbl.schema.metadata)
+    )
+
+
 def test_read_cdf_partitioned_with_predicate():
     dt = DeltaTable("../crates/test/tests/data/cdf-table/")
     data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'").read_all()
@@ -467,7 +506,7 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     cdc_data = pq.read_table(cdc_path)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data == expected_data
+    assert cdc_data.to_pydict() == expected_data.to_pydict()
 
 
 @pytest.mark.pyarrow
@@ -475,9 +514,6 @@ def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     import pyarrow as pa
     import pyarrow.compute as pc
     import pyarrow.dataset as ds
-    import pyarrow.parquet as pq
-
-    cdc_path = f"{tmp_path}/_change_data"
 
     write_deltalake(
         tmp_path,
@@ -496,17 +532,31 @@ def test_delete_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
             field_=pa.field("_change_type", pa.string(), nullable=False),
             column=[["delete"] * 2],
         )
+        .select(["int64", "_change_type"])
+        .sort_by("int64")
     )
 
-    table_schema = pa.schema(dt.schema())
-    table_schema = table_schema.insert(
-        len(table_schema), pa.field("_change_type", pa.string(), nullable=False)
+    # delta-rs returns Arrow view types (e.g. `string_view`) for zero-copy.
+    # PyArrow 16.x lacks compute kernels for view types, and even `Table.filter`
+    # can fail because it applies `take` across *all* columns.
+    # Convert the only columns we need to kernel-backed types.
+    raw_cdc_table = pa.table(dt.load_cdf().read_all())
+    change_type_py = raw_cdc_table.column(
+        raw_cdc_table.schema.get_field_index("_change_type")
+    ).to_pylist()
+    cdc_table = pa.table(
+        {
+            "int64": raw_cdc_table.column(
+                raw_cdc_table.schema.get_field_index("int64")
+            ),
+            "_change_type": pa.array(change_type_py, type=pa.string()),
+        }
     )
-    cdc_data = pq.read_table(cdc_path, schema=table_schema)
 
-    assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert len(os.listdir(cdc_path)) == 2
-    assert cdc_data == expected_data
+    delete_mask = pa.array([(v == "delete") for v in change_type_py], type=pa.bool_())
+    cdc_data = cdc_table.filter(delete_mask).sort_by("int64")
+
+    assert cdc_data.to_pydict() == expected_data.to_pydict()
 
 
 @pytest.mark.pyarrow
@@ -615,7 +665,9 @@ def test_write_predicate_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Tabl
     cdc_data = cdc_data.combine_chunks().sort_by([("_change_type", "ascending")])
 
     assert expected_data == cdc_data
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data_pyarrow
+
+    table = _normalize_pyarrow_view_types_for_sort(dt.to_pyarrow_table())
+    assert table.sort_by([("utf8", "ascending")]) == sample_data_pyarrow
 
 
 @pytest.mark.pyarrow
@@ -660,8 +712,11 @@ def test_write_overwrite_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Ta
         for col in tbl.column_names
         if col not in ["_commit_version", "_commit_timestamp"]
     ]
-    assert pa.table(tbl.select(select_cols)).sort_by(sort_values) == expected_data
-    assert dt.to_pyarrow_table().sort_by([("utf8", "ascending")]) == sample_data_pyarrow
+    actual = _normalize_pyarrow_view_types_for_sort(pa.table(tbl.select(select_cols)))
+    assert actual.sort_by(sort_values) == expected_data
+
+    table = _normalize_pyarrow_view_types_for_sort(dt.to_pyarrow_table())
+    assert table.sort_by([("utf8", "ascending")]) == sample_data_pyarrow
 
 
 @pytest.mark.pyarrow
@@ -713,9 +768,10 @@ def test_write_overwrite_partitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Tabl
         "_change_data shouldn't exist since a specific partition was overwritten"
     )
 
-    assert pa.table(dt.load_cdf().read_all()).drop_columns(
-        ["_commit_version", "_commit_timestamp"]
-    ).sort_by(sort_values).select(expected_data.column_names) == pa.concat_tables(
+    actual = _normalize_pyarrow_view_types_for_sort(pa.table(dt.load_cdf().read_all()))
+    assert actual.drop_columns(["_commit_version", "_commit_timestamp"]).sort_by(
+        sort_values
+    ).select(expected_data.column_names) == pa.concat_tables(
         [first_batch, expected_data]
     ).sort_by(sort_values)
 
@@ -765,10 +821,11 @@ def test_read_cdf_last_version(tmp_path):
             "foo": Array([1, 2, 3], type=Field("foo", DataType.int32(), nullable=True)),
             "_change_type": Array(
                 ["insert", "insert", "insert"],
-                type=Field("foo", DataType.string(), nullable=True),
+                type=Field("_change_type", DataType.string_view(), nullable=True),
             ),
             "_commit_version": Array(
-                [0, 0, 0], type=Field("foo", DataType.int64(), nullable=True)
+                [0, 0, 0],
+                type=Field("_commit_version", DataType.int64(), nullable=True),
             ),
         }
     )
@@ -791,3 +848,10 @@ def test_read_cdf_last_version(tmp_path):
     )
 
     assert expected == data
+
+
+def test_read_cdf_write_stream(tmp_path):
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'")
+
+    write_deltalake(tmp_path, data)

@@ -19,7 +19,7 @@ static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 /// TEST_PREFIXES as they should appear in object stores.
 static TEST_PREFIXES_ENCODED: &[&str] = &["my table", "%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A"];
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
     let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
@@ -96,9 +96,9 @@ async fn read_write_test_onelake(context: &IntegrationContext, path: &Path) -> T
     Ok(())
 }
 
-#[test]
 #[serial]
-fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestResult {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestResult {
     let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
     unsafe {
         // Removing the envs set by the `IntegrationContext (az_cli::prepare_env())` to illustrate the issue if e.g. account_name is not set from custom `storage_options`, but still preserving the use of the `IntegrationContext`
@@ -117,8 +117,8 @@ fn list_delta_tables_using_listing_provider_with_missing_account_name() -> TestR
     Ok(())
 }
 
-#[tokio::test]
 #[serial]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_delta_tables_using_listing_provider_with_account_name() -> TestResult {
     let context = IntegrationContext::new(Box::new(MsftIntegration::default()))?;
     unsafe {

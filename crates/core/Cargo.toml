@@ -106,7 +106,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
-datafusion = ["dep:datafusion", "datafusion-datasource", "datafusion-proto"]
+datafusion = [
+    "dep:datafusion",
+    "datafusion-datasource",
+    "datafusion-proto",
+]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]

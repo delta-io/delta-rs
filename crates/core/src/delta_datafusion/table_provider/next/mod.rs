@@ -43,7 +43,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use serde::{Deserialize, Serialize};
 
 pub use self::scan::DeltaScanExec;
-use self::scan::KernelScanPlan;
+pub(crate) use self::scan::KernelScanPlan;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
@@ -53,7 +53,7 @@ use crate::table::builder::DeltaTableConfig;
 mod scan;
 
 /// Default column name for the file id column we add to files read from disk.
-const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
+pub(crate) const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SnapshotWrapper {
@@ -86,14 +86,14 @@ impl From<EagerSnapshot> for SnapshotWrapper {
 }
 
 impl SnapshotWrapper {
-    fn table_configuration(&self) -> &TableConfiguration {
+    pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.table_configuration(),
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot().table_configuration(),
         }
     }
 
-    fn snapshot(&self) -> &Snapshot {
+    pub(crate) fn snapshot(&self) -> &Snapshot {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
@@ -115,6 +115,8 @@ pub struct DeltaScan {
     scan_schema: SchemaRef,
     /// Full schema including file_id column if configured
     full_schema: SchemaRef,
+    #[serde(skip)]
+    file_skipping_predicate: Option<Vec<Expr>>,
 }
 
 impl DeltaScan {
@@ -134,7 +136,16 @@ impl DeltaScan {
             config,
             scan_schema,
             full_schema,
+            file_skipping_predicate: None,
         })
+    }
+
+    pub(crate) fn with_file_skipping_predicate(
+        mut self,
+        predicate: impl IntoIterator<Item = Expr>,
+    ) -> Self {
+        self.file_skipping_predicate = Some(predicate.into_iter().collect());
+        self
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -196,6 +207,7 @@ impl TableProvider for DeltaScan {
             kernel_projection.as_ref(),
             filters,
             &self.config,
+            self.file_skipping_predicate.clone(),
         )?;
 
         let stream = match &self.snapshot {
@@ -224,6 +236,7 @@ impl TableProvider for DeltaScan {
         Ok(scan::supports_filters_pushdown(
             filter,
             self.snapshot.table_configuration(),
+            &self.config,
         ))
     }
 }
