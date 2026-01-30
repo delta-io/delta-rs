@@ -29,6 +29,13 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// URL.
+    ///
+    /// Note: this is a best-effort "check then register" helper and is not atomic. Concurrent
+    /// callers may race and register the same mapping multiple times (typically benign).
+    ///
+    /// If the session already has a (stale/incorrect) object store registered for the URL, this
+    /// method will not replace it; callers must explicitly override the mapping via
+    /// `RuntimeEnv::register_object_store`.
     fn ensure_object_store_registered(
         &self,
         log_store: &dyn LogStore,

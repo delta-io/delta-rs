@@ -813,6 +813,10 @@ impl DeltaTable {
     /// This registers the table's root object store with the session's `RuntimeEnv` if missing.
     /// Registration is idempotent and will not overwrite an existing mapping.
     ///
+    /// If the session already has an object store registered for the table's URL but it is stale or
+    /// incorrect, this method will not replace it. To override an existing mapping, call
+    /// `RuntimeEnv::register_object_store` directly.
+    ///
     /// ```rust,no_run
     /// use datafusion::prelude::SessionContext;
     /// use deltalake_core::{DeltaResult, DeltaTable};
