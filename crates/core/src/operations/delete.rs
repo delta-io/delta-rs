@@ -394,14 +394,9 @@ async fn execute(
 
     if props.partition_only {
         // Partition-only delete: select files via Add-action partition values (no data-file scan).
-        let candidates = crate::delta_datafusion::find_files(
-            &snapshot,
-            log_store.clone(),
-            session,
-            Some(predicate.clone()),
-        )
-        .await?
-        .candidates;
+        let candidates =
+            crate::delta_datafusion::find_files_by_partition_predicate(&snapshot, &predicate)
+                .await?;
 
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
