@@ -58,9 +58,10 @@ impl Iterator for StreamToReaderAdapter {
     type Item = Result<RecordBatch, ArrowError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let next = rt()
-            .block_on(self.stream.next())
-            .map(|b| b.map_err(|e| ArrowError::ExternalError(Box::new(e))));
+        let next = tokio::task::block_in_place(|| {
+            rt().block_on(self.stream.next())
+                .map(|b| b.map_err(|e| ArrowError::ExternalError(Box::new(e))))
+        });
 
         match next {
             Some(Ok(batch)) if self.needs_cast => Some(self.normalize_batch(batch)),
