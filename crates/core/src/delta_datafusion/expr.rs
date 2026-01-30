@@ -194,7 +194,7 @@ pub(crate) struct DeltaContextProvider<'a> {
 }
 
 impl<'a> DeltaContextProvider<'a> {
-    fn new(session: &'a dyn Session) -> DeltaResult<Self> {
+    fn try_new(session: &'a dyn Session) -> DeltaResult<Self> {
         let planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(CustomNestedFunctionPlanner::default()),
@@ -287,7 +287,7 @@ pub fn parse_predicate_expression(
             source: Box::new(err),
         })?;
 
-    let context_provider = DeltaContextProvider::new(session)?;
+    let context_provider = DeltaContextProvider::try_new(session)?;
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 

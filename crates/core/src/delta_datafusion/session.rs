@@ -42,10 +42,15 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
         operation_id: Option<Uuid>,
     ) -> DeltaResult<()>;
 
-    /// Ensure the session's `RuntimeEnv` has the delta-rs object store registered for a table.
+    /// Ensure the session's `RuntimeEnv` has a per-table, prefixed object store registered.
     ///
-    /// Delta-rs registers a per-table object store URL (using the `delta-rs://...` scheme) so
-    /// DataFusion can resolve table-relative paths consistently across storage backends.
+    /// Delta-rs historically registered a synthetic per-table object store URL (using the
+    /// `delta-rs://...` scheme) that maps to `LogStore::object_store` (scoped to the table root).
+    /// This is primarily a migration helper for legacy DataFusion integrations that expect
+    /// table-relative paths.
+    ///
+    /// This does not support fully-qualified file URLs (e.g. shallow clones). Prefer
+    /// `ensure_object_store_registered` in new code.
     ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// table's delta-rs object store URL.
@@ -143,7 +148,9 @@ pub(crate) fn resolve_session_state(
             Ok((derived, ResolvedSessionStateKind::DerivedFromTrait))
         }
         SessionFallbackPolicy::RequireSessionState => Err(DeltaTableError::generic(format!(
-            "{operation}: provided DataFusion Session (session_id={session_id}) is not a SessionState. To fix: pass a concrete SessionState (e.g. Arc::new(create_session().state()) or Arc::new(session_ctx.state())). Catalogs are not transferable via the Session trait. See delta-io/delta-rs#4081.",
+            "{operation}: provided DataFusion Session (session_id={session_id}) is not a SessionState. \
+To fix: pass a concrete SessionState (e.g. Arc::new(create_session().state()) or Arc::new(session_ctx.state())). \
+Catalogs are not transferable via the Session trait. See delta-io/delta-rs#4081.",
             operation = ctx.operation,
             session_id = provided.session_id(),
         ))),
@@ -157,7 +164,9 @@ fn warn_incompatible_session(ctx: SessionResolveContext<'_>, session: &dyn DataF
         table_uri = ?table_uri,
         session_id = %session.session_id(),
         cdc = ctx.cdc,
-        "Provided DataFusion Session is not a SessionState; falling back to internal defaults. This may ignore the caller's runtime/config/execution props/UDF registries/caches. Catalogs are not transferable via the Session trait. See delta-io/delta-rs#4081."
+        "Provided DataFusion Session is not a SessionState; falling back to internal defaults. \
+    This may ignore the caller's runtime/config/execution props/UDF registries/caches. \
+    Catalogs are not transferable via the Session trait. See delta-io/delta-rs#4081."
     );
 }
 
