@@ -49,6 +49,9 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// This is primarily a migration helper for legacy DataFusion integrations that expect
     /// table-relative paths.
     ///
+    /// Only non-migrated/legacy operations should rely on this behavior; the newer table provider
+    /// path does not rely on these internal/special `delta-rs://...` URLs.
+    ///
     /// This does not support fully-qualified file URLs (e.g. shallow clones). Prefer
     /// `ensure_object_store_registered` in new code.
     ///
