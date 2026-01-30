@@ -24,12 +24,13 @@ use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
-    common::{ColumnStatistics, HashMap, Result, Statistics, plan_err, stats::Precision},
+    common::{
+        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, plan_err, stats::Precision,
+    },
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
-    physical_expr::planner::logical2physical,
     physical_plan::{
         ExecutionPlan,
         empty::EmptyExec,
@@ -293,6 +294,10 @@ type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
+    // Schema of physical file columns to read from Parquet (no Delta partitions, no file-id).
+    //
+    // This is also the schema used for Parquet pruning/pushdown. It may include view types
+    // (e.g. Utf8View/BinaryView) depending on `DeltaScanConfig`.
     parquet_read_schema: &SchemaRef,
     limit: Option<usize>,
     file_id_field: &FieldRef,
@@ -308,6 +313,7 @@ async fn get_read_plan(
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
     let full_read_schema = Arc::new(full_read_schema.finish());
+    let full_read_df_schema = full_read_schema.clone().to_dfschema()?;
 
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
@@ -332,7 +338,7 @@ async fn get_read_plan(
         if !has_selection_vectors && let Some(pred) = predicate {
             // Predicate pushdown can reference the synthetic file-id partition column.
             // Use the full read schema (data columns + file-id) when planning.
-            let physical = logical2physical(pred, full_read_schema.as_ref());
+            let physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);
@@ -405,6 +411,7 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
         }
         return Ok(batch);
     }
+
     let options = CastOptions {
         safe: true,
         ..Default::default()
@@ -420,7 +427,9 @@ fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<Re
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, RecordBatch, StringArray, StructArray};
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, Int32Array, RecordBatch, StringArray, StructArray,
+    };
     use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
         physical_plan::collect,
@@ -833,6 +842,255 @@ mod tests {
             "+----+-------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_view_literal_against_base_parquet_file() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        // Write a Parquet file with base types, but read it with a view-typed schema.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    Some("charlie"),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_view_literal.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_view_literal.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("name").eq(lit(ScalarValue::Utf8View(Some("bob".to_string()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+----+------+-------------------------------------+",
+            "| id | name | __delta_rs_file_id__                |",
+            "+----+------+-------------------------------------+",
+            "| 2  | bob  | memory:///test_view_literal.parquet |",
+            "+----+------+-------------------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_sql_literal_against_view_schema() -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        // Write a Parquet file with base types, but read it with a view-typed schema.
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8View, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![
+                    Some("alice"),
+                    Some("bob"),
+                    Some("charlie"),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_sql_literal.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_sql_literal.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("name").eq(lit("bob"));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        let expected = vec![
+            "+----+------+------------------------------------+",
+            "| id | name | __delta_rs_file_id__               |",
+            "+----+------+------------------------------------+",
+            "| 2  | bob  | memory:///test_sql_literal.parquet |",
+            "+----+------+------------------------------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_predicate_pushdown_allows_binaryview_literal_against_base_parquet_file()
+    -> TestResult {
+        use datafusion::scalar::ScalarValue;
+
+        let store = Arc::new(InMemory::new());
+        let store_url = Url::parse("memory:///")?;
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store.clone());
+
+        let file_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::Binary, true),
+        ]));
+        let parquet_read_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("data", DataType::BinaryView, true),
+        ]));
+        let data = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"aaa".as_slice()),
+                    Some(b"bbb".as_slice()),
+                    Some(b"ccc".as_slice()),
+                ])),
+            ],
+        )?;
+
+        let mut buffer = Vec::new();
+        let mut arrow_writer = ArrowWriter::try_new(&mut buffer, file_schema.clone(), None)?;
+        arrow_writer.write(&data)?;
+        arrow_writer.close()?;
+
+        let path = Path::from("test_binary_view.parquet");
+        store.put(&path, buffer.into()).await?;
+        let mut file: PartitionedFile = store.head(&path).await?.into();
+        file.partition_values
+            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
+                "memory:///test_binary_view.parquet".to_string(),
+            ))));
+
+        let files_by_store = vec![(
+            store_url.as_object_store_url(),
+            vec![(file, None::<Vec<bool>>)],
+        )];
+
+        let file_id_field = Arc::new(Field::new(
+            FILE_ID_COLUMN_DEFAULT,
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ));
+
+        let predicate = col("data").eq(lit(ScalarValue::BinaryView(Some(b"bbb".to_vec()))));
+        let plan = get_read_plan(
+            &session.state(),
+            files_by_store,
+            &parquet_read_schema,
+            None,
+            &file_id_field,
+            Some(&predicate),
+        )
+        .await?;
+        let batches = collect(plan, session.task_ctx()).await?;
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_rows(), 1);
+        let id_col = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_col.value(0), 2);
+
+        let data_col = batches[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        assert_eq!(data_col.value(0), b"bbb");
+
+        assert_eq!(batches[0].num_columns(), 3);
+        assert_eq!(batches[0].schema().field(2).name(), FILE_ID_COLUMN_DEFAULT);
 
         Ok(())
     }
