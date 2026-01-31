@@ -112,19 +112,6 @@ pub(crate) async fn find_files(
     }
 }
 
-/// Select files for a **partition-only** predicate using Delta log metadata (Add.partitionValues),
-/// without reading data files.
-///
-/// Assumes the caller already validated that `predicate`:
-/// - references only partition columns
-/// - is deterministic
-pub(crate) async fn find_files_by_partition_predicate(
-    snapshot: &EagerSnapshot,
-    predicate: &Expr,
-) -> DeltaResult<Vec<Add>> {
-    scan_memory_table(snapshot, predicate).await
-}
-
 pub(crate) struct FindFilesExprProperties {
     pub partition_columns: Vec<String>,
 

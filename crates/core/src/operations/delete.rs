@@ -384,20 +384,47 @@ async fn execute(
     }
 
     if props.partition_only {
-        // Partition-only delete: select files via Add-action partition values (no data-file scan).
         let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
-        let candidates = crate::delta_datafusion::find_files_by_partition_predicate(
-            &snapshot,
+        let removes: Vec<_> = match crate::delta_datafusion::engine::to_delta_predicate(
             &partition_predicate,
-        )
-        .await?;
+        ) {
+            Ok(delta_predicate) => {
+                // Partition-only delete: select + remove files using log metadata only.
+                snapshot
+                    .file_views(log_store.as_ref(), Some(Arc::new(delta_predicate)))
+                    .map_ok(|f| f.remove_action(true).into())
+                    .try_collect()
+                    .await?
+            }
+            Err(err) => {
+                tracing::debug!(
+                    ?err,
+                    "Partition-only delete predicate not convertible to kernel; falling back to DataFusion evaluation"
+                );
+
+                let matching_paths = Arc::new(
+                    find_file_paths_by_partition_predicate_datafusion(
+                        &snapshot,
+                        &partition_predicate,
+                    )
+                    .await?,
+                );
+                snapshot
+                    .file_views(log_store.as_ref(), None)
+                    .try_filter_map(|f| {
+                        let matching_paths = Arc::clone(&matching_paths);
+                        async move {
+                            Ok(matching_paths
+                                .contains(f.path_raw())
+                                .then(|| f.remove_action(true).into()))
+                        }
+                    })
+                    .try_collect()
+                    .await?
+            }
+        };
 
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
-
-        let removes: Vec<_> = candidates
-            .into_iter()
-            .map(|add| Action::Remove(add.remove_action(true)))
-            .collect();
         metrics.num_removed_files = removes.len();
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
@@ -434,7 +461,7 @@ async fn execute(
     metrics.num_removed_files = removes.len();
 
     if files_scan.partition_only {
-        // Note: Partition-only predicates are handled earlier using Add-action metadata.
+        // Note: Partition-only predicates are handled earlier using log metadata.
         // This branch is kept defensively in case `scan_files_where_matches` ever determines
         // a predicate is partition-only after simplification.
         // if we are deleting entire files only, no need to rescue any data or write cdc files.
@@ -503,6 +530,78 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
     Ok((actions, metrics))
+}
+
+async fn find_file_paths_by_partition_predicate_datafusion(
+    snapshot: &EagerSnapshot,
+    predicate: &Expr,
+) -> DeltaResult<std::collections::HashSet<String>> {
+    use arrow_array::RecordBatch;
+    use arrow_array::StringArray;
+    use arrow_schema::DataType;
+    use arrow_schema::Field;
+    use arrow_schema::Schema;
+    use datafusion::datasource::MemTable;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::logical_expr::col;
+
+    use crate::delta_datafusion::PATH_COLUMN;
+    use crate::errors::DeltaTableError;
+
+    let batch = snapshot.add_actions_table(true)?;
+    let schema = batch.schema();
+    let mut arrays = Vec::with_capacity(schema.fields().len());
+    let mut fields = Vec::with_capacity(schema.fields().len());
+
+    arrays.push(
+        batch
+            .column_by_name("path")
+            .ok_or(DeltaTableError::Generic(
+                "Column with name `path` does not exist".to_owned(),
+            ))?
+            .to_owned(),
+    );
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+
+    for field in schema.fields() {
+        if let Some(name) = field.name().strip_prefix("partition.") {
+            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
+            fields.push(field.as_ref().clone().with_name(name));
+        }
+    }
+
+    let schema = Arc::new(Schema::new(fields));
+    let mem_table = MemTable::try_new(
+        schema.clone(),
+        vec![vec![RecordBatch::try_new(schema, arrays)?]],
+    )?;
+
+    let ctx = SessionContext::new();
+    let batches = ctx
+        .read_table(Arc::new(mem_table))?
+        .filter(predicate.to_owned())?
+        .select(vec![col(PATH_COLUMN)])?
+        .collect()
+        .await?;
+
+    let mut paths = std::collections::HashSet::new();
+    for batch in batches {
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .ok_or_else(|| DeltaTableError::Generic(format!("Column `{PATH_COLUMN}` missing")))?;
+        let array = array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Column `{PATH_COLUMN}` was not Utf8"))
+            })?;
+
+        for path in array.iter().flatten() {
+            paths.insert(path.to_string());
+        }
+    }
+
+    Ok(paths)
 }
 
 #[cfg(test)]
