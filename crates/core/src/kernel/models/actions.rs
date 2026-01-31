@@ -907,23 +907,6 @@ pub struct Remove {
     pub default_row_commit_version: Option<i64>,
 }
 
-impl Add {
-    pub(crate) fn remove_action(self, data_change: bool) -> Remove {
-        Remove {
-            path: self.path,
-            data_change,
-            deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
-            extended_file_metadata: Some(true),
-            partition_values: Some(self.partition_values),
-            size: Some(self.size),
-            tags: None,
-            deletion_vector: self.deletion_vector,
-            base_row_id: None,
-            default_row_commit_version: None,
-        }
-    }
-}
-
 /// Delta AddCDCFile action that describes a parquet CDC data file.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
