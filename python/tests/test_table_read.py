@@ -1176,3 +1176,18 @@ def test_read_deletion_vectors():
     assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
         "value"
     ].to_pylist() == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+@pytest.mark.pandas
+def test_nested_runtimes(tmp_path):
+    import pandas as pd
+
+    csv_path = tmp_path / "csv_data"
+    pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]}).to_csv(
+        csv_path, index=False
+    )
+
+    con = QueryBuilder()
+    con.execute(f"CREATE EXTERNAL TABLE raw_csv STORED AS CSV LOCATION '{csv_path}'")
+    df = con.execute("SELECT * FROM raw_csv")
+    write_deltalake(tmp_path / "delta", df, mode="overwrite")

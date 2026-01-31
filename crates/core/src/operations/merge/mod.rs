@@ -56,7 +56,7 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
     physical_plan::ExecutionPlan,
-    prelude::{DataFrame, SessionContext, cast},
+    prelude::{DataFrame, cast},
 };
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
@@ -75,8 +75,9 @@ use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder, DeltaSessionContext,
-    DeltaTableProvider, register_store,
+    DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder, DeltaSessionExt,
+    DeltaTableProvider, SessionFallbackPolicy, SessionResolveContext, create_session,
+    resolve_session_state,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
@@ -145,6 +146,7 @@ pub struct MergeBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     state: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -181,6 +183,7 @@ impl MergeBuilder {
             source_alias: None,
             target_alias: None,
             state: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
             merge_schema: false,
@@ -385,16 +388,23 @@ impl MergeBuilder {
 
     /// Set the DataFusion session used for planning and execution.
     ///
-    /// The provided `state` must wrap a concrete `datafusion::execution::context::SessionState`.
-    /// Other `datafusion::catalog::Session` implementations will cause the operation to return an
-    /// error at execution time.
+    /// The provided `state` should wrap a concrete `datafusion::execution::context::SessionState`.
     ///
-    /// This strictness avoids subtle bugs where Delta object stores could be registered on one
-    /// runtime environment while execution uses a different `task_ctx()` / runtime environment.
+    /// If `state` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
     ///
     /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, state: Arc<dyn Session>) -> Self {
         self.state = Some(state);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -404,7 +414,7 @@ impl MergeBuilder {
         self
     }
 
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
@@ -1550,15 +1560,18 @@ impl std::future::IntoFuture for MergeBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let state = this
-                .state
-                .and_then(|state| state.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let session: SessionContext = DeltaSessionContext::default().into();
-                    session.state()
-                });
+            let (state, _) = resolve_session_state(
+                this.state.as_deref(),
+                this.session_fallback_policy,
+                || create_session().state(),
+                SessionResolveContext {
+                    operation: "merge",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
 
-            register_store(this.log_store.clone(), state.runtime_env().as_ref());
+            state.ensure_log_store_registered(this.log_store.as_ref())?;
 
             let (snapshot, metrics) = execute(
                 this.predicate,

@@ -276,7 +276,11 @@ pub(crate) async fn write_execution_plan_v2(
     // the schema and batches were prior constructed with this in mind.
     let schema = plan.schema();
     let mut validations = if let Some(snapshot) = snapshot {
-        validation_predicates(session, plan.clone(), snapshot.table_configuration())?
+        validation_predicates(
+            session,
+            &plan.schema().to_dfschema()?,
+            snapshot.table_configuration(),
+        )?
     } else {
         debug!(
             "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."

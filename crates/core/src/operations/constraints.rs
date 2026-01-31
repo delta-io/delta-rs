@@ -11,8 +11,8 @@ use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
-    DataValidationExec, DeltaScanNext, Expression, constraints_to_exprs, create_session,
-    expr::fmt_expr_to_sql, into_expr, update_datafusion_session,
+    DataValidationExec, DeltaScanNext, DeltaSessionExt, Expression, constraints_to_exprs,
+    create_session, expr::fmt_expr_to_sql, into_expr,
 };
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -146,11 +146,9 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let session = this
                 .session
                 .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            update_datafusion_session(
-                this.log_store.as_ref(),
-                session.as_ref(),
-                Some(operation_id),
-            )?;
+            session
+                .as_ref()
+                .ensure_object_store_registered(this.log_store.as_ref(), Some(operation_id))?;
 
             let proivider = DeltaScanNext::builder()
                 .with_eager_snapshot(snapshot.clone())

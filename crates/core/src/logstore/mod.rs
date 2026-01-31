@@ -374,6 +374,10 @@ pub trait LogStore: Send + Sync + AsAny {
     /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
     /// host we convert the location from this `LogStore` to a valid name, combining the
     /// original scheme, host and path with invalid characters replaced.
+    ///
+    /// This is a legacy/migration helper for delta-rs DataFusion integrations that use a
+    /// synthetic per-table `delta-rs://...` URL mapping to a table-scoped (prefixed) object store.
+    /// It will not work correctly with fully-qualified file URLs (e.g. shallow clones).
     fn object_store_url(&self) -> ObjectStoreUrl {
         crate::logstore::object_store_url(&self.config().location)
     }

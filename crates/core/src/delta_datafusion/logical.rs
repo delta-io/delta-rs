@@ -5,13 +5,19 @@ use std::sync::Arc;
 
 use arrow_schema::Field;
 use datafusion::common::{Column, Result};
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNodeCore};
+use datafusion::logical_expr::{
+    Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
+};
 use datafusion::prelude::{Expr, col};
 use itertools::Itertools;
+
+use crate::delta_datafusion::data_validation::DataValidation;
 
 pub(crate) trait LogicalPlanBuilderExt: Sized {
     fn with_column(self, name: &str, expr: Expr) -> Result<Self>;
     fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
+    /// Validate all data produced by the plan coforms to the passed predicates.
+    fn validate(self, validations: impl IntoIterator<Item = Expr>) -> Result<Self>;
 }
 
 pub(crate) trait ColumnReference: Sized {
@@ -60,6 +66,13 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
             })
             .collect_vec();
         self.project(projection)
+    }
+
+    fn validate(self, validations: impl IntoIterator<Item = Expr>) -> Result<Self> {
+        let plan = LogicalPlan::Extension(Extension {
+            node: DataValidation::try_new(self.build()?, validations)?,
+        });
+        Ok(LogicalPlanBuilder::new(plan))
     }
 }
 
