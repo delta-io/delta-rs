@@ -31,7 +31,9 @@ use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
-use crate::table::file_format_options::{IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef};
+use crate::table::file_format_options::{
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 

@@ -74,10 +74,10 @@ use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
-use crate::table::state::DeltaTableState;
 use crate::table::file_format_options::{
     IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
 };
+use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
