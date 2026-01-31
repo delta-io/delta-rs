@@ -389,7 +389,13 @@ async fn execute(
             &partition_predicate,
         ) {
             Ok(delta_predicate) => {
-                // Partition-only delete: select + remove files using log metadata only.
+                // `Snapshot::files` documents predicate filtering as "best effort" file skipping
+                // because, in general, files may contain a mix of matching and non-matching rows.
+                //
+                // For partition-only predicates, partition values are constant per file, so
+                // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
+                // a file either fully matches or does not. It is therefore safe to treat this as
+                // the authoritative match set for DELETE.
                 snapshot
                     .file_views(log_store.as_ref(), Some(Arc::new(delta_predicate)))
                     .map_ok(|f| f.remove_action(true).into())
@@ -404,6 +410,7 @@ async fn execute(
 
                 let matching_paths = Arc::new(
                     find_file_paths_by_partition_predicate_datafusion(
+                        session,
                         &snapshot,
                         &partition_predicate,
                     )
@@ -533,6 +540,7 @@ async fn execute(
 }
 
 async fn find_file_paths_by_partition_predicate_datafusion(
+    session: &dyn Session,
     snapshot: &EagerSnapshot,
     predicate: &Expr,
 ) -> DeltaResult<std::collections::HashSet<String>> {
@@ -541,12 +549,13 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     use arrow_schema::DataType;
     use arrow_schema::Field;
     use arrow_schema::Schema;
-    use datafusion::datasource::MemTable;
-    use datafusion::execution::context::SessionContext;
+    use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion::logical_expr::col;
 
     use crate::delta_datafusion::PATH_COLUMN;
     use crate::errors::DeltaTableError;
+    use datafusion::datasource::{MemTable, provider_as_source};
+    use datafusion::physical_plan::collect;
 
     let batch = snapshot.add_actions_table(true)?;
     let schema = batch.schema();
@@ -576,13 +585,17 @@ async fn find_file_paths_by_partition_predicate_datafusion(
         vec![vec![RecordBatch::try_new(schema, arrays)?]],
     )?;
 
-    let ctx = SessionContext::new();
-    let batches = ctx
-        .read_table(Arc::new(mem_table))?
-        .filter(predicate.to_owned())?
-        .select(vec![col(PATH_COLUMN)])?
-        .collect()
-        .await?;
+    let plan = LogicalPlanBuilder::scan(
+        "partition_predicate",
+        provider_as_source(Arc::new(mem_table)),
+        None,
+    )?
+    .filter(predicate.to_owned())?
+    .project([col(PATH_COLUMN)])?
+    .build()?;
+
+    let exec = session.create_physical_plan(&plan).await?;
+    let batches = collect(exec, session.task_ctx()).await?;
 
     let mut paths = std::collections::HashSet::new();
     for batch in batches {
