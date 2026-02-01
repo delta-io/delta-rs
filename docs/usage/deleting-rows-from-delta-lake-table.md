@@ -26,7 +26,8 @@ Here's how to delete all the rows where the `num` is greater than 2:
 
 === "Rust"
     ```rust
-    let table = deltalake::open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let mut table = open_table(delta_path).await?;
     let (table, delete_metrics) = DeltaOps(table)
         .delete()
         .with_predicate(col("num").gt(lit(2)))
@@ -34,7 +35,7 @@ Here's how to delete all the rows where the `num` is greater than 2:
     ```
     `with_predicate` expects an argument that can be translated to a Datafusion `Expression`. This can be either using the Dataframe API, or using a `SQL where` clause:
     ```rust
-    let table = deltalake::open_table("./data/simple_table").await?;
+    let table = deltalake::open_table(delta_path).await?;
     let (table, delete_metrics) = DeltaOps(table)
         .delete()
         .with_predicate("num > 2")

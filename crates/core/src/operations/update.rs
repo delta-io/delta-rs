@@ -11,7 +11,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = UpdateBuilder::new(table.object_store(), table.state)
 //!     .with_predicate(col("col1").eq(lit(1)))
 //!     .with_update("value", col("value") + lit(20))
