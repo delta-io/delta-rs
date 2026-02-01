@@ -25,7 +25,8 @@ Get metadata from a table with the
     ```
 === "Rust"
     ```rust
-    let table = deltalake::open_table("../rust/tests/data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
+    let table = deltalake::open_table(delta_path).await?;
     let metadata = table.metadata()?;
     println!("metadata: {:?}", metadata);
     ```
@@ -53,7 +54,8 @@ the table will be loaded into.
 === "Rust"
     Use `DeltaTable::get_schema` to retrieve the delta lake schema
     ```rust
-    let table = deltalake::open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let mut table = open_table(delta_path).await?;
     let schema = table.get_schema()?;
     println!("schema: {:?}", schema);
     ```
@@ -118,7 +120,8 @@ To view the available history, use `DeltaTable.history`:
     ```
 === "Rust"
     ```rust
-    let table = deltalake::open_table("../rust/tests/data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     let history = table.history(None).await?;
     println!("Table history: {:#?}", history);
     ```
@@ -143,7 +146,8 @@ data frame of the add actions data using `DeltaTable.get_add_actions`:
 
 === "Rust"
     ```rust
-    let table = deltalake::open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     let actions = table.snapshot()?.add_actions_table(true)?;
     println!("{}", pretty_format_batches(&vec![actions])?);
     ```
@@ -159,7 +163,8 @@ This works even with past versions of the table:
     ```
 === "Rust"
     ```rust
-    let mut table = deltalake::open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
+    let mut table = deltalake::open_table(delta_path).await?;
     table.load_version(0).await?;
     let actions = table.snapshot()?.add_actions_table(true)?;
     println!("{}", pretty_format_batches(&vec![actions])?);
