@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::path::Path;
+use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
