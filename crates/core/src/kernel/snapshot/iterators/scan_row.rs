@@ -30,7 +30,9 @@ use crate::{DeltaResult, DeltaTableError};
 
 pin_project! {
     pub(crate) struct ScanRowOutStream<S> {
-        snapshot: Arc<KernelSnapshot>,
+        stats_schema: KernelSchemaRef,
+        partitions_schema: Option<KernelSchemaRef>,
+        column_mapping_mode: ColumnMappingMode,
 
         #[pin]
         stream: S,
@@ -38,8 +40,16 @@ pin_project! {
 }
 
 impl<S> ScanRowOutStream<S> {
-    pub fn new(snapshot: Arc<KernelSnapshot>, stream: S) -> Self {
-        Self { snapshot, stream }
+    pub fn try_new(snapshot: Arc<KernelSnapshot>, stream: S) -> DeltaResult<Self> {
+        let stats_schema = snapshot.stats_schema()?;
+        let partitions_schema = snapshot.partitions_schema()?;
+        let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+        Ok(Self {
+            stats_schema,
+            partitions_schema,
+            column_mapping_mode,
+            stream,
+        })
     }
 }
 
@@ -52,10 +62,15 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.project();
         match this.stream.poll_next(cx) {
-            Poll::Ready(Some(Ok(batch))) => match parse_stats_column(this.snapshot, &batch) {
-                Ok(batch) => Poll::Ready(Some(Ok(batch))),
-                Err(err) => Poll::Ready(Some(Err(err))),
-            },
+            Poll::Ready(Some(Ok(batch))) => {
+                let result = parse_stats_column_impl(
+                    &batch,
+                    this.stats_schema.clone(),
+                    this.partitions_schema.as_ref(),
+                    *this.column_mapping_mode,
+                );
+                Poll::Ready(Some(result))
+            }
             other => other,
         }
     }
@@ -94,15 +109,26 @@ pub(crate) fn scan_row_in_eval(
     )?)
 }
 
-fn parse_stats_column(sn: &KernelSnapshot, batch: &RecordBatch) -> DeltaResult<RecordBatch> {
-    let stats_schema = sn.stats_schema()?;
-    parse_stats_column_with_schema(sn, batch, stats_schema)
-}
-
 pub(crate) fn parse_stats_column_with_schema(
     sn: &KernelSnapshot,
     batch: &RecordBatch,
     stats_schema: KernelSchemaRef,
+) -> DeltaResult<RecordBatch> {
+    let partitions_schema = sn.partitions_schema()?;
+    let column_mapping_mode = sn.table_configuration().column_mapping_mode();
+    parse_stats_column_impl(
+        batch,
+        stats_schema,
+        partitions_schema.as_ref(),
+        column_mapping_mode,
+    )
+}
+
+fn parse_stats_column_impl(
+    batch: &RecordBatch,
+    stats_schema: KernelSchemaRef,
+    partitions_schema: Option<&KernelSchemaRef>,
+    column_mapping_mode: ColumnMappingMode,
 ) -> DeltaResult<RecordBatch> {
     let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
         return Err(DeltaTableError::SchemaMismatch {
@@ -110,7 +136,6 @@ pub(crate) fn parse_stats_column_with_schema(
         });
     };
 
-    let column_mapping_mode = sn.table_configuration().column_mapping_mode();
     let mut columns = batch.columns().to_vec();
     let mut fields = batch.schema().fields().to_vec();
 
@@ -128,7 +153,7 @@ pub(crate) fn parse_stats_column_with_schema(
     ));
     columns[stats_idx] = stats_array;
 
-    if let Some(partition_schema) = sn.partitions_schema()? {
+    if let Some(partition_schema) = partitions_schema {
         let partition_array = parse_partitions(
             batch,
             partition_schema.as_ref(),
