@@ -1,7 +1,10 @@
+use url::Url;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
-    let table = deltalake::open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/abs/tmp/some-table").unwrap();
+    let table = deltalake::open_table(delta_path).await?;
     let ctx = SessionContext::new();
     let ops = DeltaOps(table);
     let cdf = ops
