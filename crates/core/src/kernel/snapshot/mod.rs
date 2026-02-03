@@ -260,7 +260,10 @@ impl Snapshot {
             .scan_metadata(engine)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
+        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+            Ok(s) => s.boxed(),
+            Err(err) => Box::pin(once(ready(Err(err)))),
+        }
     }
 
     pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
@@ -281,7 +284,10 @@ impl Snapshot {
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
+        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+            Ok(s) => s.boxed(),
+            Err(err) => Box::pin(once(ready(Err(err)))),
+        }
     }
 
     /// Stream the active files in the snapshot

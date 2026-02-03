@@ -89,11 +89,13 @@ The same table can also be loaded using the core Rust crate:
 
 ```rs
 use deltalake::{open_table, DeltaTableError};
+use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), DeltaTableError> {
     // open the table written in python
-    let table = open_table("./data/delta").await?;
+    let delta_path = Url::from_directory_path("/abs/data/delta").unwrap();
+    let table = open_table(delta_path).await?;
 
     // show all active files in the table
     let files: Vec<_> = table.get_file_uris()?.collect();
