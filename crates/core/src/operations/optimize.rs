@@ -53,7 +53,7 @@ use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
     DeltaRuntimeEnvBuilder, DeltaSessionContext, SessionFallbackPolicy, SessionResolveContext,
-    resolve_session_state, scan_file_list,
+    resolve_session_state, scan_file_list, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
@@ -395,6 +395,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     cdc: false,
                 },
             )?;
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
