@@ -234,10 +234,13 @@ impl BlindDeltaTable {
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-        self.snapshot
-            .update(self.log_store.as_ref(), Some(commit_version as u64))
-            .await?;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
 
+        self.snapshot =
+            Snapshot::try_new(self.log_store().as_ref(), config, Some(commit_version)).await?;
         Ok(commit_version)
     }
 }
@@ -637,7 +640,11 @@ mod tests {
         let adds = writer.flush().await.unwrap();
 
         // Two partitions (A, B) should create at least 2 files
-        assert!(adds.len() >= 2, "Expected at least 2 files, got {}", adds.len());
+        assert!(
+            adds.len() >= 2,
+            "Expected at least 2 files, got {}",
+            adds.len()
+        );
 
         // Verify partition values are set
         for add in &adds {
@@ -708,11 +715,9 @@ mod tests {
         // Create a batch with 10000 rows
         let row_count = 10000;
         let large_data: Vec<i32> = (0..row_count).collect();
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(large_data))],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(large_data))])
+                .unwrap();
 
         let mut writer = RecordBatchWriter::for_blind_appends(&blind).unwrap();
         writer.write(batch).await.unwrap();
@@ -786,7 +791,9 @@ mod tests {
                 size: 2000,
                 modification_time: 123457,
                 data_change: true,
-                stats: Some(r#"{"numRecords": 1000, "minValues": {}, "maxValues": {}}"#.to_string()),
+                stats: Some(
+                    r#"{"numRecords": 1000, "minValues": {}, "maxValues": {}}"#.to_string(),
+                ),
                 tags: None,
                 deletion_vector: None,
                 base_row_id: None,
@@ -871,11 +878,7 @@ mod tests {
         assert_eq!(batch.num_rows(), 1);
 
         // Verify partition values map was created with 3 entries
-        let partition_col = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .unwrap();
+        let partition_col = batch.column(1).as_any().downcast_ref::<MapArray>().unwrap();
         assert!(!partition_col.is_null(0));
         // Map should have 3 key-value pairs
         assert_eq!(partition_col.value(0).len(), 3);
@@ -907,11 +910,7 @@ mod tests {
         assert_eq!(batch.num_rows(), 1);
 
         // Verify partition values map has 1 entry with null value
-        let partition_col = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .unwrap();
+        let partition_col = batch.column(1).as_any().downcast_ref::<MapArray>().unwrap();
         let map_entries = partition_col.value(0);
         assert_eq!(map_entries.len(), 1);
 

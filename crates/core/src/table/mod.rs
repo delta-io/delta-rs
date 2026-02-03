@@ -25,7 +25,6 @@ use crate::logstore::{
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
-
 mod blind;
 pub mod builder;
 pub mod config;
