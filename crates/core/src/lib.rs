@@ -108,6 +108,7 @@ pub use self::table::builder::{
 pub use self::table::config::TableProperty;
 pub use self::table::{BlindDeltaTable, DeltaTable};
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
+#[allow(deprecated)]
 pub use operations::DeltaOps;
 
 pub use protocol::checkpoints;

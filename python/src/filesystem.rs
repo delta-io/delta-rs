@@ -1,11 +1,11 @@
+use crate::RawDeltaTable;
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree, warn};
-use crate::RawDeltaTable;
-use deltalake::logstore::object_store::{
-    path::Path, DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload,
-    PutPayloadMut,
-};
 use deltalake::DeltaTableBuilder;
+use deltalake::logstore::object_store::{
+    DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload, PutPayloadMut,
+    path::Path,
+};
 use parking_lot::Mutex;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;

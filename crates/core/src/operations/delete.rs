@@ -53,13 +53,19 @@ use uuid::Uuid;
 use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
+use crate::delta_datafusion::DeltaScanConfig;
+use crate::delta_datafusion::DeltaSessionExt;
+use crate::delta_datafusion::SessionFallbackPolicy;
+use crate::delta_datafusion::SessionResolveContext;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::{
     LogicalPlanBuilderExt as _, LogicalPlanExt, MetricObserver,
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
-use crate::delta_datafusion::{Expression, update_datafusion_session};
-use crate::delta_datafusion::{create_session, scan_files_where_matches};
+use crate::delta_datafusion::{
+    Expression, create_session, resolve_session_state, scan_files_where_matches,
+    update_datafusion_session,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
@@ -85,6 +91,7 @@ pub struct DeleteBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
@@ -139,6 +146,7 @@ impl DeleteBuilder {
             snapshot,
             log_store,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
             custom_execute_handler: None,
@@ -151,9 +159,25 @@ impl DeleteBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -192,16 +216,28 @@ impl std::future::IntoFuture for DeleteBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let session = if let Some(session) = this.session {
-                session
-            } else {
-                Arc::new(create_session().into_inner().state())
-            };
-            update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session().state(),
+                SessionResolveContext {
+                    operation: "delete",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+            session.ensure_log_store_registered(this.log_store.as_ref())?;
 
             let predicate = this
                 .predicate
-                .map(|p| p.resolve(session.as_ref(), snapshot.arrow_schema().to_dfschema_ref()?))
+                .map(|p| {
+                    let scan_config = DeltaScanConfig::new_from_session(&session);
+                    let predicate_schema = scan_config
+                        .table_schema(snapshot.table_configuration())?
+                        .to_dfschema_ref()?;
+                    p.resolve(&session, predicate_schema)
+                })
                 .transpose()?;
 
             let operation = DeltaOperation::Delete {
@@ -212,7 +248,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot.clone(),
-                session.as_ref(),
+                &session,
                 operation_id,
             )
             .await?;
@@ -441,6 +477,7 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::ArrayRef;
+    use arrow_array::BinaryArray;
     use arrow_array::StringArray;
     use arrow_array::StructArray;
     use arrow_buffer::NullBuffer;
@@ -450,6 +487,7 @@ mod tests {
     use datafusion::physical_plan::ExecutionPlan;
     use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
+    use datafusion::scalar::ScalarValue;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::PrimitiveType;
     use delta_kernel::schema::StructType;
@@ -912,6 +950,201 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_string_predicate_dictionary_formatting() -> DeltaResult<()> {
+        // Regression test: resolving predicates against the execution scan schema can
+        // dictionary-encode partition columns, so fmt_expr_to_sql must support
+        // ScalarValue::Dictionary scalars.
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["id"])).await;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "C"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+            ],
+        )?;
+
+        let table = write_batch(table, batch).await;
+
+        let (table, _metrics) = table.delete().with_predicate("id = 'A'").await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = 'A'"));
+
+        let expected = [
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 2     | 2021-02-02 |",
+            "| C  | 4     | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_binary_equality_non_partition() -> DeltaResult<()> {
+        // Regression test: DF52 view types can cause predicate evaluation to compare
+        // Binary against BinaryView for equality predicates.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("data", DataType::Binary, true),
+            Field::new("int32", DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"aaa".as_slice()),
+                    Some(b"bbb".as_slice()),
+                    Some(b"ccc".as_slice()),
+                ])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![0, 1, 2])) as ArrayRef,
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        let (table, _metrics) = table
+            .delete()
+            .with_predicate(col("data").eq(lit(ScalarValue::Binary(Some(b"bbb".to_vec())))))
+            .await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(
+            parameters["predicate"],
+            json!("data = decode('626262', 'hex')")
+        );
+
+        let mut values = Vec::new();
+        for batch in get_data(&table).await {
+            let int32 = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            for idx in 0..batch.num_rows() {
+                values.push(int32.value(idx));
+            }
+        }
+        values.sort();
+        assert_eq!(values, vec![0, 2]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_string_equality_utf8view_regression_4125() -> DeltaResult<()> {
+        // Direct regression test for GitHub issue #4125:
+        // https://github.com/delta-io/delta-rs/issues/4125
+        //
+        // Non-partition string column with default session (view types enabled in DF52+).
+        // Was failing with: Invalid comparison operation: Utf8 == Utf8View
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["alice", "bob", "charlie"])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        // This was the failing operation in issue #4125
+        let (table, _metrics) = table.delete().with_predicate("name = 'bob'").await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("name = 'bob'"));
+
+        let expected = [
+            "+---------+-------+",
+            "| name    | value |",
+            "+---------+-------+",
+            "| alice   | 1     |",
+            "| charlie | 3     |",
+            "+---------+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_custom_session_schema_force_view_types_disabled() -> DeltaResult<()> {
+        // Integration guardrail: user-supplied DataFusion sessions may disable view types.
+        // Predicate resolution must respect the provided session's config.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("name", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec!["alice", "bob", "charlie"])),
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+        let config: datafusion::prelude::SessionConfig =
+            crate::delta_datafusion::DeltaSessionConfig::default().into();
+        let config = config.set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let runtime_env = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .build_arc()
+            .unwrap();
+        let state = datafusion::execution::SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_query_planner(crate::delta_datafusion::planner::DeltaPlanner::new())
+            .build();
+        let session = Arc::new(state);
+
+        let (table, _metrics) = table
+            .delete()
+            .with_session_state(session)
+            .with_predicate("name = 'bob'")
+            .await?;
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("name = 'bob'"));
+
+        let expected = [
+            "+---------+-------+",
+            "| name    | value |",
+            "+---------+-------+",
+            "| alice   | 1     |",
+            "| charlie | 3     |",
+            "+---------+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+        Ok(())
     }
 
     #[tokio::test]

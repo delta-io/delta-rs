@@ -48,7 +48,10 @@ use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider};
+use crate::delta_datafusion::{
+    DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
+    SessionResolveContext, resolve_session_state,
+};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
@@ -58,7 +61,7 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version, to_kernel_predicate};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -216,6 +219,7 @@ pub struct OptimizeBuilder<'a> {
     optimize_type: OptimizeType,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -271,6 +275,7 @@ impl<'a> OptimizeBuilder<'a> {
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             custom_execute_handler: None,
         }
     }
@@ -329,9 +334,25 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 }
@@ -357,10 +378,16 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build()
             });
-            let session = this
-                .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| create_session_state_for_optimize(None, None));
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session_state_for_optimize(None, None),
+                SessionResolveContext {
+                    operation: "optimize",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -944,7 +971,17 @@ async fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
@@ -1056,7 +1093,17 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         let partition_values = file

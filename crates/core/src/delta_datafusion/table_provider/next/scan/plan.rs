@@ -23,6 +23,7 @@ use datafusion::common::{HashMap, HashSet, exec_err, plan_err};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
+use datafusion::scalar::ScalarValue;
 use datafusion_datasource::file_scan_config::wrap_partition_type_in_dict;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::DataType as KernelDataType;
@@ -49,7 +50,7 @@ use crate::kernel::{Scan, Snapshot};
 /// Manages three schemas:
 /// - **result_schema**: Logical schema exposed to query after all transformations
 /// - **output_schema**: Final schema including metadata columns (e.g., file_id)
-/// - **parquet_read_schema**: Physical schema for reading Parquet files
+/// - **parquet_read_schema**: Physical schema for Parquet reads + predicate evaluation
 ///
 /// # Predicate Pushdown
 ///
@@ -67,16 +68,10 @@ pub(crate) struct KernelScanPlan {
     /// If set, indicates a projection to apply to the
     /// scan output to obtain the result schema
     pub(crate) result_projection: Option<Vec<usize>>,
-    /// The schema the inner Parquet scan should read from data files.
+    /// Physical schema used for Parquet reads and predicate evaluation.
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
     pub(crate) parquet_predicate: Option<Expr>,
-    /// Predicate passed to delta kernel for file skipping,
-    ///
-    /// If this is configured, the predicates pushed into the scan will
-    /// not be considered for file skipping. This is to handle file re-write
-    /// cases in UPDATE, MERGE, etc.
-    pub(crate) skipping_predicate: Option<PredicateRef>,
 }
 
 impl KernelScanPlan {
@@ -111,14 +106,7 @@ impl KernelScanPlan {
 
         let Some(projection) = projection else {
             let scan = Arc::new(scan_builder.build()?);
-            return Self::try_new_with_scan(
-                scan,
-                config,
-                table_schema,
-                None,
-                parquet_predicate,
-                scan_predicate,
-            );
+            return Self::try_new_with_scan(scan, config, table_schema, None, parquet_predicate);
         };
 
         // The table projection may not include all columns referenced in filters,
@@ -184,7 +172,6 @@ impl KernelScanPlan {
             result_schema,
             result_projection,
             parquet_predicate,
-            scan_predicate,
         )
     }
 
@@ -194,7 +181,6 @@ impl KernelScanPlan {
         result_schema: SchemaRef,
         result_projection: Option<Vec<usize>>,
         parquet_predicate: Option<Expr>,
-        skipping_predicate: Option<PredicateRef>,
     ) -> Result<Self> {
         let output_schema = if config.retain_file_id() {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
@@ -214,7 +200,6 @@ impl KernelScanPlan {
             result_projection,
             parquet_read_schema,
             parquet_predicate,
-            skipping_predicate,
         })
     }
 
@@ -233,6 +218,8 @@ impl KernelScanPlan {
 
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
+        // NOTE: keep the synthetic file-id column as Dictionary<UInt16, Utf8>.
+        // Arrow's dictionary packing does not support Utf8View, and this column is internal.
         Arc::new(Field::new(
             self.file_column_name
                 .as_deref()
@@ -339,6 +326,22 @@ impl DeltaScanConfig {
             _ => field,
         }
     }
+
+    // internal helper function to map scalar values
+    //
+    // This is specifically meant to align file stats values with the parquet
+    // scan. We track it here to have one place where view type mapping is handled.
+    pub(super) fn map_scalar_value(&self, value: ScalarValue) -> ScalarValue {
+        match value {
+            ScalarValue::Utf8(Some(v)) if self.schema_force_view_types => {
+                ScalarValue::Utf8View(Some(v))
+            }
+            ScalarValue::Binary(Some(v)) if self.schema_force_view_types => {
+                ScalarValue::BinaryView(Some(v))
+            }
+            other => other,
+        }
+    }
 }
 
 pub(crate) fn supports_filters_pushdown(
@@ -350,9 +353,16 @@ pub(crate) fn supports_filters_pushdown(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    // Parquet predicate pushdown is enabled only when we can safely apply it at read time.
+    // Deletion vectors require preserving row order for selection masks, and row tracking
+    // disables predicate pushdown in the read plan.
+    let parquet_pushdown_enabled = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     filter
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field).pushdown)
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled).pushdown)
         .collect()
 }
 
@@ -374,9 +384,13 @@ fn process_filters(
         .file_column_name
         .as_deref()
         .unwrap_or(FILE_ID_COLUMN_DEFAULT);
+
+    let parquet_pushdown_enabled = scan_config.enable_parquet_pushdown
+        && !config.is_feature_enabled(&TableFeature::RowTracking)
+        && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field))
+        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled))
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
     let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
@@ -403,6 +417,7 @@ fn process_predicate<'a>(
     expr: &'a Expr,
     config: &TableConfiguration,
     file_id_column: &str,
+    parquet_pushdown_enabled: bool,
 ) -> ProcessedPredicate<'a> {
     let cols = config.metadata().partition_columns();
     let only_partition_refs = expr.column_refs().iter().all(|c| cols.contains(&c.name));
@@ -431,7 +446,13 @@ fn process_predicate<'a>(
             // push down any predicate to parquet
             (TableProviderFilterPushDown::Inexact, None)
         } else {
-            (TableProviderFilterPushDown::Inexact, Some(expr))
+            // For non-partition predicates we can *attempt* Parquet pushdown, but it is not a
+            // correctness boundary (it may be partially applied or skipped). Keep this Inexact so
+            // DataFusion retains a post-scan Filter.
+            (
+                TableProviderFilterPushDown::Inexact,
+                parquet_pushdown_enabled.then_some(expr),
+            )
         };
         return ProcessedPredicate {
             pushdown,
@@ -453,7 +474,7 @@ fn process_predicate<'a>(
     ProcessedPredicate {
         pushdown: TableProviderFilterPushDown::Inexact,
         kernel_predicate: None,
-        parquet_predicate: Some(expr),
+        parquet_predicate: parquet_pushdown_enabled.then_some(expr),
     }
 }
 
@@ -506,6 +527,29 @@ mod tests {
     };
 
     use super::*;
+
+    fn schema_has_view_types(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .any(|f| data_type_has_view_types(f.data_type()))
+    }
+
+    fn data_type_has_view_types(dt: &DataType) -> bool {
+        match dt {
+            DataType::Utf8View | DataType::BinaryView => true,
+            DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
+            DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|f| data_type_has_view_types(f.data_type())),
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::ListView(inner)
+            | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
+            _ => false,
+        }
+    }
 
     #[tokio::test]
     async fn test_rewrite_expression() -> TestResult {
@@ -562,7 +606,8 @@ mod tests {
             &DeltaScanConfig::default(),
             None,
         )?;
-        println!("Scan plan: {:?}", scan_plan.parquet_predicate);
+        let expected_pq = col("col-3877fd94-0973-4941-ac6b-646849a1ff65").eq(lit("Timothy Lamb"));
+        assert_eq!(scan_plan.parquet_predicate, Some(expected_pq));
 
         Ok(())
     }
@@ -592,8 +637,7 @@ mod tests {
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
 
-        let filter =
-            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8View(Some("BME".to_string()))));
+        let filter = col(r#""Company Very Short""#).eq(lit("BME"));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?
@@ -607,23 +651,169 @@ mod tests {
             "+--------------------+--------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        // we need to pass a more specific type here since we are not going
+        // through datafusions predicate handling.
+        let filter =
+            col(r#""Company Very Short""#).eq(lit(ScalarValue::Utf8View(Some("BME".to_string()))));
         let scan = provider.scan(&ctx.state(), None, &[filter], None).await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
 
-        let filter =
-            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
+        let filter = col(r#""Super Name""#).eq(lit("Timothy Lamb"));
         let batches = ctx
             .read_table(provider.clone())?
             .filter(filter.clone())?
             .collect()
             .await?;
         assert_batches_sorted_eq!(&expected, &batches);
+
+        let filter =
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
         let scan = provider
             .scan(&ctx.state(), None, &[filter.clone()], None)
             .await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+    #[tokio::test]
+    async fn test_scan_schema_contract() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = true;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let expected_parquet_schema = config.physical_arrow_schema(
+            scan_plan.scan.snapshot().table_configuration(),
+            &scan_plan.scan.physical_schema().as_ref().try_into_arrow()?,
+        )?;
+        assert_eq!(
+            scan_plan.parquet_read_schema.as_ref(),
+            expected_parquet_schema.as_ref()
+        );
+
+        // `parquet_read_schema` contains only physical file columns (no Delta partitions, no file-id).
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Company Very Short")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name(config.file_id_field().name())
+                .is_err()
+        );
+
+        // Column-mapped tables use logical names in the result schema, but physical names for Parquet reads.
+        assert!(
+            scan_plan
+                .result_schema
+                .field_with_name("Super Name")
+                .is_ok()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Super Name")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")
+                .is_ok()
+        );
+        assert!(matches!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")?
+                .data_type(),
+            DataType::Utf8View | DataType::BinaryView
+        ));
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = false;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(!schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let mut partitioned_table = open_fs_path("../test/tests/data/delta-0.8.0-partitioned");
+        partitioned_table.load().await?;
+        let partitioned_snapshot = partitioned_table.snapshot()?.snapshot().snapshot();
+        let scan_plan = KernelScanPlan::try_new(
+            partitioned_snapshot,
+            None,
+            &[],
+            &DeltaScanConfig::default(),
+            None,
+        )?;
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("year")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("month")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("day")
+                .is_err()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pushdown_exactness_policy() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let table_config = table.snapshot()?.snapshot().table_configuration();
+        let scan_config = DeltaScanConfig::default();
+
+        // Partition-only filters are enforced by the kernel scan (exact).
+        let partition_only = col(r#""Company Very Short""#).eq(lit("BME"));
+        assert_eq!(
+            supports_filters_pushdown(&[&partition_only], table_config, &scan_config),
+            vec![TableProviderFilterPushDown::Exact]
+        );
+
+        // Non-partition filters are best-effort (Parquet pruning/pushdown); keep inexact so DF keeps
+        // a correctness filter above the scan.
+        let data_only = col(r#""Super Name""#).eq(lit("Timothy Lamb"));
+        assert_eq!(
+            supports_filters_pushdown(&[&data_only], table_config, &scan_config),
+            vec![TableProviderFilterPushDown::Inexact]
+        );
+
+        // Mixed partition + data filters are also inexact.
+        assert_eq!(
+            supports_filters_pushdown(&[&partition_only, &data_only], table_config, &scan_config),
+            vec![
+                TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Inexact,
+            ]
+        );
 
         Ok(())
     }

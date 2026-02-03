@@ -511,7 +511,6 @@ def test_checkpoint_with_multiple_writes(tmp_path: pathlib.Path):
     dt = DeltaTable(tmp_path)
     assert dt.version() == 1
     new_df = dt.to_pandas()
-    print(dt.to_pandas())
     assert len(new_df) == 1, "We overwrote! there should only be one row"
 
 

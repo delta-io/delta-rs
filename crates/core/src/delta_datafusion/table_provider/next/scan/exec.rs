@@ -9,9 +9,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{ArrayAccessor, RecordBatch, StringArray};
+use arrow::array::{RecordBatch, StringArray};
 use arrow::compute::filter_record_batch;
 use arrow::datatypes::{SchemaRef, UInt16Type};
+use arrow_array::StringViewArray;
 use arrow_array::{Array, BooleanArray};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
@@ -148,10 +149,6 @@ impl DeltaScanExec {
             retain_file_ids,
             properties,
         }
-    }
-
-    pub(crate) fn delta_plan(&self) -> &KernelScanPlan {
-        &self.scan_plan
     }
 
     /// Transform the statistics from the inner physical parquet read plan to the logical
@@ -519,25 +516,55 @@ fn split_by_file_id_runs(
         .downcast_ref::<arrow_array::DictionaryArray<UInt16Type>>()
         .ok_or_else(|| {
             internal_datafusion_err!(
-                "Expected file id column '{}' to be Dictionary<UInt16, Utf8>, got {:?}",
+                "Expected file id column '{}' to be Dictionary<UInt16, Utf8|Utf8View>, got {:?}",
                 batch.schema_ref().field(file_id_idx).name(),
                 batch.column(file_id_idx).data_type()
             )
         })?;
 
-    let typed = dict.downcast_dict::<StringArray>().ok_or_else(|| {
-        internal_datafusion_err!(
-            "Expected file id column '{}' to be Dictionary<UInt16, Utf8>, got {:?}",
+    // Parquet reads may yield Utf8 or Utf8View depending on DataFusion settings.
+    // Accept either for the synthetic file id column.
+    let keys = dict.keys();
+
+    enum FileIdValues<'a> {
+        Utf8(&'a StringArray),
+        Utf8View(&'a StringViewArray),
+    }
+
+    let values = if let Some(values) = dict
+        .values()
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringArray>()
+    {
+        FileIdValues::Utf8(values)
+    } else if let Some(values) = dict
+        .values()
+        .as_ref()
+        .as_any()
+        .downcast_ref::<StringViewArray>()
+    {
+        FileIdValues::Utf8View(values)
+    } else {
+        return Err(internal_datafusion_err!(
+            "Expected file id column '{}' to be Dictionary<UInt16, Utf8|Utf8View>, got {:?}",
             batch.schema_ref().field(file_id_idx).name(),
             batch.column(file_id_idx).data_type()
-        )
-    })?;
+        ));
+    };
+
+    let file_id_for_row = |row: usize| -> String {
+        let key = keys.value(row) as usize;
+        match values {
+            FileIdValues::Utf8(arr) => arr.value(key).to_string(),
+            FileIdValues::Utf8View(arr) => arr.value(key).to_string(),
+        }
+    };
 
     if dict.is_null(0) {
         return Err(internal_datafusion_err!("file id value must not be null"));
     }
 
-    let keys = typed.keys();
     let mut prev_key = keys.value(0);
     let mut start = 0usize;
     let mut runs = Vec::new();
@@ -548,14 +575,14 @@ fn split_by_file_id_runs(
         }
         let key = keys.value(i);
         if key != prev_key {
-            let file_id = typed.value(start).to_string();
+            let file_id = file_id_for_row(start);
             runs.push((file_id, batch.slice(start, i - start)));
             start = i;
             prev_key = key;
         }
     }
 
-    let file_id = typed.value(start).to_string();
+    let file_id = file_id_for_row(start);
     runs.push((file_id, batch.slice(start, batch.num_rows() - start)));
 
     Ok(runs)
@@ -568,6 +595,7 @@ mod tests {
     use arrow::array::AsArray;
     use arrow::datatypes::DataType;
     use arrow_array::Array;
+    use arrow_array::ArrayAccessor;
     use datafusion::{
         common::stats::Precision,
         physical_plan::{collect, collect_partitioned},
@@ -633,10 +661,15 @@ mod tests {
         // Verify file_id column has the correct type
         let schema = data[0].schema();
         let file_id_field = schema.column_with_name("file_id").unwrap().1;
-        assert_eq!(
-            file_id_field.data_type(),
-            &DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into())
-        );
+        match file_id_field.data_type() {
+            DataType::Dictionary(_, value_type)
+                if value_type.as_ref() == &DataType::Utf8
+                    || value_type.as_ref() == &DataType::Utf8View =>
+            {
+                // ok
+            }
+            other => panic!("unexpected file_id dtype: {other:?}"),
+        }
 
         Ok(())
     }
@@ -896,7 +929,7 @@ mod tests {
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let statistics = scan.partition_statistics(None)?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
-        assert_eq!(statistics.total_byte_size, Precision::Exact(3240));
+        assert_eq!(statistics.total_byte_size, Precision::Inexact(3240));
         for col_stat in statistics.column_statistics.iter() {
             assert_eq!(col_stat.null_count, Precision::Absent);
             assert_eq!(col_stat.min_value, Precision::Absent);
@@ -1050,9 +1083,9 @@ mod tests {
             .downcast_ref::<DeltaScanExec>()
             .expect("Expected DeltaScanExec");
 
-        let kernel_type = Arc::clone(exec.delta_plan().scan.logical_schema()).into();
+        let kernel_type = Arc::clone(exec.scan_plan.scan.logical_schema()).into();
 
-        let mut scan_plan = exec.delta_plan().clone();
+        let mut scan_plan = exec.scan_plan.as_ref().clone();
         scan_plan.result_schema = Arc::new(Schema::new(vec![Field::new(
             "value",
             DataType::Int32,
@@ -1279,7 +1312,7 @@ mod tests {
         let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
         let err = split_by_file_id_runs(&batch, file_id_idx).unwrap_err();
         let message = err.to_string();
-        assert!(message.contains("Dictionary<UInt16, Utf8>"));
+        assert!(message.contains("Dictionary<UInt16"));
         assert!(message.contains("Int32"));
 
         Ok(())

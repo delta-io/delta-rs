@@ -12,14 +12,15 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, DFSchemaRef, Result, Statistics, ToDFSchema};
+use datafusion::common::{Column, ColumnStatistics, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::{
-    FileGroup, FileSource, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
+    FileGroup, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
 };
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::DataSinkExec;
+use datafusion::datasource::table_schema::TableSchema;
 use datafusion::error::DataFusionError;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::dml::InsertOp;
@@ -49,12 +50,10 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_datafusion::engine::AsObjectStoreUrl;
-use crate::delta_datafusion::schema_adapter::DeltaSchemaAdapterFactory;
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, FindFilesExprProperties, LogDataHandler, get_null_of_arrow_type,
-    register_store, to_correct_scalar_value,
+    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
+    get_null_of_arrow_type, to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -151,7 +150,7 @@ impl DeltaScanConfigBuilder {
                 Some(name) => {
                     if column_names.contains(name) {
                         return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {name} exits"
+                            "Unable to add file path column since column with name {name} exists"
                         )));
                     }
 
@@ -179,7 +178,7 @@ impl DeltaScanConfigBuilder {
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
-            schema_force_view_types: false,
+            schema_force_view_types: true,
         })
     }
 }
@@ -538,12 +537,82 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
 
+        // DF52's TableSchema outputs columns as: file_schema + partition_columns
+        // Source stats are indexed by TableConfiguration.schema() field order, which may differ
+        // from the scan schema order. We need name-based remapping, not index-based.
+        let partition_col_names = self.snapshot.metadata().partition_columns();
+
+        // Build name -> ColumnStatistics map from source stats (keyed by TableConfiguration schema order)
+        let source_schema = self.snapshot.schema();
+        let stats_by_name: HashMap<String, ColumnStatistics> = source_schema
+            .fields()
+            .enumerate()
+            .filter_map(|(idx, field)| {
+                stats
+                    .column_statistics
+                    .get(idx)
+                    .map(|s| (field.name().to_string(), s.clone()))
+            })
+            .collect();
+
+        // Build stats in DF52 order: file_schema columns first, then partition_columns
+        // file_schema columns are in file_schema field order (non-partition from logical_schema)
+        let file_col_stats: Vec<ColumnStatistics> = file_schema
+            .fields()
+            .iter()
+            .map(|f| {
+                stats_by_name
+                    .get(f.name())
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        // Partition columns must be in metadata.partition_columns() order (not schema encounter order)
+        let partition_col_stats: Vec<ColumnStatistics> = partition_col_names
+            .iter()
+            .map(|name| {
+                stats_by_name
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(ColumnStatistics::new_unknown)
+            })
+            .collect();
+
+        // Combine: file columns first, then partition columns
+        let mut reordered_stats = file_col_stats;
+        reordered_stats.extend(partition_col_stats);
+
+        let stats = Statistics {
+            num_rows: stats.num_rows,
+            total_byte_size: stats.total_byte_size,
+            column_statistics: reordered_stats,
+        };
+
+        // Add unknown stats for file_column if present (it's added as partition field but not in original schema)
+        let stats = if config.file_column_name.is_some() {
+            let mut col_stats = stats.column_statistics;
+            col_stats.push(ColumnStatistics::new_unknown());
+            Statistics {
+                num_rows: stats.num_rows,
+                total_byte_size: stats.total_byte_size,
+                column_statistics: col_stats,
+            }
+        } else {
+            stats
+        };
+
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
-        let mut file_source = ParquetSource::new(parquet_options);
+        let partition_fields: Vec<Arc<Field>> =
+            table_partition_cols.into_iter().map(Arc::new).collect();
+        let table_schema = TableSchema::new(file_schema, partition_fields);
+
+        let mut file_source =
+            ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -553,11 +622,9 @@ impl<'a> DeltaScanBuilder<'a> {
         {
             file_source = file_source.with_predicate(predicate);
         };
-        let file_source =
-            file_source.with_schema_adapter_factory(Arc::new(DeltaSchemaAdapterFactory {}))?;
 
         let file_scan_config =
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), file_schema, file_source)
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(file_source))
                 .with_file_groups(
                     // If all files were filtered out, we still need to emit at least one partition to
                     // pass datafusion sanity checks.
@@ -570,9 +637,8 @@ impl<'a> DeltaScanBuilder<'a> {
                     },
                 )
                 .with_statistics(stats)
-                .with_projection_indices(self.projection.cloned())
+                .with_projection_indices(self.projection.cloned())?
                 .with_limit(self.limit)
-                .with_table_partition_cols(table_partition_cols)
                 .build();
 
         let metrics = ExecutionPlanMetricsSet::new();
@@ -742,8 +808,33 @@ impl DeltaTable {
         builder
     }
 
+    /// Ensure the provided DataFusion session is prepared to read this table.
+    ///
+    /// This registers the table's root object store with the session's `RuntimeEnv` if missing.
+    /// Registration is idempotent and will not overwrite an existing mapping.
+    ///
+    /// If the session already has an object store registered for the table's URL but it is stale or
+    /// incorrect, this method will not replace it. To override an existing mapping, call
+    /// `RuntimeEnv::register_object_store` directly.
+    ///
+    /// ```rust,no_run
+    /// use datafusion::prelude::SessionContext;
+    /// use deltalake_core::{DeltaResult, DeltaTable};
+    ///
+    /// # fn main() -> DeltaResult<()> {
+    /// let table = DeltaTable::new_in_memory();
+    /// let ctx = SessionContext::new();
+    /// let state = ctx.state();
+    /// table.update_datafusion_session(&state)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        update_datafusion_session(self.log_store().as_ref(), session, None)
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+            session,
+            self.log_store().as_ref(),
+            None,
+        )
     }
 }
 
@@ -752,13 +843,11 @@ pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let url = log_store.root_url().as_object_store_url();
-    if session.runtime_env().object_store(&url).is_err() {
-        session
-            .runtime_env()
-            .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
-    }
-    Ok(())
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+        session,
+        log_store,
+        operation_id,
+    )
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
@@ -826,7 +915,7 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
@@ -864,7 +953,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), state.runtime_env().as_ref());
+        state.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,

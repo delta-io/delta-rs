@@ -37,7 +37,7 @@ use url::Url;
 
 use crate::{
     DeltaResult,
-    delta_datafusion::engine::to_datafusion_scalar,
+    delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
         LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
         arrow::engine_ext::stats_schema, parse_stats_column_with_schema,
@@ -137,6 +137,8 @@ pin_project! {
 
         kernel_scan: Arc<KernelScan>,
 
+        scan_config: DeltaScanConfig,
+
         pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
 
         #[pin]
@@ -145,7 +147,12 @@ pin_project! {
 }
 
 impl<S> ScanFileStream<S> {
-    pub(crate) fn new(engine: Arc<dyn Engine>, scan: &Arc<Scan>, stream: S) -> Self {
+    pub(crate) fn new(
+        engine: Arc<dyn Engine>,
+        scan: &Arc<Scan>,
+        scan_config: DeltaScanConfig,
+        stream: S,
+    ) -> Self {
         Self {
             metrics: ReplayStats::new(),
             dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>)>::new(100),
@@ -153,6 +160,7 @@ impl<S> ScanFileStream<S> {
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
             stream,
+            scan_config,
         }
     }
 }
@@ -223,6 +231,7 @@ where
                 // TODO: do we need to mnake the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
+                    &this.scan_config,
                     parsed_stats,
                     predicate_columns.as_ref(),
                 );
@@ -269,6 +278,7 @@ where
 /// - [`StructData`]: Partition values to be materialized in the output
 fn extract_file_statistics(
     scan: &KernelScan,
+    scan_config: &DeltaScanConfig,
     parsed_stats: RecordBatch,
     predicate_columns: Option<&HashSet<String>>,
 ) -> HashMap<Url, (Statistics, Option<StructData>)> {
@@ -302,6 +312,7 @@ fn extract_file_statistics(
                             min_value: Precision::Absent,
                             sum_value: Precision::Absent,
                             distinct_count: Precision::Absent,
+                            byte_size: Precision::Absent,
                         };
                     }
 
@@ -321,8 +332,10 @@ fn extract_file_statistics(
                         Precision::Absent
                     };
 
-                    let max_value = extract_precision(&max_values, f.name());
-                    let min_value = extract_precision(&min_values, f.name());
+                    let max_value =
+                        physical_precision(extract_precision(&max_values, f.name()), scan_config);
+                    let min_value =
+                        physical_precision(extract_precision(&min_values, f.name()), scan_config);
 
                     ColumnStatistics {
                         null_count,
@@ -330,6 +343,7 @@ fn extract_file_statistics(
                         min_value,
                         sum_value: Precision::Absent,
                         distinct_count: Precision::Absent,
+                        byte_size: Precision::Absent,
                     }
                 })
                 .collect_vec();
@@ -347,6 +361,18 @@ fn extract_file_statistics(
             ))
         })
         .collect()
+}
+
+#[inline]
+fn physical_precision(
+    precision: Precision<ScalarValue>,
+    scan_config: &DeltaScanConfig,
+) -> Precision<ScalarValue> {
+    match precision {
+        Precision::Exact(v) => Precision::Exact(scan_config.map_scalar_value(v)),
+        Precision::Inexact(v) => Precision::Inexact(scan_config.map_scalar_value(v)),
+        Precision::Absent => Precision::Absent,
+    }
 }
 
 fn extract_precision(data: &Option<StructData>, name: impl AsRef<str>) -> Precision<ScalarValue> {
