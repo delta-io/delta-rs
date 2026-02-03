@@ -343,7 +343,7 @@ impl CdfLoadBuilder {
     }
 
     /// Executes the scan
-    pub(crate) async fn build(
+    pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
