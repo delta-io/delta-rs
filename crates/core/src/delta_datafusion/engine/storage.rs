@@ -148,7 +148,9 @@ fn get_store_url(url: &url::Url) -> ObjectStoreUrl {
     ObjectStoreUrl::parse(format!(
         "{}://{}",
         url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
+        // Use BeforeUsername to include userinfo (e.g., container name for Azure ABFSS URLs)
+        // This ensures different containers on the same account get unique ObjectStoreUrl keys
+        &url[url::Position::BeforeUsername..url::Position::AfterPort],
     ))
     // Safety: The url is guaranteed to be valid as we construct it
     // from a valid url and pass only the parts that object store url
