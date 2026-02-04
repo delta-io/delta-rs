@@ -17,8 +17,14 @@ aws-config = { version = "1.8", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
+    "client-hyper",
 ] }
-aws-sdk-glue = "1.120"
+aws-sdk-glue = { version = "1.120", default-features = false, features = [
+    "behavior-version-latest",
+    "rt-tokio",
+    # Use the new default HTTPS client stack (no hyper 0.14).
+    "default-https-client",
+] }
 deltalake-core = { version = "0.30.0", path = "../core" }
 thiserror = { workspace = true }
 
