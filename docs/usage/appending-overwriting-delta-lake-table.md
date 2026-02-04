@@ -29,7 +29,8 @@ Append two additional rows of data to the table:
 
 === "Rust"
 `rust
-    let table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("num", DataType::Int32, false),
@@ -70,7 +71,8 @@ Now let's see how to overwrite the existing Delta table.
 
 === "Rust"
 `rust
-    let table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("num", DataType::Int32, false),
@@ -104,7 +106,8 @@ Overwriting just performs a logical delete. It doesn't physically remove the pre
 
 === "Rust"
 `rust
-    let mut table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;
     `
 

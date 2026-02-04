@@ -18,7 +18,7 @@ Here's how to Z Order a Delta table:
 
 === "Rust"
     ```rust
-    let table = open_table("tmp").await?;    
+    let table = open_table(delta_path_url).await?;    
     
     let (table, metrics) = DeltaOps(table)
         .optimize()
