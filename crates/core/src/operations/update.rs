@@ -11,7 +11,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = UpdateBuilder::new(table.object_store(), table.state)
 //!     .with_predicate(col("col1").eq(lit(1)))
 //!     .with_update("value", col("value") + lit(20))
@@ -57,10 +57,11 @@ use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::{
     delta_datafusion::{
-        DeltaColumn, create_session,
+        DeltaColumn, DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
         expr::fmt_expr_to_sql,
         logical::{LogicalPlanBuilderExt as _, LogicalPlanExt as _, MetricObserver},
         physical::{MetricObserverExec, find_metric_node, get_metric},
+        resolve_session_state,
     },
     kernel::{
         Action, EagerSnapshot,
@@ -92,6 +93,7 @@ pub struct UpdateBuilder {
     log_store: LogStoreRef,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional information to add to the commit
@@ -137,6 +139,7 @@ impl UpdateBuilder {
             snapshot,
             log_store,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             writer_properties: None,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
@@ -160,9 +163,25 @@ impl UpdateBuilder {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 
@@ -172,7 +191,7 @@ impl UpdateBuilder {
         self
     }
 
-    /// Writer properties passed to parquet writer for when fiiles are rewritten
+    /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
         self
@@ -431,12 +450,18 @@ impl std::future::IntoFuture for UpdateBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let session = if let Some(session) = this.session {
-                session
-            } else {
-                Arc::new(create_session().into_inner().state())
-            };
-            update_datafusion_session(&this.log_store, session.as_ref(), Some(operation_id))?;
+            let (state, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session().state(),
+                SessionResolveContext {
+                    operation: "update",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
+            update_datafusion_session(&this.log_store, &state, Some(operation_id))?;
+            state.ensure_log_store_registered(this.log_store.as_ref())?;
 
             if this.updates.is_empty() {
                 return Ok((
@@ -448,11 +473,11 @@ impl std::future::IntoFuture for UpdateBuilder {
             let predicate = this
                 .predicate
                 .map(|p| {
-                    let scan_config = DeltaScanConfig::new_from_session(session.as_ref());
+                    let scan_config = DeltaScanConfig::new_from_session(&state);
                     let predicate_schema = scan_config
                         .table_schema(snapshot.table_configuration())?
                         .to_dfschema_ref()?;
-                    p.resolve(session.as_ref(), predicate_schema)
+                    p.resolve(&state, predicate_schema)
                 })
                 .transpose()?;
 
@@ -466,7 +491,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 this.updates,
                 this.log_store.clone(),
                 &snapshot,
-                session.as_ref(),
+                &state,
                 this.writer_properties,
                 operation_id,
             )

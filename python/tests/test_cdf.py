@@ -848,3 +848,10 @@ def test_read_cdf_last_version(tmp_path):
     )
 
     assert expected == data
+
+
+def test_read_cdf_write_stream(tmp_path):
+    dt = DeltaTable("../crates/test/tests/data/cdf-table/")
+    data = dt.load_cdf(0, 3, predicate="birthday = '2023-12-25'")
+
+    write_deltalake(tmp_path, data)

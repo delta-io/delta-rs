@@ -8,7 +8,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let mut table = open_table("../path/to/table")?;
+//! let mut table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = FileSystemCheckBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
