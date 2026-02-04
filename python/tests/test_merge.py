@@ -2117,6 +2117,48 @@ def test_merge_preserves_casing_in_quoted_identifiers(
     assert result == expected
 
 
+def test_merge_camelcase_non_nullable_column_4082(tmp_path: pathlib.Path):
+    # Regression test for https://github.com/delta-io/delta-rs/issues/4082
+    schema = Schema(
+        [
+            Field("submittedAt", PrimitiveType("long"), nullable=False),
+            Field("id", PrimitiveType("string"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema=schema, mode="ignore")
+
+    source_table = Table(
+        {
+            "submittedAt": Array(
+                [123],
+                ArrowField("submittedAt", type=DataType.int64(), nullable=True),
+            ),
+            "id": Array(
+                ["test"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    (
+        dt.merge(
+            source=source_table,
+            predicate="source.id = target.id",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    assert dt.history(1)[0]["operation"] == "MERGE"
+
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    assert result["submittedAt"].to_pylist() == [123]
+    assert result["id"].to_pylist() == ["test"]
+
+
 @pytest.mark.pandas
 @pytest.mark.pyarrow
 def test_struct_casting(tmp_path: pathlib.Path):
