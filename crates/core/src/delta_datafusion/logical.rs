@@ -3,12 +3,16 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use arrow_schema::Field;
+use arrow_array::RecordBatch;
+use arrow_schema::{Field, SchemaRef};
+use datafusion::catalog::MemTable;
 use datafusion::common::{Column, Result};
+use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNodeCore,
 };
 use datafusion::prelude::{Expr, col};
+use datafusion::sql::TableReference;
 use itertools::Itertools;
 
 use crate::delta_datafusion::data_validation::DataValidation;
@@ -18,6 +22,12 @@ pub(crate) trait LogicalPlanBuilderExt: Sized {
     fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
     /// Validate all data produced by the plan coforms to the passed predicates.
     fn validate(self, validations: impl IntoIterator<Item = Expr>) -> Result<Self>;
+    /// Create and in-memory scan of existing record batches
+    fn scan_batches(
+        table_name: impl Into<TableReference>,
+        schema: SchemaRef,
+        batches: impl IntoIterator<Item = impl IntoIterator<Item = RecordBatch>>,
+    ) -> Result<Self>;
 }
 
 pub(crate) trait ColumnReference: Sized {
@@ -74,6 +84,19 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
         });
         Ok(LogicalPlanBuilder::new(plan))
     }
+
+    fn scan_batches(
+        table_name: impl Into<TableReference>,
+        schema: SchemaRef,
+        batches: impl IntoIterator<Item = impl IntoIterator<Item = RecordBatch>>,
+    ) -> Result<Self> {
+        let partitions: Vec<Vec<RecordBatch>> = batches
+            .into_iter()
+            .map(|b| b.into_iter().collect())
+            .collect();
+        let table_provider = Arc::new(MemTable::try_new(schema, partitions)?);
+        LogicalPlanBuilder::scan(table_name, provider_as_source(table_provider), None)
+    }
 }
 
 pub(crate) trait LogicalPlanExt: Sized {
@@ -92,9 +115,8 @@ impl LogicalPlanExt for Arc<LogicalPlan> {
     }
 }
 
-// Metric Observer is used to update DataFusion metrics from a record batch.
-// See MetricObserverExec for the physical implementation
-
+/// Metric Observer is used to update DataFusion metrics from a record batch.
+/// See MetricObserverExec for the physical implementation
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
 pub(crate) struct MetricObserver {
     // id is preserved during conversion to physical node
@@ -129,7 +151,8 @@ impl UserDefinedLogicalNodeCore for MetricObserver {
             self.schema()
                 .fields()
                 .iter()
-                .map(|f| f.name().clone())
+                .map(|f| f.name())
+                .cloned()
                 .collect()
         }
     }

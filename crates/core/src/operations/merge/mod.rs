@@ -782,7 +782,7 @@ async fn execute(
     let exec_start = Instant::now();
     // Determining whether we should write change data once so that computation of change data can
     // be disabled in the common case(s)
-    let should_cdc = should_write_cdc(&snapshot)?;
+    let should_cdc = should_write_cdc(&snapshot);
     // Change data may be collected and then written out at the completion of the merge
 
     if should_cdc {

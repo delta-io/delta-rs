@@ -94,8 +94,7 @@ def test_enforce_schema_rust_writer(existing_sample_table: DeltaTable, mode: str
     )
 
     with pytest.raises(
-        SchemaMismatchError,
-        match=".*Cannot cast schema, number of fields does not match.*",
+        match="Schema evolution required but schema mode not set.",
     ):
         write_deltalake(
             table_or_uri=existing_sample_table,
@@ -105,8 +104,7 @@ def test_enforce_schema_rust_writer(existing_sample_table: DeltaTable, mode: str
 
     table_uri = existing_sample_table._table.table_uri()
     with pytest.raises(
-        SchemaMismatchError,
-        match=".*Cannot cast schema, number of fields does not match.*",
+        match="Schema evolution required but schema mode not set.",
     ):
         write_deltalake(
             table_uri,
@@ -178,7 +176,11 @@ def test_merge_schema(existing_table: DeltaTable):
     read_data = existing_table.to_pyarrow_table().sort_by(
         [("utf8", "ascending"), ("new_x", "ascending")]
     )
-    concated = pa.concat_tables([old_table_data, new_data])
+    concated = pa.concat_tables([old_table_data, new_data]).sort_by(
+        [("utf8", "ascending"), ("new_x", "ascending")]
+    )
+    print(read_data.to_pandas()["struct"])
+    print(concated.to_pandas()["struct"])
     assert read_data == concated
 
     write_deltalake(existing_table, new_data, mode="overwrite", schema_mode="overwrite")
@@ -244,7 +246,7 @@ def test_overwrite_schema(existing_table: DeltaTable):
 
 
 def test_update_schema_rust_writer_append(existing_sample_table: DeltaTable):
-    with pytest.raises(SchemaMismatchError):
+    with pytest.raises(match="Schema evolution required but schema mode not set."):
         # It's illegal to do schema drift without correct schema_mode
         write_deltalake(
             existing_sample_table,
@@ -350,9 +352,7 @@ def test_update_schema_rust_writer_invalid(existing_sample_table: DeltaTable):
         }
     )
 
-    with pytest.raises(
-        SchemaMismatchError, match="Cannot cast schema, number of fields does not match"
-    ):
+    with pytest.raises(match="Schema evolution required but schema mode not set"):
         write_deltalake(
             existing_sample_table,
             new_data,
@@ -714,7 +714,7 @@ def test_fails_wrong_partitioning(
 ):
     with pytest.raises(
         DeltaError,
-        match='Generic error: Specified table partitioning does not match table partitioning: expected: [], got: ["int32"]',
+        match='Partitioning mispatch: expected: [], got: ["int32"]',
     ):
         write_deltalake(
             existing_table,

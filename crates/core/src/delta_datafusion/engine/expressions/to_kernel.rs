@@ -23,9 +23,7 @@ pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
 /// Converts a DataFusion expression to a Delta kernel expression.
 pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     match expr {
-        Expr::Column(column) => Ok(Expression::Column(ColumnName::from_naive_str_split(
-            &column.name,
-        ))),
+        Expr::Column(column) => Ok(Expression::Column(ColumnName::new([&column.name]))),
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
         }
