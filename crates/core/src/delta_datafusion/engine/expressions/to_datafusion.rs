@@ -7,7 +7,7 @@ use datafusion::common::{
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
 use datafusion::logical_expr::expr::ScalarFunction;
-use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
+use datafusion::logical_expr::{BinaryExpr, Expr, Operator, expr_fn::ident, lit};
 use datafusion::prelude::coalesce;
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
@@ -34,7 +34,11 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
             let base_name = name_iter
                 .next()
                 .ok_or_else(|| internal_datafusion_err!("Expected at least one column name"))?;
-            Ok(name_iter.fold(col(base_name), |acc, n| acc.field(n)))
+            // Kernel column paths are already exact segments. Using `ident` avoids DataFusion SQL
+            // identifier normalization (e.g. lowercasing), and treats `.` as a literal character
+            // rather than a qualifier separator. This is required for correctness with camelCase
+            // and other non-normalized column names (see #4082).
+            Ok(name_iter.fold(ident(base_name), |acc, n| acc.field(n)))
         }
         Expression::Predicate(expr) => predicate_to_df(expr, output_type),
         Expression::Struct(fields) => struct_to_df(fields, output_type),
@@ -222,7 +226,7 @@ fn struct_to_df(fields: &[Arc<Expression>], output_type: &DataType) -> DFResult<
 mod tests {
     use std::ops::Not;
 
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::logical_expr::{col, expr_fn::ident, lit};
     use delta_kernel::expressions::ColumnName;
     use delta_kernel::expressions::{ArrayData, BinaryExpression, MapData, Scalar, StructData};
     use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
@@ -381,11 +385,25 @@ mod tests {
     fn test_column_expression() {
         let expr = Expression::Column(ColumnName::new(["test_col"]));
         let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
-        assert_eq!(result, col("test_col"));
+        assert_eq!(result, ident("test_col"));
 
         let expr = Expression::Column(ColumnName::new(["test_col", "field_1", "field_2"]));
         let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
-        assert_eq!(result, col("test_col").field("field_1").field("field_2"));
+        assert_eq!(result, ident("test_col").field("field_1").field("field_2"));
+    }
+
+    #[test]
+    fn test_column_expression_preserves_case() {
+        let expr = Expression::Column(ColumnName::new(["submittedAt"]));
+        let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
+        assert_eq!(result, ident("submittedAt"));
+    }
+
+    #[test]
+    fn test_column_expression_preserves_dots_in_segments() {
+        let expr = Expression::Column(ColumnName::new(["a.b"]));
+        let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
+        assert_eq!(result, ident("a.b"));
     }
 
     /// Test various literal values:
