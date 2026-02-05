@@ -17,6 +17,9 @@ name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
 
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-unity"]
+
 [dependencies]
 delta_kernel.workspace = true
 url.workspace = true
@@ -49,6 +52,14 @@ num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
+
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
+    "aws",
+    "azure",
+    "gcp",
+    "r2",
+] }
 
 # opentelemetry
 tracing-opentelemetry = { workspace = true }
