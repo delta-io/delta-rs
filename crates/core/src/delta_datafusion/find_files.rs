@@ -541,3 +541,195 @@ pub(crate) async fn scan_files_where_matches(
         partition_only: visitor.partition_only,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow_array::{Int64Array, TimestampMicrosecondArray};
+    use arrow_schema::TimeUnit;
+
+    use crate::{
+        DeltaTable,
+        delta_datafusion::{create_session, update_datafusion_session},
+    };
+
+    use super::*;
+
+    async fn create_simple_table() -> (DeltaTable, SessionContext) {
+        let int_arr = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let str_arr = Arc::new(StringArray::from(vec!["a", "a", "b", "b", "c", "c"]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("part", DataType::Utf8, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![str_arr, int_arr]).unwrap();
+
+        let dt = DeltaTable::new_in_memory()
+            .write(Some(batch))
+            .with_partition_columns(["part"])
+            .await
+            .unwrap();
+
+        let session = create_session().into_inner();
+        update_datafusion_session(dt.log_store().as_ref(), &session.state(), None).unwrap();
+
+        (dt, session)
+    }
+
+    async fn create_date_table() -> (DeltaTable, SessionContext) {
+        let int_arr = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let time_arr = Arc::new(
+            TimestampMicrosecondArray::from(vec![
+                1000000, 1000000, 3000000, 3000000, 5000000, 5000000,
+            ])
+            .with_timezone("UTC"),
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "part",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![time_arr, int_arr]).unwrap();
+
+        let dt = DeltaTable::new_in_memory()
+            .write(Some(batch))
+            .with_partition_columns(["part"])
+            .await
+            .unwrap();
+
+        let session = create_session().into_inner();
+        update_datafusion_session(dt.log_store().as_ref(), &session.state(), None).unwrap();
+
+        (dt, session)
+    }
+
+    async fn files_count(dt: &DeltaTable) -> usize {
+        dt.snapshot()
+            .unwrap()
+            .snapshot()
+            .file_views(dt.log_store().as_ref(), None)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .len()
+    }
+
+    #[tokio::test]
+    async fn test_delete_simple() {
+        let (dt, _) = create_simple_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt.delete().await.unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 3);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(count, 0);
+    }
+
+    // delete with a predicate on data column that matches the whole file
+    #[tokio::test]
+    async fn test_delete_with_data_pred_whole_file() {
+        let (dt, _) = create_simple_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt
+            .delete()
+            .with_predicate(col("value").gt(lit(4_i64)))
+            .await
+            .unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(count, 2);
+    }
+
+    // delete with a predicate on data column that matches the some data in file
+    #[tokio::test]
+    async fn test_delete_with_data_pred_part_file() {
+        let (dt, _) = create_simple_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt
+            .delete()
+            .with_predicate(col("value").gt(lit(5_i64)))
+            .await
+            .unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 1);
+        assert_eq!(count, 3);
+    }
+
+    // delete with a predicate on partition column that matches the some data in file
+    #[tokio::test]
+    async fn test_delete_with_part_pred_part_file() {
+        let (dt, _) = create_simple_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt
+            .delete()
+            .with_predicate(col("part").gt(lit("b")))
+            .await
+            .unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_date() {
+        let (dt, _) = create_date_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt
+            .delete()
+            .with_predicate(col("part").gt(lit(ScalarValue::TimestampMicrosecond(
+                Some(3000000),
+                Some("UTC".into()),
+            ))))
+            .await
+            .unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_date_mixed() {
+        let (dt, _) = create_date_table().await;
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let count = files_count(&dt).await;
+        assert_eq!(count, 3);
+
+        let (dt, metrics) = dt
+            .delete()
+            .with_predicate(
+                col("part")
+                    .gt(lit(ScalarValue::TimestampMicrosecond(
+                        Some(3000000),
+                        Some("UTC".into()),
+                    )))
+                    .or(col("value").lt(lit(3_i64))),
+            )
+            .await
+            .unwrap();
+        let count = files_count(&dt).await;
+        assert_eq!(metrics.num_removed_files, 2);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(count, 1);
+    }
+}

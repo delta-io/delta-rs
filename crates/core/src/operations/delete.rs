@@ -54,7 +54,6 @@ use super::Operation;
 use super::cdc::should_write_cdc;
 use crate::DeltaTable;
 use crate::delta_datafusion::DeltaScanConfig;
-use crate::delta_datafusion::DeltaSessionExt;
 use crate::delta_datafusion::SessionFallbackPolicy;
 use crate::delta_datafusion::SessionResolveContext;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
@@ -227,7 +226,6 @@ impl std::future::IntoFuture for DeleteBuilder {
                 },
             )?;
             update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
-            session.ensure_log_store_registered(this.log_store.as_ref())?;
 
             let predicate = this
                 .predicate
@@ -351,7 +349,7 @@ async fn execute(
 
     let Some(predicate) = predicate else {
         // no predicate, so we are just dropping all files.
-        // we also don't need to write cdc actions if we are fropping all files.
+        // no need to write cdc actions if we are dropping whole files.
         let removes: Vec<_> = snapshot
             .file_views(log_store.as_ref(), None)
             .map_ok(|f| f.remove_action(true).into())
