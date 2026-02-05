@@ -218,10 +218,7 @@ async fn get_data_scan_plan(
         .into_iter()
         .into_group_map();
 
-    // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
-    // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
-    // dictionary doesn't exceed the key space (one distinct value per file). Track this so we can
-    // observe if/when chunking ever triggers.
+    // Track planned file-group chunking so we can observe if/when it triggers.
     let planned_file_groups = files_by_store
         .values()
         .map(|files| files.len().div_ceil(MAX_PARTITION_DICT_CARDINALITY))
@@ -314,12 +311,14 @@ const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
 
 fn partitioned_files_to_file_groups(
     files: impl IntoIterator<Item = PartitionedFile>,
-    max_files_per_group: usize,
 ) -> Vec<FileGroup> {
-    let max_files_per_group = max_files_per_group.max(1);
+    let max_files_per_group = MAX_PARTITION_DICT_CARDINALITY;
 
     files
         .into_iter()
+        // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
+        // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
+        // dictionary doesn't exceed the key space (one distinct value per file).
         .chunks(max_files_per_group)
         .into_iter()
         .map(|chunk| chunk.collect())
@@ -379,13 +378,7 @@ async fn get_read_plan(
                 .with_pushdown_filters(true);
         }
 
-        // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
-        // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
-        // dictionary doesn't exceed the key space (one distinct value per file).
-        let file_groups = partitioned_files_to_file_groups(
-            files.into_iter().map(|file| file.0),
-            MAX_PARTITION_DICT_CARDINALITY,
-        );
+        let file_groups = partitioned_files_to_file_groups(files.into_iter().map(|file| file.0));
         let (file_groups, statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
 
@@ -489,16 +482,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_partitioned_files_to_file_groups_respects_max_files_per_group() {
-        let files = (0..5)
+    fn test_partitioned_files_to_file_groups_respects_dictionary_cardinality_limit() {
+        let files = (0..=MAX_PARTITION_DICT_CARDINALITY)
             .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
             .collect_vec();
 
-        let groups = partitioned_files_to_file_groups(files, 2);
-        assert_eq!(groups.len(), 3);
-        assert_eq!(groups[0].len(), 2);
-        assert_eq!(groups[1].len(), 2);
-        assert_eq!(groups[2].len(), 1);
+        let groups = partitioned_files_to_file_groups(files);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
+        assert_eq!(groups[1].len(), 1);
     }
 
     #[tokio::test]
