@@ -38,13 +38,10 @@ use datafusion::{
         union::UnionExec,
     },
     prelude::Expr,
-    scalar::ScalarValue,
 };
 use datafusion_datasource::{
-    PartitionedFile, TableSchema, compute_all_files_statistics,
-    file_groups::FileGroup,
-    file_scan_config::{FileScanConfigBuilder, wrap_partition_value_in_dict},
-    source::DataSourceExec,
+    PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
+    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
@@ -62,6 +59,7 @@ use crate::{
     delta_datafusion::{
         DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
+        file_id::wrap_file_id_value,
     },
 };
 
@@ -200,8 +198,7 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
-        let file_value =
-            wrap_partition_value_in_dict(ScalarValue::Utf8(Some(f.file_url.to_string())));
+        let file_value = wrap_file_id_value(f.file_url.as_str());
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
@@ -291,6 +288,27 @@ fn update_partition_stats(
 }
 
 type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
+
+/// Maximum number of distinct values representable by DataFusion's default partition dictionary
+/// encoding (`Dictionary<UInt16, _>`).
+const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
+
+fn partitioned_files_to_file_groups(
+    files: impl IntoIterator<Item = PartitionedFile>,
+) -> Vec<FileGroup> {
+    let max_files_per_group = MAX_PARTITION_DICT_CARDINALITY;
+
+    files
+        .into_iter()
+        // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
+        // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
+        // dictionary doesn't exceed the key space (one distinct value per file).
+        .chunks(max_files_per_group)
+        .into_iter()
+        .map(|chunk| chunk.collect())
+        .collect()
+}
+
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
@@ -344,9 +362,9 @@ async fn get_read_plan(
                 .with_pushdown_filters(true);
         }
 
-        let file_group: FileGroup = files.into_iter().map(|file| file.0).collect();
+        let file_groups = partitioned_files_to_file_groups(files.into_iter().map(|file| file.0));
         let (file_groups, statistics) =
-            compute_all_files_statistics(vec![file_group], full_table_schema, true, false)?;
+            compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
 
         let config = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
             .with_file_groups(file_groups)
@@ -447,6 +465,18 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn test_partitioned_files_to_file_groups_respects_dictionary_cardinality_limit() {
+        let files = (0..=MAX_PARTITION_DICT_CARDINALITY)
+            .map(|i| PartitionedFile::new(format!("memory:///f{i}.parquet"), 0))
+            .collect_vec();
+
+        let groups = partitioned_files_to_file_groups(files);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
+        assert_eq!(groups[1].len(), 1);
+    }
+
     #[tokio::test]
     async fn test_parquet_plan() -> TestResult {
         let store = Arc::new(InMemory::new());
@@ -477,20 +507,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_data.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let plan = get_read_plan(
             &session.state(),
@@ -603,20 +628,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_data.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let plan = get_read_plan(
             &session.state(),
@@ -721,9 +741,7 @@ mod tests {
         let mut file_1: PartitionedFile = store_1.head(&path).await?.into();
         file_1
             .partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "first:///test_data.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("first:///test_data.parquet"));
 
         let mut buffer = Vec::new();
         let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
@@ -734,9 +752,7 @@ mod tests {
         let mut file_2: PartitionedFile = store_2.head(&path).await?.into();
         file_2
             .partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "second:///test_data.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("second:///test_data.parquet"));
 
         let files_by_store = vec![
             (
@@ -749,11 +765,8 @@ mod tests {
             ),
         ];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let plan = get_read_plan(
             &session.state(),
@@ -808,20 +821,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_data.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let predicate = col("id").eq(lit(2i32));
         let plan = get_read_plan(
@@ -886,20 +894,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_view_literal.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_view_literal.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let predicate = col("name").eq(lit(ScalarValue::Utf8View(Some("bob".to_string()))));
         let plan = get_read_plan(
@@ -927,8 +930,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_predicate_pushdown_allows_sql_literal_against_view_schema() -> TestResult {
-        use datafusion::scalar::ScalarValue;
-
         let store = Arc::new(InMemory::new());
         let store_url = Url::parse("memory:///")?;
         let session = Arc::new(create_session().into_inner());
@@ -966,20 +967,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_sql_literal.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_sql_literal.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let predicate = col("name").eq(lit("bob"));
         let plan = get_read_plan(
@@ -1046,20 +1042,15 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(
-                "memory:///test_binary_view.parquet".to_string(),
-            ))));
+            .push(wrap_file_id_value("memory:///test_binary_view.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
             vec![(file, None::<Vec<bool>>)],
         )];
 
-        let file_id_field = Arc::new(Field::new(
-            FILE_ID_COLUMN_DEFAULT,
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ));
+        let file_id_field =
+            crate::delta_datafusion::file_id::file_id_field(Some(FILE_ID_COLUMN_DEFAULT));
 
         let predicate = col("data").eq(lit(ScalarValue::BinaryView(Some(b"bbb".to_vec()))));
         let plan = get_read_plan(

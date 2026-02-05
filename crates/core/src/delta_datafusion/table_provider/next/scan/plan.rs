@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_schema::{DataType, Field, FieldRef, SchemaBuilder};
+use arrow_schema::{DataType, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{HashMap, HashSet, exec_err, plan_err};
@@ -218,15 +218,7 @@ impl KernelScanPlan {
 
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
-        // NOTE: keep the synthetic file-id column as Dictionary<UInt16, Utf8>.
-        // Arrow's dictionary packing does not support Utf8View, and this column is internal.
-        Arc::new(Field::new(
-            self.file_column_name
-                .as_deref()
-                .unwrap_or(FILE_ID_COLUMN_DEFAULT),
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ))
+        crate::delta_datafusion::file_id::file_id_field(self.file_column_name.as_deref())
     }
 
     pub(crate) fn retain_file_id(&self) -> bool {
@@ -816,5 +808,15 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_file_id_field_uses_canonical_file_id_type() {
+        let config = DeltaScanConfig::default();
+        let field = config.file_id_field();
+        assert_eq!(
+            field.data_type(),
+            &crate::delta_datafusion::file_id::file_id_data_type()
+        );
     }
 }
