@@ -17,6 +17,9 @@ name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
 
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-unity"]
+
 [dependencies]
 delta_kernel.workspace = true
 url.workspace = true
