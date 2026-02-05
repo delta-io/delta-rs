@@ -38,7 +38,6 @@ use datafusion::{
         union::UnionExec,
     },
     prelude::Expr,
-    scalar::ScalarValue,
 };
 use datafusion_datasource::{
     PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
@@ -60,6 +59,7 @@ use crate::{
     delta_datafusion::{
         DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
+        file_id::wrap_file_id_value,
     },
 };
 
@@ -198,7 +198,7 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
-        let file_value = wrap_file_id_partition_value(f.file_url.as_str());
+        let file_value = wrap_file_id_value(f.file_url.as_str());
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
@@ -217,18 +217,6 @@ async fn get_data_scan_plan(
         .try_collect::<_, Vec<_>, _>()?
         .into_iter()
         .into_group_map();
-
-    // Track planned file-group chunking so we can observe if/when it triggers.
-    let planned_file_groups = files_by_store
-        .values()
-        .map(|files| files.len().div_ceil(MAX_PARTITION_DICT_CARDINALITY))
-        .sum::<usize>();
-    MetricBuilder::new(&metrics)
-        .global_counter("count_file_groups_planned")
-        .add(planned_file_groups);
-    MetricBuilder::new(&metrics)
-        .global_counter("count_file_group_chunks")
-        .add(planned_file_groups.saturating_sub(files_by_store.len()));
 
     // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
     // so leaving predicate as None for now until we are sure this is safe to do.
@@ -261,10 +249,6 @@ async fn get_data_scan_plan(
     );
 
     Ok(Arc::new(exec))
-}
-
-fn wrap_file_id_partition_value(file_url: &str) -> ScalarValue {
-    crate::delta_datafusion::file_id::wrap_file_id_value(file_url)
 }
 
 fn update_partition_stats(
@@ -523,7 +507,7 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_file_id_partition_value("memory:///test_data.parquet"));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -644,7 +628,7 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_file_id_partition_value("memory:///test_data.parquet"));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -757,7 +741,7 @@ mod tests {
         let mut file_1: PartitionedFile = store_1.head(&path).await?.into();
         file_1
             .partition_values
-            .push(wrap_file_id_partition_value("first:///test_data.parquet"));
+            .push(wrap_file_id_value("first:///test_data.parquet"));
 
         let mut buffer = Vec::new();
         let mut arrow_writer = ArrowWriter::try_new(&mut buffer, arrow_schema.clone(), None)?;
@@ -768,7 +752,7 @@ mod tests {
         let mut file_2: PartitionedFile = store_2.head(&path).await?.into();
         file_2
             .partition_values
-            .push(wrap_file_id_partition_value("second:///test_data.parquet"));
+            .push(wrap_file_id_value("second:///test_data.parquet"));
 
         let files_by_store = vec![
             (
@@ -837,7 +821,7 @@ mod tests {
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
         file.partition_values
-            .push(wrap_file_id_partition_value("memory:///test_data.parquet"));
+            .push(wrap_file_id_value("memory:///test_data.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -909,9 +893,8 @@ mod tests {
         let path = Path::from("test_view_literal.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(wrap_file_id_partition_value(
-            "memory:///test_view_literal.parquet",
-        ));
+        file.partition_values
+            .push(wrap_file_id_value("memory:///test_view_literal.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -983,9 +966,8 @@ mod tests {
         let path = Path::from("test_sql_literal.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(wrap_file_id_partition_value(
-            "memory:///test_sql_literal.parquet",
-        ));
+        file.partition_values
+            .push(wrap_file_id_value("memory:///test_sql_literal.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
@@ -1059,9 +1041,8 @@ mod tests {
         let path = Path::from("test_binary_view.parquet");
         store.put(&path, buffer.into()).await?;
         let mut file: PartitionedFile = store.head(&path).await?.into();
-        file.partition_values.push(wrap_file_id_partition_value(
-            "memory:///test_binary_view.parquet",
-        ));
+        file.partition_values
+            .push(wrap_file_id_value("memory:///test_binary_view.parquet"));
 
         let files_by_store = vec![(
             store_url.as_object_store_url(),
