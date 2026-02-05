@@ -68,12 +68,15 @@ use crate::delta_datafusion::{
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, resolve_snapshot_with_config};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
+use crate::table::file_format_options::{
+    IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef, state_with_file_format_options,
+};
 use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -93,7 +96,7 @@ pub struct DeleteBuilder {
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
-    writer_properties: Option<WriterProperties>,
+    writer_properties_factory: Option<WriterPropertiesFactoryRef>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -141,6 +144,11 @@ impl super::Operation for DeleteBuilder {
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let writer_properties_factory = snapshot
+            .as_ref()
+            .map(|ss| ss.load_config().file_format_options.clone())
+            .flatten()
+            .map(|ffo| ffo.writer_properties_factory());
         Self {
             predicate: None,
             snapshot,
@@ -148,7 +156,7 @@ impl DeleteBuilder {
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
-            writer_properties: None,
+            writer_properties_factory,
             custom_execute_handler: None,
         }
     }
@@ -189,7 +197,8 @@ impl DeleteBuilder {
 
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = Some(writer_properties);
+        let writer_properties_factory = writer_properties.into_factory_ref();
+        self.writer_properties_factory = Some(writer_properties_factory);
         self
     }
 
@@ -208,8 +217,15 @@ impl std::future::IntoFuture for DeleteBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let base_config = this.snapshot.as_ref().map(|s| s.load_config());
+            let snapshot = resolve_snapshot_with_config(
+                &this.log_store,
+                this.snapshot.clone(),
+                true,
+                None,
+                base_config,
+            )
+            .await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
@@ -239,6 +255,19 @@ impl std::future::IntoFuture for DeleteBuilder {
                     p.resolve(&session, predicate_schema)
                 })
                 .transpose()?;
+            let file_format_options = &snapshot.load_config().file_format_options;
+            let session_state =
+                session
+                    .as_any()
+                    .downcast_ref::<SessionState>()
+                    .ok_or_else(|| {
+                        exec_datafusion_err!("Failed to downcast Session to SessionState")
+                    })?;
+
+            let session = Arc::new(state_with_file_format_options(
+                session_state.clone(),
+                file_format_options.as_ref(),
+            )?);
 
             let operation = DeltaOperation::Delete {
                 predicate: predicate.as_ref().map(|p| fmt_expr_to_sql(p)).transpose()?,
@@ -248,7 +277,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 predicate,
                 this.log_store.clone(),
                 snapshot.clone(),
-                &session,
+                session.as_ref(),
                 operation_id,
             )
             .await?;
@@ -434,6 +463,11 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
+    let writer_properties_factory = snapshot
+        .load_config()
+        .file_format_options
+        .as_ref()
+        .map(|ffo| ffo.writer_properties_factory());
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
@@ -441,6 +475,7 @@ async fn execute(
         exec.clone(),
         Some(operation_id),
         write_cdc,
+        writer_properties_factory,
     )
     .await?;
 

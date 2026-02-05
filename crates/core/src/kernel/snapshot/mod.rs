@@ -509,6 +509,16 @@ pub(crate) async fn resolve_snapshot(
     require_files: bool,
     version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
+    resolve_snapshot_with_config(log_store, maybe_snapshot, require_files, version, None).await
+}
+
+pub(crate) async fn resolve_snapshot_with_config(
+    log_store: &dyn LogStore,
+    maybe_snapshot: Option<EagerSnapshot>,
+    require_files: bool,
+    version: Option<Version>,
+    base_config: Option<&DeltaTableConfig>,
+) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
         if let Some(version) = version
             && snapshot.version() as Version != version
@@ -523,7 +533,7 @@ pub(crate) async fn resolve_snapshot(
             Ok(snapshot)
         }
     } else {
-        let mut config = DeltaTableConfig::default();
+        let mut config = base_config.cloned().unwrap_or_default();
         config.require_files = require_files;
         EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
     }

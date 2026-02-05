@@ -39,6 +39,8 @@ use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
+use crate::table::file_format_options::FileFormatRef;
+use crate::table::state::DeltaTableState;
 
 pub mod add_column;
 pub mod add_feature;
@@ -115,7 +117,9 @@ impl DeltaTable {
 
     #[must_use]
     pub fn create(&self) -> CreateBuilder {
-        CreateBuilder::default().with_log_store(self.log_store())
+        CreateBuilder::default()
+            .with_log_store(self.log_store())
+            .with_table_config(self.config.clone())
     }
 
     #[must_use]
@@ -340,6 +344,28 @@ impl DeltaOps {
         }
     }
 
+    /// Set options for parquet files
+    pub async fn with_file_format_options(
+        mut self,
+        file_format_options: FileFormatRef,
+    ) -> DeltaResult<Self> {
+        // Update table-level config so future loads/operations use these options
+        self.0.config.file_format_options = Some(file_format_options);
+
+        // Update the in-memory state and snapshot config to match the top level table config
+        if self.0.state.is_some() {
+            self.0.state = Some(
+                DeltaTableState::try_new(
+                    &self.0.log_store,
+                    self.0.config.clone(),
+                    Some(self.0.state.unwrap().version()),
+                )
+                .await?,
+            );
+        }
+        Ok(self)
+    }
+
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
     ///
     /// Using this will not persist any changes beyond the lifetime of the table object.
@@ -374,7 +400,9 @@ impl DeltaOps {
     #[must_use]
     #[deprecated(note = "Use [`DeltaTable::create`] instead")]
     pub fn create(self) -> CreateBuilder {
-        CreateBuilder::default().with_log_store(self.0.log_store)
+        CreateBuilder::default()
+            .with_log_store(self.0.log_store)
+            .with_table_config(self.0.config.clone())
     }
 
     /// Generate a symlink_format_manifest for other engines

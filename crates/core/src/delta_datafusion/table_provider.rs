@@ -173,11 +173,18 @@ impl DeltaScanConfigBuilder {
             None
         };
 
+        let table_parquet_options = snapshot
+            .load_config()
+            .file_format_options
+            .as_ref()
+            .map(|ffo| ffo.table_options().parquet);
+
         Ok(DeltaScanConfig {
             file_column_name,
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
+            table_parquet_options,
             schema_force_view_types: true,
         })
     }
@@ -197,6 +204,9 @@ pub struct DeltaScanConfig {
     pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
+    /// Options that control how Parquet files are read
+    #[serde(skip)]
+    pub table_parquet_options: Option<TableParquetOptions>,
 }
 
 impl Default for DeltaScanConfig {
@@ -214,6 +224,7 @@ impl DeltaScanConfig {
             enable_parquet_pushdown: true,
             schema_force_view_types: true,
             schema: None,
+            table_parquet_options: None,
         }
     }
 
@@ -225,6 +236,7 @@ impl DeltaScanConfig {
             enable_parquet_pushdown: config_options.execution.parquet.pushdown_filters,
             schema_force_view_types: config_options.execution.parquet.schema_force_view_types,
             schema: None,
+            table_parquet_options: None,
         }
     }
 
@@ -602,10 +614,24 @@ impl<'a> DeltaScanBuilder<'a> {
             stats
         };
 
-        let parquet_options = TableParquetOptions {
-            global: self.session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options: TableParquetOptions = config
+            .table_parquet_options
+            .clone()
+            .unwrap_or_else(|| self.session.table_options().parquet.clone());
+
+        // We have to set the encryption factory on the ParquetSource based on the Parquet options,
+        // as this is usually handled by the ParquetFormat type in DataFusion,
+        // which is not used in delta-rs.
+        let encryption_factory = parquet_options
+            .crypto
+            .factory_id
+            .as_ref()
+            .map(|factory_id| {
+                self.session
+                    .runtime_env()
+                    .parquet_encryption_factory(factory_id)
+            })
+            .transpose()?;
 
         let partition_fields: Vec<Arc<Field>> =
             table_partition_cols.into_iter().map(Arc::new).collect();
@@ -613,6 +639,10 @@ impl<'a> DeltaScanBuilder<'a> {
 
         let mut file_source =
             ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
+
+        if let Some(encryption_factory) = encryption_factory {
+            file_source = file_source.with_encryption_factory(encryption_factory);
+        }
 
         // Sometimes (i.e Merge) we want to prune files that don't make the
         // filter and read the entire contents for files that do match the
@@ -768,6 +798,11 @@ impl TableProviderBuilder {
             }
         };
 
+        // Set table_parquet_options from the snapshot's file_format_options
+        if let Some(file_format_options) = &snapshot.load_config().file_format_options {
+            config.table_parquet_options = Some(file_format_options.table_options().parquet);
+        }
+
         let mut provider = next::DeltaScan::new(snapshot, config)?;
         if let Some(skipping) = self.file_skipping_predicates {
             // validate that the expressions contain no illegal variants
@@ -916,6 +951,9 @@ impl TableProvider for DeltaTableProvider {
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         session.ensure_log_store_registered(self.log_store.as_ref())?;
+        if let Some(format_options) = &self.snapshot.load_config().file_format_options {
+            format_options.update_session(session)?;
+        }
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)

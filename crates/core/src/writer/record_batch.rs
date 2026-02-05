@@ -18,8 +18,8 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{ObjectStore, path::Path};
+use parquet::file::properties::WriterProperties;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
-use parquet::{basic::Compression, file::properties::WriterProperties};
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -38,13 +38,16 @@ use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
+use crate::table::file_format_options::{
+    FileFormatToWriterPropertiesFactory, IntoWriterPropertiesFactoryRef, WriterPropertiesFactoryRef,
+};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
     storage: Arc<dyn ObjectStore>,
     arrow_schema_ref: ArrowSchemaRef,
     original_schema_ref: ArrowSchemaRef,
-    writer_properties: WriterProperties,
+    writer_properties_factory: WriterPropertiesFactoryRef,
     should_evolve: bool,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
@@ -72,11 +75,12 @@ impl RecordBatchWriter {
         let delta_table = DeltaTableBuilder::from_url(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties_factory = delta_table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
         let configuration = delta_table.snapshot().map_or_else(
@@ -88,7 +92,7 @@ impl RecordBatchWriter {
             storage: delta_table.object_store(),
             arrow_schema_ref: schema.clone(),
             original_schema_ref: schema,
-            writer_properties,
+            writer_properties_factory,
             partition_columns: partition_columns.unwrap_or_default(),
             should_evolve: false,
             arrow_writers: HashMap::new(),
@@ -127,18 +131,20 @@ impl RecordBatchWriter {
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns().clone();
 
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties_factory = table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
+
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
         Ok(Self {
             storage: table.object_store(),
             arrow_schema_ref: arrow_schema_ref.clone(),
             original_schema_ref: arrow_schema_ref.clone(),
-            writer_properties,
+            writer_properties_factory,
             partition_columns,
             should_evolve: false,
             arrow_writers: HashMap::new(),
@@ -191,6 +197,8 @@ impl RecordBatchWriter {
         partition_values: &IndexMap<String, Scalar>,
         mode: WriteMode,
     ) -> Result<ArrowSchemaRef, DeltaTableError> {
+        let arrow_schema =
+            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
         let partition_key = partition_values.hive_partition_path();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
@@ -198,13 +206,19 @@ impl RecordBatchWriter {
         let written_schema = match self.arrow_writers.get_mut(&partition_key) {
             Some(writer) => writer.write(&record_batch, mode)?,
             None => {
+                let prefix = Path::parse(&partition_key)?;
+                let uuid = Uuid::new_v4();
+                let path =
+                    next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
+                let writer_properties = self
+                    .writer_properties_factory
+                    .create_writer_properties(&path, &arrow_schema)
+                    .await?;
                 let mut writer = PartitionWriter::new(
-                    arrow_schema_without_partitions(
-                        &self.arrow_schema_ref,
-                        &self.partition_columns,
-                    ),
+                    arrow_schema,
                     partition_values.clone(),
-                    self.writer_properties.clone(),
+                    writer_properties,
+                    path,
                 )?;
                 let schema = writer.write(&record_batch, mode)?;
                 // Currently schema evolution is not supported with partition columns which means
@@ -223,7 +237,8 @@ impl RecordBatchWriter {
 
     /// Sets the writer properties for the underlying arrow writer.
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
-        self.writer_properties = writer_properties;
+        let writer_properties_factory = writer_properties.into_factory_ref();
+        self.writer_properties_factory = writer_properties_factory;
         self
     }
 
@@ -278,18 +293,15 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
-            let uuid = Uuid::new_v4();
-            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage
-                .put_with_retries(&path, obj_bytes.into(), 15)
+                .put_with_retries(&writer.path, obj_bytes.into(), 15)
                 .await?;
 
             actions.push(create_add(
                 &writer.partition_values,
-                path.to_string(),
+                writer.path.to_string(),
                 file_size,
                 &metadata,
                 self.num_indexed_cols,
@@ -340,6 +352,7 @@ struct PartitionWriter {
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
     pub(super) partition_values: IndexMap<String, Scalar>,
     pub(super) buffered_record_batch_count: usize,
+    pub(super) path: Path,
 }
 
 impl PartitionWriter {
@@ -347,6 +360,7 @@ impl PartitionWriter {
         arrow_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: WriterProperties,
+        path: Path,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
         let arrow_writer = ArrowWriter::try_new(
@@ -364,6 +378,7 @@ impl PartitionWriter {
             arrow_writer,
             partition_values,
             buffered_record_batch_count,
+            path,
         })
     }
 

@@ -31,7 +31,7 @@ arrow-ord = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
-parquet = { workspace = true, features = ["async", "object_store"] }
+parquet = { workspace = true, features = ["async", "object_store", "encryption"] }
 object_store = { workspace = true }
 
 # datafusion
@@ -94,6 +94,7 @@ ctor = "0"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
+paste = "1"
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
@@ -144,6 +145,10 @@ required-features = ["datafusion"]
 
 [[test]]
 name = "command_vacuum"
+required-features = ["datafusion"]
+
+[[test]]
+name = "commands_with_encryption"
 required-features = ["datafusion"]
 
 [[test]]

@@ -14,6 +14,7 @@ use url::Url;
 use super::normalize_table_url;
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{LogStoreRef, StorageConfig, object_store_factories};
+use crate::table::file_format_options::FileFormatRef;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
@@ -54,6 +55,11 @@ pub struct DeltaTableConfig {
 
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
+    /// Options to apply when operating on the table files
+    pub file_format_options: Option<FileFormatRef>,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
     pub io_runtime: Option<IORuntime>,
 }
@@ -64,6 +70,7 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            file_format_options: None,
             io_runtime: None,
         }
     }
@@ -127,6 +134,12 @@ impl DeltaTableBuilder {
             allow_http: None,
             table_config: DeltaTableConfig::default(),
         })
+    }
+
+    /// Sets the overall table configuration
+    pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
+        self.table_config = table_config;
+        self
     }
 
     /// Sets `require_files=false` to the builder
@@ -221,6 +234,12 @@ impl DeltaTableBuilder {
     /// This setting is most useful for testing / development when connecting to emulated services.
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = Some(allow_http);
+        self
+    }
+
+    /// Set the file options to use when reading/writing individual files in the table.
+    pub fn with_file_format_options(mut self, file_format_options: FileFormatRef) -> Self {
+        self.table_config.file_format_options = Some(file_format_options);
         self
     }
 

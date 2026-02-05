@@ -30,6 +30,7 @@ pub mod config;
 pub mod state;
 
 mod columns;
+pub mod file_format_options;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;

@@ -10,10 +10,7 @@ use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use object_store::path::Path;
-use parquet::{
-    arrow::ArrowWriter, basic::Compression, errors::ParquetError,
-    file::properties::WriterProperties,
-};
+use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tracing::*;
 use url::Url;
@@ -31,6 +28,9 @@ use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
+use crate::table::file_format_options::{
+    FileFormatToWriterPropertiesFactory, WriterPropertiesFactoryRef,
+};
 use crate::writer::utils::ShareableBuffer;
 
 type BadValue = (Value, ParquetError);
@@ -41,7 +41,7 @@ pub struct JsonWriter {
     table: DeltaTable,
     /// Optional schema to use, otherwise try to rely on the schema from the [DeltaTable]
     schema_ref: Option<ArrowSchemaRef>,
-    writer_properties: WriterProperties,
+    writer_properties_factory: WriterPropertiesFactoryRef,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, DataArrowWriter>,
 }
@@ -55,6 +55,7 @@ pub(crate) struct DataArrowWriter {
     arrow_writer: ArrowWriter<ShareableBuffer>,
     partition_values: IndexMap<String, Scalar>,
     buffered_record_batch_count: usize,
+    path: Path,
 }
 
 impl DataArrowWriter {
@@ -155,6 +156,7 @@ impl DataArrowWriter {
     fn new(
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
+        path: Path,
     ) -> Result<Self, ParquetError> {
         let buffer = ShareableBuffer::default();
         let arrow_writer = Self::new_underlying_writer(
@@ -173,6 +175,7 @@ impl DataArrowWriter {
             arrow_writer,
             partition_values,
             buffered_record_batch_count,
+            path,
         })
     }
 
@@ -197,16 +200,18 @@ impl JsonWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+
+        let writer_properties_factory = table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
 
         Ok(Self {
             table,
             schema_ref: Some(schema_ref),
-            writer_properties,
+            writer_properties_factory,
             partition_columns: partition_columns.unwrap_or_default(),
             arrow_writers: HashMap::new(),
         })
@@ -218,15 +223,16 @@ impl JsonWriter {
         let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().clone();
 
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties_factory = table
+            .snapshot()?
+            .load_config()
+            .file_format_options
+            .clone()
+            .into_writer_properties_factory_ref_or_default();
 
         Ok(Self {
             table: table.clone(),
-            writer_properties,
+            writer_properties_factory,
             partition_columns,
             schema_ref: None,
             arrow_writers: HashMap::new(),
@@ -327,7 +333,6 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         let arrow_schema = self.arrow_schema();
         let divided = self.divide_by_partition_values(values)?;
         let partition_columns = self.partition_columns.clone();
-        let writer_properties = self.writer_properties.clone();
 
         for (key, values) in divided {
             match self.arrow_writers.get_mut(&key) {
@@ -339,7 +344,20 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 }
                 None => {
                     let schema = arrow_schema_without_partitions(&arrow_schema, &partition_columns);
-                    let mut writer = DataArrowWriter::new(schema, writer_properties.clone())?;
+                    let record_batch =
+                        record_batch_from_message(arrow_schema.clone(), &values[..1])?;
+                    let partition_values =
+                        extract_partition_values(&partition_columns, &record_batch)?;
+                    let prefix = Path::parse(partition_values.hive_partition_path())?;
+                    let uuid = Uuid::new_v4();
+                    let path =
+                        next_data_path(&prefix, 0, &uuid, self.writer_properties_factory.clone());
+                    let writer_properties = self
+                        .writer_properties_factory
+                        .create_writer_properties(&path, &arrow_schema)
+                        .await?;
+                    let mut writer = DataArrowWriter::new(schema, writer_properties, path)?;
+
                     let result = writer
                         .write_values(&partition_columns, arrow_schema.clone(), values)
                         .await;
@@ -385,26 +403,27 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let prefix = writer.partition_values.hive_partition_path();
-            let prefix = Path::parse(prefix)?;
-            let uuid = Uuid::new_v4();
 
-            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
 
-            debug!(path = %path, size = file_size, rows = metadata.file_metadata().num_rows(), "writing data file");
+            debug!(
+                path = writer.path.to_string(),
+                size = file_size,
+                rows = metadata.file_metadata().num_rows(),
+                "writing data file"
+            );
 
             self.table
                 .object_store()
-                .put_with_retries(&path, obj_bytes.into(), 15)
+                .put_with_retries(&writer.path, obj_bytes.into(), 15)
                 .await?;
 
             let table_config = self.table.snapshot()?.table_config();
 
             actions.push(create_add(
                 &writer.partition_values,
-                path.to_string(),
+                writer.path.to_string(),
                 file_size,
                 &metadata,
                 table_config.num_indexed_cols(),

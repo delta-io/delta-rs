@@ -22,7 +22,7 @@ use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
 use crate::table::normalize_table_url;
-use crate::{DeltaTable, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableBuilder, DeltaTableConfig};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -62,6 +62,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
+    table_config: DeltaTableConfig,
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
@@ -99,6 +100,7 @@ impl CreateBuilder {
             storage_options: None,
             actions: Default::default(),
             log_store: None,
+            table_config: DeltaTableConfig::default(),
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
@@ -239,6 +241,12 @@ impl CreateBuilder {
         self
     }
 
+    /// Set configuration options for the table
+    pub fn with_table_config(mut self, table_config: DeltaTableConfig) -> Self {
+        self.table_config = table_config;
+        self
+    }
+
     /// Set a custom execute handler, for pre and post execution
     pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
         self.custom_execute_handler = Some(handler);
@@ -263,7 +271,7 @@ impl CreateBuilder {
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
                 normalize_table_url(log_store.root_url()),
-                DeltaTable::new(log_store, Default::default()),
+                DeltaTable::new(log_store, self.table_config.clone()),
             )
         } else {
             let storage_url =
@@ -271,6 +279,7 @@ impl CreateBuilder {
             (
                 storage_url.clone(),
                 DeltaTableBuilder::from_url(storage_url)?
+                    .with_table_config(self.table_config.clone())
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )

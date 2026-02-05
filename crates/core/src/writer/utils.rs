@@ -10,12 +10,12 @@ use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use object_store::path::Path;
 use parking_lot::RwLock;
 use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::errors::DeltaResult;
+use crate::table::file_format_options::WriterPropertiesFactoryRef;
 use crate::writer::DeltaWriterError;
 
 /// Generate the name of the file to be written
@@ -26,7 +26,7 @@ pub(crate) fn next_data_path(
     prefix: &Path,
     part_count: usize,
     writer_id: &Uuid,
-    writer_properties: &WriterProperties,
+    writer_properties_factory: WriterPropertiesFactoryRef,
 ) -> Path {
     fn compression_to_str(compression: &Compression) -> &str {
         match compression {
@@ -46,7 +46,7 @@ pub(crate) fn next_data_path(
     // We can not access the default column properties but the current implementation will return
     // the default compression when the column is not found
     let column_path = ColumnPath::new(Vec::new());
-    let compression = writer_properties.compression(&column_path);
+    let compression = writer_properties_factory.compression(&column_path);
 
     let part = format!("{part_count:0>5}");
 
@@ -63,7 +63,7 @@ pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,
     json: &[Value],
 ) -> DeltaResult<RecordBatch> {
-    let mut decoder = ReaderBuilder::new(arrow_schema).build_decoder().unwrap();
+    let mut decoder = ReaderBuilder::new(arrow_schema).build_decoder()?;
     decoder.serialize(json)?;
     decoder
         .flush()?
@@ -158,7 +158,9 @@ impl Write for ShareableBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::table::file_format_options::IntoWriterPropertiesFactoryRef;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    use parquet::file::properties::WriterProperties;
 
     #[test]
     fn test_data_path() {
@@ -171,7 +173,7 @@ mod tests {
             .build();
 
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.parquet"
         );
 
@@ -179,7 +181,7 @@ mod tests {
             .set_compression(Compression::SNAPPY)
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.snappy.parquet"
         );
 
@@ -187,7 +189,7 @@ mod tests {
             .set_compression(Compression::GZIP(GzipLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.gz.parquet"
         );
 
@@ -195,7 +197,7 @@ mod tests {
             .set_compression(Compression::LZ4)
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4.parquet"
         );
 
@@ -203,7 +205,7 @@ mod tests {
             .set_compression(Compression::ZSTD(ZstdLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.zstd.parquet"
         );
 
@@ -211,7 +213,7 @@ mod tests {
             .set_compression(Compression::LZ4_RAW)
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4raw.parquet"
         );
 
@@ -219,7 +221,7 @@ mod tests {
             .set_compression(Compression::BROTLI(BrotliLevel::default()))
             .build();
         assert_eq!(
-            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            next_data_path(&prefix, 1, &uuid, props.into_factory_ref()).as_ref(),
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.br.parquet"
         );
     }

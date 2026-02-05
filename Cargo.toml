@@ -39,7 +39,7 @@ object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
 # datafusion 52.1
-datafusion = { version = "52.1.0" }
+datafusion = { version = "52.1.0", features = ["default", "parquet_encryption"] }
 datafusion-datasource = { version = "52.1.0" }
 datafusion-ffi = { version = "52.1.0" }
 datafusion-proto = { version = "52.1.0" }
@@ -61,7 +61,7 @@ tempfile = { version = "3" }
 uuid = { version = "1" }
 
 # runtime / async
-async-trait = { version = "0.1" }
+async-trait = { version = "0.1.89" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
 typed-builder = { version = "0.23.0" }

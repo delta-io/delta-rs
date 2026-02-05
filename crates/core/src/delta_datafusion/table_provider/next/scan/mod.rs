@@ -124,6 +124,7 @@ pub(super) async fn execution_plan(
         limit,
         file_id_field,
         config.retain_file_id(),
+        config.table_parquet_options.as_ref(),
     )
     .await
 }
@@ -178,6 +179,7 @@ async fn get_data_scan_plan(
     limit: Option<usize>,
     file_id_field: FieldRef,
     retain_file_ids: bool,
+    table_parquet_options: Option<&TableParquetOptions>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -237,6 +239,7 @@ async fn get_data_scan_plan(
         limit,
         &file_id_field,
         predicate,
+        table_parquet_options,
     )
     .await?;
 
@@ -302,13 +305,13 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
+    table_parquet_options: Option<&TableParquetOptions>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
-    let pq_options = TableParquetOptions {
-        global: state.config().options().execution.parquet.clone(),
-        ..Default::default()
-    };
+    let pq_options = table_parquet_options
+        .cloned()
+        .unwrap_or_else(|| state.table_options().parquet.clone());
 
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
@@ -330,6 +333,15 @@ async fn get_read_plan(
         let mut file_source = ParquetSource::new(table_schema)
             .with_table_parquet_options(pq_options.clone())
             .with_parquet_file_reader_factory(reader_factory);
+
+        // Set encryption factory if configured
+        if let Some(factory_id) = &pq_options.crypto.factory_id {
+            if let Ok(encryption_factory) =
+                state.runtime_env().parquet_encryption_factory(factory_id)
+            {
+                file_source = file_source.with_encryption_factory(encryption_factory);
+            }
+        }
 
         // TODO(roeap); we might be able to also push selection vectors into the read plan
         // by creating parquet access plans. However we need to make sure this does not
@@ -499,6 +511,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -520,6 +533,7 @@ mod tests {
             &arrow_schema,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -545,6 +559,7 @@ mod tests {
             &arrow_schema_extended,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -625,6 +640,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -659,6 +675,7 @@ mod tests {
             &arrow_schema_extended,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -762,6 +779,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -831,6 +849,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -909,6 +928,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -989,6 +1009,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1069,6 +1090,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
