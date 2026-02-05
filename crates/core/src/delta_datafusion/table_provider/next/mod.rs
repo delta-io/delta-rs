@@ -52,7 +52,7 @@ use crate::kernel::{EagerSnapshot, Snapshot};
 mod scan;
 
 /// Default column name for the file id column we add to files read from disk.
-pub(crate) const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
+pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SnapshotWrapper {
