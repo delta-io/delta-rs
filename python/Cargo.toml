@@ -50,6 +50,14 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
+    "aws",
+    "azure",
+    "gcp",
+    "r2",
+] }
+
 # opentelemetry
 tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
