@@ -15,9 +15,7 @@ use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, ColumnStatistics, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
-use datafusion::datasource::physical_plan::{
-    FileGroup, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-};
+use datafusion::datasource::physical_plan::FileGroup;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::table_schema::TableSchema;
@@ -50,6 +48,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+use crate::delta_datafusion::file_id::{file_id_data_type, wrap_file_id_value};
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
@@ -471,7 +470,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
             if config.file_column_name.is_some() {
                 let partition_value = if config.wrap_partition_values {
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
+                    wrap_file_id_value(action.path.clone())
                 } else {
                     ScalarValue::Utf8(Some(action.path.clone()))
                 };
@@ -500,7 +499,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         if let Some(file_column_name) = &config.file_column_name {
             let field_name_datatype = if config.wrap_partition_values {
-                wrap_partition_type_in_dict(DataType::Utf8)
+                file_id_data_type()
             } else {
                 DataType::Utf8
             };

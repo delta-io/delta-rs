@@ -18,8 +18,6 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
 use datafusion::prelude::{cast, lit};
-use datafusion::scalar::ScalarValue;
-use datafusion_datasource::file_scan_config::wrap_partition_value_in_dict;
 use delta_kernel::Predicate;
 use futures::TryStreamExt as _;
 use itertools::Itertools;
@@ -27,6 +25,7 @@ use percent_encoding::percent_decode_str;
 use tracing::*;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
+use crate::delta_datafusion::file_id::wrap_file_id_value;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, DeltaScanNext,
@@ -442,7 +441,7 @@ impl MatchedFilesScan {
 ///
 /// ## Returns
 ///
-/// If no files contaon matching data, `None` is returned.
+/// If no files contain matching data, `None` is returned.
 ///
 /// Otherwise:
 /// - The logical plan for reading data from matched files only.
@@ -486,7 +485,7 @@ pub(crate) async fn scan_files_where_matches(
     let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
 
     // Scan the delta table with a dedicated predicate applied for file skipping
-    // and with the source file path exosed as column.
+    // and with the source file path exposed as column.
     let table_source = provider_as_source(
         DeltaScanNext::builder()
             .with_eager_snapshot(snapshot.clone())
@@ -497,7 +496,7 @@ pub(crate) async fn scan_files_where_matches(
 
     // the kernel scan only provides a best effort file skipping, in this case
     // we want to determine the file we certainly need to rewrite. For this
-    // we perform an initial aggreagte scan to see if we can quickly find
+    // we perform an initial aggregate scan to see if we can quickly find
     // at least one matching record in the files.
     let files_plan = LogicalPlanBuilder::scan("files_scan", table_source.clone(), None)?
         .filter(predicate.clone())?
@@ -522,11 +521,13 @@ pub(crate) async fn scan_files_where_matches(
         .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
         .collect_vec();
 
-    // Crate a table scan limiting the data to that originating from valid files.
+    // Create a table scan limiting the data to that originating from valid files.
+    // TODO(delta-io/delta-rs#4113): Avoid plan-time `IN (...)` lists by pushing a matched-file
+    // allowlist into scan planning.
     let file_list = valid_files
         .iter()
         .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string()))
-        .map(|v| lit(wrap_partition_value_in_dict(ScalarValue::Utf8(Some(v)))))
+        .map(|v| lit(wrap_file_id_value(v)))
         .collect_vec();
     let plan = LogicalPlanBuilder::scan("source", table_source, None)?
         .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
@@ -540,4 +541,38 @@ pub(crate) async fn scan_files_where_matches(
         delta_predicate,
         partition_only: visitor.partition_only,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::physical_plan::collect;
+    use datafusion::prelude::{col, lit};
+
+    use crate::{
+        delta_datafusion::create_session,
+        test_utils::{TestResult, open_fs_path},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_scan_files_where_matches_plan_can_be_planned() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/simple_table");
+        table.load().await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let predicate = col("id").gt(lit(-1i64));
+        let Some(scan) = scan_files_where_matches(&session, &snapshot, predicate).await? else {
+            panic!("Expected at least one matching file");
+        };
+
+        let plan = session.create_physical_plan(scan.scan()).await?;
+        let _data = collect(plan, session.task_ctx()).await?;
+
+        Ok(())
+    }
 }
