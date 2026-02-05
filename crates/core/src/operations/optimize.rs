@@ -18,29 +18,32 @@
 //! ```rust ignore
 //! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
-//! ````
+//! ```
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::common::Column;
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::ScalarUDF;
+use datafusion::logical_expr::expr::ScalarFunction;
+use datafusion::physical_plan::execute_stream;
+use datafusion::prelude::Expr;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
-use futures::stream::BoxStream;
-use futures::{Future, StreamExt, TryStreamExt};
+use futures::stream;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
-use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
@@ -49,8 +52,8 @@ use uuid::Uuid;
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
-    DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
-    SessionResolveContext, resolve_session_state,
+    DeltaRuntimeEnvBuilder, DeltaSessionContext, SessionFallbackPolicy, SessionResolveContext,
+    resolve_session_state, scan_file_list, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
@@ -317,6 +320,10 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Max number of concurrent tasks
+    #[deprecated(
+        since = "0.31.0",
+        note = "This setting is no longer used and handled on the daatfusion session."
+    )]
     pub fn with_max_concurrent_tasks(mut self, max_concurrent_tasks: usize) -> Self {
         self.max_concurrent_tasks = max_concurrent_tasks;
         self
@@ -388,6 +395,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     cdc: false,
                 },
             )?;
+            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -395,15 +404,15 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
-                session,
+                &session,
             )
             .await?;
 
             let metrics = plan
                 .execute(
+                    &session,
                     this.log_store.clone(),
                     &snapshot,
-                    this.max_concurrent_tasks,
                     this.min_commit_interval,
                     this.commit_properties.clone(),
                     operation_id,
@@ -528,32 +537,26 @@ pub struct MergeTaskParameters {
     stats_columns: Option<Vec<String>>,
 }
 
-/// A stream of record batches, with a ParquetError on failure.
-type ParquetReadStream = BoxStream<'static, Result<RecordBatch, ParquetError>>;
-
 impl MergePlan {
     /// Rewrites files in a single partition.
     ///
     /// Returns a vector of add and remove actions, as well as the partial metrics
     /// collected during the operation.
-    async fn rewrite_files<F>(
+    async fn rewrite_files(
         task_parameters: Arc<MergeTaskParameters>,
         partition_values: IndexMap<String, Scalar>,
         files: MergeBin,
         object_store: ObjectStoreRef,
-        read_stream: F,
-    ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError>
-    where
-        F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
-    {
+        mut read_stream: SendableRecordBatchStream,
+    ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError> {
         debug!("Rewriting files in partition: {partition_values:?}");
         // First, initialize metrics
-        let mut partial_actions = files
+        let mut partial_actions: Vec<_> = files
             .iter()
             .map(|file_meta| {
                 create_remove(file_meta.path.as_ref(), &partition_values, file_meta.size)
             })
-            .collect::<Result<Vec<_>, DeltaTableError>>()?;
+            .try_collect()?;
 
         let files_removed = files
             .iter()
@@ -588,8 +591,6 @@ impl MergePlan {
             task_parameters.num_indexed_cols,
             task_parameters.stats_columns.clone(),
         )?;
-
-        let mut read_stream = read_stream.await?;
 
         while let Some(maybe_batch) = read_stream.next().await {
             let mut batch = maybe_batch?;
@@ -628,14 +629,10 @@ impl MergePlan {
     async fn read_zorder(
         files: MergeBin,
         context: Arc<zorder::ZOrderExecContext>,
-        table_provider: DeltaTableProvider,
-    ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::common::Column;
-        use datafusion::logical_expr::expr::ScalarFunction;
-        use datafusion::logical_expr::{Expr, ScalarUDF};
-
-        let provider = table_provider.with_files(files.files);
-        let df = context.ctx.read_table(Arc::new(provider))?;
+        snapshot: EagerSnapshot,
+    ) -> Result<SendableRecordBatchStream, DeltaTableError> {
+        let plan = scan_file_list(&snapshot, files.files.iter().map(|f| &f.path)).await?;
+        let df = context.ctx.execute_logical_plan(plan).await?;
 
         let cols = context
             .columns
@@ -648,13 +645,7 @@ impl MergePlan {
         ));
         let df = df.sort(vec![expr.sort(true, true)])?;
 
-        let stream = df
-            .execute_stream()
-            .await?
-            .map_err(|err| {
-                ParquetError::General(format!("Z-order failed while scanning data: {err:?}"))
-            })
-            .boxed();
+        let stream = df.execute_stream().await?;
 
         Ok(stream)
     }
@@ -664,56 +655,42 @@ impl MergePlan {
     #[instrument(skip_all, fields(operation = "optimize", version = snapshot.version()))]
     pub async fn execute(
         mut self,
+        session: &SessionState,
         log_store: LogStoreRef,
         snapshot: &EagerSnapshot,
-        max_concurrent_tasks: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
         operation_id: Uuid,
         handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
-        info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
+        let task_parameters = self.task_parameters.clone();
 
-        let stream = match operations {
-            OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
+        let mut stream = match operations {
+            OptimizeOperations::Compact(bins) => stream::iter(bins)
                 .flat_map(|(_, (partition, bins))| {
-                    futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
+                    stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
-                .map(|(partition, files)| {
-                    debug!(
-                        "merging a group of {} files in partition {partition:?}",
-                        files.len(),
-                    );
-                    for file in files.iter() {
-                        debug!("  file {}", file.path);
+                .then(move |(partition, files)| {
+                    let object_store = object_store.clone();
+                    let task_ctx = session.task_ctx();
+                    let task_parameters = task_parameters.clone();
+                    async move {
+                        let plan =
+                            scan_file_list(snapshot, files.files.iter().map(|a| a.path.clone()))
+                                .await?;
+                        let exec = session.create_physical_plan(&plan).await?;
+                        let stream = execute_stream(exec, task_ctx)?;
+                        let rewrite_result = tokio::task::spawn(Self::rewrite_files(
+                            task_parameters,
+                            partition,
+                            files,
+                            object_store.clone(),
+                            stream,
+                        ));
+                        util::flatten_join_error(rewrite_result).await
                     }
-                    let object_store_ref = object_store.clone();
-                    let batch_stream = futures::stream::iter(files.clone())
-                        .then(move |file| {
-                            let object_store_ref = object_store_ref.clone();
-                            let meta = ObjectMeta::try_from(file).unwrap();
-                            async move {
-                                let file_reader =
-                                    ParquetObjectReader::new(object_store_ref, meta.location)
-                                        .with_file_size(meta.size);
-                                ParquetRecordBatchStreamBuilder::new(file_reader)
-                                    .await?
-                                    .build()
-                            }
-                        })
-                        .try_flatten()
-                        .boxed();
-
-                    let rewrite_result = tokio::task::spawn(Self::rewrite_files(
-                        self.task_parameters.clone(),
-                        partition,
-                        files,
-                        object_store.clone(),
-                        futures::future::ready(Ok(batch_stream)),
-                    ));
-                    util::flatten_join_error(rewrite_result)
                 })
                 .boxed(),
             OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
@@ -722,48 +699,34 @@ impl MergePlan {
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
                     *state,
-                    object_store,
+                    object_store.clone(),
                 )?);
-                let task_parameters = self.task_parameters.clone();
-
-                use crate::delta_datafusion::DataFusionMixins;
-                use crate::delta_datafusion::DeltaScanConfigBuilder;
-                use crate::delta_datafusion::DeltaTableProvider;
-
-                let scan_config = DeltaScanConfigBuilder::default()
-                    .with_file_column(false)
-                    .with_schema(snapshot.input_schema())
-                    .build(snapshot)?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
-                let log_store = log_store.clone();
+
                 futures::stream::iter(bins)
-                    .map(move |(_, (partition, files))| {
-                        let batch_stream = Self::read_zorder(
-                            files.clone(),
-                            exec_context.clone(),
-                            DeltaTableProvider::try_new(
-                                snapshot.clone(),
-                                log_store.clone(),
-                                scan_config.clone(),
-                            )
-                            .unwrap(),
-                        );
-                        let rewrite_result = tokio::task::spawn(Self::rewrite_files(
-                            task_parameters.clone(),
-                            partition,
-                            files,
-                            log_store.object_store(Some(operation_id)),
-                            batch_stream,
-                        ));
-                        util::flatten_join_error(rewrite_result)
+                    .then(move |(_, (partition, files))| {
+                        let exec_context = exec_context.clone();
+                        let snapshot = snapshot.clone();
+                        let task_parameters = task_parameters.clone();
+                        let object_store = object_store.clone();
+                        async move {
+                            let stream =
+                                Self::read_zorder(files.clone(), exec_context, snapshot).await?;
+                            let rewrite_result = tokio::task::spawn(Self::rewrite_files(
+                                task_parameters,
+                                partition,
+                                files,
+                                object_store,
+                                stream,
+                            ));
+                            util::flatten_join_error(rewrite_result).await
+                        }
                     })
                     .boxed()
             }
         };
-
-        let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
         let mut table =
             DeltaTable::new_with_state(log_store.clone(), DeltaTableState::new(snapshot.clone()));
@@ -862,7 +825,7 @@ pub async fn create_merge_plan(
     filters: &[PartitionFilter],
     target_size: Option<u64>,
     writer_properties: WriterProperties,
-    session: SessionState,
+    session: &SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size =
         target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size().get());
@@ -1058,7 +1021,7 @@ async fn build_zorder_plan(
     snapshot: &EagerSnapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
-    session: SessionState,
+    session: &SessionState,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1125,7 +1088,8 @@ async fn build_zorder_plan(
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
-    let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(session));
+    let operation =
+        OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(session.clone()));
     Ok((operation, metrics))
 }
 
@@ -1261,7 +1225,7 @@ pub(super) mod zorder {
         mod tests {
             use super::*;
             use ::datafusion::assert_batches_eq;
-            use arrow_array::{Int32Array, StringArray};
+            use arrow_array::{Int32Array, RecordBatch, StringArray};
             use arrow_ord::sort::sort_to_indices;
             use arrow_schema::Field;
             use arrow_select::take::take;
