@@ -1169,7 +1169,7 @@ pub(crate) fn simplify_expr(
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
 
-fn get_pushdown_filters(
+pub(crate) fn get_pushdown_filters(
     filter: &[&Expr],
     partition_cols: &[String],
 ) -> Vec<TableProviderFilterPushDown> {

@@ -102,6 +102,7 @@ use crate::delta_datafusion::expr_adapter::build_expr_adapter_factory;
 mod table_provider;
 pub(crate) mod utils;
 mod expr_adapter;
+pub mod table_provider_old;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
