@@ -54,6 +54,7 @@ pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
 pub(crate) use self::plan::{KernelScanPlan, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
+use super::FileSelection;
 use crate::{
     DeltaTableError,
     delta_datafusion::{
@@ -77,9 +78,10 @@ pub(super) async fn execution_plan(
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
+    file_selection: Option<&FileSelection>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (files, transforms, dvs, metrics) =
-        replay_files(engine, &scan_plan, config.clone(), stream).await?;
+        replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
     let file_id_field = config.file_id_field();
     if scan_plan.is_metadata_only() {
@@ -89,7 +91,10 @@ pub(super) async fn execution_plan(
                 match &f.stats.num_rows {
                     Precision::Exact(n) => *n,
                     _ => {
-                        return plan_err!("Expected exact row counts in: {}", f.file_url);
+                        return plan_err!(
+                            "Expected exact row counts in file: {}",
+                            super::redact_url_for_error(&f.file_url)
+                        );
                     }
                 },
             ))
@@ -131,16 +136,49 @@ async fn replay_files(
     scan_plan: &KernelScanPlan,
     scan_config: DeltaScanConfig,
     stream: ScanMetadataStream,
+    file_selection: Option<&FileSelection>,
 ) -> Result<(
     Vec<ScanFileContext>,
     HashMap<String, Arc<Expression>>,
     DashMap<String, Vec<bool>>,
     ExecutionPlanMetricsSet,
 )> {
-    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, scan_config, stream);
+    let mut stream = ScanFileStream::new(
+        engine,
+        &scan_plan.scan,
+        scan_config,
+        file_selection.map(|selection| &selection.file_ids),
+        stream,
+    );
     let mut files = Vec::new();
     while let Some(file) = stream.try_next().await? {
         files.extend(file);
+    }
+
+    if let Some(selection) = file_selection {
+        if selection.missing_file_policy == super::MissingFilePolicy::Error {
+            let found: std::collections::HashSet<_> =
+                files.iter().map(|f| f.file_url.to_string()).collect();
+            let all_missing: Vec<_> = selection.file_ids.difference(&found).sorted().collect();
+
+            if !all_missing.is_empty() {
+                let missing_total = all_missing.len();
+                let missing: Vec<_> = all_missing
+                    .iter()
+                    .take(10)
+                    .map(|id| super::redact_url_str_for_error(id))
+                    .collect();
+                let extra = if missing_total > missing.len() {
+                    format!(" (and {} more)", missing_total - missing.len())
+                } else {
+                    String::new()
+                };
+                return plan_err!(
+                    "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
+                    missing.join(", ")
+                );
+            }
+        }
     }
 
     let transforms: HashMap<_, _> = files

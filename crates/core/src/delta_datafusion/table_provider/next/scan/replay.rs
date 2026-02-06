@@ -128,7 +128,7 @@ pin_project! {
     /// - **Deletion vectors**: Asynchronously loaded and cached
     /// - **Partition values**: Extracted from file metadata
     /// - **Transforms**: Column mapping expressions for physical-to-logical translation
-    pub(crate) struct ScanFileStream<S> {
+    pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
 
         engine: Arc<dyn Engine>,
@@ -139,6 +139,8 @@ pin_project! {
 
         scan_config: DeltaScanConfig,
 
+        file_selection: Option<&'a HashSet<String>>,
+
         pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
 
         #[pin]
@@ -146,11 +148,12 @@ pin_project! {
     }
 }
 
-impl<S> ScanFileStream<S> {
+impl<'a, S> ScanFileStream<'a, S> {
     pub(crate) fn new(
         engine: Arc<dyn Engine>,
         scan: &Arc<Scan>,
         scan_config: DeltaScanConfig,
+        file_selection: Option<&'a HashSet<String>>,
         stream: S,
     ) -> Self {
         Self {
@@ -161,11 +164,12 @@ impl<S> ScanFileStream<S> {
             kernel_scan: scan.inner().clone(),
             stream,
             scan_config,
+            file_selection,
         }
     }
 }
 
-impl<S> Stream for ScanFileStream<S>
+impl<'a, S> Stream for ScanFileStream<'a, S>
 where
     S: Stream<Item = DeltaResult<ScanMetadata>>,
 {
@@ -186,6 +190,12 @@ where
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
+
+                if let Some(selection) = this.file_selection {
+                    ctx.files
+                        .retain(|file| selection.contains(file.file_url.as_str()));
+                    ctx.count = ctx.files.len();
+                }
 
                 // Spawn tasks to read the deletion vectors from disk.
                 for file in &ctx.files {
@@ -228,7 +238,7 @@ where
                     stats_schema,
                 )?;
 
-                // TODO: do we need to mnake the stats inexact if deletion vectors are present?
+                // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     &this.scan_config,
