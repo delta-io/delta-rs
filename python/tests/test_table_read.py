@@ -1059,11 +1059,13 @@ def test_is_deltatable_valid_path():
     assert DeltaTable.is_deltatable(table_path)
 
 
-def test_is_deltatable_invalid_path():
+def test_is_deltatable_invalid_path_raises_error():
     # Nonce ensures that the table_path always remains an invalid table path.
     nonce = int(random() * 10000)
     table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
-    assert not DeltaTable.is_deltatable(table_path)
+
+    with pytest.raises(ValueError):
+        assert not DeltaTable.is_deltatable(table_path)
 
 
 def test_is_deltatable_with_storage_opts():

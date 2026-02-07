@@ -310,7 +310,7 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let table_url = deltalake::table::builder::ensure_table_uri(table_uri)
+        let table_url = deltalake::table::builder::parse_table_uri(table_uri)
             .map_err(|_| PyErr::new::<PyValueError, _>("Invalid table URI"))?;
         let mut builder = deltalake::DeltaTableBuilder::from_url(table_url)
             .map_err(|_| PyErr::new::<PyValueError, _>("Failed to create table builder"))?;
@@ -1873,7 +1873,7 @@ impl RawDeltaTable {
         commit_properties=None,
         post_commithook_properties=None
     ))]
-    fn write(
+    pub fn write(
         &self,
         py: Python,
         data: PyRecordBatchReader,
