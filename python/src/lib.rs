@@ -29,7 +29,7 @@ use deltalake::delta_datafusion::{
 };
 
 use deltalake::arrow::array::{
-    ArrayRef, BooleanBuilder, ListBuilder, RecordBatchIterator, StringBuilder,
+    ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
 };
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
@@ -130,7 +130,9 @@ const DELETION_VECTOR_BATCH_SIZE: usize = 1024;
 fn deletion_vector_schema() -> Arc<arrow::datatypes::Schema> {
     use arrow::datatypes::{DataType, Field, Schema};
     Arc::new(Schema::new(vec![
-        Field::new("filepath", DataType::Utf8, false),
+        // Use LargeUtf8 for filepath to be conservative about long fully-qualified URIs.
+        // Python API docs intentionally expose this as `str`.
+        Field::new("filepath", DataType::LargeUtf8, false),
         Field::new(
             "selection_vector",
             DataType::List(Arc::new(Field::new("item", DataType::Boolean, false))),
@@ -153,7 +155,7 @@ fn build_deletion_vector_batches(
     let mut batches = Vec::new();
     let batch_size = batch_size.max(1);
     for chunk in vectors.chunks(batch_size) {
-        let mut filepath_builder = StringBuilder::new();
+        let mut filepath_builder = LargeStringBuilder::new();
         let mut selection_vector_builder = ListBuilder::new(BooleanBuilder::new())
             .with_field(Arc::new(Field::new("item", DataType::Boolean, false)));
 
@@ -2927,6 +2929,12 @@ mod tests {
     #[test]
     fn test_deletion_vector_schema_uses_non_nullable_items() {
         let schema = deletion_vector_schema();
+        let filepath_field = schema.field_with_name("filepath").unwrap();
+        assert_eq!(
+            filepath_field.data_type(),
+            &arrow::datatypes::DataType::LargeUtf8
+        );
+
         let selection_vector_field = schema.field_with_name("selection_vector").unwrap();
         let item_nullable = match selection_vector_field.data_type() {
             arrow::datatypes::DataType::List(item) => item.is_nullable(),

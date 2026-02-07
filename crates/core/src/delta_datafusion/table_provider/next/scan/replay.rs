@@ -37,7 +37,7 @@ use pin_project_lite::pin_project;
 use url::Url;
 
 use crate::{
-    DeltaResult,
+    DeltaResult, DeltaTableError,
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
         LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
@@ -195,12 +195,11 @@ where
                     scan_data
                 };
 
-                let mut ctx = ScanContext::new(this.table_root.clone());
-                ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
-                    Ok(ctx) => ctx,
-                    Err(err) => return Poll::Ready(Some(Err(err.into()))),
-                };
-                ctx = match ctx.error_or() {
+                let ctx = match scan_data
+                    .visit_scan_files(ScanContext::new(this.table_root.clone()), visit_scan_file)
+                    .map_err(|err| DataFusionError::from(DeltaTableError::from(err)))
+                    .and_then(ScanContext::error_or)
+                {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
@@ -535,13 +534,11 @@ fn apply_file_selection(
             continue;
         }
 
-        let keep = parse_path(
+        let file_url = parse_path(
             table_root,
             LogicalFileView::new(batch.clone(), idx).path_raw(),
-        )
-        .map(|url| file_selection.contains(url.as_str()))
-        .unwrap_or(false);
-        selection_vector[idx] = keep;
+        )?;
+        selection_vector[idx] = file_selection.contains(file_url.as_str());
     }
 
     scan_data.scan_files =

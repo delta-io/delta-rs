@@ -1176,9 +1176,13 @@ def test_deletion_vectors_api_smoke():
     expected_selection_vector = [
         [False, True, True, True, True, True, True, True, True, False]
     ]
-    expected_suffix = "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    expected_suffix = (
+        "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    )
     expected_filepath = next(
-        Path(path).resolve().as_uri() for path in dt.file_uris() if path.endswith(expected_suffix)
+        Path(path).resolve().as_uri()
+        for path in dt.file_uris()
+        if path.endswith(expected_suffix)
     )
     assert expected_filepath.endswith(expected_suffix)
 

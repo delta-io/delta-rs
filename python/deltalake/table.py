@@ -419,7 +419,7 @@ class DeltaTable:
 
         Returns:
             RecordBatchReader: A reader with two columns:
-                - filepath (utf8): fully-qualified file URI.
+                - filepath (str): fully-qualified file URI.
                 - selection_vector (list[bool]): row keep mask where True means keep and False means deleted.
 
         Notes:
