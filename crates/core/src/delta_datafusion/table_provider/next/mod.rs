@@ -39,7 +39,7 @@ use datafusion::{
     logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
-use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::{Engine, table_configuration::TableConfiguration};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -49,7 +49,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
-use crate::kernel::{EagerSnapshot, Snapshot};
+use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
 
 mod scan;
 
@@ -268,6 +268,15 @@ pub struct DeltaScan {
     file_selection: Option<FileSelection>,
 }
 
+/// Deletion vector selection for one data file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletionVectorSelection {
+    /// Fully-qualified file URI.
+    pub filepath: String,
+    /// Row-level keep mask where `true` means keep and `false` means deleted.
+    pub keep_mask: Vec<bool>,
+}
+
 impl DeltaScan {
     // create new delta scan
     pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
@@ -301,6 +310,52 @@ impl DeltaScan {
     pub(crate) fn with_file_selection(mut self, selection: FileSelection) -> Self {
         self.file_selection = Some(selection);
         self
+    }
+    /// Materialize deletion vector keep masks for files in this scan.
+    ///
+    /// The result is sorted lexicographically by filepath for deterministic ordering and includes
+    /// only files that have deletion vectors.
+    ///
+    /// This API materializes all deletion vectors in memory.
+    pub async fn deletion_vectors(
+        &self,
+        session: &dyn Session,
+    ) -> Result<Vec<DeletionVectorSelection>> {
+        let engine = DataFusionEngine::new_from_session(session);
+
+        let scan_plan = KernelScanPlan::try_new(
+            self.snapshot.snapshot(),
+            None,
+            &[],
+            &self.config,
+            self.file_skipping_predicate.clone(),
+        )?;
+
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
+
+        scan::replay_deletion_vectors(engine, &scan_plan, &self.config, stream).await
+    }
+
+    fn scan_metadata_stream(
+        &self,
+        scan_plan: &KernelScanPlan,
+        engine: Arc<dyn Engine>,
+    ) -> SendableScanMetadataStream {
+        match &self.snapshot {
+            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
+            SnapshotWrapper::EagerSnapshot(esn) => {
+                if let Ok(files) = esn.files() {
+                    scan_plan.scan.scan_metadata_from(
+                        engine,
+                        esn.snapshot().version() as u64,
+                        Box::new(files.to_vec().into_iter()),
+                        None,
+                    )
+                } else {
+                    scan_plan.scan.scan_metadata(engine)
+                }
+            }
+        }
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -360,21 +415,7 @@ impl TableProvider for DeltaScan {
             self.file_skipping_predicate.clone(),
         )?;
 
-        let stream = match &self.snapshot {
-            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine.clone()),
-            SnapshotWrapper::EagerSnapshot(esn) => {
-                if let Ok(files) = esn.files() {
-                    scan_plan.scan.scan_metadata_from(
-                        engine.clone(),
-                        esn.snapshot().version() as u64,
-                        Box::new(files.to_vec().into_iter()),
-                        None,
-                    )
-                } else {
-                    scan_plan.scan.scan_metadata(engine.clone())
-                }
-            }
-        };
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
 
         scan::execution_plan(
             &self.config,
@@ -416,8 +457,8 @@ mod tests {
 
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::session::create_session,
-        kernel::Snapshot,
+        delta_datafusion::{DeltaScanConfig, session::create_session},
+        kernel::{EagerSnapshot, Snapshot},
         test_utils::{TestResult, TestTables},
     };
 
@@ -857,6 +898,72 @@ mod tests {
                 "file:///tmp/delta/b.parquet".to_string(),
             ]
         );
+
+        Ok(())
+    }
+
+    fn expected_dv_small()
+    -> std::result::Result<Vec<DeletionVectorSelection>, Box<dyn std::error::Error>> {
+        let filepath = Url::from_file_path(
+            TestTables::WithDvSmall
+                .as_path()
+                .join("part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"),
+        )
+        .map_err(|_| "failed to convert expected file path to URL")?
+        .to_string();
+        Ok(vec![DeletionVectorSelection {
+            filepath,
+            keep_mask: vec![false, true, true, true, true, true, true, true, true, false],
+        }])
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_with_dv_table() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let expected = expected_dv_small()?;
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        let deletion_vectors_second = provider.deletion_vectors(&state).await?;
+
+        assert_eq!(deletion_vectors, expected);
+        assert_eq!(deletion_vectors_second, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_without_dv_table_is_empty() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+
+        assert!(deletion_vectors.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_with_eager_snapshot() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(eager, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let expected = expected_dv_small()?;
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        assert_eq!(deletion_vectors, expected);
 
         Ok(())
     }

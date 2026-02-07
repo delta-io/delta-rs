@@ -37,7 +37,7 @@ use pin_project_lite::pin_project;
 use url::Url;
 
 use crate::{
-    DeltaResult,
+    DeltaResult, DeltaTableError,
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
         LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
@@ -195,8 +195,11 @@ where
                     scan_data
                 };
 
-                let mut ctx = ScanContext::new(this.table_root.clone());
-                ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
+                let ctx = match scan_data
+                    .visit_scan_files(ScanContext::new(this.table_root.clone()), visit_scan_file)
+                    .map_err(|err| DataFusionError::from(DeltaTableError::from(err)))
+                    .and_then(ScanContext::error_or)
+                {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
@@ -430,8 +433,6 @@ pub(crate) struct ScanFileContext {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
     /// Statistics about the data in the file.
@@ -461,8 +462,6 @@ struct ScanFileContextInner {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
 
@@ -492,6 +491,22 @@ impl ScanContext {
     fn parse_path(&self, path: &str) -> DeltaResult<Url, DataFusionError> {
         parse_path(&self.table_root, path)
     }
+
+    fn error_or(self) -> DeltaResult<Self, DataFusionError> {
+        let ScanContext {
+            table_root,
+            files,
+            errs,
+            count,
+        } = self;
+        errs.error_or(())?;
+        Ok(ScanContext {
+            table_root,
+            files,
+            errs: DataFusionErrorBuilder::new(),
+            count,
+        })
+    }
 }
 
 fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
@@ -519,13 +534,11 @@ fn apply_file_selection(
             continue;
         }
 
-        let keep = parse_path(
+        let file_url = parse_path(
             table_root,
             LogicalFileView::new(batch.clone(), idx).path_raw(),
-        )
-        .map(|url| file_selection.contains(url.as_str()))
-        .unwrap_or(false);
-        selection_vector[idx] = keep;
+        )?;
+        selection_vector[idx] = file_selection.contains(file_url.as_str());
     }
 
     scan_data.scan_files =
@@ -549,4 +562,46 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
         size: scan_file.size as u64,
     });
     ctx.count += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use delta_kernel::scan::state::{DvInfo, ScanFile};
+    use url::Url;
+
+    use super::{ScanContext, visit_scan_file};
+
+    fn scan_file(path: impl Into<String>) -> ScanFile {
+        ScanFile {
+            path: path.into(),
+            size: 1,
+            modification_time: 0,
+            stats: None,
+            dv_info: DvInfo::default(),
+            transform: None,
+            partition_values: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_scan_context_error_or_returns_error_for_invalid_path() {
+        let mut ctx = ScanContext::new(Url::parse("mailto:delta@example.com").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+        assert!(ctx.error_or().is_err());
+    }
+
+    #[test]
+    fn test_scan_context_error_or_keeps_valid_path() {
+        let mut ctx = ScanContext::new(Url::parse("file:///tmp/delta/").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+
+        let ctx = ctx.error_or().unwrap();
+        assert_eq!(ctx.files.len(), 1);
+        assert_eq!(
+            ctx.files[0].file_url.as_str(),
+            "file:///tmp/delta/part-000.parquet"
+        );
+    }
 }
