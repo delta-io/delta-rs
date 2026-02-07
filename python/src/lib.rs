@@ -1873,7 +1873,7 @@ impl RawDeltaTable {
         commit_properties=None,
         post_commithook_properties=None
     ))]
-    pub fn write(
+    fn write(
         &self,
         py: Python,
         data: PyRecordBatchReader,
