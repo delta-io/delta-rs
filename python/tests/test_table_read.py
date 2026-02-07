@@ -1170,6 +1170,48 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
     assert expected == actual
 
 
+def test_deletion_vectors_api_smoke():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    expected_selection_vector = [
+        [False, True, True, True, True, True, True, True, True, False]
+    ]
+    expected_suffix = "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    expected_filepath = next(
+        Path(path).resolve().as_uri() for path in dt.file_uris() if path.endswith(expected_suffix)
+    )
+    assert expected_filepath.endswith(expected_suffix)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+
+    table = vectors.read_all()
+    assert table.num_rows == 1
+    assert table["filepath"].to_pylist() == [expected_filepath]
+    assert table["selection_vector"].to_pylist() == expected_selection_vector
+
+    table_second = dt.deletion_vectors().read_all()
+    assert table_second["filepath"].to_pylist() == [expected_filepath]
+    assert table_second["selection_vector"].to_pylist() == expected_selection_vector
+
+
+def test_deletion_vectors_empty_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+    assert vectors.read_all().num_rows == 0
+
+
+def test_deletion_vectors_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(Exception, match="without files"):
+        dt.deletion_vectors()
+
+
 def test_read_deletion_vectors():
     table_path = "../crates/test/tests/data/table-with-dv-small"
     dt = DeltaTable(table_path)

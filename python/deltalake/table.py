@@ -413,6 +413,21 @@ class DeltaTable:
             allow_out_of_range=allow_out_of_range,
         )
 
+    def deletion_vectors(self) -> RecordBatchReader:
+        """
+        Return deletion vectors for data files in this table.
+
+        Returns:
+            RecordBatchReader: A reader with two columns:
+                - filepath (utf8): fully-qualified file URI.
+                - selection_vector (list[bool]): row keep mask where True means keep and False means deleted.
+
+        Notes:
+            Only files that have deletion vectors are returned.
+            Deletion vectors are materialized in memory before being exposed as record batches.
+        """
+        return self._table.deletion_vectors()
+
     @property
     def table_uri(self) -> str:
         return self._table.table_uri()

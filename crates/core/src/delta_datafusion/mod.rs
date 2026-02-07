@@ -65,7 +65,7 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
-pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{

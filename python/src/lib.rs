@@ -11,7 +11,7 @@ mod utils;
 mod writer;
 
 use arrow::pyarrow::PyArrowType;
-use arrow_schema::SchemaRef;
+use arrow_schema::{ArrowError, SchemaRef};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
@@ -24,8 +24,13 @@ use deltalake::datafusion::datasource::provider_as_source;
 use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
-use deltalake::delta_datafusion::{DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext};
+use deltalake::delta_datafusion::{
+    DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext,
+};
 
+use deltalake::arrow::array::{
+    ArrayRef, BooleanBuilder, ListBuilder, RecordBatchIterator, StringBuilder,
+};
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -117,6 +122,62 @@ type StringVec = Vec<String>;
 
 const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 52;
 
+/// Maximum number of file-level deletion vector entries per Arrow RecordBatch when returning
+/// results from `DeltaTable.deletion_vectors()`.  Each entry is one (filepath, selection_vector)
+/// pair, so this bounds memory per batch — not per row within a file's mask.
+const DELETION_VECTOR_BATCH_SIZE: usize = 1024;
+
+fn deletion_vector_schema() -> Arc<arrow::datatypes::Schema> {
+    use arrow::datatypes::{DataType, Field, Schema};
+    Arc::new(Schema::new(vec![
+        Field::new("filepath", DataType::Utf8, false),
+        Field::new(
+            "selection_vector",
+            DataType::List(Arc::new(Field::new("item", DataType::Boolean, false))),
+            false,
+        ),
+    ]))
+}
+
+fn build_deletion_vector_batches(
+    vectors: Vec<DeletionVectorSelection>,
+    batch_size: usize,
+) -> Result<Vec<arrow::record_batch::RecordBatch>, ArrowError> {
+    use arrow::datatypes::{DataType, Field};
+
+    if vectors.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let schema = deletion_vector_schema();
+    let mut batches = Vec::new();
+    let batch_size = batch_size.max(1);
+    for chunk in vectors.chunks(batch_size) {
+        let mut filepath_builder = StringBuilder::new();
+        let mut selection_vector_builder = ListBuilder::new(BooleanBuilder::new())
+            .with_field(Arc::new(Field::new("item", DataType::Boolean, false)));
+
+        for dv in chunk {
+            filepath_builder.append_value(&dv.filepath);
+            for keep in &dv.keep_mask {
+                selection_vector_builder.values().append_value(*keep);
+            }
+            selection_vector_builder.append(true);
+        }
+
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(filepath_builder.finish()) as ArrayRef,
+                Arc::new(selection_vector_builder.finish()) as ArrayRef,
+            ],
+        )?;
+        batches.push(batch);
+    }
+
+    Ok(batches)
+}
+
 fn datafusion_python_version(py: Python<'_>) -> Option<String> {
     let importlib_metadata = PyModule::import(py, "importlib.metadata").ok()?;
     importlib_metadata
@@ -157,6 +218,29 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)
         })
+    }
+
+    /// Clone both the table handle and its snapshot state under a single lock acquisition.
+    ///
+    /// This avoids a TOCTOU gap that could occur if we called `with_table` and `cloned_state`
+    /// separately (the snapshot could advance between the two calls).
+    ///
+    /// The full `DeltaTable` clone is needed so the caller can call
+    /// `update_datafusion_session` (which registers object stores) outside the Mutex guard —
+    /// holding the Mutex across async work would risk deadlocks.
+    fn cloned_table_and_state(&self) -> PyResult<(deltalake::DeltaTable, EagerSnapshot)> {
+        match self._table.lock() {
+            Ok(table) => {
+                let state = table
+                    .snapshot()
+                    .map(|snapshot| snapshot.snapshot())
+                    .cloned()
+                    .map_err(PythonError::from)
+                    .map_err(PyErr::from)?;
+                Ok((table.clone(), state))
+            }
+            Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
+        }
     }
 
     fn log_store(&self) -> PyResult<LogStoreRef> {
@@ -961,6 +1045,42 @@ impl RawDeltaTable {
         py.detach(|| {
             let stream = convert_stream_to_reader(stream);
             Ok(stream.into())
+        })
+    }
+
+    pub fn deletion_vectors(&self, py: Python) -> PyResult<Arro3RecordBatchReader> {
+        if !self.has_files()? {
+            return Err(DeltaError::new_err("Table is instantiated without files."));
+        }
+
+        py.detach(|| {
+            let (table, state) = self.cloned_table_and_state()?;
+
+            // Fresh session — same pattern as load_cdf.  The session only needs
+            // the table's object stores registered so the scan engine can read files.
+            let ctx = SessionContext::new();
+            let session_state = ctx.state();
+            table
+                .update_datafusion_session(&session_state)
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+
+            let scan = DeltaScanNext::new(state, DeltaScanConfig::default())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+            let vectors = rt()
+                .block_on(scan.deletion_vectors(&session_state))
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+
+            let batches = build_deletion_vector_batches(vectors, DELETION_VECTOR_BATCH_SIZE)
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)?;
+
+            let reader: Box<dyn deltalake::arrow::array::RecordBatchReader + Send> = Box::new(
+                RecordBatchIterator::new(batches.into_iter().map(Ok), deletion_vector_schema()),
+            );
+            Ok(reader.into())
         })
     }
 
@@ -2769,4 +2889,49 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::ObjectOutputStream>()?;
     m.add_class::<features::TableFeatures>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_deletion_vector_batches_chunks_rows() {
+        let vectors = vec![
+            DeletionVectorSelection {
+                filepath: "f1".to_string(),
+                keep_mask: vec![true, false],
+            },
+            DeletionVectorSelection {
+                filepath: "f2".to_string(),
+                keep_mask: vec![true],
+            },
+            DeletionVectorSelection {
+                filepath: "f3".to_string(),
+                keep_mask: vec![false, false, true],
+            },
+        ];
+        let batches = build_deletion_vector_batches(vectors, 2).unwrap();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].num_rows(), 2);
+        assert_eq!(batches[1].num_rows(), 1);
+    }
+
+    #[test]
+    fn test_build_deletion_vector_batches_empty_returns_empty_vec() {
+        let batches = build_deletion_vector_batches(vec![], 1024).unwrap();
+        assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn test_deletion_vector_schema_uses_non_nullable_items() {
+        let schema = deletion_vector_schema();
+        let selection_vector_field = schema.field_with_name("selection_vector").unwrap();
+        let item_nullable = match selection_vector_field.data_type() {
+            arrow::datatypes::DataType::List(item) => item.is_nullable(),
+            other => panic!("expected list type, got {other:?}"),
+        };
+        assert!(!item_nullable);
+    }
 }
