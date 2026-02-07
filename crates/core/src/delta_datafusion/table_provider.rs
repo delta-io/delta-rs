@@ -3,8 +3,6 @@ use std::borrow::Cow;
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::BooleanArray;
-use arrow::compute::filter_record_batch;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::ArrowError;
 use chrono::{DateTime, TimeZone, Utc};
@@ -12,7 +10,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
-use datafusion::common::{Column, ColumnStatistics, DFSchemaRef, Result, Statistics, ToDFSchema};
+use datafusion::common::{Column, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
 use datafusion::datasource::physical_plan::FileGroup;
@@ -51,8 +49,8 @@ use uuid::Uuid;
 use crate::delta_datafusion::file_id::{file_id_data_type, wrap_file_id_value};
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
-    get_null_of_arrow_type, to_correct_scalar_value,
+    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, get_null_of_arrow_type,
+    to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -379,7 +377,7 @@ impl<'a> DeltaScanBuilder<'a> {
             .transpose()?;
 
         // Perform Pruning of files to scan
-        let (files, files_scanned, files_pruned, pruning_mask) = match self.files {
+        let (files, files_scanned, files_pruned, _) = match self.files {
             Some(files) => {
                 let files = files.to_owned();
                 let files_scanned = files.len();
@@ -510,97 +508,6 @@ impl<'a> DeltaScanBuilder<'a> {
             ));
         }
 
-        // FIXME - where is the correct place to marry file pruning with statistics pruning?
-        //  Temporarily re-generating the log handler, just so that we can compute the stats.
-        //  Should we update datafusion_table_statistics to optionally take the mask?
-        let stats = if let Some(mask) = pruning_mask {
-            let es = self.snapshot.snapshot();
-            let mut pruned_batches = Vec::new();
-            let mut mask_offset = 0;
-
-            for batch in self.snapshot.files()? {
-                let batch_size = batch.num_rows();
-                let batch_mask = &mask[mask_offset..mask_offset + batch_size];
-                let batch_mask_array = BooleanArray::from(batch_mask.to_vec());
-                let pruned_batch = filter_record_batch(batch, &batch_mask_array)?;
-                if pruned_batch.num_rows() > 0 {
-                    pruned_batches.push(pruned_batch);
-                }
-                mask_offset += batch_size;
-            }
-
-            LogDataHandler::new(&pruned_batches, es.table_configuration()).statistics()
-        } else {
-            self.snapshot.log_data().statistics()
-        };
-
-        let stats = stats.unwrap_or(Statistics::new_unknown(&schema));
-
-        // DF52's TableSchema outputs columns as: file_schema + partition_columns
-        // Source stats are indexed by TableConfiguration.schema() field order, which may differ
-        // from the scan schema order. We need name-based remapping, not index-based.
-        let partition_col_names = self.snapshot.metadata().partition_columns();
-
-        // Build name -> ColumnStatistics map from source stats (keyed by TableConfiguration schema order)
-        let source_schema = self.snapshot.schema();
-        let stats_by_name: HashMap<String, ColumnStatistics> = source_schema
-            .fields()
-            .enumerate()
-            .filter_map(|(idx, field)| {
-                stats
-                    .column_statistics
-                    .get(idx)
-                    .map(|s| (field.name().to_string(), s.clone()))
-            })
-            .collect();
-
-        // Build stats in DF52 order: file_schema columns first, then partition_columns
-        // file_schema columns are in file_schema field order (non-partition from logical_schema)
-        let file_col_stats: Vec<ColumnStatistics> = file_schema
-            .fields()
-            .iter()
-            .map(|f| {
-                stats_by_name
-                    .get(f.name())
-                    .cloned()
-                    .unwrap_or_else(ColumnStatistics::new_unknown)
-            })
-            .collect();
-
-        // Partition columns must be in metadata.partition_columns() order (not schema encounter order)
-        let partition_col_stats: Vec<ColumnStatistics> = partition_col_names
-            .iter()
-            .map(|name| {
-                stats_by_name
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(ColumnStatistics::new_unknown)
-            })
-            .collect();
-
-        // Combine: file columns first, then partition columns
-        let mut reordered_stats = file_col_stats;
-        reordered_stats.extend(partition_col_stats);
-
-        let stats = Statistics {
-            num_rows: stats.num_rows,
-            total_byte_size: stats.total_byte_size,
-            column_statistics: reordered_stats,
-        };
-
-        // Add unknown stats for file_column if present (it's added as partition field but not in original schema)
-        let stats = if config.file_column_name.is_some() {
-            let mut col_stats = stats.column_statistics;
-            col_stats.push(ColumnStatistics::new_unknown());
-            Statistics {
-                num_rows: stats.num_rows,
-                total_byte_size: stats.total_byte_size,
-                column_statistics: col_stats,
-            }
-        } else {
-            stats
-        };
-
         let parquet_options = TableParquetOptions {
             global: self.session.config().options().execution.parquet.clone(),
             ..Default::default()
@@ -635,7 +542,6 @@ impl<'a> DeltaScanBuilder<'a> {
                         file_groups.into_values().map(FileGroup::from).collect()
                     },
                 )
-                .with_statistics(stats)
                 .with_projection_indices(self.projection.cloned())?
                 .with_limit(self.limit)
                 .build();
@@ -937,10 +843,6 @@ impl TableProvider for DeltaTableProvider {
             filter,
             self.snapshot.metadata().partition_columns(),
         ))
-    }
-
-    fn statistics(&self) -> Option<Statistics> {
-        self.snapshot.log_data().statistics()
     }
 
     /// Insert the data into the delta table

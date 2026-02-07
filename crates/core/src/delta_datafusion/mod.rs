@@ -46,7 +46,7 @@ use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -57,7 +57,6 @@ use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
-use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
 pub(crate) use self::session::DeltaSessionExt;
@@ -299,13 +298,6 @@ pub(crate) fn get_path_column<'a>(
         .ok_or_else(err)?
         .downcast_dict::<StringArray>()
         .ok_or_else(err)
-}
-
-impl DeltaTableState {
-    /// Provide table level statistics to Datafusion
-    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        self.snapshot.log_data().statistics()
-    }
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
