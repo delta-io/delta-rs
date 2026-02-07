@@ -23,6 +23,7 @@ use datafusion::{
 use delta_kernel::{
     Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
+    engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
@@ -185,7 +186,16 @@ where
             .unwrap();
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
-                let mut ctx = ScanContext::new(this.table_root.clone(), *this.file_selection);
+                let scan_data = if let Some(selection) = this.file_selection {
+                    match apply_file_selection(scan_data, this.table_root, selection) {
+                        Ok(scan_data) => scan_data,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    }
+                } else {
+                    scan_data
+                };
+
+                let mut ctx = ScanContext::new(this.table_root.clone());
                 ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
@@ -459,11 +469,9 @@ struct ScanFileContextInner {
     pub dv_info: DvInfo,
 }
 
-struct ScanContext<'a> {
+struct ScanContext {
     /// Table root URL
     table_root: Url,
-    /// Optional file-id filter for this scan batch.
-    file_selection: Option<&'a HashSet<String>>,
     /// Files to be scanned.
     files: Vec<ScanFileContextInner>,
     /// Errors encountered during the scan.
@@ -471,11 +479,10 @@ struct ScanContext<'a> {
     count: usize,
 }
 
-impl<'a> ScanContext<'a> {
-    fn new(table_root: Url, file_selection: Option<&'a HashSet<String>>) -> Self {
+impl ScanContext {
+    fn new(table_root: Url) -> Self {
         Self {
             table_root,
-            file_selection,
             files: Vec::new(),
             errs: DataFusionErrorBuilder::new(),
             count: 0,
@@ -496,7 +503,37 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
-fn visit_scan_file(ctx: &mut ScanContext<'_>, scan_file: ScanFile) {
+fn apply_file_selection(
+    mut scan_data: ScanMetadata,
+    table_root: &Url,
+    file_selection: &HashSet<String>,
+) -> DeltaResult<ScanMetadata> {
+    let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+
+    // Kernel allows a shorter selection vector; missing entries are implicitly true.
+    selection_vector.resize(batch.num_rows(), true);
+
+    for idx in 0..batch.num_rows() {
+        if !selection_vector[idx] {
+            continue;
+        }
+
+        let keep = parse_path(
+            table_root,
+            LogicalFileView::new(batch.clone(), idx).path_raw(),
+        )
+        .map(|url| file_selection.contains(url.as_str()))
+        .unwrap_or(false);
+        selection_vector[idx] = keep;
+    }
+
+    scan_data.scan_files =
+        FilteredEngineData::try_new(Box::new(ArrowEngineData::new(batch)), selection_vector)?;
+    Ok(scan_data)
+}
+
+fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
     let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
         Err(e) => {
@@ -504,12 +541,6 @@ fn visit_scan_file(ctx: &mut ScanContext<'_>, scan_file: ScanFile) {
             return;
         }
     };
-
-    if let Some(selection) = ctx.file_selection {
-        if !selection.contains(file_url.as_str()) {
-            return;
-        }
-    }
 
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
