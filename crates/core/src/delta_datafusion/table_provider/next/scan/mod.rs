@@ -149,7 +149,7 @@ pub(super) async fn replay_deletion_vectors(
     config: &DeltaScanConfig,
     stream: ScanMetadataStream,
 ) -> Result<Vec<DeletionVectorSelection>> {
-    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, config.clone(), stream);
+    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, config.clone(), None, stream);
     while stream.try_next().await?.is_some() {}
 
     let dv_stream = stream.dv_stream.build();
