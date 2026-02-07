@@ -73,3 +73,40 @@ storage_options = {
 
 dt = DeltaTable(abfs_path,storage_options=storage_options)
 ```
+
+## Configuration Reference
+
+The following table lists all available configuration options that can be passed via the `storage_options` parameter when working with Azure Data Lake Storage. These options correspond to the `AzureConfigKey` enum from the `object_store` crate.
+
+| Configuration Key | Environment Variable | Description |
+|-------------------|---------------------|-------------|
+| `account_name` | `AZURE_STORAGE_ACCOUNT_NAME` | Azure storage account name |
+| `access_key` | `AZURE_STORAGE_ACCOUNT_KEY` | Azure storage account access key |
+| `client_id` | `AZURE_STORAGE_CLIENT_ID` | Service principal client ID for Azure AD authentication |
+| `client_secret` | `AZURE_STORAGE_CLIENT_SECRET` | Service principal client secret |
+| `authority_id` / `tenant_id` | `AZURE_STORAGE_TENANT_ID` | Azure Active Directory tenant ID |
+| `sas_key` | `AZURE_STORAGE_SAS_KEY` | Shared Access Signature (SAS) token (must be percent-encoded) |
+| `bearer_token` | `AZURE_STORAGE_TOKEN` | Bearer token for authentication |
+| `use_emulator` | `AZURE_STORAGE_USE_EMULATOR` | Use Azurite storage emulator (set to `true`) |
+| `endpoint` | `AZURE_STORAGE_ENDPOINT` | Custom Azure endpoint URL |
+| `use_azure_cli` | `AZURE_STORAGE_USE_AZURE_CLI` | Use credentials from Azure CLI (set to `true`) |
+| `federated_token_file` | `AZURE_FEDERATED_TOKEN_FILE` | Path to federated token file for workload identity |
+| `container_name` | `AZURE_STORAGE_CONTAINER_NAME` | Container name (alternative to specifying in URL) |
+| `msi_endpoint` | `IDENTITY_ENDPOINT` or `AZURE_MSI_ENDPOINT` | Managed Service Identity (MSI) endpoint |
+| `object_id` | `AZURE_STORAGE_OBJECT_ID` | Object ID for managed identity |
+| `msi_resource_id` | `AZURE_STORAGE_MSI_RESOURCE_ID` | MSI resource ID |
+| `skip_signature` | `AZURE_STORAGE_SKIP_SIGNATURE` | Skip request signature (set to `true` for anonymous access) |
+| `use_fabric_endpoint` | `AZURE_STORAGE_USE_FABRIC_ENDPOINT` | Use Microsoft Fabric endpoint (set to `true`) |
+| `disable_tagging` | `AZURE_STORAGE_DISABLE_TAGGING` | Disable blob tagging (set to `true` if not supported) |
+
+### Supported URL Schemes
+
+Delta Lake on Azure ADLS supports the following URL schemes:
+
+- `abfss://container@account.dfs.core.windows.net/path/to/table` - Azure Blob File System Secure (ABFSS)
+- `abfs://container@account.dfs.core.windows.net/path/to/table` - Azure Blob File System
+- `az://container/path/to/table` - Short form Azure scheme
+- `adl://container/path/to/table` - Azure Data Lake scheme
+
+!!! note
+    For the complete and authoritative list of configuration options, refer to the [object_store AzureConfigKey documentation](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html).

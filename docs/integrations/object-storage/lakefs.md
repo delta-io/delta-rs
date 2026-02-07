@@ -48,6 +48,27 @@ storage_options = {
 
 It might occur that a deltalake operation fails midway. At this point a lakefs transaction branch was created, but never destroyed. The branches are hidden in the UI, but each branch starts with `delta-tx`.
 
-With the lakefs python library you can list these branches and delete stale ones. 
+With the lakefs python library you can list these branches and delete stale ones.
 
-<TODO add example here>
+```python
+import lakefs
+
+# Initialize LakeFS client
+client = lakefs.Client(
+    host="https://mylakefs.example.com",
+    username="LAKEFSID",
+    password="LAKEFSKEY",
+)
+
+# Access the repository
+repo = lakefs.Repository("my-repo", client=client)
+
+# List and delete stale transaction branches
+for branch in repo.branches():
+    if branch.id.startswith("delta-tx"):
+        print(f"Deleting stale transaction branch: {branch.id}")
+        branch.delete()
+```
+
+!!! tip
+    You can add additional logic to check the branch creation time and only delete branches older than a certain threshold to avoid removing branches from operations that are still in progress.
