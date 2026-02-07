@@ -23,6 +23,7 @@ use datafusion::{
 use delta_kernel::{
     Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
+    engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
@@ -128,7 +129,7 @@ pin_project! {
     /// - **Deletion vectors**: Asynchronously loaded and cached
     /// - **Partition values**: Extracted from file metadata
     /// - **Transforms**: Column mapping expressions for physical-to-logical translation
-    pub(crate) struct ScanFileStream<S> {
+    pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
 
         engine: Arc<dyn Engine>,
@@ -139,6 +140,8 @@ pin_project! {
 
         scan_config: DeltaScanConfig,
 
+        file_selection: Option<&'a HashSet<String>>,
+
         pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
 
         #[pin]
@@ -146,11 +149,12 @@ pin_project! {
     }
 }
 
-impl<S> ScanFileStream<S> {
+impl<'a, S> ScanFileStream<'a, S> {
     pub(crate) fn new(
         engine: Arc<dyn Engine>,
         scan: &Arc<Scan>,
         scan_config: DeltaScanConfig,
+        file_selection: Option<&'a HashSet<String>>,
         stream: S,
     ) -> Self {
         Self {
@@ -161,11 +165,12 @@ impl<S> ScanFileStream<S> {
             kernel_scan: scan.inner().clone(),
             stream,
             scan_config,
+            file_selection,
         }
     }
 }
 
-impl<S> Stream for ScanFileStream<S>
+impl<'a, S> Stream for ScanFileStream<'a, S>
 where
     S: Stream<Item = DeltaResult<ScanMetadata>>,
 {
@@ -181,6 +186,15 @@ where
             .unwrap();
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
+                let scan_data = if let Some(selection) = this.file_selection {
+                    match apply_file_selection(scan_data, this.table_root, selection) {
+                        Ok(scan_data) => scan_data,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    }
+                } else {
+                    scan_data
+                };
+
                 let mut ctx = ScanContext::new(this.table_root.clone());
                 ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
                     Ok(ctx) => ctx,
@@ -228,7 +242,7 @@ where
                     stats_schema,
                 )?;
 
-                // TODO: do we need to mnake the stats inexact if deletion vectors are present?
+                // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     &this.scan_config,
@@ -489,6 +503,36 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
+fn apply_file_selection(
+    mut scan_data: ScanMetadata,
+    table_root: &Url,
+    file_selection: &HashSet<String>,
+) -> DeltaResult<ScanMetadata> {
+    let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+
+    // Kernel allows a shorter selection vector; missing entries are implicitly true.
+    selection_vector.resize(batch.num_rows(), true);
+
+    for idx in 0..batch.num_rows() {
+        if !selection_vector[idx] {
+            continue;
+        }
+
+        let keep = parse_path(
+            table_root,
+            LogicalFileView::new(batch.clone(), idx).path_raw(),
+        )
+        .map(|url| file_selection.contains(url.as_str()))
+        .unwrap_or(false);
+        selection_vector[idx] = keep;
+    }
+
+    scan_data.scan_files =
+        FilteredEngineData::try_new(Box::new(ArrowEngineData::new(batch)), selection_vector)?;
+    Ok(scan_data)
+}
+
 fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
     let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
@@ -497,6 +541,7 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
             return;
         }
     };
+
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
         transform: scan_file.transform,
