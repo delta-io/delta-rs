@@ -185,17 +185,11 @@ where
             .unwrap();
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
-                let mut ctx = ScanContext::new(this.table_root.clone());
+                let mut ctx = ScanContext::new(this.table_root.clone(), *this.file_selection);
                 ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
-
-                if let Some(selection) = this.file_selection {
-                    ctx.files
-                        .retain(|file| selection.contains(file.file_url.as_str()));
-                    ctx.count = ctx.files.len();
-                }
 
                 // Spawn tasks to read the deletion vectors from disk.
                 for file in &ctx.files {
@@ -465,9 +459,11 @@ struct ScanFileContextInner {
     pub dv_info: DvInfo,
 }
 
-struct ScanContext {
+struct ScanContext<'a> {
     /// Table root URL
     table_root: Url,
+    /// Optional file-id filter for this scan batch.
+    file_selection: Option<&'a HashSet<String>>,
     /// Files to be scanned.
     files: Vec<ScanFileContextInner>,
     /// Errors encountered during the scan.
@@ -475,10 +471,11 @@ struct ScanContext {
     count: usize,
 }
 
-impl ScanContext {
-    fn new(table_root: Url) -> Self {
+impl<'a> ScanContext<'a> {
+    fn new(table_root: Url, file_selection: Option<&'a HashSet<String>>) -> Self {
         Self {
             table_root,
+            file_selection,
             files: Vec::new(),
             errs: DataFusionErrorBuilder::new(),
             count: 0,
@@ -499,7 +496,7 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
-fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
+fn visit_scan_file(ctx: &mut ScanContext<'_>, scan_file: ScanFile) {
     let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
         Err(e) => {
@@ -507,6 +504,13 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
             return;
         }
     };
+
+    if let Some(selection) = ctx.file_selection {
+        if !selection.contains(file_url.as_str()) {
+            return;
+        }
+    }
+
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
         transform: scan_file.transform,

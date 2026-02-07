@@ -541,6 +541,11 @@ mod tests {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
         let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let total_file_count = snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_fold(0usize, |count, _| async move { Ok(count + 1) })
+            .await?;
+        assert_eq!(total_file_count, 5);
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -555,6 +560,7 @@ mod tests {
         let mut baseline_visitor = DeltaScanVisitor::default();
         visit_execution_plan(baseline_plan.as_ref(), &mut baseline_visitor).unwrap();
         let baseline_num_scanned = baseline_visitor.num_scanned.unwrap_or_default();
+        assert_eq!(baseline_num_scanned, total_file_count);
 
         let selected_file_ids: Vec<String> = snapshot
             .file_views(log_store.as_ref(), None)
@@ -562,6 +568,22 @@ mod tests {
             .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
             .try_collect()
             .await?;
+        assert_eq!(selected_file_ids.len(), 2);
+
+        let expected_selected_rows: usize = selected_file_ids
+            .iter()
+            .map(|file_id| {
+                let file_url = Url::parse(file_id).expect("expected selected file id to be a URL");
+                let parquet_path = file_url
+                    .to_file_path()
+                    .expect("expected selected file id to be a local file URL");
+                let reader = SerializedFileReader::new(
+                    File::open(parquet_path).expect("failed to open selected parquet file"),
+                )
+                .expect("failed to read selected parquet metadata");
+                reader.metadata().file_metadata().num_rows() as usize
+            })
+            .sum();
 
         let selection = FileSelection::new(selected_file_ids.clone());
         let provider = DeltaScan::builder()
@@ -577,7 +599,14 @@ mod tests {
         visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
 
         assert_eq!(visitor.num_scanned, Some(selected_file_ids.len()));
-        assert!(baseline_num_scanned > selected_file_ids.len());
+
+        let batches: Vec<_> = collect_partitioned(plan.clone(), session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, expected_selected_rows);
 
         Ok(())
     }
@@ -626,18 +655,30 @@ mod tests {
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
 
-        let selected_file_urls: Vec<Url> = snapshot
+        let (selected_file_url, expected_raw_rows, deleted_rows): (Url, usize, usize) = snapshot
             .file_views(log_store.as_ref(), None)
-            .take(1)
-            .map_ok(|view| table_root.join(view.path_raw()).unwrap())
-            .try_collect()
-            .await?;
-        let selected_file_url = selected_file_urls.into_iter().next().unwrap();
+            .map_ok(|view| {
+                view.deletion_vector_descriptor().map(|dv| {
+                    (
+                        table_root.join(view.path_raw()).unwrap(),
+                        view.num_records()
+                            .expect("expected numRecords stats for table-with-dv file"),
+                        dv.cardinality as usize,
+                    )
+                })
+            })
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("expected at least one file with a deletion vector");
 
         let parquet_path = selected_file_url.to_file_path().unwrap();
         let reader = SerializedFileReader::new(File::open(parquet_path)?)?;
         let raw_rows = reader.metadata().file_metadata().num_rows() as usize;
-        assert!(raw_rows > 0);
+        assert_eq!(raw_rows, expected_raw_rows);
+        assert!(deleted_rows > 0);
 
         let selection = FileSelection::new([selected_file_url.to_string()]);
         let provider = DeltaScan::builder()
@@ -659,8 +700,10 @@ mod tests {
             .flatten()
             .collect();
         let returned_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        assert!(returned_rows > 0);
-        assert!(returned_rows < raw_rows);
+        let expected_returned_rows = expected_raw_rows
+            .checked_sub(deleted_rows)
+            .expect("deletion vector cardinality should not exceed file row count");
+        assert_eq!(returned_rows, expected_returned_rows);
 
         Ok(())
     }
