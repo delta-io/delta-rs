@@ -186,8 +186,6 @@ class DeltaTable:
             storage_options: a dictionary of the options to use for the
                 storage backend
 
-        Raises:
-            ValueError: If path does not exists.
         """
         return RawDeltaTable.is_deltatable(table_uri, storage_options)
 
