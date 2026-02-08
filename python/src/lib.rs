@@ -310,10 +310,12 @@ impl RawDeltaTable {
         table_uri: &str,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<bool> {
-        let table_url = deltalake::table::builder::parse_table_uri(table_uri)
-            .map_err(|_| PyErr::new::<PyValueError, _>("Invalid table URI"))?;
-        let mut builder = deltalake::DeltaTableBuilder::from_url(table_url)
-            .map_err(|_| PyErr::new::<PyValueError, _>("Failed to create table builder"))?;
+        let Some(mut builder) = deltalake::table::builder::parse_table_uri(table_uri)
+            .ok()
+            .and_then(|url| deltalake::DeltaTableBuilder::from_url(url).ok())
+        else {
+            return Ok(false);
+        };
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }

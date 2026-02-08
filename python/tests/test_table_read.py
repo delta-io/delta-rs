@@ -4,7 +4,6 @@ import tempfile
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
-from random import random
 from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
@@ -1059,22 +1058,18 @@ def test_is_deltatable_valid_path():
     assert DeltaTable.is_deltatable(table_path)
 
 
-def test_is_deltatable_invalid_path(tmp_path: Path):
+def test_is_deltatable_empty_path(tmp_path: Path):
     not_delta_path = tmp_path / "not_delta_table"
-
     # Ensure path exists
     not_delta_path.mkdir()
 
     assert not DeltaTable.is_deltatable(str(not_delta_path))
 
 
-def test_is_deltatable_invalid_path_raises_error():
-    # Nonce ensures that the table_path always remains an invalid table path.
-    nonce = int(random() * 10000)
-    table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
+def test_is_deltatable_invalid_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
 
-    with pytest.raises(ValueError):
-        DeltaTable.is_deltatable(table_path)
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
 
 
 def test_is_deltatable_with_storage_opts():
