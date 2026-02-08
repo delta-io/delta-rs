@@ -4,7 +4,7 @@
 
 **Version:** 1.0  
 **Date:** February 2026  
-**Status:** Design Document  
+**Status:** Design Document     
 **Target Client:** Azure Data Explorer (ADX / Kusto)  
 **Storage Backend:** Azure Blob Storage (ADLS Gen2)
 
