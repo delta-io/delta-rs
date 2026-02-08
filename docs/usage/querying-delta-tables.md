@@ -120,7 +120,8 @@ Dask Name: read-parquet, 6 tasks
 When working with the Rust API, Apache Datafusion can be used to query data from a delta table.
 
 ```rust
-let table = deltalake::open_table("../rust/tests/data/delta-0.8.0-partitioned").await?;
+let delta_path = Url::from_directory_path("/rust/tests/data/delta-0.8.0-partitioned").unwrap();
+let table = deltalake::open_table(delta_path).await?;
 let ctx = SessionContext::new();
 ctx.register_table("simple_table", Arc::new(table.clone()))?;
 let df = ctx.sql("SELECT value FROM simple_table WHERE year = 2021").await?;
@@ -129,7 +130,8 @@ df.show().await?;
 
 Apache Datafusion also supports a Dataframe interface than can be used instead of the SQL interface:
 ```rust
-let table = deltalake::open_table("../rust/tests/data/delta-0.8.0-partitioned").await?;
+let delta_path = Url::from_directory_path("/rust/tests/data/delta-0.8.0-partitioned").unwrap();
+let table = deltalake::open_table(delta_path).await?;
 let ctx = SessionContext::new();
 let dataframe = ctx.read_table( Arc::new(table.clone()))?;
 let df = dataframe.filter(col("year").eq(lit(2021)))?.select(vec![col("value")])?;

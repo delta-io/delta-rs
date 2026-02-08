@@ -149,11 +149,12 @@ wish to load:
 
 === "Python"
     ```python
-    >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
+    >>> dt = DeltaTable("/rust/tests/data/simple_table", version=2)
     ```
 === "Rust"
     ```rust
-    let mut table = open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
+    let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;
     ```
 

@@ -1,16 +1,15 @@
 use arrow_schema::Schema;
 use datafusion::catalog::Session;
-use datafusion::common::{HashMap, Result, ScalarValue, plan_err};
+use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col, when};
 use datafusion::prelude::lit;
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_features::TableFeature;
-use itertools::Itertools as _;
 use tracing::debug;
 
 use crate::{
-    DeltaResult, DeltaTableError,
+    DeltaResult,
     delta_datafusion::expr::parse_predicate_expression,
     kernel::{DataCheck, EagerSnapshot},
     table::GeneratedColumn,
@@ -34,37 +33,30 @@ pub fn with_generated_columns(
         return Ok(plan);
     }
 
-    let mut gen_lookup: HashMap<_, _> = generated_cols
-        .iter()
-        .map(|gc| {
-            Ok::<_, DeltaTableError>((
-                gc.get_name(),
-                parse_predicate_expression(plan.schema(), &gc.generation_expr, session)?
-                    .alias(gc.get_name()),
-            ))
-        })
-        .try_collect()?;
-
-    let projection: Vec<_> = table_schema
+    // Preserve the full input projection: missing non-generated columns are handled later by
+    // schema evolution logic when `SchemaMode::Merge` is used.
+    let mut projection: Vec<_> = plan
+        .schema()
         .fields()
         .iter()
-        .map(|f| {
-            let expr = if plan.schema().field_with_unqualified_name(f.name()).is_err() {
-                if let Some(expr) = gen_lookup.remove(f.name().as_str()) {
-                    debug!("Adding missing generated column {}.", f.name());
-                    expr.cast_to(f.data_type(), plan.schema())?
-                } else {
-                    return plan_err!(
-                        "Generated column expression for missing column {} not found.",
-                        f.name()
-                    );
-                }
-            } else {
-                col(f.name())
-            };
-            Ok(expr)
-        })
-        .try_collect()?;
+        .map(|f| col(f.name()))
+        .collect();
+
+    for generated_col in generated_cols {
+        let name = generated_col.get_name();
+        if plan.schema().field_with_unqualified_name(name).is_ok() {
+            continue;
+        }
+
+        debug!("Adding missing generated column {}.", name);
+        let mut expr =
+            parse_predicate_expression(plan.schema(), &generated_col.generation_expr, session)?
+                .alias(name);
+        if let Ok(field) = table_schema.field_with_name(name) {
+            expr = expr.cast_to(field.data_type(), plan.schema())?;
+        }
+        projection.push(expr);
+    }
 
     Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
 }
@@ -328,6 +320,42 @@ mod tests {
                 .schema()
                 .field_with_unqualified_name("value")
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_missing_non_generated_nullable_column_does_not_error() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+            ArrowField::new("computed", ArrowDataType::Int32, false),
+            ArrowField::new("user", ArrowDataType::Utf8, true),
+        ]);
+
+        let generated_cols = vec![GeneratedColumn::new(
+            "computed",
+            "id + value",
+            &KernelDataType::INTEGER,
+        )];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("computed")
+                .is_ok()
+        );
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("user")
+                .is_err()
         );
     }
 }

@@ -18,7 +18,6 @@
 //! `TableProvider` trait. It encapsulates all delta table-specific logic required to translate
 //! DataFusion's logical and physical plans into operations on Delta Lake data. This includes
 //! - table scans
-//! - insert operations
 //!
 //! ## Table Scans
 //!
@@ -27,6 +26,7 @@
 //! - applying Delta features by transforming the physical data into the table's logical schema
 //!
 use std::any::Any;
+use std::collections::HashSet;
 use std::{borrow::Cow, sync::Arc};
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -39,20 +39,176 @@ use datafusion::{
     logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
-use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::{Engine, table_configuration::TableConfiguration};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
+use crate::DeltaTableError;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
-use crate::kernel::{EagerSnapshot, Snapshot};
+use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
 
 mod scan;
 
+mod serde_file_id_set {
+    use std::collections::HashSet;
+
+    use serde::{Deserialize as _, Deserializer, Serializer};
+
+    pub(crate) fn serialize<S>(set: &HashSet<String>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut values: Vec<_> = set.iter().collect();
+        values.sort();
+        serializer.collect_seq(values)
+    }
+
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<HashSet<String>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = Vec::<String>::deserialize(deserializer)?;
+        Ok(values.into_iter().collect())
+    }
+}
+
 /// Default column name for the file id column we add to files read from disk.
-pub(crate) const FILE_ID_COLUMN_DEFAULT: &str = "__delta_rs_file_id__";
+pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) enum MissingFilePolicy {
+    /// Return an error if any selected file IDs are not found in the scan.
+    #[default]
+    Error,
+    /// Silently skip file IDs that are not found in the scan.
+    /// Useful for operations like compaction where files may have been concurrently removed.
+    #[allow(dead_code)]
+    Ignore,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct FileSelection {
+    #[serde(with = "serde_file_id_set")]
+    file_ids: HashSet<String>,
+    missing_file_policy: MissingFilePolicy,
+}
+
+impl FileSelection {
+    /// Create a selection from pre-normalized file IDs.
+    ///
+    /// This constructor does not normalize or validate the input IDs.
+    /// Callers with relative paths or Add actions should prefer:
+    /// - [`FileSelection::from_paths`]
+    /// - [`FileSelection::from_adds`]
+    /// - [`normalize_path_as_file_id`]
+    pub(crate) fn new(file_ids: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            file_ids: file_ids.into_iter().collect(),
+            missing_file_policy: MissingFilePolicy::Error,
+        }
+    }
+
+    pub(crate) fn with_missing_file_policy(mut self, policy: MissingFilePolicy) -> Self {
+        self.missing_file_policy = policy;
+        self
+    }
+
+    pub(crate) fn from_paths(
+        paths: impl IntoIterator<Item = impl AsRef<str>>,
+        table_root_url: &Url,
+    ) -> crate::DeltaResult<Self> {
+        let table_root_url = ensure_table_root_url(table_root_url);
+        let mut file_ids = HashSet::new();
+        for path in paths {
+            let file_id = normalize_path_as_file_id_with_table_root(
+                path.as_ref(),
+                &table_root_url,
+                "file path",
+            )?;
+            file_ids.insert(file_id);
+        }
+
+        Ok(Self {
+            file_ids,
+            missing_file_policy: MissingFilePolicy::Error,
+        })
+    }
+
+    pub(crate) fn from_adds(
+        adds: impl IntoIterator<Item = crate::kernel::Add>,
+        table_root_url: &Url,
+    ) -> crate::DeltaResult<Self> {
+        Self::from_paths(adds.into_iter().map(|a| a.path), table_root_url)
+    }
+}
+
+fn ensure_table_root_url(table_root_url: &Url) -> Url {
+    if table_root_url.path().ends_with('/') {
+        table_root_url.clone()
+    } else {
+        let mut table_root_url = table_root_url.clone();
+        table_root_url.set_path(&format!("{}/", table_root_url.path()));
+        table_root_url
+    }
+}
+
+pub(crate) fn redact_url_for_error(url: &Url) -> String {
+    let mut redacted = url.clone();
+    let _ = redacted.set_password(None);
+    let _ = redacted.set_username("");
+    redacted.set_query(None);
+    redacted.set_fragment(None);
+    redacted.to_string()
+}
+
+pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
+    Url::parse(urlish).map_or_else(
+        |_| {
+            urlish
+                .split(|c| c == '?' || c == '#')
+                .next()
+                .unwrap_or(urlish)
+                .to_string()
+        },
+        |url| redact_url_for_error(&url),
+    )
+}
+
+fn normalize_path_as_file_id_with_table_root(
+    path: &str,
+    table_root_url: &Url,
+    context: &'static str,
+) -> crate::DeltaResult<String> {
+    debug_assert!(
+        table_root_url.path().ends_with('/'),
+        "table_root_url must end with '/' before normalization"
+    );
+
+    let file_url = Url::parse(path)
+        .or_else(|_| table_root_url.join(path))
+        .map_err(|e| {
+            DeltaTableError::InvalidTableLocation(format!(
+                "Failed to normalize {context} '{}' against '{}': {e}",
+                redact_url_str_for_error(path),
+                redact_url_for_error(table_root_url),
+            ))
+        })?;
+
+    Ok(file_url.to_string())
+}
+
+pub(crate) fn normalize_path_as_file_id(
+    path: &str,
+    table_root_url: &Url,
+    context: &'static str,
+) -> crate::DeltaResult<String> {
+    let table_root_url = ensure_table_root_url(table_root_url);
+    normalize_path_as_file_id_with_table_root(path, &table_root_url, context)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SnapshotWrapper {
@@ -109,6 +265,16 @@ pub struct DeltaScan {
     full_schema: SchemaRef,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
+    file_selection: Option<FileSelection>,
+}
+
+/// Deletion vector selection for one data file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeletionVectorSelection {
+    /// Fully-qualified file URI.
+    pub filepath: String,
+    /// Row-level keep mask where `true` means keep and `false` means deleted.
+    pub keep_mask: Vec<bool>,
 }
 
 impl DeltaScan {
@@ -129,6 +295,7 @@ impl DeltaScan {
             scan_schema,
             full_schema,
             file_skipping_predicate: None,
+            file_selection: None,
         })
     }
 
@@ -138,6 +305,57 @@ impl DeltaScan {
     ) -> Self {
         self.file_skipping_predicate = Some(predicate.into_iter().collect());
         self
+    }
+
+    pub(crate) fn with_file_selection(mut self, selection: FileSelection) -> Self {
+        self.file_selection = Some(selection);
+        self
+    }
+    /// Materialize deletion vector keep masks for files in this scan.
+    ///
+    /// The result is sorted lexicographically by filepath for deterministic ordering and includes
+    /// only files that have deletion vectors.
+    ///
+    /// This API materializes all deletion vectors in memory.
+    pub async fn deletion_vectors(
+        &self,
+        session: &dyn Session,
+    ) -> Result<Vec<DeletionVectorSelection>> {
+        let engine = DataFusionEngine::new_from_session(session);
+
+        let scan_plan = KernelScanPlan::try_new(
+            self.snapshot.snapshot(),
+            None,
+            &[],
+            &self.config,
+            self.file_skipping_predicate.clone(),
+        )?;
+
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
+
+        scan::replay_deletion_vectors(engine, &scan_plan, &self.config, stream).await
+    }
+
+    fn scan_metadata_stream(
+        &self,
+        scan_plan: &KernelScanPlan,
+        engine: Arc<dyn Engine>,
+    ) -> SendableScanMetadataStream {
+        match &self.snapshot {
+            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
+            SnapshotWrapper::EagerSnapshot(esn) => {
+                if let Ok(files) = esn.files() {
+                    scan_plan.scan.scan_metadata_from(
+                        engine,
+                        esn.snapshot().version() as u64,
+                        Box::new(files.to_vec().into_iter()),
+                        None,
+                    )
+                } else {
+                    scan_plan.scan.scan_metadata(engine)
+                }
+            }
+        }
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -197,23 +415,18 @@ impl TableProvider for DeltaScan {
             self.file_skipping_predicate.clone(),
         )?;
 
-        let stream = match &self.snapshot {
-            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine.clone()),
-            SnapshotWrapper::EagerSnapshot(esn) => {
-                if let Ok(files) = esn.files() {
-                    scan_plan.scan.scan_metadata_from(
-                        engine.clone(),
-                        esn.snapshot().version() as u64,
-                        Box::new(files.to_vec().into_iter()),
-                        None,
-                    )
-                } else {
-                    scan_plan.scan.scan_metadata(engine.clone())
-                }
-            }
-        };
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
 
-        scan::execution_plan(&self.config, session, scan_plan, stream, engine, limit).await
+        scan::execution_plan(
+            &self.config,
+            session,
+            scan_plan,
+            stream,
+            engine,
+            limit,
+            self.file_selection.as_ref(),
+        )
+        .await
     }
 
     fn supports_filters_pushdown(
@@ -236,11 +449,16 @@ mod tests {
         physical_plan::{ExecutionPlanVisitor, collect_partitioned, visit_execution_plan},
     };
     use datafusion_datasource::source::DataSourceExec;
+    use futures::{StreamExt as _, TryStreamExt as _};
+    use parquet::file::reader::FileReader as _;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+    use url::Url;
 
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::session::create_session,
-        kernel::Snapshot,
+        delta_datafusion::{DeltaScanConfig, session::create_session},
+        kernel::{EagerSnapshot, Snapshot},
         test_utils::{TestResult, TestTables},
     };
 
@@ -355,6 +573,397 @@ mod tests {
         ];
 
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let total_file_count = snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_fold(0usize, |count, _| async move { Ok(count + 1) })
+            .await?;
+        assert_eq!(total_file_count, 5);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let baseline_provider = DeltaScan::builder()
+            .with_snapshot(snapshot.clone())
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?;
+        let baseline_plan = baseline_provider.scan(&state, None, &[], None).await?;
+
+        let mut baseline_visitor = DeltaScanVisitor::default();
+        visit_execution_plan(baseline_plan.as_ref(), &mut baseline_visitor).unwrap();
+        let baseline_num_scanned = baseline_visitor.num_scanned.unwrap_or_default();
+        assert_eq!(baseline_num_scanned, total_file_count);
+
+        let selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(2)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await?;
+        assert_eq!(selected_file_ids.len(), 2);
+
+        let expected_selected_rows: usize = selected_file_ids
+            .iter()
+            .map(|file_id| {
+                let file_url = Url::parse(file_id).expect("expected selected file id to be a URL");
+                let parquet_path = file_url
+                    .to_file_path()
+                    .expect("expected selected file id to be a local file URL");
+                let reader = SerializedFileReader::new(
+                    File::open(parquet_path).expect("failed to open selected parquet file"),
+                )
+                .expect("failed to read selected parquet metadata");
+                reader.metadata().file_metadata().num_rows() as usize
+            })
+            .sum();
+
+        let selection = FileSelection::new(selected_file_ids.clone());
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_file_selection(selection);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+
+        assert_eq!(visitor.num_scanned, Some(selected_file_ids.len()));
+
+        let batches: Vec<_> = collect_partitioned(plan.clone(), session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, expected_selected_rows);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_from_paths_reads_selected_file() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let selected_path = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+        let selection = FileSelection::from_paths([selected_path.as_str()], &table_root)?;
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_file_selection(selection);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        assert_eq!(visitor.num_scanned, Some(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_applies_deletion_vectors() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let (selected_file_url, expected_raw_rows, deleted_rows): (Url, usize, usize) = snapshot
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|view| {
+                view.deletion_vector_descriptor().map(|dv| {
+                    (
+                        table_root.join(view.path_raw()).unwrap(),
+                        view.num_records()
+                            .expect("expected numRecords stats for table-with-dv file"),
+                        dv.cardinality as usize,
+                    )
+                })
+            })
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("expected at least one file with a deletion vector");
+
+        let parquet_path = selected_file_url.to_file_path().unwrap();
+        let reader = SerializedFileReader::new(File::open(parquet_path)?)?;
+        let raw_rows = reader.metadata().file_metadata().num_rows() as usize;
+        assert_eq!(raw_rows, expected_raw_rows);
+        assert!(deleted_rows > 0);
+
+        let selection = FileSelection::new([selected_file_url.to_string()]);
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_file_selection(selection);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        assert_eq!(visitor.num_scanned, Some(1));
+
+        let batches: Vec<_> = collect_partitioned(plan.clone(), session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        let expected_returned_rows = expected_raw_rows
+            .checked_sub(deleted_rows)
+            .expect("deletion vector cardinality should not exceed file row count");
+        assert_eq!(returned_rows, expected_returned_rows);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_strict_missing_files_errors() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let mut selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await?;
+        selected_file_ids.push(
+            "https://urluser:urlpassword@example.com/__does_not_exist__.parquet?token=urltoken"
+                .to_string(),
+        );
+
+        let selection = FileSelection::new(selected_file_ids);
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_file_selection(selection);
+
+        let err = provider.scan(&state, None, &[], None).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("File selection contains"),
+            "unexpected error: {err_str}"
+        );
+        assert!(
+            err_str.contains("missing files"),
+            "unexpected error: {err_str}"
+        );
+        assert!(!err_str.contains("urluser"));
+        assert!(!err_str.contains("urlpassword"));
+        assert!(!err_str.contains("urltoken"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_missing_policy_ignore_skips_missing() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let mut selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await?;
+        selected_file_ids.push(
+            "https://example.com/__does_not_exist__.parquet?token=should_not_matter".to_string(),
+        );
+
+        let selection = FileSelection::new(selected_file_ids)
+            .with_missing_file_policy(MissingFilePolicy::Ignore);
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_file_selection(selection);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        assert_eq!(visitor.num_scanned, Some(1));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_from_paths_normalizes_urls() -> TestResult {
+        let cases = vec![
+            (
+                "file:///tmp/delta",
+                "data/part-000.parquet",
+                "file:///tmp/delta/data/part-000.parquet",
+            ),
+            (
+                "file:///tmp/delta/",
+                "file:///other/table/part-000.parquet",
+                "file:///other/table/part-000.parquet",
+            ),
+            (
+                "s3://my-bucket/warehouse/my_table",
+                "part-00000-abc.snappy.parquet",
+                "s3://my-bucket/warehouse/my_table/part-00000-abc.snappy.parquet",
+            ),
+            (
+                "az://container/path/to/table/",
+                "year=2024/part-00000.parquet",
+                "az://container/path/to/table/year=2024/part-00000.parquet",
+            ),
+            (
+                "gs://bucket/delta_table",
+                "gs://bucket/delta_table/data/part-000.parquet",
+                "gs://bucket/delta_table/data/part-000.parquet",
+            ),
+            (
+                "file:///tmp/delta/",
+                "data/part space😀.parquet",
+                "file:///tmp/delta/data/part%20space%F0%9F%98%80.parquet",
+            ),
+        ];
+
+        for (table_root, input, expected) in cases {
+            let table_root = Url::parse(table_root).unwrap();
+            let selection = FileSelection::from_paths([input], &table_root)?;
+            assert!(selection.file_ids.contains(expected));
+            assert_eq!(selection.missing_file_policy, MissingFilePolicy::Error);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_serde_is_deterministic() -> TestResult {
+        let selection = FileSelection::new([
+            "file:///tmp/delta/b.parquet".to_string(),
+            "file:///tmp/delta/a.parquet".to_string(),
+        ]);
+
+        let value = serde_json::to_value(&selection)?;
+        let file_ids = value
+            .get("file_ids")
+            .and_then(|v| v.as_array())
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            file_ids,
+            vec![
+                "file:///tmp/delta/a.parquet".to_string(),
+                "file:///tmp/delta/b.parquet".to_string(),
+            ]
+        );
+
+        Ok(())
+    }
+
+    fn expected_dv_small()
+    -> std::result::Result<Vec<DeletionVectorSelection>, Box<dyn std::error::Error>> {
+        let filepath = Url::from_file_path(
+            TestTables::WithDvSmall
+                .as_path()
+                .join("part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"),
+        )
+        .map_err(|_| "failed to convert expected file path to URL")?
+        .to_string();
+        Ok(vec![DeletionVectorSelection {
+            filepath,
+            keep_mask: vec![false, true, true, true, true, true, true, true, true, false],
+        }])
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_with_dv_table() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let expected = expected_dv_small()?;
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        let deletion_vectors_second = provider.deletion_vectors(&state).await?;
+
+        assert_eq!(deletion_vectors, expected);
+        assert_eq!(deletion_vectors_second, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_without_dv_table_is_empty() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+
+        assert!(deletion_vectors.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_with_eager_snapshot() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(eager, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let expected = expected_dv_small()?;
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        assert_eq!(deletion_vectors, expected);
 
         Ok(())
     }

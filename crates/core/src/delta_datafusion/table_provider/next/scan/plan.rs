@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_schema::{DataType, Field, FieldRef, SchemaBuilder};
+use arrow_schema::{DataType, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{HashMap, HashSet, exec_err, plan_err};
@@ -218,15 +218,7 @@ impl KernelScanPlan {
 
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
-        // NOTE: keep the synthetic file-id column as Dictionary<UInt16, Utf8>.
-        // Arrow's dictionary packing does not support Utf8View, and this column is internal.
-        Arc::new(Field::new(
-            self.file_column_name
-                .as_deref()
-                .unwrap_or(FILE_ID_COLUMN_DEFAULT),
-            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
-            false,
-        ))
+        crate::delta_datafusion::file_id::file_id_field(self.file_column_name.as_deref())
     }
 
     pub(crate) fn retain_file_id(&self) -> bool {
@@ -528,6 +520,29 @@ mod tests {
 
     use super::*;
 
+    fn schema_has_view_types(schema: &Schema) -> bool {
+        schema
+            .fields()
+            .iter()
+            .any(|f| data_type_has_view_types(f.data_type()))
+    }
+
+    fn data_type_has_view_types(dt: &DataType) -> bool {
+        match dt {
+            DataType::Utf8View | DataType::BinaryView => true,
+            DataType::Dictionary(_, value) => data_type_has_view_types(value.as_ref()),
+            DataType::Map(entry, _) => data_type_has_view_types(entry.data_type()),
+            DataType::Struct(fields) => fields
+                .iter()
+                .any(|f| data_type_has_view_types(f.data_type())),
+            DataType::List(inner)
+            | DataType::LargeList(inner)
+            | DataType::ListView(inner)
+            | DataType::FixedSizeList(inner, _) => data_type_has_view_types(inner.data_type()),
+            _ => false,
+        }
+    }
+
     #[tokio::test]
     async fn test_rewrite_expression() -> TestResult {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
@@ -583,7 +598,8 @@ mod tests {
             &DeltaScanConfig::default(),
             None,
         )?;
-        println!("Scan plan: {:?}", scan_plan.parquet_predicate);
+        let expected_pq = col("col-3877fd94-0973-4941-ac6b-646849a1ff65").eq(lit("Timothy Lamb"));
+        assert_eq!(scan_plan.parquet_predicate, Some(expected_pq));
 
         Ok(())
     }
@@ -653,5 +669,154 @@ mod tests {
         assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
+    }
+    #[tokio::test]
+    async fn test_scan_schema_contract() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = true;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let expected_parquet_schema = config.physical_arrow_schema(
+            scan_plan.scan.snapshot().table_configuration(),
+            &scan_plan.scan.physical_schema().as_ref().try_into_arrow()?,
+        )?;
+        assert_eq!(
+            scan_plan.parquet_read_schema.as_ref(),
+            expected_parquet_schema.as_ref()
+        );
+
+        // `parquet_read_schema` contains only physical file columns (no Delta partitions, no file-id).
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Company Very Short")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name(config.file_id_field().name())
+                .is_err()
+        );
+
+        // Column-mapped tables use logical names in the result schema, but physical names for Parquet reads.
+        assert!(
+            scan_plan
+                .result_schema
+                .field_with_name("Super Name")
+                .is_ok()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Super Name")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")
+                .is_ok()
+        );
+        assert!(matches!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")?
+                .data_type(),
+            DataType::Utf8View | DataType::BinaryView
+        ));
+
+        let mut config = DeltaScanConfig::default();
+        config.schema_force_view_types = false;
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert!(!schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.parquet_read_schema.as_ref()
+        ));
+
+        let mut partitioned_table = open_fs_path("../test/tests/data/delta-0.8.0-partitioned");
+        partitioned_table.load().await?;
+        let partitioned_snapshot = partitioned_table.snapshot()?.snapshot().snapshot();
+        let scan_plan = KernelScanPlan::try_new(
+            partitioned_snapshot,
+            None,
+            &[],
+            &DeltaScanConfig::default(),
+            None,
+        )?;
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("year")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("month")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("day")
+                .is_err()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pushdown_exactness_policy() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let table_config = table.snapshot()?.snapshot().table_configuration();
+        let scan_config = DeltaScanConfig::default();
+
+        // Partition-only filters are enforced by the kernel scan (exact).
+        let partition_only = col(r#""Company Very Short""#).eq(lit("BME"));
+        assert_eq!(
+            supports_filters_pushdown(&[&partition_only], table_config, &scan_config),
+            vec![TableProviderFilterPushDown::Exact]
+        );
+
+        // Non-partition filters are best-effort (Parquet pruning/pushdown); keep inexact so DF keeps
+        // a correctness filter above the scan.
+        let data_only = col(r#""Super Name""#).eq(lit("Timothy Lamb"));
+        assert_eq!(
+            supports_filters_pushdown(&[&data_only], table_config, &scan_config),
+            vec![TableProviderFilterPushDown::Inexact]
+        );
+
+        // Mixed partition + data filters are also inexact.
+        assert_eq!(
+            supports_filters_pushdown(&[&partition_only, &data_only], table_config, &scan_config),
+            vec![
+                TableProviderFilterPushDown::Exact,
+                TableProviderFilterPushDown::Inexact,
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_id_field_uses_canonical_file_id_type() {
+        let config = DeltaScanConfig::default();
+        let field = config.file_id_field();
+        assert_eq!(
+            field.data_type(),
+            &crate::delta_datafusion::file_id::file_id_data_type()
+        );
     }
 }

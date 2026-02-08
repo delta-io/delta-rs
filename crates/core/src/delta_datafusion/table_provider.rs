@@ -15,9 +15,7 @@ use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, ColumnStatistics, DFSchemaRef, Result, Statistics, ToDFSchema};
 use datafusion::config::{ConfigOptions, TableParquetOptions};
 use datafusion::datasource::TableType;
-use datafusion::datasource::physical_plan::{
-    FileGroup, wrap_partition_type_in_dict, wrap_partition_value_in_dict,
-};
+use datafusion::datasource::physical_plan::FileGroup;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::table_schema::TableSchema;
@@ -50,12 +48,11 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
-use crate::delta_datafusion::engine::AsObjectStoreUrl;
-
+use crate::delta_datafusion::file_id::{file_id_data_type, wrap_file_id_value};
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{
-    DataFusionMixins as _, FindFilesExprProperties, LogDataHandler, get_null_of_arrow_type,
-    register_store, to_correct_scalar_value,
+    DataFusionMixins as _, DeltaSessionExt, FindFilesExprProperties, LogDataHandler,
+    get_null_of_arrow_type, to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, EagerSnapshot, Snapshot};
@@ -473,7 +470,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
             if config.file_column_name.is_some() {
                 let partition_value = if config.wrap_partition_values {
-                    wrap_partition_value_in_dict(ScalarValue::Utf8(Some(action.path.clone())))
+                    wrap_file_id_value(action.path.clone())
                 } else {
                     ScalarValue::Utf8(Some(action.path.clone()))
                 };
@@ -502,7 +499,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
         if let Some(file_column_name) = &config.file_column_name {
             let field_name_datatype = if config.wrap_partition_values {
-                wrap_partition_type_in_dict(DataType::Utf8)
+                file_id_data_type()
             } else {
                 DataType::Utf8
             };
@@ -810,8 +807,33 @@ impl DeltaTable {
         builder
     }
 
+    /// Ensure the provided DataFusion session is prepared to read this table.
+    ///
+    /// This registers the table's root object store with the session's `RuntimeEnv` if missing.
+    /// Registration is idempotent and will not overwrite an existing mapping.
+    ///
+    /// If the session already has an object store registered for the table's URL but it is stale or
+    /// incorrect, this method will not replace it. To override an existing mapping, call
+    /// `RuntimeEnv::register_object_store` directly.
+    ///
+    /// ```rust,no_run
+    /// use datafusion::prelude::SessionContext;
+    /// use deltalake_core::{DeltaResult, DeltaTable};
+    ///
+    /// # fn main() -> DeltaResult<()> {
+    /// let table = DeltaTable::new_in_memory();
+    /// let ctx = SessionContext::new();
+    /// let state = ctx.state();
+    /// table.update_datafusion_session(&state)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn update_datafusion_session(&self, session: &dyn Session) -> DeltaResult<()> {
-        update_datafusion_session(self.log_store().as_ref(), session, None)
+        crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+            session,
+            self.log_store().as_ref(),
+            None,
+        )
     }
 }
 
@@ -820,13 +842,11 @@ pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    let url = log_store.root_url().as_object_store_url();
-    if session.runtime_env().object_store(&url).is_err() {
-        session
-            .runtime_env()
-            .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
-    }
-    Ok(())
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
+        session,
+        log_store,
+        operation_id,
+    )
 }
 
 // TODO: implement this for Snapshot, not for DeltaTable since DeltaTable has unknown load state.
@@ -894,7 +914,7 @@ impl TableProvider for DeltaTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
         let filter_expr = conjunction(filters.iter().cloned());
 
         let mut scan = DeltaScanBuilder::new(&self.snapshot, self.log_store.clone(), session)
@@ -932,7 +952,7 @@ impl TableProvider for DeltaTableProvider {
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        register_store(self.log_store.clone(), state.runtime_env().as_ref());
+        state.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,

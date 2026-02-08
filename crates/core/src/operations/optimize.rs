@@ -16,7 +16,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
@@ -48,7 +48,10 @@ use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::{DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider};
+use crate::delta_datafusion::{
+    DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
+    SessionResolveContext, resolve_session_state,
+};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
@@ -216,6 +219,7 @@ pub struct OptimizeBuilder<'a> {
     optimize_type: OptimizeType,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -271,6 +275,7 @@ impl<'a> OptimizeBuilder<'a> {
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             custom_execute_handler: None,
         }
     }
@@ -329,8 +334,25 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 }
@@ -356,10 +378,16 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build()
             });
-            let session = this
-                .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| create_session_state_for_optimize(None, None));
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session_state_for_optimize(None, None),
+                SessionResolveContext {
+                    operation: "optimize",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,

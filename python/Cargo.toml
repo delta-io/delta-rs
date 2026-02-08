@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.4.0"
+version = "1.4.1"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
@@ -16,6 +16,9 @@ keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
+
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-unity"]
 
 [dependencies]
 delta_kernel.workspace = true
@@ -49,6 +52,14 @@ num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
+
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
+    "aws",
+    "azure",
+    "gcp",
+    "r2",
+] }
 
 # opentelemetry
 tracing-opentelemetry = { workspace = true }

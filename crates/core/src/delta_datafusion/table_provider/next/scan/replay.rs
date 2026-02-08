@@ -23,6 +23,7 @@ use datafusion::{
 use delta_kernel::{
     Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
+    engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
@@ -36,7 +37,7 @@ use pin_project_lite::pin_project;
 use url::Url;
 
 use crate::{
-    DeltaResult,
+    DeltaResult, DeltaTableError,
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
         LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
@@ -128,7 +129,7 @@ pin_project! {
     /// - **Deletion vectors**: Asynchronously loaded and cached
     /// - **Partition values**: Extracted from file metadata
     /// - **Transforms**: Column mapping expressions for physical-to-logical translation
-    pub(crate) struct ScanFileStream<S> {
+    pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
 
         engine: Arc<dyn Engine>,
@@ -139,6 +140,8 @@ pin_project! {
 
         scan_config: DeltaScanConfig,
 
+        file_selection: Option<&'a HashSet<String>>,
+
         pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
 
         #[pin]
@@ -146,11 +149,12 @@ pin_project! {
     }
 }
 
-impl<S> ScanFileStream<S> {
+impl<'a, S> ScanFileStream<'a, S> {
     pub(crate) fn new(
         engine: Arc<dyn Engine>,
         scan: &Arc<Scan>,
         scan_config: DeltaScanConfig,
+        file_selection: Option<&'a HashSet<String>>,
         stream: S,
     ) -> Self {
         Self {
@@ -161,11 +165,12 @@ impl<S> ScanFileStream<S> {
             kernel_scan: scan.inner().clone(),
             stream,
             scan_config,
+            file_selection,
         }
     }
 }
 
-impl<S> Stream for ScanFileStream<S>
+impl<'a, S> Stream for ScanFileStream<'a, S>
 where
     S: Stream<Item = DeltaResult<ScanMetadata>>,
 {
@@ -181,8 +186,20 @@ where
             .unwrap();
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
-                let mut ctx = ScanContext::new(this.table_root.clone());
-                ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
+                let scan_data = if let Some(selection) = this.file_selection {
+                    match apply_file_selection(scan_data, this.table_root, selection) {
+                        Ok(scan_data) => scan_data,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    }
+                } else {
+                    scan_data
+                };
+
+                let ctx = match scan_data
+                    .visit_scan_files(ScanContext::new(this.table_root.clone()), visit_scan_file)
+                    .map_err(|err| DataFusionError::from(DeltaTableError::from(err)))
+                    .and_then(ScanContext::error_or)
+                {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
@@ -228,7 +245,7 @@ where
                     stats_schema,
                 )?;
 
-                // TODO: do we need to mnake the stats inexact if deletion vectors are present?
+                // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     &this.scan_config,
@@ -416,8 +433,6 @@ pub(crate) struct ScanFileContext {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
     /// Statistics about the data in the file.
@@ -447,8 +462,6 @@ struct ScanFileContextInner {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
 
@@ -478,6 +491,22 @@ impl ScanContext {
     fn parse_path(&self, path: &str) -> DeltaResult<Url, DataFusionError> {
         parse_path(&self.table_root, path)
     }
+
+    fn error_or(self) -> DeltaResult<Self, DataFusionError> {
+        let ScanContext {
+            table_root,
+            files,
+            errs,
+            count,
+        } = self;
+        errs.error_or(())?;
+        Ok(ScanContext {
+            table_root,
+            files,
+            errs: DataFusionErrorBuilder::new(),
+            count,
+        })
+    }
 }
 
 fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
@@ -489,6 +518,34 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
+fn apply_file_selection(
+    mut scan_data: ScanMetadata,
+    table_root: &Url,
+    file_selection: &HashSet<String>,
+) -> DeltaResult<ScanMetadata> {
+    let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+
+    // Kernel allows a shorter selection vector; missing entries are implicitly true.
+    selection_vector.resize(batch.num_rows(), true);
+
+    for idx in 0..batch.num_rows() {
+        if !selection_vector[idx] {
+            continue;
+        }
+
+        let file_url = parse_path(
+            table_root,
+            LogicalFileView::new(batch.clone(), idx).path_raw(),
+        )?;
+        selection_vector[idx] = file_selection.contains(file_url.as_str());
+    }
+
+    scan_data.scan_files =
+        FilteredEngineData::try_new(Box::new(ArrowEngineData::new(batch)), selection_vector)?;
+    Ok(scan_data)
+}
+
 fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
     let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
@@ -497,6 +554,7 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
             return;
         }
     };
+
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
         transform: scan_file.transform,
@@ -504,4 +562,46 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
         size: scan_file.size as u64,
     });
     ctx.count += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use delta_kernel::scan::state::{DvInfo, ScanFile};
+    use url::Url;
+
+    use super::{ScanContext, visit_scan_file};
+
+    fn scan_file(path: impl Into<String>) -> ScanFile {
+        ScanFile {
+            path: path.into(),
+            size: 1,
+            modification_time: 0,
+            stats: None,
+            dv_info: DvInfo::default(),
+            transform: None,
+            partition_values: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_scan_context_error_or_returns_error_for_invalid_path() {
+        let mut ctx = ScanContext::new(Url::parse("mailto:delta@example.com").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+        assert!(ctx.error_or().is_err());
+    }
+
+    #[test]
+    fn test_scan_context_error_or_keeps_valid_path() {
+        let mut ctx = ScanContext::new(Url::parse("file:///tmp/delta/").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+
+        let ctx = ctx.error_or().unwrap();
+        assert_eq!(ctx.files.len(), 1);
+        assert_eq!(
+            ctx.files[0].file_url.as_str(),
+            "file:///tmp/delta/part-000.parquet"
+        );
+    }
 }
