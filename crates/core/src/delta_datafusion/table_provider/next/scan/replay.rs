@@ -78,19 +78,21 @@ fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
 fn create_minimal_stats_schema(
     scan: &KernelScan,
     predicate_columns: Option<&HashSet<String>>,
-) -> Arc<Schema> {
+) -> DeltaResult<Arc<Schema>> {
+    let minimal_schema = || {
+        Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
+            .map(Arc::new)
+            .map_err(Into::into)
+    };
+
     match predicate_columns {
         None => {
             // No predicate - only need numRecords for file statistics
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
+            minimal_schema()
         }
         Some(cols) if cols.is_empty() => {
             // Empty predicate columns - minimal schema
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
+            minimal_schema()
         }
         Some(cols) => {
             // Filter physical schema to only referenced columns
@@ -103,17 +105,14 @@ fn create_minimal_stats_schema(
 
             if filtered_fields.is_empty() {
                 // Predicate references only partition columns - minimal schema
-                Arc::new(
-                    Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
-                        .unwrap(),
-                )
+                minimal_schema()
             } else {
                 // Create stats schema for filtered fields
-                let filtered_schema = Schema::try_new(filtered_fields).unwrap();
-                Arc::new(stats_schema(
+                let filtered_schema = Schema::try_new(filtered_fields)?;
+                Ok(Arc::new(stats_schema(
                     &filtered_schema,
                     scan.snapshot().table_properties(),
-                ))
+                )))
             }
         }
     }
@@ -233,10 +232,13 @@ where
                 let predicate_columns = extract_predicate_columns(this.kernel_scan.as_ref());
 
                 // Create minimal stats schema based on predicate columns
-                let stats_schema = create_minimal_stats_schema(
+                let stats_schema = match create_minimal_stats_schema(
                     this.kernel_scan.as_ref(),
                     predicate_columns.as_ref(),
-                );
+                ) {
+                    Ok(schema) => schema,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                };
 
                 // Parse statistics (will skip parsing for unreferenced columns)
                 let parsed_stats = parse_stats_column_with_schema(
@@ -245,7 +247,6 @@ where
                     stats_schema,
                 )?;
 
-                // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     &this.scan_config,
