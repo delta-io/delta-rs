@@ -27,7 +27,7 @@ deltalake-azure = { version = "0.13.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.14.0", path = "../gcp", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
 reqwest-retry = "0.7"
-reqwest-middleware = { version = "0.4.0", features = ["json"] }
+reqwest-middleware = { version = "0.5.1", features = ["json"] }
 rand = "0.9"
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
