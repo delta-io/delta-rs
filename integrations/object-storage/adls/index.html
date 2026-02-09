@@ -1552,6 +1552,26 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2078,6 +2098,26 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2154,6 +2194,121 @@
 </span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>
 </span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">abfs_path</span><span class="p">,</span><span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </span></code></pre></div>
+<h2 id="configuration-reference">Configuration Reference</h2>
+<p>The following table lists all available configuration options that can be passed via the <code>storage_options</code> parameter when working with Azure Data Lake Storage. These options correspond to the <code>AzureConfigKey</code> enum from the <code>object_store</code> crate.</p>
+<table>
+<thead>
+<tr>
+<th>Configuration Key</th>
+<th>Environment Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>account_name</code></td>
+<td><code>AZURE_STORAGE_ACCOUNT_NAME</code></td>
+<td>Azure storage account name</td>
+</tr>
+<tr>
+<td><code>access_key</code></td>
+<td><code>AZURE_STORAGE_ACCOUNT_KEY</code></td>
+<td>Azure storage account access key</td>
+</tr>
+<tr>
+<td><code>client_id</code></td>
+<td><code>AZURE_STORAGE_CLIENT_ID</code></td>
+<td>Service principal client ID for Azure AD authentication</td>
+</tr>
+<tr>
+<td><code>client_secret</code></td>
+<td><code>AZURE_STORAGE_CLIENT_SECRET</code></td>
+<td>Service principal client secret</td>
+</tr>
+<tr>
+<td><code>authority_id</code> / <code>tenant_id</code></td>
+<td><code>AZURE_STORAGE_TENANT_ID</code></td>
+<td>Azure Active Directory tenant ID</td>
+</tr>
+<tr>
+<td><code>sas_key</code></td>
+<td><code>AZURE_STORAGE_SAS_KEY</code></td>
+<td>Shared Access Signature (SAS) token (must be percent-encoded)</td>
+</tr>
+<tr>
+<td><code>bearer_token</code></td>
+<td><code>AZURE_STORAGE_TOKEN</code></td>
+<td>Bearer token for authentication</td>
+</tr>
+<tr>
+<td><code>use_emulator</code></td>
+<td><code>AZURE_STORAGE_USE_EMULATOR</code></td>
+<td>Use Azurite storage emulator (set to <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>endpoint</code></td>
+<td><code>AZURE_STORAGE_ENDPOINT</code></td>
+<td>Custom Azure endpoint URL</td>
+</tr>
+<tr>
+<td><code>use_azure_cli</code></td>
+<td><code>AZURE_STORAGE_USE_AZURE_CLI</code></td>
+<td>Use credentials from Azure CLI (set to <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>federated_token_file</code></td>
+<td><code>AZURE_FEDERATED_TOKEN_FILE</code></td>
+<td>Path to federated token file for workload identity</td>
+</tr>
+<tr>
+<td><code>container_name</code></td>
+<td><code>AZURE_STORAGE_CONTAINER_NAME</code></td>
+<td>Container name (alternative to specifying in URL)</td>
+</tr>
+<tr>
+<td><code>msi_endpoint</code></td>
+<td><code>IDENTITY_ENDPOINT</code> or <code>AZURE_MSI_ENDPOINT</code></td>
+<td>Managed Service Identity (MSI) endpoint</td>
+</tr>
+<tr>
+<td><code>object_id</code></td>
+<td><code>AZURE_STORAGE_OBJECT_ID</code></td>
+<td>Object ID for managed identity</td>
+</tr>
+<tr>
+<td><code>msi_resource_id</code></td>
+<td><code>AZURE_STORAGE_MSI_RESOURCE_ID</code></td>
+<td>MSI resource ID</td>
+</tr>
+<tr>
+<td><code>skip_signature</code></td>
+<td><code>AZURE_STORAGE_SKIP_SIGNATURE</code></td>
+<td>Skip request signature (set to <code>true</code> for anonymous access)</td>
+</tr>
+<tr>
+<td><code>use_fabric_endpoint</code></td>
+<td><code>AZURE_STORAGE_USE_FABRIC_ENDPOINT</code></td>
+<td>Use Microsoft Fabric endpoint (set to <code>true</code>)</td>
+</tr>
+<tr>
+<td><code>disable_tagging</code></td>
+<td><code>AZURE_STORAGE_DISABLE_TAGGING</code></td>
+<td>Disable blob tagging (set to <code>true</code> if not supported)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="supported-url-schemes">Supported URL Schemes</h3>
+<p>Delta Lake on Azure ADLS supports the following URL schemes:</p>
+<ul>
+<li><code>abfss://container@account.dfs.core.windows.net/path/to/table</code> - Azure Blob File System Secure (ABFSS)</li>
+<li><code>abfs://container@account.dfs.core.windows.net/path/to/table</code> - Azure Blob File System</li>
+<li><code>az://container/path/to/table</code> - Short form Azure scheme</li>
+<li><code>adl://container/path/to/table</code> - Azure Data Lake scheme</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>For the complete and authoritative list of configuration options, refer to the <a href="https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html">object_store AzureConfigKey documentation</a>.</p>
+</div>
 
 
 

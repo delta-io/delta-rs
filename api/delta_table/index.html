@@ -2038,6 +2038,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.deletion_vectors" class="md-nav__link">
+    deletion_vectors
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.file_uris" class="md-nav__link">
     file_uris
   </a>
@@ -2888,6 +2895,58 @@ they are rewritten without the records.</p>
     </tbody>
   </table>
 
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
+<h4 id="deltalake.DeltaTable.deletion_vectors" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">deletion_vectors</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">deletion_vectors</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">RecordBatchReader</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Return deletion vectors for data files in this table.</p>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>RecordBatchReader</code></td>          <td>
+                <code><span title="arro3.core.RecordBatchReader">RecordBatchReader</span></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A reader with two columns:
+- filepath (str): fully-qualified file URI.
+- selection_vector (list[bool]): row keep mask where True means keep and False means deleted.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="notes" open>
+  <summary>Notes</summary>
+  <p>Only files that have deletion vectors are returned.
+Deletion vectors are materialized in memory before being exposed as record batches.</p>
+</details>
   </div>
 
 </div>

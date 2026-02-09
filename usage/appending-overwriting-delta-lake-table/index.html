@@ -2092,7 +2092,8 @@
 </div>
 </div>
 <p><code>rust
-    let table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("num", DataType::Int32, false),
@@ -2132,7 +2133,8 @@
 </div>
 </div>
 <p><code>rust
-    let table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("num", DataType::Int32, false),
@@ -2163,7 +2165,8 @@ Here are the contents of the Delta table after the overwrite operation:</p>
 </div>
 </div>
 <p><code>rust
-    let mut table = open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;</code></p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>+-------+----------+
 </span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>|   num | letter   |

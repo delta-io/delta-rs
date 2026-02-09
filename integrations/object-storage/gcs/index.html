@@ -1599,6 +1599,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    Authentication Methods
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2132,6 +2159,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#authentication-methods" class="md-nav__link">
+    Authentication Methods
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2203,6 +2257,61 @@
 <li><code>storage.objects.list</code> (only required if you plan on using the Google Cloud CLI)</li>
 </ul>
 <p>For more information, see the <a href="https://cloud.google.com/storage/docs/uploading-objects">GCP documentation</a></p>
+<h2 id="configuration-reference">Configuration Reference</h2>
+<p>The following table lists all available configuration options that can be passed via the <code>storage_options</code> parameter when working with Google Cloud Storage. These options correspond to the <code>GoogleConfigKey</code> enum from the <code>object_store</code> crate.</p>
+<table>
+<thead>
+<tr>
+<th>Configuration Key</th>
+<th>Environment Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>service_account</code></td>
+<td><code>GOOGLE_SERVICE_ACCOUNT</code></td>
+<td>Path to service account JSON file for authentication</td>
+</tr>
+<tr>
+<td><code>service_account_key</code></td>
+<td><code>GOOGLE_SERVICE_ACCOUNT_KEY</code></td>
+<td>Serialized service account key JSON string</td>
+</tr>
+<tr>
+<td><code>application_credentials</code></td>
+<td><code>GOOGLE_APPLICATION_CREDENTIALS</code></td>
+<td>Path to Application Default Credentials (ADC) file</td>
+</tr>
+<tr>
+<td><code>bucket</code> / <code>bucket_name</code></td>
+<td><code>GOOGLE_BUCKET</code></td>
+<td>GCS bucket name (alternative to specifying in URL)</td>
+</tr>
+<tr>
+<td><code>endpoint</code></td>
+<td><code>GOOGLE_ENDPOINT</code></td>
+<td>Custom GCS endpoint URL (for testing or GCS-compatible services)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="supported-url-schemes">Supported URL Schemes</h3>
+<p>Delta Lake on Google Cloud Storage supports the following URL scheme:</p>
+<ul>
+<li><code>gs://bucket-name/path/to/table</code> - Google Cloud Storage URL</li>
+</ul>
+<h3 id="authentication-methods">Authentication Methods</h3>
+<p>GCS authentication can be configured in several ways (in order of precedence):</p>
+<ol>
+<li><strong>Service Account Key</strong> - Provide a service account JSON via <code>service_account_key</code> or <code>service_account</code> (file path)</li>
+<li><strong>Application Default Credentials (ADC)</strong> - Set <code>GOOGLE_APPLICATION_CREDENTIALS</code> environment variable to point to a credentials file</li>
+<li><strong>GCloud CLI Credentials</strong> - If authenticated via <code>gcloud auth application-default login</code>, credentials will be automatically discovered</li>
+<li><strong>Workload Identity</strong> - For applications running on GKE, credentials are automatically provided via workload identity</li>
+</ol>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>For the complete and authoritative list of configuration options, refer to the <a href="https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html">object_store GoogleConfigKey documentation</a>.</p>
+</div>
 
 
 

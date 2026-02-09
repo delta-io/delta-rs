@@ -1625,6 +1625,61 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#supported-s3-compatible-services" class="md-nav__link">
+    Supported S3-Compatible Services
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported S3-Compatible Services">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloudflare-r2" class="md-nav__link">
+    Cloudflare R2
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minio" class="md-nav__link">
+    MinIO
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alibaba-cloud-oss" class="md-nav__link">
+    Alibaba Cloud OSS
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#localstack" class="md-nav__link">
+    LocalStack
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ceph-rados-gateway" class="md-nav__link">
+    Ceph / RADOS Gateway
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-key-summary" class="md-nav__link">
+    Configuration Key Summary
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2064,6 +2119,61 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#supported-s3-compatible-services" class="md-nav__link">
+    Supported S3-Compatible Services
+  </a>
+  
+    <nav class="md-nav" aria-label="Supported S3-Compatible Services">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cloudflare-r2" class="md-nav__link">
+    Cloudflare R2
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minio" class="md-nav__link">
+    MinIO
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alibaba-cloud-oss" class="md-nav__link">
+    Alibaba Cloud OSS
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#localstack" class="md-nav__link">
+    LocalStack
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ceph-rados-gateway" class="md-nav__link">
+    Ceph / RADOS Gateway
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-key-summary" class="md-nav__link">
+    Configuration Key Summary
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2142,6 +2252,150 @@
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span>
 </span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">}</span>
 </span></code></pre></div>
+<h2 id="supported-s3-compatible-services">Supported S3-Compatible Services</h2>
+<p>Delta Lake works with many S3-compatible object storage services. Below are the most commonly used services and their specific configuration requirements.</p>
+<h3 id="cloudflare-r2">Cloudflare R2</h3>
+<p>Cloudflare R2 supports conditional puts with ETags, which provides safe concurrent writes without requiring DynamoDB.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;R2_ACCESS_KEY_ID&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;R2_SECRET_ACCESS_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;https://&lt;account_id&gt;.r2.cloudflarestorage.com&#39;</span><span class="p">,</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    <span class="s1">&#39;AWS_REGION&#39;</span><span class="p">:</span> <span class="s1">&#39;auto&#39;</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span><span class="p">,</span>  <span class="c1"># Required for safe concurrent writes</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="p">}</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    <span class="s2">&quot;s3://my-bucket/delta-table&quot;</span><span class="p">,</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="minio">MinIO</h3>
+<p>MinIO is an open-source S3-compatible storage server that can be self-hosted.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;MINIO_ACCESS_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;MINIO_SECRET_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;http://localhost:9000&#39;</span><span class="p">,</span>  <span class="c1"># Or your MinIO server URL</span>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>    <span class="s1">&#39;AWS_REGION&#39;</span><span class="p">:</span> <span class="s1">&#39;us-east-1&#39;</span><span class="p">,</span>  <span class="c1"># MinIO default region</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>    <span class="s1">&#39;allow_http&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>  <span class="c1"># Required for non-HTTPS endpoints</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>    <span class="s1">&#39;aws_conditional_put&#39;</span><span class="p">:</span> <span class="s1">&#39;etag&#39;</span><span class="p">,</span>  <span class="c1"># Required for safe concurrent writes</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="p">}</span>
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a>
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>    <span class="s2">&quot;s3://my-bucket/delta-table&quot;</span><span class="p">,</span>
+</span><span id="__span-5-14"><a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-5-15"><a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-5-16"><a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="alibaba-cloud-oss">Alibaba Cloud OSS</h3>
+<p>Alibaba Cloud Object Storage Service (OSS) is S3-compatible and commonly used in China and Asia-Pacific regions.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;OSS_ACCESS_KEY_ID&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;OSS_SECRET_ACCESS_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;https://oss-&lt;region&gt;.aliyuncs.com&#39;</span><span class="p">,</span>  <span class="c1"># e.g., oss-cn-hangzhou.aliyuncs.com</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>    <span class="s1">&#39;AWS_REGION&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;region&gt;&#39;</span><span class="p">,</span>  <span class="c1"># e.g., cn-hangzhou</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a>    <span class="s1">&#39;aws_virtual_hosted_style_request&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="p">}</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>    <span class="s2">&quot;s3://my-bucket/delta-table&quot;</span><span class="p">,</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="p">)</span>
+</span></code></pre></div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>For Alibaba OSS issues, see <a href="https://github.com/delta-io/delta-rs/issues/2361">#2361</a> for known compatibility considerations.</p>
+</div>
+<h3 id="localstack">LocalStack</h3>
+<p>LocalStack provides a local AWS cloud emulator for testing, including S3 emulation.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;test&#39;</span><span class="p">,</span>  <span class="c1"># LocalStack accepts any credentials</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="s1">&#39;test&#39;</span><span class="p">,</span>
+</span><span id="__span-7-6"><a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;http://localhost:4566&#39;</span><span class="p">,</span>  <span class="c1"># Default LocalStack endpoint</span>
+</span><span id="__span-7-7"><a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>    <span class="s1">&#39;AWS_REGION&#39;</span><span class="p">:</span> <span class="s1">&#39;us-east-1&#39;</span><span class="p">,</span>
+</span><span id="__span-7-8"><a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>    <span class="s1">&#39;allow_http&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>  <span class="c1"># Required for HTTP endpoint</span>
+</span><span id="__span-7-9"><a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>    <span class="s1">&#39;aws_skip_signature&#39;</span><span class="p">:</span> <span class="s1">&#39;true&#39;</span><span class="p">,</span>  <span class="c1"># Optional: skip signing for faster testing</span>
+</span><span id="__span-7-10"><a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a><span class="p">}</span>
+</span><span id="__span-7-11"><a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>
+</span><span id="__span-7-12"><a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-7-13"><a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>    <span class="s2">&quot;s3://test-bucket/delta-table&quot;</span><span class="p">,</span>
+</span><span id="__span-7-14"><a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-7-15"><a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-7-16"><a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="p">)</span>
+</span></code></pre></div>
+<h3 id="ceph-rados-gateway">Ceph / RADOS Gateway</h3>
+<p>Ceph's RADOS Gateway provides an S3-compatible interface to Ceph object storage.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>    <span class="s1">&#39;AWS_ACCESS_KEY_ID&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;CEPH_ACCESS_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>    <span class="s1">&#39;AWS_SECRET_ACCESS_KEY&#39;</span><span class="p">:</span> <span class="s1">&#39;&lt;CEPH_SECRET_KEY&gt;&#39;</span><span class="p">,</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>    <span class="s1">&#39;AWS_ENDPOINT_URL&#39;</span><span class="p">:</span> <span class="s1">&#39;https://ceph.example.com&#39;</span><span class="p">,</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>    <span class="s1">&#39;AWS_REGION&#39;</span><span class="p">:</span> <span class="s1">&#39;default&#39;</span><span class="p">,</span>  <span class="c1"># Ceph typically uses &#39;default&#39; or &#39;us-east-1&#39;</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>    <span class="s1">&#39;aws_virtual_hosted_style_request&#39;</span><span class="p">:</span> <span class="s1">&#39;false&#39;</span><span class="p">,</span>  <span class="c1"># Ceph often requires path-style requests</span>
+</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a><span class="p">}</span>
+</span><span id="__span-8-10"><a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>
+</span><span id="__span-8-11"><a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-8-12"><a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>    <span class="s2">&quot;s3://my-bucket/delta-table&quot;</span><span class="p">,</span>
+</span><span id="__span-8-13"><a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-8-14"><a id="__codelineno-8-14" name="__codelineno-8-14" href="#__codelineno-8-14"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span>
+</span><span id="__span-8-15"><a id="__codelineno-8-15" name="__codelineno-8-15" href="#__codelineno-8-15"></a><span class="p">)</span>
+</span></code></pre></div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Different Ceph configurations may require different settings. Check your Ceph installation's documentation for specific requirements.</p>
+</div>
+<h2 id="configuration-key-summary">Configuration Key Summary</h2>
+<p>When working with S3-compatible services, the most important configuration keys are:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Purpose</th>
+<th>Common Values</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AWS_ENDPOINT_URL</code></td>
+<td>Custom S3 endpoint</td>
+<td>Service-specific URL</td>
+</tr>
+<tr>
+<td><code>aws_conditional_put</code></td>
+<td>Safe concurrent writes</td>
+<td><code>etag</code> (for services supporting conditional puts)</td>
+</tr>
+<tr>
+<td><code>allow_http</code></td>
+<td>Allow non-HTTPS connections</td>
+<td><code>true</code> for local/testing environments</td>
+</tr>
+<tr>
+<td><code>aws_virtual_hosted_style_request</code></td>
+<td>URL style for requests</td>
+<td><code>true</code> for virtual-hosted, <code>false</code> for path-style</td>
+</tr>
+<tr>
+<td><code>aws_skip_signature</code></td>
+<td>Skip request signing</td>
+<td><code>true</code> for testing/unauthenticated access</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition tip">
+<p class="admonition-title">Tip</p>
+<p>Most S3-compatible services work best with <code>aws_conditional_put: 'etag'</code> to enable safe concurrent writes without requiring DynamoDB.</p>
+</div>
 
 
 

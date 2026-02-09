@@ -1619,6 +1619,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#delta-lake-specific-options" class="md-nav__link">
+    Delta Lake Specific Options
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2092,6 +2119,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#configuration-reference" class="md-nav__link">
+    Configuration Reference
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Reference">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#delta-lake-specific-options" class="md-nav__link">
+    Delta Lake Specific Options
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#supported-url-schemes" class="md-nav__link">
+    Supported URL Schemes
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2187,6 +2241,164 @@
 <li>dynamodb:PutItem</li>
 <li>dynamodb:UpdateItem</li>
 </ul>
+<h2 id="configuration-reference">Configuration Reference</h2>
+<p>The following table lists all available configuration options that can be passed via the <code>storage_options</code> parameter when working with AWS S3. These options correspond to the <code>AmazonS3ConfigKey</code> enum from the <code>object_store</code> crate.</p>
+<table>
+<thead>
+<tr>
+<th>Configuration Key</th>
+<th>Environment Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>access_key_id</code></td>
+<td><code>AWS_ACCESS_KEY_ID</code></td>
+<td>AWS access key ID for authentication</td>
+</tr>
+<tr>
+<td><code>secret_access_key</code></td>
+<td><code>AWS_SECRET_ACCESS_KEY</code></td>
+<td>AWS secret access key for authentication</td>
+</tr>
+<tr>
+<td><code>region</code></td>
+<td><code>AWS_REGION</code> or <code>AWS_DEFAULT_REGION</code></td>
+<td>AWS region where the S3 bucket is located</td>
+</tr>
+<tr>
+<td><code>endpoint</code></td>
+<td><code>AWS_ENDPOINT_URL</code></td>
+<td>Custom S3 endpoint URL (for S3-compatible services like MinIO, LocalStack)</td>
+</tr>
+<tr>
+<td><code>token</code></td>
+<td><code>AWS_SESSION_TOKEN</code></td>
+<td>Session token for temporary credentials (STS)</td>
+</tr>
+<tr>
+<td><code>imdsv1_fallback</code></td>
+<td><code>AWS_EC2_METADATA_V1_DISABLED</code></td>
+<td>Allow IMDSv1 fallback for EC2 metadata (set to <code>true</code> to disable)</td>
+</tr>
+<tr>
+<td><code>virtual_hosted_style_request</code></td>
+<td><code>AWS_VIRTUAL_HOSTED_STYLE_REQUEST</code></td>
+<td>Use virtual hosted-style requests (<code>true</code>) or path-style (<code>false</code>)</td>
+</tr>
+<tr>
+<td><code>aws_unsigned_payload</code></td>
+<td>-</td>
+<td>Skip payload signing for requests (set to <code>true</code> for unsigned uploads)</td>
+</tr>
+<tr>
+<td><code>aws_checksum_algorithm</code></td>
+<td>-</td>
+<td>Checksum algorithm to use (e.g., <code>sha256</code>)</td>
+</tr>
+<tr>
+<td><code>aws_metadata_endpoint</code></td>
+<td><code>AWS_EC2_METADATA_SERVICE_ENDPOINT</code></td>
+<td>EC2 metadata service endpoint URL</td>
+</tr>
+<tr>
+<td><code>aws_container_credentials_relative_uri</code></td>
+<td><code>AWS_CONTAINER_CREDENTIALS_RELATIVE_URI</code></td>
+<td>URI for container credentials (ECS tasks)</td>
+</tr>
+<tr>
+<td><code>aws_copy_if_not_exists</code></td>
+<td>-</td>
+<td>How to handle copy-if-not-exists operations</td>
+</tr>
+<tr>
+<td><code>aws_conditional_put</code></td>
+<td>-</td>
+<td>Conditional put support mode (e.g., <code>etag</code> for S3-compatible stores)</td>
+</tr>
+<tr>
+<td><code>aws_skip_signature</code></td>
+<td>-</td>
+<td>Skip request signing entirely (set to <code>true</code> for anonymous access)</td>
+</tr>
+<tr>
+<td><code>aws_disable_tagging</code></td>
+<td>-</td>
+<td>Disable object tagging (set to <code>true</code> if not supported)</td>
+</tr>
+<tr>
+<td><code>aws_s3_express</code></td>
+<td>-</td>
+<td>Enable S3 Express One Zone support</td>
+</tr>
+<tr>
+<td><code>aws_request_payer</code></td>
+<td>-</td>
+<td>Request payer setting (for requester-pays buckets)</td>
+</tr>
+<tr>
+<td><code>aws_web_identity_token_file</code></td>
+<td><code>AWS_WEB_IDENTITY_TOKEN_FILE</code></td>
+<td>Path to web identity token file for OIDC authentication</td>
+</tr>
+<tr>
+<td><code>aws_role_arn</code></td>
+<td><code>AWS_ROLE_ARN</code></td>
+<td>IAM role ARN to assume via STS AssumeRole</td>
+</tr>
+<tr>
+<td><code>aws_role_session_name</code></td>
+<td><code>AWS_ROLE_SESSION_NAME</code></td>
+<td>Session name for role assumption</td>
+</tr>
+<tr>
+<td><code>aws_sts_endpoint</code></td>
+<td>-</td>
+<td>Custom STS endpoint URL</td>
+</tr>
+</tbody>
+</table>
+<h3 id="delta-lake-specific-options">Delta Lake Specific Options</h3>
+<p>In addition to the standard S3 configuration options above, delta-rs provides these specific settings:</p>
+<table>
+<thead>
+<tr>
+<th>Configuration Key</th>
+<th>Environment Variable</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AWS_S3_LOCKING_PROVIDER</code></td>
+<td><code>AWS_S3_LOCKING_PROVIDER</code></td>
+<td>Locking mechanism for safe concurrent writes (set to <code>dynamodb</code>)</td>
+</tr>
+<tr>
+<td><code>DELTA_DYNAMO_TABLE_NAME</code></td>
+<td><code>DELTA_DYNAMO_TABLE_NAME</code></td>
+<td>DynamoDB table name for lock management</td>
+</tr>
+<tr>
+<td><code>AWS_S3_ALLOW_UNSAFE_RENAME</code></td>
+<td><code>AWS_S3_ALLOW_UNSAFE_RENAME</code></td>
+<td>Allow unsafe writes without locking (set to <code>true</code> to skip locking - not recommended for production)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="supported-url-schemes">Supported URL Schemes</h3>
+<p>Delta Lake on S3 supports the following URL schemes:</p>
+<ul>
+<li><code>s3://bucket-name/path/to/table</code> - Standard S3 URL</li>
+<li><code>s3a://bucket-name/path/to/table</code> - Hadoop S3A scheme</li>
+<li><code>https://s3.&lt;region&gt;.amazonaws.com/bucket-name/path/to/table</code> - HTTPS path-style URL</li>
+<li><code>https://bucket-name.s3.&lt;region&gt;.amazonaws.com/path/to/table</code> - HTTPS virtual hosted-style URL</li>
+</ul>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>For the complete and authoritative list of configuration options, refer to the <a href="https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html">object_store AmazonS3ConfigKey documentation</a>.</p>
+</div>
 
 
 
