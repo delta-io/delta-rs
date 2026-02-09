@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.4.1"
+version = "1.4.2"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
