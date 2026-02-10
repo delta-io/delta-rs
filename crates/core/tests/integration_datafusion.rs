@@ -1478,8 +1478,12 @@ fn schema_with_generated_column_and_user(user_nullable: bool) -> StructType {
 }
 
 fn id_value_record_batch() -> RecordBatch {
-    let id_arr = Int32Array::from(vec![1, 2]);
-    let value_arr = Int32Array::from(vec![10, 20]);
+    id_value_record_batch_with(vec![1, 2], vec![10, 20])
+}
+
+fn id_value_record_batch_with(ids: Vec<i32>, values: Vec<i32>) -> RecordBatch {
+    let id_arr = Int32Array::from(ids);
+    let value_arr = Int32Array::from(values);
     RecordBatch::try_from_iter_with_nullable(vec![
         ("id", Arc::new(id_arr) as ArrayRef, false),
         ("value", Arc::new(value_arr) as ArrayRef, false),
@@ -1513,6 +1517,35 @@ async fn test_schema_merge_append_missing_nullable_column_with_generated_columns
         .await
         .unwrap();
 
+    // Ensure schema merge didn't strip generated column metadata.
+    let schema = table.snapshot().unwrap().snapshot().arrow_schema();
+    let computed = schema.field_with_name("computed").unwrap();
+    assert_eq!(
+        computed
+            .metadata()
+            .get(ColumnMetadataKey::GenerationExpression.as_ref())
+            .map(|v| v.as_str()),
+        Some("id + value")
+    );
+
+    // Subsequent appends should continue to generate values for missing generated columns.
+    let table = table
+        .write(vec![id_value_record_batch_with(vec![3, 4], vec![30, 40])])
+        .with_schema_mode(SchemaMode::Merge)
+        .await
+        .unwrap();
+
+    // Ensure subsequent schema merges also preserve generated column metadata.
+    let schema = table.snapshot().unwrap().snapshot().arrow_schema();
+    let computed = schema.field_with_name("computed").unwrap();
+    assert_eq!(
+        computed
+            .metadata()
+            .get(ColumnMetadataKey::GenerationExpression.as_ref())
+            .map(|v| v.as_str()),
+        Some("id + value")
+    );
+
     let batches = ctx
         .read_table(table.table_provider().await.unwrap())
         .unwrap()
@@ -1530,6 +1563,8 @@ async fn test_schema_merge_append_missing_nullable_column_with_generated_columns
             "+----+-------+----------+------+",
             "| 1  | 10    | 11       |      |",
             "| 2  | 20    | 22       |      |",
+            "| 3  | 30    | 33       |      |",
+            "| 4  | 40    | 44       |      |",
             "+----+-------+----------+------+",
         ],
         &batches

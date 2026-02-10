@@ -251,7 +251,9 @@ def test_merge_with_g_during_schema_evolution(
     )
 
     id_col = ArrowField("id", DataType.int32(), nullable=True)
-    gc = ArrowField("gc", DataType.int32(), nullable=True)
+    gc = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
+        {"delta.generationExpression": "5"}
+    )
     expected_data = Table.from_pydict(
         {"id": Array([1, 2], type=id_col), "gc": Array([5, 5], type=gc)},
     )
