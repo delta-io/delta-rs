@@ -123,7 +123,7 @@ impl From<WriteError> for DeltaTableError {
 }
 
 /// Configuration to write data into Delta tables
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WriterConfig {
     /// Schema of the delta table
     table_schema: ArrowSchemaRef,
