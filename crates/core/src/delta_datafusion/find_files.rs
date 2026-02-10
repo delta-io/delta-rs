@@ -25,8 +25,8 @@ use percent_encoding::percent_decode_str;
 use tracing::*;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
-use crate::delta_datafusion::file_id::wrap_file_id_value;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
+use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, DeltaScanNext,
     FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
@@ -521,16 +521,31 @@ pub(crate) async fn scan_files_where_matches(
         .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
         .collect_vec();
 
-    // Create a table scan limiting the data to that originating from valid files.
-    // TODO(delta-io/delta-rs#4113): Avoid plan-time `IN (...)` lists by pushing a matched-file
-    // allowlist into scan planning.
-    let file_list = valid_files
-        .iter()
-        .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string()))
-        .map(|v| lit(wrap_file_id_value(v)))
-        .collect_vec();
-    let plan = LogicalPlanBuilder::scan("source", table_source, None)?
-        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
+    // Create a table scan limited to the matched files by forwarding an explicit
+    // file selection into the table provider.
+    let table_root = snapshot
+        .snapshot()
+        .scan_builder()
+        .build()?
+        .table_root()
+        .clone();
+    let file_selection = FileSelection::from_paths(
+        valid_files
+            .iter()
+            .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string())),
+        &table_root,
+    )?
+    .with_missing_file_policy(MissingFilePolicy::Ignore);
+    let selected_provider = DeltaScanNext::builder()
+        .with_eager_snapshot(snapshot.clone())
+        .with_file_skipping_predicates(skipping_pred)
+        .with_file_column(FILE_ID_COLUMN_DEFAULT)
+        .build()
+        .await?
+        .with_file_selection(file_selection);
+    let selected_table_source = provider_as_source(Arc::new(selected_provider));
+
+    let plan = LogicalPlanBuilder::scan("source", selected_table_source, None)?
         .drop_columns([FILE_ID_COLUMN_DEFAULT])?
         .build()?;
 
@@ -572,6 +587,30 @@ mod tests {
 
         let plan = session.create_physical_plan(scan.scan()).await?;
         let _data = collect(plan, session.task_ctx()).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_files_where_matches_plan_has_no_file_id_in_list_filter() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/simple_table");
+        table.load().await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let predicate = col("id").gt(lit(-1i64));
+        let Some(scan) = scan_files_where_matches(&session, &snapshot, predicate).await? else {
+            panic!("Expected at least one matching file");
+        };
+
+        let plan_debug = format!("{:?}", scan.scan());
+        assert!(
+            !(plan_debug.contains("InList(") && plan_debug.contains(FILE_ID_COLUMN_DEFAULT)),
+            "unexpected plan with file-id IN filter: {plan_debug}"
+        );
 
         Ok(())
     }
