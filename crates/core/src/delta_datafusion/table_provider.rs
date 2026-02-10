@@ -647,20 +647,28 @@ impl TableProviderBuilder {
     }
 
     pub async fn build(self) -> Result<next::DeltaScan> {
+        let TableProviderBuilder {
+            log_store,
+            snapshot,
+            file_column,
+            table_version,
+            file_skipping_predicates,
+        } = self;
+
         let mut config = DeltaScanConfig::new();
-        if let Some(file_column) = self.file_column {
+        if let Some(file_column) = file_column {
             config = config.with_file_column_name(file_column);
         }
 
-        let snapshot = match self.snapshot {
+        let snapshot = match snapshot {
             Some(wrapper) => wrapper,
             None => {
-                if let Some(log_store) = self.log_store.as_ref() {
+                if let Some(log_store) = log_store.as_ref() {
                     SnapshotWrapper::Snapshot(
                         Snapshot::try_new(
                             log_store,
                             Default::default(),
-                            self.table_version.map(|v| v as i64),
+                            table_version.map(|v| v as i64),
                         )
                         .await?
                         .into(),
@@ -674,7 +682,11 @@ impl TableProviderBuilder {
         };
 
         let mut provider = next::DeltaScan::new(snapshot, config)?;
-        if let Some(skipping) = self.file_skipping_predicates {
+        if let Some(log_store) = log_store {
+            provider = provider.with_log_store(log_store);
+        }
+
+        if let Some(skipping) = file_skipping_predicates {
             // validate that the expressions contain no illegal variants
             // that are not eligible for file skipping, e.g. volatile functions.
             for term in &skipping {
@@ -704,11 +716,9 @@ impl DeltaTable {
     ///
     /// See [`TableProviderBuilder`] for options when building the provider.
     pub fn table_provider(&self) -> TableProviderBuilder {
-        let mut builder = TableProviderBuilder::new();
+        let mut builder = TableProviderBuilder::new().with_log_store(self.log_store());
         if let Ok(state) = self.snapshot() {
             builder = builder.with_eager_snapshot(state.snapshot().clone());
-        } else {
-            builder = builder.with_log_store(self.log_store());
         }
         builder
     }
@@ -1196,10 +1206,23 @@ mod tests {
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::execution::context::SessionState;
     use datafusion::logical_expr::dml::InsertOp;
+    use datafusion::physical_plan::collect_partitioned;
     use object_store::path::Path;
     use std::sync::Arc;
 
     use super::*;
+
+    async fn create_in_memory_id_table() -> Result<DeltaTable, DeltaTableError> {
+        let schema = StructType::try_new(vec![StructField::new(
+            "id".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            true,
+        )])?;
+        DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .await
+    }
 
     async fn create_test_table() -> Result<DeltaTable, DeltaTableError> {
         use tempfile::TempDir;
@@ -1280,6 +1303,53 @@ mod tests {
         );
         assert_eq!(result_plan.children().len(), 1);
         assert!(result_plan.metrics().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_table_provider_from_loaded_table_supports_insert_into() {
+        let table = create_in_memory_id_table().await.unwrap();
+        let log_store = table.log_store();
+        let provider = table.table_provider().await.unwrap();
+
+        let session = Arc::new(crate::delta_datafusion::create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let schema = provider.schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![11, 13]))],
+        )
+        .unwrap();
+        let mem_table = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+        let input = mem_table.scan(&state, None, &[], None).await.unwrap();
+
+        let write_plan = provider
+            .insert_into(&state, input, InsertOp::Append)
+            .await
+            .unwrap();
+        let _write_batches: Vec<_> = collect_partitioned(write_plan, session.task_ctx())
+            .await
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let read_provider = next::DeltaScan::builder()
+            .with_log_store(log_store)
+            .await
+            .unwrap();
+        session
+            .register_table("delta_table", read_provider)
+            .unwrap();
+        let batches = session
+            .sql("SELECT id FROM delta_table ORDER BY id")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
+        datafusion::assert_batches_sorted_eq!(&expected, &batches);
     }
 
     #[test]
