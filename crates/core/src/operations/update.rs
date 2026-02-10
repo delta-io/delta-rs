@@ -460,7 +460,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                     cdc: false,
                 },
             )?;
-            update_datafusion_session(&this.log_store, &state, Some(operation_id))?;
+            update_datafusion_session(&state, &this.log_store, Some(operation_id))?;
             state.ensure_log_store_registered(this.log_store.as_ref())?;
 
             if this.updates.is_empty() {
