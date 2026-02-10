@@ -1,5 +1,4 @@
 use std::sync::{Arc, OnceLock};
-use std::vec;
 
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
@@ -8,13 +7,18 @@ use datafusion::common::ToDFSchema;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
-use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
+use datafusion::physical_expr::expressions::col as physical_col;
+use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::{
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, execute_stream_partitioned,
+};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -41,6 +45,7 @@ fn channel_size() -> usize {
         std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
+            .filter(|size| *size > 0)
             .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
     })
 }
@@ -375,7 +380,30 @@ pub(crate) async fn write_exec_plan(
     }
 }
 
-// We drive partition streams concurrently and centralize writes via an mpsc channel.
+/// Hash repartitions the plan by partition columns so each stream
+/// writes to disjoint Delta partitions, avoiding duplicate small files
+/// Returns the plan unchanged if there is only a single stream
+fn repartition_by_partition_columns(
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: &[String],
+) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    let num_partitions = plan.output_partitioning().partition_count();
+
+    if num_partitions <= 1 {
+        return Ok(plan);
+    }
+
+    let schema = plan.schema();
+    let hash_exprs = partition_columns
+        .iter()
+        .map(|name| physical_col(name, &schema).map(|e| e as _))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Arc::new(RepartitionExec::try_new(
+        plan,
+        Partitioning::Hash(hash_exprs, num_partitions),
+    )?))
+}
+
 async fn write_data_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
@@ -396,63 +424,126 @@ async fn write_data_plan(
         writer_stats_config.stats_columns.clone(),
     );
 
-    // sync channel for batches produced by partition stream
-    let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
+    // Keep the previous single-writer fan-in path for unpartitioned tables.
+    if partition_columns.is_empty() {
+        let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
 
-    let writer_handle = tokio::task::spawn(async move {
-        let mut writer = DeltaWriter::new(object_store.clone(), config);
-        let mut total_write_ms: u64 = 0;
-        while let Some(batch) = rx.recv().await {
-            let wstart = std::time::Instant::now();
-            writer.write(&batch).await?;
-            total_write_ms += wstart.elapsed().as_millis() as u64;
-        }
-        let adds = writer.close().await?;
-        Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
-    });
-
-    // spawn one worker per partition stream to drive DataFusion concurrently
-    let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
-    let mut worker_handles = Vec::with_capacity(partition_streams.len());
-    let scan_start = std::time::Instant::now();
-    for mut partition_stream in partition_streams {
-        let tx_clone = tx.clone();
-        let handle = tokio::task::spawn(async move {
-            while let Some(maybe_batch) = partition_stream.next().await {
-                let batch = maybe_batch?;
-                tx_clone.send(batch).await.map_err(|_| {
-                    DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
-                })?;
+        let writer_handle = tokio::task::spawn(async move {
+            let mut writer = DeltaWriter::new(object_store.clone(), config);
+            let mut total_write_ms: u64 = 0;
+            while let Some(batch) = rx.recv().await {
+                let wstart = std::time::Instant::now();
+                writer.write(&batch).await?;
+                total_write_ms += wstart.elapsed().as_millis() as u64;
             }
-            Ok::<(), DeltaTableError>(())
+            let adds = writer.close().await?;
+            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
         });
-        worker_handles.push(handle);
+
+        let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
+        let mut worker_handles = Vec::with_capacity(partition_streams.len());
+        let scan_start = std::time::Instant::now();
+        for mut partition_stream in partition_streams {
+            let tx_clone = tx.clone();
+            let handle = tokio::task::spawn(async move {
+                while let Some(maybe_batch) = partition_stream.next().await {
+                    let batch = maybe_batch?;
+                    tx_clone.send(batch).await.map_err(|_| {
+                        DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
+                    })?;
+                }
+                Ok::<(), DeltaTableError>(())
+            });
+            worker_handles.push(handle);
+        }
+        drop(tx);
+
+        let join_res = writer_handle
+            .await
+            .map_err(|e| DeltaTableError::Generic(format!("writer join error: {e}")))?;
+        let (adds, write_time_ms) = match join_res {
+            Ok(ok) => ok,
+            Err(e) => {
+                for handle in &worker_handles {
+                    handle.abort();
+                }
+                for handle in worker_handles {
+                    let _ = handle.await;
+                }
+                return Err(e);
+            }
+        };
+
+        for h in worker_handles {
+            let join_res = h.await.map_err(|e| {
+                DeltaTableError::Generic(format!("worker join error when driving partition: {e}"))
+            })?;
+            join_res?;
+        }
+
+        let scan_time_ms = scan_start
+            .elapsed()
+            .as_millis()
+            .saturating_sub(write_time_ms as u128) as u64;
+
+        let metrics = WriteExecutionPlanMetrics {
+            scan_time_ms,
+            write_time_ms,
+        };
+
+        let actions = adds.into_iter().map(Action::Add).collect::<Vec<_>>();
+        return Ok((actions, metrics));
     }
 
-    drop(tx);
+    let plan = repartition_by_partition_columns(plan, &partition_columns)?;
+    let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
+    let scan_start = std::time::Instant::now();
 
-    let join_res = writer_handle
-        .await
-        .map_err(|e| DeltaTableError::Generic(format!("writer join error: {}", e)))?;
-    let (adds, write_time_ms) = join_res?;
-
-    for h in worker_handles {
-        let join_res = h.await.map_err(|e| {
-            DeltaTableError::Generic(format!("worker join error when driving partition: {}", e))
-        })?;
-        join_res?;
+    let mut join_set = JoinSet::new();
+    for mut stream in partition_streams {
+        let store = object_store.clone();
+        let writer_config = config.clone();
+        join_set.spawn(async move {
+            let mut writer = DeltaWriter::new(store, writer_config);
+            let mut write_ms: u64 = 0;
+            while let Some(maybe_batch) = stream.next().await {
+                let batch = maybe_batch?;
+                let wstart = std::time::Instant::now();
+                writer.write(&batch).await?;
+                write_ms += wstart.elapsed().as_millis() as u64;
+            }
+            let adds = writer.close().await?;
+            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, write_ms))
+        });
     }
 
-    let write_elapsed = write_time_ms;
-    let scan_time_ms = scan_start.elapsed().as_millis() as u64;
-    let scan_time_ms = scan_time_ms.saturating_sub(write_elapsed);
+    let mut all_adds = Vec::new();
+    // Writers run in parallel, so wall-clock write time is the slowest task
+    let mut max_write_ms: u64 = 0;
+    while let Some(join_res) = join_set.join_next().await {
+        let result = join_res
+            .map_err(|e| DeltaTableError::Generic(format!("writer task join error: {e}")))?;
+        match result {
+            Ok((adds, write_ms)) => {
+                all_adds.extend(adds);
+                max_write_ms = max_write_ms.max(write_ms);
+            }
+            Err(e) => {
+                join_set.abort_all();
+                return Err(e);
+            }
+        }
+    }
+
+    let scan_elapsed = scan_start.elapsed().as_millis() as u64;
+    let scan_time_ms = scan_elapsed.saturating_sub(max_write_ms);
 
     let metrics = WriteExecutionPlanMetrics {
         scan_time_ms,
-        write_time_ms: write_elapsed,
+        write_time_ms: max_write_ms,
     };
 
-    let actions = adds.into_iter().map(Action::Add).collect::<Vec<_>>();
+    let actions = all_adds.into_iter().map(Action::Add).collect::<Vec<_>>();
     Ok((actions, metrics))
 }
 
@@ -504,45 +595,195 @@ async fn write_cdc_plan(
         writer_stats_config.stats_columns.clone(),
     );
 
-    // sync channel for batches produced by partition stream for normal and cdf batches
-    let (tx_normal, mut rx_normal) = mpsc::channel::<RecordBatch>(channel_size());
-    let (tx_cdf, mut rx_cdf) = mpsc::channel::<RecordBatch>(channel_size());
+    // Keep the previous single-writer fan-in path for unpartitioned tables.
+    if partition_columns.is_empty() {
+        let (tx_normal, mut rx_normal) = mpsc::channel::<RecordBatch>(channel_size());
+        let (tx_cdf, mut rx_cdf) = mpsc::channel::<RecordBatch>(channel_size());
 
-    let normal_writer_handle = tokio::task::spawn(async move {
-        let mut writer = DeltaWriter::new(object_store, normal_config);
-        let mut total_write_ms: u64 = 0;
-        while let Some(batch) = rx_normal.recv().await {
-            let wstart = std::time::Instant::now();
-            writer.write(&batch).await?;
-            total_write_ms += wstart.elapsed().as_millis() as u64;
+        let normal_writer_handle = tokio::task::spawn(async move {
+            let mut writer = DeltaWriter::new(object_store, normal_config);
+            let mut total_write_ms: u64 = 0;
+            while let Some(batch) = rx_normal.recv().await {
+                let wstart = std::time::Instant::now();
+                writer.write(&batch).await?;
+                total_write_ms += wstart.elapsed().as_millis() as u64;
+            }
+            let adds = writer.close().await?;
+            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
+        });
+
+        let cdf_writer_handle = tokio::task::spawn(async move {
+            let mut writer = DeltaWriter::new(cdf_store, cdf_config);
+            let mut total_write_ms: u64 = 0;
+            while let Some(batch) = rx_cdf.recv().await {
+                let wstart = std::time::Instant::now();
+                writer.write(&batch).await?;
+                total_write_ms += wstart.elapsed().as_millis() as u64;
+            }
+            let adds = writer.close().await?;
+            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
+        });
+
+        let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
+        let mut worker_handles = Vec::with_capacity(partition_streams.len());
+        let scan_start = std::time::Instant::now();
+
+        for mut partition_stream in partition_streams {
+            let txn = tx_normal.clone();
+            let txc = tx_cdf.clone();
+            let session_ctx = SessionContext::new();
+
+            let h = tokio::task::spawn(async move {
+                while let Some(maybe_batch) = partition_stream.next().await {
+                    let batch = maybe_batch?;
+
+                    // split batch since upstream unioned write and cdf plans
+                    let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
+                        batch.schema(),
+                        vec![vec![batch.clone()]],
+                    )?);
+                    let batch_df = session_ctx
+                        .read_table(table_provider)
+                        .map_err(|e| DeltaTableError::Generic(format!("read_table failed: {e}")))?;
+
+                    let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
+                        vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
+                        true,
+                    ))?;
+
+                    let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
+                        vec![
+                            lit("delete"),
+                            lit("insert"),
+                            lit("update_preimage"),
+                            lit("update_postimage"),
+                        ],
+                        false,
+                    ))?;
+
+                    let mut normal_stream = normal_df.execute_stream().await?;
+                    while let Some(mut normal_batch) = normal_stream.try_next().await? {
+                        let mut idx: Option<usize> = None;
+                        for (i_field, field) in
+                            normal_batch.schema_ref().fields().iter().enumerate()
+                        {
+                            if field.name() == CDC_COLUMN_NAME {
+                                idx = Some(i_field);
+                                break;
+                            }
+                        }
+                        normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
+                            "idx of _change_type col not found. This shouldn't have happened.",
+                        ))?);
+
+                        txn.send(normal_batch).await.map_err(|_| {
+                            DeltaTableError::Generic(
+                                "normal writer closed unexpectedly".to_string(),
+                            )
+                        })?;
+                    }
+
+                    let mut cdf_stream = cdf_df.execute_stream().await?;
+                    while let Some(cdf_batch) = cdf_stream.try_next().await? {
+                        txc.send(cdf_batch).await.map_err(|_| {
+                            DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
+                        })?;
+                    }
+                }
+                Ok::<(), DeltaTableError>(())
+            });
+
+            worker_handles.push(h);
         }
-        let adds = writer.close().await?;
-        Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
-    });
 
-    let cdf_writer_handle = tokio::task::spawn(async move {
-        let mut writer = DeltaWriter::new(cdf_store, cdf_config);
-        let mut total_write_ms: u64 = 0;
-        while let Some(batch) = rx_cdf.recv().await {
-            let wstart = std::time::Instant::now();
-            writer.write(&batch).await?;
-            total_write_ms += wstart.elapsed().as_millis() as u64;
+        drop(tx_normal);
+        drop(tx_cdf);
+
+        let normal_join = normal_writer_handle
+            .await
+            .map_err(|e| DeltaTableError::Generic(format!("normal writer join error: {e}")))?;
+        let (normal_adds, normal_write_ms) = match normal_join {
+            Ok(ok) => ok,
+            Err(e) => {
+                cdf_writer_handle.abort();
+                for handle in &worker_handles {
+                    handle.abort();
+                }
+                for handle in worker_handles {
+                    let _ = handle.await;
+                }
+                return Err(e);
+            }
+        };
+
+        let cdf_join = cdf_writer_handle
+            .await
+            .map_err(|e| DeltaTableError::Generic(format!("cdf writer join error: {e}")))?;
+        let (cdf_adds, cdf_write_ms) = match cdf_join {
+            Ok(ok) => ok,
+            Err(e) => {
+                for handle in &worker_handles {
+                    handle.abort();
+                }
+                for handle in worker_handles {
+                    let _ = handle.await;
+                }
+                return Err(e);
+            }
+        };
+
+        for h in worker_handles {
+            let join_res = h.await.map_err(|e| {
+                DeltaTableError::Generic(format!("worker join error when driving partition: {e}"))
+            })?;
+            join_res?;
         }
-        let adds = writer.close().await?;
-        Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
-    });
 
-    // spawn partition workers that split batches and send to appropriate writer channel
+        let mut actions = normal_adds.into_iter().map(Action::Add).collect::<Vec<_>>();
+        let mut cdf_actions = cdf_adds
+            .into_iter()
+            .map(|add| {
+                Action::Cdc(AddCDCFile {
+                    path: format!("_change_data/{}", add.path),
+                    size: add.size,
+                    partition_values: add.partition_values,
+                    data_change: false,
+                    tags: add.tags,
+                })
+            })
+            .collect::<Vec<_>>();
+        actions.append(&mut cdf_actions);
+
+        let write_time_ms = normal_write_ms + cdf_write_ms;
+        let scan_elapsed = scan_start.elapsed().as_millis() as u64;
+        let scan_time_ms = scan_elapsed.saturating_sub(write_time_ms);
+
+        let metrics = WriteExecutionPlanMetrics {
+            scan_time_ms,
+            write_time_ms,
+        };
+
+        return Ok((actions, metrics));
+    }
+
+    let plan = repartition_by_partition_columns(plan, &partition_columns)?;
     let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
-    let mut worker_handles = Vec::with_capacity(partition_streams.len());
     let scan_start = std::time::Instant::now();
-    for mut partition_stream in partition_streams {
-        let txn = tx_normal.clone();
-        let txc = tx_cdf.clone();
-        let session_ctx = SessionContext::new();
+    let mut join_set = JoinSet::new();
 
-        let h = tokio::task::spawn(async move {
-            while let Some(maybe_batch) = partition_stream.next().await {
+    for mut stream in partition_streams {
+        let store = object_store.clone();
+        let cdf_store = cdf_store.clone();
+        let normal_config = normal_config.clone();
+        let cdf_config = cdf_config.clone();
+
+        join_set.spawn(async move {
+            let mut normal_writer = DeltaWriter::new(store, normal_config);
+            let mut cdf_writer = DeltaWriter::new(cdf_store, cdf_config);
+            let session_ctx = SessionContext::new();
+            let mut write_ms: u64 = 0;
+
+            while let Some(maybe_batch) = stream.next().await {
                 let batch = maybe_batch?;
 
                 // split batch since upstream unioned write and cdf plans
@@ -550,7 +791,9 @@ async fn write_cdc_plan(
                     batch.schema(),
                     vec![vec![batch.clone()]],
                 )?);
-                let batch_df = session_ctx.read_table(table_provider).unwrap();
+                let batch_df = session_ctx
+                    .read_table(table_provider)
+                    .map_err(|e| DeltaTableError::Generic(format!("read_table failed: {e}")))?;
 
                 let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
                     vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
@@ -567,10 +810,8 @@ async fn write_cdc_plan(
                     false,
                 ))?;
 
-                // Concatenate with the CDF_schema, since we need to keep the _change_type col
                 let mut normal_stream = normal_df.execute_stream().await?;
                 while let Some(mut normal_batch) = normal_stream.try_next().await? {
-                    // Drop the CDC_COLUMN ("_change_type")
                     let mut idx: Option<usize> = None;
                     for (i_field, field) in normal_batch.schema_ref().fields().iter().enumerate() {
                         if field.name() == CDC_COLUMN_NAME {
@@ -582,71 +823,59 @@ async fn write_cdc_plan(
                         "idx of _change_type col not found. This shouldn't have happened.",
                     ))?);
 
-                    txn.send(normal_batch).await.map_err(|_| {
-                        DeltaTableError::Generic("normal writer closed unexpectedly".to_string())
-                    })?;
+                    let wstart = std::time::Instant::now();
+                    normal_writer.write(&normal_batch).await?;
+                    write_ms += wstart.elapsed().as_millis() as u64;
                 }
 
                 let mut cdf_stream = cdf_df.execute_stream().await?;
                 while let Some(cdf_batch) = cdf_stream.try_next().await? {
-                    txc.send(cdf_batch).await.map_err(|_| {
-                        DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
-                    })?;
+                    let wstart = std::time::Instant::now();
+                    cdf_writer.write(&cdf_batch).await?;
+                    write_ms += wstart.elapsed().as_millis() as u64;
                 }
             }
-            Ok::<(), DeltaTableError>(())
+
+            let normal_adds = normal_writer.close().await?;
+            let cdf_adds = cdf_writer.close().await?;
+            Ok::<(Vec<Add>, Vec<Add>, u64), DeltaTableError>((normal_adds, cdf_adds, write_ms))
         });
-
-        worker_handles.push(h);
     }
 
-    // drop original senders so writer tasks exit after all workers finish
-    drop(tx_normal);
-    drop(tx_cdf);
-
-    // wait for writer tasks to finish
-    let normal_join = normal_writer_handle
-        .await
-        .map_err(|e| DeltaTableError::Generic(format!("normal writer join error: {}", e)))?;
-    let (normal_adds, normal_write_ms) = normal_join?;
-
-    let cdf_join = cdf_writer_handle
-        .await
-        .map_err(|e| DeltaTableError::Generic(format!("cdf writer join error: {}", e)))?;
-    let (cdf_adds, cdf_write_ms) = cdf_join?;
-
-    // check if workers that collect stream didnt fail
-    for h in worker_handles {
-        let join_res = h.await.map_err(|e| {
-            DeltaTableError::Generic(format!("worker join error when driving partition: {}", e))
-        })?;
-        join_res?;
+    let mut all_actions = Vec::new();
+    // Writers run in parallel, so wall-clock write time is the slowest task
+    let mut max_write_ms: u64 = 0;
+    while let Some(join_res) = join_set.join_next().await {
+        let result = join_res
+            .map_err(|e| DeltaTableError::Generic(format!("writer task join error: {e}")))?;
+        match result {
+            Ok((normal_adds, cdf_adds, write_ms)) => {
+                all_actions.extend(normal_adds.into_iter().map(Action::Add));
+                all_actions.extend(cdf_adds.into_iter().map(|add| {
+                    Action::Cdc(AddCDCFile {
+                        path: format!("_change_data/{}", add.path),
+                        size: add.size,
+                        partition_values: add.partition_values,
+                        data_change: false,
+                        tags: add.tags,
+                    })
+                }));
+                max_write_ms = max_write_ms.max(write_ms);
+            }
+            Err(e) => {
+                join_set.abort_all();
+                return Err(e);
+            }
+        }
     }
 
-    let mut actions = normal_adds.into_iter().map(Action::Add).collect::<Vec<_>>();
-    let mut cdf_actions = cdf_adds
-        .into_iter()
-        .map(|add| {
-            Action::Cdc(AddCDCFile {
-                path: format!("_change_data/{}", add.path),
-                size: add.size,
-                partition_values: add.partition_values,
-                data_change: false,
-                tags: add.tags,
-            })
-        })
-        .collect::<Vec<_>>();
-
-    actions.append(&mut cdf_actions);
-
-    let write_time_ms = normal_write_ms + cdf_write_ms;
     let scan_elapsed = scan_start.elapsed().as_millis() as u64;
-    let scan_time_ms = scan_elapsed.saturating_sub(write_time_ms);
+    let scan_time_ms = scan_elapsed.saturating_sub(max_write_ms);
 
     let metrics = WriteExecutionPlanMetrics {
         scan_time_ms,
-        write_time_ms,
+        write_time_ms: max_write_ms,
     };
 
-    Ok((actions, metrics))
+    Ok((all_actions, metrics))
 }

@@ -1117,6 +1117,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_partitioned_parallel_writers() {
+        let batch = get_record_batch(None, false);
+
+        let multi_stream_input: Arc<dyn TableProvider> = Arc::new(
+            MemTable::try_new(
+                batch.schema(),
+                vec![
+                    vec![batch.clone()],
+                    vec![batch.clone()],
+                    vec![batch.clone()],
+                ],
+            )
+            .unwrap(),
+        );
+        let multi_stream_plan =
+            LogicalPlanBuilder::scan("source", provider_as_source(multi_stream_input), None)
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let parallel_table = DeltaTable::new_in_memory()
+            .write(vec![])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_input_plan(multi_stream_plan)
+            .with_partition_columns(["modified"])
+            .await
+            .unwrap();
+
+        let single_writer_table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone(), batch.clone(), batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_partition_columns(["modified"])
+            .await
+            .unwrap();
+
+        let parallel_data = get_data_sorted(&parallel_table, "modified, id, value").await;
+        let single_writer_data = get_data_sorted(&single_writer_table, "modified, id, value").await;
+        assert_eq!(parallel_data, single_writer_data);
+
+        let parallel_files = parallel_table.snapshot().unwrap().log_data().num_files();
+        let single_writer_files = single_writer_table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .num_files();
+        assert_eq!(parallel_files, single_writer_files);
+        assert_eq!(parallel_files, 2);
+
+        let parallel_write_metrics: WriteMetrics = get_write_metrics(&parallel_table).await;
+        let single_writer_metrics: WriteMetrics = get_write_metrics(&single_writer_table).await;
+        assert_eq!(
+            parallel_write_metrics.num_added_files,
+            single_writer_metrics.num_added_files
+        );
+        assert_eq!(parallel_write_metrics.num_added_files, 2);
+    }
+
+    #[tokio::test]
+    async fn test_write_partitioned_parallel_writers_error_propagation() {
+        let batch = get_record_batch(None, false);
+
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "string", "nullable": true, "metadata": {}},
+                {"name": "value", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"value < 6\"} }"
+                }},
+                {"name": "modified", "type": "string", "nullable": true, "metadata": {}},
+            ]
+        }))
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(schema.fields().cloned())
+            .with_partition_columns(["modified"])
+            .await
+            .unwrap();
+
+        let multi_stream_input: Arc<dyn TableProvider> = Arc::new(
+            MemTable::try_new(
+                batch.schema(),
+                vec![
+                    vec![batch.clone()],
+                    vec![batch.clone()],
+                    vec![batch.clone()],
+                ],
+            )
+            .unwrap(),
+        );
+        let multi_stream_plan =
+            LogicalPlanBuilder::scan("source", provider_as_source(multi_stream_input), None)
+                .unwrap()
+                .build()
+                .unwrap();
+
+        let result = table
+            .write(vec![])
+            .with_save_mode(SaveMode::Append)
+            .with_input_plan(multi_stream_plan)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "write should fail when invariant is violated in parallel writers"
+        );
+    }
+
+    #[tokio::test]
     async fn test_merge_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaTable::new_in_memory()
