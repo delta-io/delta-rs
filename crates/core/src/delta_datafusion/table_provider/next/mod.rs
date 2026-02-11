@@ -495,7 +495,12 @@ impl TableProvider for DeltaScan {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::Int64Array, record_batch::RecordBatch};
+    use arrow::{
+        array::Int64Array,
+        datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+        record_batch::RecordBatch,
+    };
+    use arrow_array::{DictionaryArray, UInt16Array, types::UInt16Type};
     use datafusion::{
         catalog::Session,
         datasource::MemTable,
@@ -514,7 +519,10 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq,
         delta_datafusion::{DeltaScanConfig, session::create_session},
-        kernel::{DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType},
+        kernel::{
+            Action, DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType,
+        },
+        logstore::get_actions,
         test_utils::{TestResult, TestTables},
     };
 
@@ -670,6 +678,76 @@ mod tests {
             .insert_into(&state, overwrite_input, InsertOp::Overwrite)
             .await?;
         let _overwrite_batches: Vec<_> = collect_partitioned(overwrite_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let commit_bytes = log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("expected overwrite commit bytes at version 2");
+        let overwrite_actions = get_actions(2, &commit_bytes)?;
+        assert!(
+            overwrite_actions
+                .iter()
+                .any(|action| matches!(action, Action::Remove(_))),
+            "expected overwrite commit to contain at least one Remove action"
+        );
+        assert!(
+            overwrite_actions
+                .iter()
+                .any(|action| matches!(action, Action::Add(_))),
+            "expected overwrite commit to contain at least one Add action"
+        );
+
+        let read_provider = DeltaScan::builder().with_log_store(log_store).await?;
+        session.register_table("delta_table", read_provider)?;
+        let batches = session
+            .sql("SELECT id FROM delta_table ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_dictionary_source_is_cast_to_table_schema() -> TestResult {
+        let table = create_in_memory_id_table().await?;
+        let log_store = table.log_store();
+        let provider = DeltaScan::builder()
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let dictionary_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "id",
+            ArrowDataType::Dictionary(
+                Box::new(ArrowDataType::UInt16),
+                Box::new(ArrowDataType::Int64),
+            ),
+            true,
+        )]));
+
+        let dictionary_values = Int64Array::from(vec![11, 13]);
+        let dictionary_keys = UInt16Array::from(vec![0, 1]);
+        let dictionary_array =
+            DictionaryArray::<UInt16Type>::new(dictionary_keys, Arc::new(dictionary_values));
+        let dictionary_batch =
+            RecordBatch::try_new(dictionary_schema.clone(), vec![Arc::new(dictionary_array)])?;
+
+        let mem_table = MemTable::try_new(dictionary_schema, vec![vec![dictionary_batch]])?;
+        let input = mem_table.scan(&state, None, &[], None).await?;
+        let write_plan = provider
+            .insert_into(&state, input, InsertOp::Append)
+            .await?;
+        let _write_batches: Vec<_> = collect_partitioned(write_plan, session.task_ctx())
             .await?
             .into_iter()
             .flatten()
