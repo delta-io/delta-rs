@@ -59,7 +59,25 @@ fn channel_size() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_WRITER_BATCH_CHANNEL_SIZE, parse_channel_size};
+    use std::pin::Pin;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::task::{Context, Poll};
+
+    use arrow_array::{Int64Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::common::Result as DataFusionResult;
+    use datafusion::physical_plan::{RecordBatchStream, stream::RecordBatchStreamAdapter};
+    use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+    use futures::{Stream, stream};
+    use object_store::memory::InMemory;
+
+    use super::{
+        DEFAULT_WRITER_BATCH_CHANNEL_SIZE, ObjectStoreRef, SendableRecordBatchStream, WriterConfig,
+        parse_channel_size, write_streams,
+    };
 
     #[test]
     fn channel_size_zero_falls_back_to_default() {
@@ -85,6 +103,84 @@ mod tests {
     #[test]
     fn channel_size_missing_value_falls_back_to_default() {
         assert_eq!(parse_channel_size(None), DEFAULT_WRITER_BATCH_CHANNEL_SIZE);
+    }
+
+    struct PendingDropStream {
+        schema: Arc<ArrowSchema>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for PendingDropStream {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
+    }
+
+    impl Stream for PendingDropStream {
+        type Item = DataFusionResult<RecordBatch>;
+
+        fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Pending
+        }
+    }
+
+    impl RecordBatchStream for PendingDropStream {
+        fn schema(&self) -> Arc<ArrowSchema> {
+            self.schema.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_write_streams_aborts_workers_when_writer_fails() {
+        let expected_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            true,
+        )]));
+        let config = WriterConfig::new(
+            expected_schema.clone(),
+            vec![],
+            None,
+            Some(1024),
+            Some(1024),
+            DataSkippingNumIndexedCols::NumColumns(32),
+            None,
+        );
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let pending_stream: SendableRecordBatchStream = Box::pin(PendingDropStream {
+            schema: expected_schema,
+            dropped: dropped.clone(),
+        });
+
+        let bad_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int64,
+            true,
+        )]));
+        let bad_batch = RecordBatch::try_new(
+            bad_schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1_i64]))],
+        )
+        .unwrap();
+        let failing_stream: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
+            bad_schema,
+            stream::iter(vec![Ok::<RecordBatch, datafusion::error::DataFusionError>(
+                bad_batch,
+            )]),
+        ));
+
+        let object_store = Arc::new(InMemory::new()) as ObjectStoreRef;
+        let result = write_streams(vec![pending_stream, failing_stream], object_store, config).await;
+
+        assert!(
+            result.is_err(),
+            "expected writer failure when stream schema mismatches writer config"
+        );
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "expected pending worker stream to be dropped when writer fails"
+        );
     }
 }
 
