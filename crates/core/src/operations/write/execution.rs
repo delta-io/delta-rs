@@ -10,7 +10,8 @@ use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, 
 use datafusion::physical_expr::expressions::col as physical_col;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{
-    ExecutionPlan, ExecutionPlanProperties, Partitioning, execute_stream_partitioned,
+    ExecutionPlan, ExecutionPlanProperties, Partitioning, SendableRecordBatchStream,
+    execute_stream_partitioned,
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
@@ -106,6 +107,13 @@ fn max_concurrent_writers() -> usize {
 #[derive(Debug, Default)]
 pub(crate) struct WriteExecutionPlanMetrics {
     pub scan_time_ms: u64,
+    pub write_time_ms: u64,
+}
+
+/// Metrics captured from draining streams through a writer.
+#[derive(Debug, Default)]
+pub(crate) struct WriteStreamMetrics {
+    pub rows_written: u64,
     pub write_time_ms: u64,
 }
 
@@ -430,6 +438,93 @@ pub(crate) async fn write_exec_plan(
         )
         .await
     }
+}
+
+/// Drain one or more streams through a single [`DeltaWriter`].
+///
+/// Each stream is consumed by its own worker task and forwarded over an mpsc channel
+/// to a single writer task to preserve backpressure and streaming semantics.
+pub(crate) async fn write_streams(
+    streams: Vec<SendableRecordBatchStream>,
+    object_store: ObjectStoreRef,
+    config: WriterConfig,
+) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
+    let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
+
+    let writer_handle = tokio::task::spawn(async move {
+        let mut writer = DeltaWriter::new(object_store, config);
+        let mut total_write_ms: u64 = 0;
+        let mut rows_written: u64 = 0;
+        while let Some(batch) = rx.recv().await {
+            rows_written += batch.num_rows() as u64;
+            let wstart = std::time::Instant::now();
+            writer.write(&batch).await?;
+            total_write_ms += wstart.elapsed().as_millis() as u64;
+        }
+        let adds = writer.close().await?;
+        Ok::<(Vec<Add>, u64, u64), DeltaTableError>((adds, total_write_ms, rows_written))
+    });
+
+    let mut worker_handles = Vec::with_capacity(streams.len());
+    for mut stream in streams {
+        let tx_clone = tx.clone();
+        worker_handles.push(tokio::task::spawn(async move {
+            while let Some(maybe_batch) = stream.next().await {
+                let batch = maybe_batch?;
+                tx_clone.send(batch).await.map_err(|_| {
+                    DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
+                })?;
+            }
+            Ok::<(), DeltaTableError>(())
+        }));
+    }
+
+    drop(tx);
+
+    let writer_result = writer_handle
+        .await
+        .map_err(|e| DeltaTableError::Generic(format!("writer join error: {e}")))
+        .and_then(|join_res| join_res);
+    let writer_failed = writer_result.is_err();
+
+    if writer_failed {
+        for handle in &worker_handles {
+            handle.abort();
+        }
+    }
+
+    let mut worker_error: Option<DeltaTableError> = None;
+    for handle in worker_handles {
+        match handle.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                if worker_error.is_none() {
+                    worker_error = Some(err);
+                }
+            }
+            Err(join_err) if writer_failed && join_err.is_cancelled() => {}
+            Err(join_err) => {
+                if worker_error.is_none() {
+                    worker_error = Some(DeltaTableError::Generic(format!(
+                        "worker join error when driving partition: {join_err}"
+                    )));
+                }
+            }
+        }
+    }
+
+    let (adds, write_time_ms, rows_written) = writer_result?;
+    if let Some(err) = worker_error {
+        return Err(err);
+    }
+
+    Ok((
+        adds,
+        WriteStreamMetrics {
+            rows_written,
+            write_time_ms,
+        },
+    ))
 }
 
 /// Hash repartitions the plan by partition columns so each stream
