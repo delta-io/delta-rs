@@ -754,8 +754,8 @@ impl DeltaTable {
 }
 
 pub(crate) fn update_datafusion_session(
-    log_store: &dyn LogStore,
     session: &dyn Session,
+    log_store: &dyn LogStore,
     operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
     crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(

@@ -226,7 +226,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                     cdc: false,
                 },
             )?;
-            update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+            update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
             session.ensure_log_store_registered(this.log_store.as_ref())?;
 
             let predicate = this

@@ -453,7 +453,7 @@ impl TableProvider for DeltaScan {
             )
         })?;
 
-        super::update_datafusion_session(log_store.as_ref(), state, None)?;
+        super::update_datafusion_session(state, log_store.as_ref(), None)?;
 
         let snapshot = match &self.snapshot {
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.as_ref().clone(),
