@@ -295,6 +295,34 @@ def test_raise_when_gc_passed_merge_statement_during_schema_evolution(
         )
 
 
+def test_raise_when_gc_altered_merge_statement_during_schema_evolution(
+    table_with_gc: DeltaTable,
+):
+    id_col = ArrowField("id", DataType.int32(), nullable=True)
+    altered_gc_col = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
+        {"delta.generationExpression": "id * 10"}
+    )
+    altered_gc_data = Table.from_pydict(
+        {"id": Array([1, 2], type=id_col), "gc": Array([10, 20], type=altered_gc_col)},
+    )
+
+    with pytest.raises(
+        SchemaMismatchError,
+        match="Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.",
+    ):
+        (
+            table_with_gc.merge(
+                altered_gc_data,
+                predicate="s.id = t.id",
+                source_alias="s",
+                target_alias="t",
+                merge_schema=True,
+            )
+            .when_not_matched_insert_all()
+            .execute()
+        )
+
+
 def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     import re
 
