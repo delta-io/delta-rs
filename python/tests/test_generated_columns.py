@@ -295,32 +295,35 @@ def test_raise_when_gc_passed_merge_statement_during_schema_evolution(
         )
 
 
-def test_raise_when_gc_altered_merge_statement_during_schema_evolution(
-    table_with_gc: DeltaTable,
-):
+def test_schema_evolution_does_not_override_existing_gc_expression(tmp_path):
+    table_schema = DeltaSchema(
+        [
+            Field(name="id", type=PrimitiveType("integer"), nullable=True),
+            Field(
+                name="gc",
+                type=PrimitiveType("integer"),
+                nullable=True,
+                metadata={"delta.generationExpression": "5"},
+            ),
+            Field(name="user", type=PrimitiveType("string"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema=table_schema)
+
     id_col = ArrowField("id", DataType.int32(), nullable=True)
     altered_gc_col = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
         {"delta.generationExpression": "id * 10"}
     )
     altered_gc_data = Table.from_pydict(
-        {"id": Array([1, 2], type=id_col), "gc": Array([10, 20], type=altered_gc_col)},
+        {"id": Array([1, 2], type=id_col), "gc": Array([5, 5], type=altered_gc_col)},
     )
 
-    with pytest.raises(
-        SchemaMismatchError,
-        match="Schema evolved fields cannot have generated expressions. Recreate the table to achieve this.",
-    ):
-        (
-            table_with_gc.merge(
-                altered_gc_data,
-                predicate="s.id = t.id",
-                source_alias="s",
-                target_alias="t",
-                merge_schema=True,
-            )
-            .when_not_matched_insert_all()
-            .execute()
-        )
+    # Force schema evolution by omitting nullable `user`, and ensure batch-side
+    # generationExpression metadata does not override table metadata for `gc`.
+    write_deltalake(dt, mode="append", data=altered_gc_data, schema_mode="merge")
+    dt = DeltaTable(tmp_path)
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["gc"].metadata == {"delta.generationExpression": "5"}
 
 
 def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
