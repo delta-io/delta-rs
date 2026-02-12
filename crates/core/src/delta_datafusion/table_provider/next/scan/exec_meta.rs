@@ -194,6 +194,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_field: self.file_id_field.clone(),
+            schema_adapter: super::SchemaAdapter::new(Arc::clone(&self.scan_plan.result_schema)),
         }))
     }
 
@@ -264,11 +265,13 @@ struct DeltaScanMetaStream {
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
+    /// Cached schema adapter for efficient batch adaptation across batches
+    schema_adapter: super::SchemaAdapter,
 }
 
 impl DeltaScanMetaStream {
     /// Apply the per-file transformation to a RecordBatch.
-    fn batch_project(&self, file_id: String, row_count: usize) -> Result<RecordBatch> {
+    fn batch_project(&mut self, file_id: String, row_count: usize) -> Result<RecordBatch> {
         static EMPTY_SCHEMA: LazyLock<SchemaRef> =
             LazyLock::new(|| Arc::new(Schema::new(Fields::empty())));
         static EMPTY_KERNEL_SCHEMA: LazyLock<KernelSchemaRef> =
@@ -283,17 +286,7 @@ impl DeltaScanMetaStream {
         )?;
 
         let batch = if let Some(selection) = self.selection_vectors.get(&file_id) {
-            if selection.len() != batch.num_rows() {
-                return Err(internal_datafusion_err!(
-                    "Selection vector length ({}) does not match row count ({}) for file '{}'. \
-                     This indicates a bug in deletion vector processing.",
-                    selection.len(),
-                    batch.num_rows(),
-                    file_id
-                ));
-            }
-            let filter = BooleanArray::from_iter(selection.iter());
-            filter_record_batch(&batch, &filter)?
+            apply_selection_vector(batch, selection.value(), &file_id)?
         } else {
             batch
         };
@@ -343,11 +336,41 @@ impl DeltaScanMetaStream {
                 result,
                 &self.scan_plan,
                 Some((Arc::new(file_id_array), file_id_field.clone())),
+                &mut self.schema_adapter,
             )
         } else {
-            super::finalize_transformed_batch(result, &self.scan_plan, None)
+            super::finalize_transformed_batch(
+                result,
+                &self.scan_plan,
+                None,
+                &mut self.schema_adapter,
+            )
         }
     }
+}
+
+fn apply_selection_vector(
+    batch: RecordBatch,
+    selection: &[bool],
+    file_id: &str,
+) -> Result<RecordBatch> {
+    if selection.len() > batch.num_rows() {
+        return Err(internal_datafusion_err!(
+            "Selection vector length ({}) exceeds row count ({}) for file '{}'. \
+             This indicates a bug in deletion vector processing.",
+            selection.len(),
+            batch.num_rows(),
+            file_id
+        ));
+    }
+
+    // Delta Kernel may emit short keep-masks; missing trailing entries are
+    // implicitly `true` (row is kept).
+    let filter = BooleanArray::from_iter(selection.iter().copied().chain(std::iter::repeat_n(
+        true,
+        batch.num_rows() - selection.len(),
+    )));
+    Ok(filter_record_batch(&batch, &filter)?)
 }
 
 impl Stream for DeltaScanMetaStream {
@@ -377,6 +400,9 @@ impl RecordBatchStream for DeltaScanMetaStream {
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::RecordBatch;
+    use arrow_array::RecordBatchOptions;
+    use arrow_schema::{Fields, Schema};
     use datafusion::{
         physical_plan::collect_partitioned,
         prelude::{col, lit},
@@ -388,6 +414,37 @@ mod tests {
         delta_datafusion::session::create_session,
         test_utils::{TestResult, open_fs_path},
     };
+
+    #[test]
+    fn test_apply_selection_vector_short_mask_pads_with_true() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::new(Fields::empty())),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(4)),
+        )
+        .unwrap();
+
+        // Short masks are valid: missing trailing entries are implicitly true.
+        let filtered = apply_selection_vector(batch, &[false, true], "file:///f.parquet").unwrap();
+        assert_eq!(filtered.num_rows(), 3);
+    }
+
+    #[test]
+    fn test_apply_selection_vector_longer_than_batch_errors() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::new(Fields::empty())),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(2)),
+        )
+        .unwrap();
+
+        let err = apply_selection_vector(batch, &[true, true, true], "file:///f.parquet")
+            .expect_err("selection vector longer than row count must error");
+        assert!(
+            err.to_string().contains("Selection vector length"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[tokio::test]
     async fn test_meta_only_scan() -> TestResult {
