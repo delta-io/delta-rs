@@ -16,10 +16,9 @@
 
 use std::{collections::VecDeque, pin::Pin, sync::Arc};
 
-use arrow::array::AsArray;
-use arrow_array::{ArrayRef, RecordBatch, StructArray};
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
@@ -43,6 +42,7 @@ use datafusion_datasource::{
     PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
+use datafusion_physical_expr_adapter::BatchAdapterFactory;
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
 };
@@ -505,36 +505,25 @@ fn finalize_transformed_batch(
 }
 
 fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<RecordBatch> {
-    if batch.num_columns() == 0 {
-        if !target_schema.fields().is_empty() {
-            return plan_err!(
-                "Cannot cast empty RecordBatch to non-empty schema: {:?}",
-                target_schema
-            );
-        }
+    if batch.schema_ref().eq(target_schema) {
         return Ok(batch);
     }
 
-    let options = CastOptions {
-        safe: true,
-        ..Default::default()
-    };
-    Ok(cast_with_options(
-        &StructArray::from(batch),
-        &DataType::Struct(target_schema.fields().clone()),
-        &options,
-    )?
-    .as_struct()
-    .into())
+    let adapter_factory = BatchAdapterFactory::new(Arc::clone(target_schema));
+    let adapter = adapter_factory.make_adapter(batch.schema())?;
+    adapter.adapt_batch(&batch)
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::Array;
     use arrow_array::{
-        BinaryArray, BinaryViewArray, Int32Array, RecordBatch, StringArray, StructArray,
+        BinaryArray, BinaryViewArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
+        StringArray, StructArray,
     };
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use arrow_schema::{ArrowError, DataType, Field, Fields, Schema};
     use datafusion::{
+        error::DataFusionError,
         physical_plan::collect,
         prelude::{col, lit},
     };
@@ -560,6 +549,105 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
         assert_eq!(groups[1].len(), 1);
+    }
+
+    #[test]
+    fn test_cast_record_batch_empty_input_synthesizes_nullable_columns() {
+        let source_schema = Arc::new(Schema::new(Fields::empty()));
+        let source = RecordBatch::try_new_with_options(
+            source_schema,
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(2)),
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let adapted = cast_record_batch(source, &target_schema).unwrap();
+
+        assert_eq!(adapted.schema().as_ref(), target_schema.as_ref());
+        assert_eq!(adapted.num_rows(), 2);
+        let id = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id.null_count(), 2);
+    }
+
+    #[test]
+    fn test_cast_record_batch_empty_input_missing_non_nullable_column_errors() {
+        let source_schema = Arc::new(Schema::new(Fields::empty()));
+        let source = RecordBatch::try_new_with_options(
+            source_schema,
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let err = cast_record_batch(source, &target_schema)
+            .expect_err("missing non-nullable columns should error");
+        match err {
+            DataFusionError::Execution(msg) => {
+                assert!(
+                    msg.contains("Non-nullable column 'id'"),
+                    "expected non-nullable missing-column error, got: {msg}"
+                );
+                assert!(
+                    msg.contains("missing from the physical schema"),
+                    "expected missing physical schema detail, got: {msg}"
+                );
+            }
+            other => {
+                panic!("expected execution error for missing non-nullable column, got: {other}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_cast_record_batch_invalid_scalar_cast_errors() {
+        let source_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, true)]));
+        let source = RecordBatch::try_new(
+            source_schema,
+            vec![Arc::new(StringArray::from(vec![Some("not-an-int")]))],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let err = cast_record_batch(source, &target_schema)
+            .expect_err("invalid value cast should fail under DataFusion default cast semantics");
+        match err {
+            DataFusionError::ArrowError(inner, _) => {
+                assert!(
+                    matches!(inner.as_ref(), ArrowError::CastError(_)),
+                    "expected arrow cast error, got: {inner}"
+                );
+            }
+            other => panic!("expected arrow cast error for invalid scalar cast, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn test_cast_record_batch_overflow_cast_errors() {
+        let source_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
+        let source = RecordBatch::try_new(
+            source_schema,
+            vec![Arc::new(Int64Array::from(vec![i64::from(i32::MAX) + 1]))],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let err = cast_record_batch(source, &target_schema)
+            .expect_err("overflow cast should fail under DataFusion default cast semantics");
+        match err {
+            DataFusionError::ArrowError(inner, _) => {
+                assert!(
+                    matches!(inner.as_ref(), ArrowError::CastError(_)),
+                    "expected arrow cast error, got: {inner}"
+                );
+            }
+            other => panic!("expected arrow cast error for overflow cast, got: {other}"),
+        }
     }
 
     #[tokio::test]
