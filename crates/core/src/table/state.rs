@@ -231,6 +231,55 @@ impl EagerSnapshot {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let batches = self.add_actions_batches(flatten)?;
+        if batches.is_empty() {
+            // Return an empty batch with the correct schema
+            return self.add_actions_batches_empty(flatten);
+        }
+        Ok(concat_batches(batches[0].schema_ref(), &batches)?)
+    }
+
+    /// Get add action data as a list of [arrow::record_batch::RecordBatch] without
+    /// concatenating them into a single batch. This avoids the 2GB Arrow offset
+    /// limit for tables with a very large number of files.
+    ///
+    /// See [Self::add_actions_table] for schema details.
+    pub fn add_actions_batches(
+        &self,
+        flatten: bool,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
+        let (expression, table_schema) = self.add_actions_expr_and_schema()?;
+
+        let files = self.files()?;
+        if files.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
+        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+        let evaluator = ARROW_HANDLER.new_expression_evaluator(
+            input_schema,
+            expression.into(),
+            table_schema,
+        )?;
+
+        let results = files
+            .iter()
+            .map(|file| evaluator.evaluate_arrow(file.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if flatten {
+            results
+                .into_iter()
+                .map(|batch| Ok(batch.normalize(".", None)?))
+                .collect()
+        } else {
+            Ok(results)
+        }
+    }
+
+    /// Build the expression and output schema used by add_actions_table / add_actions_batches.
+    fn add_actions_expr_and_schema(&self) -> Result<(Expression, DataType), DeltaTableError> {
         let mut expressions = vec![
             column_expr_ref!("path"),
             column_expr_ref!("size"),
@@ -281,44 +330,27 @@ impl EagerSnapshot {
 
         let expression = Expression::Struct(expressions);
         let table_schema = DataType::try_struct_type(fields)?;
+        Ok((expression, table_schema))
+    }
 
-        let files = self.files()?;
-        if files.is_empty() {
-            // When there are no add actions, create an empty RecordBatch with the correct schema
-            let DataType::Struct(struct_type) = &table_schema else {
-                return Err(DeltaTableError::Generic(
-                    "Expected Struct type for table schema".to_string(),
-                ));
-            };
-            let arrow_schema: ArrowSchema = struct_type.as_ref().try_into_arrow()?;
-            let empty_batch = RecordBatch::new_empty(Arc::new(arrow_schema));
-
-            return if flatten {
-                Ok(empty_batch.normalize(".", None)?)
-            } else {
-                Ok(empty_batch)
-            };
-        }
-
-        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
-        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let evaluator = ARROW_HANDLER.new_expression_evaluator(
-            input_schema,
-            expression.into(),
-            table_schema,
-        )?;
-
-        let results = files
-            .iter()
-            .map(|file| evaluator.evaluate_arrow(file.clone()))
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let result = concat_batches(results[0].schema_ref(), &results)?;
+    /// Return an empty RecordBatch with the correct add-actions schema.
+    fn add_actions_batches_empty(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let (_, table_schema) = self.add_actions_expr_and_schema()?;
+        let DataType::Struct(struct_type) = &table_schema else {
+            return Err(DeltaTableError::Generic(
+                "Expected Struct type for table schema".to_string(),
+            ));
+        };
+        let arrow_schema: ArrowSchema = struct_type.as_ref().try_into_arrow()?;
+        let empty_batch = RecordBatch::new_empty(Arc::new(arrow_schema));
 
         if flatten {
-            Ok(result.normalize(".", None)?)
+            Ok(empty_batch.normalize(".", None)?)
         } else {
-            Ok(result)
+            Ok(empty_batch)
         }
     }
 }
