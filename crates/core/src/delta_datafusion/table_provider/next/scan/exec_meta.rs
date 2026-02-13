@@ -27,7 +27,9 @@ use datafusion::physical_plan::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, PlanProperties,
 };
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::metrics::{
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
+};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
@@ -35,6 +37,7 @@ use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef}
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::Stream;
 use itertools::Itertools as _;
+use tracing::debug;
 
 use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
@@ -191,6 +194,8 @@ impl ExecutionPlan for DeltaScanMetaExec {
             scan_plan: Arc::clone(&self.scan_plan),
             input: self.input[partition].clone(),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
+            dv_short_mask_padded_files_total: MetricBuilder::new(&self.metrics)
+                .counter("dv_short_mask_padded_files_total", partition),
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_field: self.file_id_field.clone(),
@@ -259,6 +264,8 @@ struct DeltaScanMetaStream {
     input: VecDeque<(String, usize)>,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
+    /// Count of file batches where short deletion-vector masks required padding.
+    dv_short_mask_padded_files_total: Count,
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
@@ -286,7 +293,19 @@ impl DeltaScanMetaStream {
         )?;
 
         let batch = if let Some(selection) = self.selection_vectors.get(&file_id) {
-            apply_selection_vector(batch, selection.value(), &file_id)?
+            let mask_len = selection.len();
+            let (batch, padded_rows) = apply_selection_vector(batch, selection.value(), &file_id)?;
+            if padded_rows > 0 {
+                self.dv_short_mask_padded_files_total.add(1);
+                debug!(
+                    file_id = file_id.as_str(),
+                    mask_len,
+                    row_count,
+                    padded_rows,
+                    "Padded short deletion-vector keep-mask in metadata scan"
+                );
+            }
+            batch
         } else {
             batch
         };
@@ -353,7 +372,7 @@ fn apply_selection_vector(
     batch: RecordBatch,
     selection: &[bool],
     file_id: &str,
-) -> Result<RecordBatch> {
+) -> Result<(RecordBatch, usize)> {
     if selection.len() > batch.num_rows() {
         return Err(internal_datafusion_err!(
             "Selection vector length ({}) exceeds row count ({}) for file '{}'. \
@@ -364,13 +383,16 @@ fn apply_selection_vector(
         ));
     }
 
+    let padded_rows = batch.num_rows() - selection.len();
     // Delta Kernel may emit short keep-masks; missing trailing entries are
     // implicitly `true` (row is kept).
-    let filter = BooleanArray::from_iter(selection.iter().copied().chain(std::iter::repeat_n(
-        true,
-        batch.num_rows() - selection.len(),
-    )));
-    Ok(filter_record_batch(&batch, &filter)?)
+    let filter = BooleanArray::from_iter(
+        selection
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(true, padded_rows)),
+    );
+    Ok((filter_record_batch(&batch, &filter)?, padded_rows))
 }
 
 impl Stream for DeltaScanMetaStream {
@@ -425,8 +447,25 @@ mod tests {
         .unwrap();
 
         // Short masks are valid: missing trailing entries are implicitly true.
-        let filtered = apply_selection_vector(batch, &[false, true], "file:///f.parquet").unwrap();
+        let (filtered, padded_rows) =
+            apply_selection_vector(batch, &[false, true], "file:///f.parquet").unwrap();
         assert_eq!(filtered.num_rows(), 3);
+        assert_eq!(padded_rows, 2);
+    }
+
+    #[test]
+    fn test_apply_selection_vector_no_padding_when_lengths_match() {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::new(Fields::empty())),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(2)),
+        )
+        .unwrap();
+
+        let (filtered, padded_rows) =
+            apply_selection_vector(batch, &[true, false], "file:///f.parquet").unwrap();
+        assert_eq!(filtered.num_rows(), 1);
+        assert_eq!(padded_rows, 0);
     }
 
     #[test]
