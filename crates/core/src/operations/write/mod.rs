@@ -2017,6 +2017,132 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_write_cdc_with_overwrite_predicate_partitioned_parallel_input() -> TestResult {
+        let delta_schema = TestSchemas::simple();
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_partition_columns(["id"])
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let schema: Arc<ArrowSchema> = Arc::new(delta_schema.try_into_arrow()?);
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1"), Some("2"), Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("yes"),
+                    Some("yes"),
+                    Some("no"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let second_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("3")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("updated")])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), Some(1));
+
+        let multi_stream_input: Arc<dyn TableProvider> = Arc::new(
+            MemTable::try_new(
+                second_batch.schema(),
+                vec![
+                    vec![second_batch.clone()],
+                    vec![second_batch.clone()],
+                    vec![second_batch.clone()],
+                ],
+            )
+            .unwrap(),
+        );
+        let multi_stream_plan =
+            LogicalPlanBuilder::scan("source", provider_as_source(multi_stream_input), None)?
+                .build()?;
+
+        let table = table
+            .write(vec![])
+            .with_input_plan(multi_stream_plan)
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .with_replace_where("value=3")
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(2));
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("failed to get snapshot bytes");
+        let version_actions = get_actions(2, &snapshot_bytes)?;
+
+        let cdc_actions = version_actions
+            .iter()
+            .filter(|action| matches!(action, &&Action::Cdc(_)))
+            .collect_vec();
+        assert!(!cdc_actions.is_empty());
+
+        let ctx = SessionContext::new();
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let mut batches = collect(cdf_scan, ctx.state().task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+
+        // _commit_timestamp is dynamic, drop it for stable assertions.
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        assert_batches_sorted_eq! {[
+            "+-------+----------+----+--------------+-----------------+",
+            "| value | modified | id | _change_type | _commit_version |",
+            "+-------+----------+----+--------------+-----------------+",
+            "| 1     | yes      | 1  | insert       | 1               |",
+            "| 2     | yes      | 2  | insert       | 1               |",
+            "| 3     | no       | 3  | delete       | 2               |",
+            "| 3     | no       | 3  | insert       | 1               |",
+            "| 3     | updated  | 3  | insert       | 2               |",
+            "| 3     | updated  | 3  | insert       | 2               |",
+            "| 3     | updated  | 3  | insert       | 2               |",
+            "+-------+----------+----+--------------+-----------------+",
+        ], &batches }
+
+        let expected_table = [
+            "+-------+----------+----+",
+            "| value | modified | id |",
+            "+-------+----------+----+",
+            "| 1     | yes      | 1  |",
+            "| 2     | yes      | 2  |",
+            "| 3     | updated  | 3  |",
+            "| 3     | updated  | 3  |",
+            "| 3     | updated  | 3  |",
+            "+-------+----------+----+",
+        ];
+        let actual_table = get_data_sorted(&table, "value, modified, id").await;
+        assert_batches_sorted_eq!(&expected_table, &actual_table);
+        Ok(())
+    }
+
     /// SMall module to collect test cases which validate the [WriteBuilder]'s
     /// check_preconditions() function
     mod check_preconditions_test {
