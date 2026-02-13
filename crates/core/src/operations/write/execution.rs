@@ -45,7 +45,6 @@ fn channel_size() -> usize {
         std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .filter(|size| *size > 0)
             .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
     })
 }
@@ -381,7 +380,7 @@ pub(crate) async fn write_exec_plan(
 }
 
 /// Hash repartitions the plan by partition columns so each stream
-/// writes to disjoint Delta partitions, avoiding duplicate small files
+/// writes to disjoint Delta partitions.
 /// Returns the plan unchanged if there is only a single stream
 fn repartition_by_partition_columns(
     plan: Arc<dyn ExecutionPlan>,
