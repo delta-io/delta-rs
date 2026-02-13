@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::Schema;
@@ -15,6 +17,7 @@ use datafusion::physical_plan::{
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::{StreamExt as _, TryStreamExt as _};
+use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
@@ -22,7 +25,7 @@ use tokio::task::JoinSet;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::writer::{DeltaWriter, WriterConfig};
+use super::writer::{DeltaWriter, PartitionWriter, PartitionWriterConfig, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
@@ -31,11 +34,15 @@ use crate::delta_datafusion::{
     validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
+use crate::kernel::{
+    Action, Add, AddCDCFile, EagerSnapshot, PartitionsExt, Remove, StructType, StructTypeExt,
+};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
+use crate::writer::record_batch::divide_by_partition_values;
+use crate::writer::utils::arrow_schema_without_partitions;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -403,6 +410,45 @@ fn repartition_by_partition_columns(
     )?))
 }
 
+async fn write_partitioned_batch(
+    writers: &mut HashMap<Path, PartitionWriter>,
+    batch: &RecordBatch,
+    file_schema: &Arc<Schema>,
+    partition_columns: &[String],
+    store: &ObjectStoreRef,
+    writer_properties: &Option<WriterProperties>,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_stats_config: &WriterStatsConfig,
+) -> DeltaResult<()> {
+    let partitioned =
+        divide_by_partition_values(file_schema.clone(), partition_columns.to_vec(), batch)?;
+    for part in partitioned {
+        let path = Path::parse(part.partition_values.hive_partition_path())?;
+        let writer = match writers.entry(path) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let config = PartitionWriterConfig::try_new(
+                    file_schema.clone(),
+                    part.partition_values.clone(),
+                    writer_properties.clone(),
+                    target_file_size,
+                    write_batch_size,
+                    None,
+                )?;
+                e.insert(PartitionWriter::try_with_config(
+                    store.clone(),
+                    config,
+                    writer_stats_config.num_indexed_cols,
+                    writer_stats_config.stats_columns.clone(),
+                )?)
+            }
+        };
+        writer.write(&part.record_batch).await?;
+    }
+    Ok(())
+}
+
 async fn write_data_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
@@ -494,6 +540,7 @@ async fn write_data_plan(
         return Ok((actions, metrics));
     }
 
+    let file_schema = arrow_schema_without_partitions(&plan.schema(), &partition_columns);
     let plan = repartition_by_partition_columns(plan, &partition_columns)?;
     let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
     let scan_start = std::time::Instant::now();
@@ -501,17 +548,34 @@ async fn write_data_plan(
     let mut join_set = JoinSet::new();
     for mut stream in partition_streams {
         let store = object_store.clone();
-        let writer_config = config.clone();
+        let file_schema = file_schema.clone();
+        let partition_columns = partition_columns.clone();
+        let writer_properties = writer_properties.clone();
+        let writer_stats_config = writer_stats_config.clone();
         join_set.spawn(async move {
-            let mut writer = DeltaWriter::new(store, writer_config);
+            let mut writers: HashMap<Path, PartitionWriter> = HashMap::new();
             let mut write_ms: u64 = 0;
             while let Some(maybe_batch) = stream.next().await {
                 let batch = maybe_batch?;
                 let wstart = std::time::Instant::now();
-                writer.write(&batch).await?;
+                write_partitioned_batch(
+                    &mut writers,
+                    &batch,
+                    &file_schema,
+                    &partition_columns,
+                    &store,
+                    &writer_properties,
+                    target_file_size,
+                    write_batch_size,
+                    &writer_stats_config,
+                )
+                .await?;
                 write_ms += wstart.elapsed().as_millis() as u64;
             }
-            let adds = writer.close().await?;
+            let mut adds = Vec::new();
+            for pw in writers.into_values() {
+                adds.extend(pw.close().await?);
+            }
             Ok::<(Vec<Add>, u64), DeltaTableError>((adds, write_ms))
         });
     }
@@ -765,6 +829,8 @@ async fn write_cdc_plan(
         return Ok((actions, metrics));
     }
 
+    let normal_file_schema = arrow_schema_without_partitions(&write_schema, &partition_columns);
+    let cdf_file_schema = arrow_schema_without_partitions(&cdf_schema, &partition_columns);
     let plan = repartition_by_partition_columns(plan, &partition_columns)?;
     let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
     let scan_start = std::time::Instant::now();
@@ -772,13 +838,16 @@ async fn write_cdc_plan(
 
     for mut stream in partition_streams {
         let store = object_store.clone();
-        let cdf_store = cdf_store.clone();
-        let normal_config = normal_config.clone();
-        let cdf_config = cdf_config.clone();
+        let cdf_store: ObjectStoreRef = cdf_store.clone();
+        let partition_columns = partition_columns.clone();
+        let normal_file_schema = normal_file_schema.clone();
+        let cdf_file_schema = cdf_file_schema.clone();
+        let writer_properties = writer_properties.clone();
+        let writer_stats_config = writer_stats_config.clone();
 
         join_set.spawn(async move {
-            let mut normal_writer = DeltaWriter::new(store, normal_config);
-            let mut cdf_writer = DeltaWriter::new(cdf_store, cdf_config);
+            let mut normal_writers: HashMap<Path, PartitionWriter> = HashMap::new();
+            let mut cdf_writers: HashMap<Path, PartitionWriter> = HashMap::new();
             let session_ctx = SessionContext::new();
             let mut write_ms: u64 = 0;
 
@@ -823,20 +892,48 @@ async fn write_cdc_plan(
                     ))?);
 
                     let wstart = std::time::Instant::now();
-                    normal_writer.write(&normal_batch).await?;
+                    write_partitioned_batch(
+                        &mut normal_writers,
+                        &normal_batch,
+                        &normal_file_schema,
+                        &partition_columns,
+                        &store,
+                        &writer_properties,
+                        target_file_size,
+                        write_batch_size,
+                        &writer_stats_config,
+                    )
+                    .await?;
                     write_ms += wstart.elapsed().as_millis() as u64;
                 }
 
                 let mut cdf_stream = cdf_df.execute_stream().await?;
                 while let Some(cdf_batch) = cdf_stream.try_next().await? {
                     let wstart = std::time::Instant::now();
-                    cdf_writer.write(&cdf_batch).await?;
+                    write_partitioned_batch(
+                        &mut cdf_writers,
+                        &cdf_batch,
+                        &cdf_file_schema,
+                        &partition_columns,
+                        &cdf_store,
+                        &writer_properties,
+                        target_file_size,
+                        write_batch_size,
+                        &writer_stats_config,
+                    )
+                    .await?;
                     write_ms += wstart.elapsed().as_millis() as u64;
                 }
             }
 
-            let normal_adds = normal_writer.close().await?;
-            let cdf_adds = cdf_writer.close().await?;
+            let mut normal_adds = Vec::new();
+            for pw in normal_writers.into_values() {
+                normal_adds.extend(pw.close().await?);
+            }
+            let mut cdf_adds = Vec::new();
+            for pw in cdf_writers.into_values() {
+                cdf_adds.extend(pw.close().await?);
+            }
             Ok::<(Vec<Add>, Vec<Add>, u64), DeltaTableError>((normal_adds, cdf_adds, write_ms))
         });
     }
