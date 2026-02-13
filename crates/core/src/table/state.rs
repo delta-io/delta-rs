@@ -358,6 +358,11 @@ impl EagerSnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "datafusion")]
+    use crate::protocol::SaveMode;
+    use crate::writer::test_utils::get_delta_schema;
+    #[cfg(feature = "datafusion")]
+    use crate::writer::test_utils::get_record_batch;
     use crate::{DeltaResult, DeltaTable};
 
     /// <https://github.com/delta-io/delta-rs/issues/3918>
@@ -373,6 +378,44 @@ mod tests {
             )
             .await?;
         let _actions = table.snapshot()?.add_actions_table(false)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_add_actions_batches_empty() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        assert!(snapshot.add_actions_batches(false)?.is_empty());
+        assert!(snapshot.add_actions_batches(true)?.is_empty());
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_batches_non_empty_flatten_has_partition_columns() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let flattened_batches = snapshot.add_actions_batches(true)?;
+        assert!(!flattened_batches.is_empty());
+        assert!(
+            flattened_batches[0]
+                .schema()
+                .field_with_name("partition.modified")
+                .is_ok()
+        );
         Ok(())
     }
 }
