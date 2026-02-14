@@ -310,13 +310,20 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         return Ok(vec![]);
     }
 
-    let mut mem_batches = Vec::with_capacity(all_batches.len());
-    let mut mem_schema: Option<Arc<Schema>> = None;
+    let first_schema = all_batches[0].schema();
+    let mut fields = Vec::with_capacity(first_schema.fields().len());
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+    for field in first_schema.fields() {
+        if let Some(name) = field.name().strip_prefix("partition.") {
+            fields.push(field.as_ref().clone().with_name(name));
+        }
+    }
+    let schema = Arc::new(Schema::new(fields));
 
+    let mut mem_batches = Vec::with_capacity(all_batches.len());
     for batch in &all_batches {
-        let schema = batch.schema();
-        let mut arrays = Vec::new();
-        let mut fields = Vec::new();
+        let batch_schema = batch.schema();
+        let mut arrays = Vec::with_capacity(schema.fields().len());
 
         arrays.push(
             batch
@@ -326,20 +333,16 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
                 ))?
                 .to_owned(),
         );
-        fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
 
-        for field in schema.fields() {
-            if let Some(name) = field.name().strip_prefix("partition.") {
+        for field in batch_schema.fields() {
+            if field.name().strip_prefix("partition.").is_some() {
                 arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-                fields.push(field.as_ref().clone().with_name(name));
             }
         }
 
-        let batch_schema = mem_schema.get_or_insert_with(|| Arc::new(Schema::new(fields.clone())));
-        mem_batches.push(RecordBatch::try_new(batch_schema.clone(), arrays)?);
+        mem_batches.push(RecordBatch::try_new(schema.clone(), arrays)?);
     }
 
-    let schema = mem_schema.unwrap();
     let mem_table = MemTable::try_new(schema, vec![mem_batches])?;
 
     let ctx = SessionContext::new();
