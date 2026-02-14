@@ -425,10 +425,6 @@ pub(crate) struct MatchedFilesScan {
     /// we do not (yet) have full coverage to translate datafusion to
     /// kernel predicates.
     pub(crate) delta_predicate: Arc<Predicate>,
-    /// The predicate contains only partition column references
-    ///
-    /// This implies that for each matched file all data matches.
-    pub(crate) partition_only: bool,
 }
 
 impl MatchedFilesScan {
@@ -482,9 +478,8 @@ pub(crate) async fn scan_files_where_matches(
         result: Ok(()),
     };
     for term in &skipping_pred {
-        visitor.result = Ok(());
         term.visit(&mut visitor)?;
-        visitor.result?
+        std::mem::replace(&mut visitor.result, Ok(()))?;
     }
 
     // convert to a delta predicate that can be applied to kernel scans.
@@ -569,7 +564,6 @@ pub(crate) async fn scan_files_where_matches(
         valid_files,
         predicate,
         delta_predicate,
-        partition_only: visitor.partition_only,
     }))
 }
 
