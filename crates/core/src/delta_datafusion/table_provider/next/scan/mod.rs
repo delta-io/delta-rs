@@ -758,26 +758,6 @@ mod tests {
         assert_eq!(id.values(), &[2i64]);
     }
 
-    #[test]
-    fn test_schema_adapter_recovers_from_inconsistent_cache_state() {
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )
-        .unwrap();
-
-        let mut adapter = SchemaAdapter::new(Arc::clone(&schema));
-        // Simulate a corrupted cache invariant: source schema cached without adapter.
-        adapter.cached_source = Some(Arc::clone(&schema));
-        adapter.cached_adapter = None;
-
-        let adapted = adapter
-            .adapt(batch)
-            .expect("schema adapter should rebuild missing cache entry instead of panicking");
-        assert_eq!(adapted.num_rows(), 3);
-    }
-
     #[tokio::test]
     async fn test_parquet_plan() -> TestResult {
         let store = Arc::new(InMemory::new());

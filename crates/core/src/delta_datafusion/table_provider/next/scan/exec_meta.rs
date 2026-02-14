@@ -383,16 +383,16 @@ fn apply_selection_vector(
         ));
     }
 
-    let padded_rows = batch.num_rows() - selection.len();
+    let n_rows_to_pad = batch.num_rows() - selection.len();
     // Delta Kernel may emit short keep-masks; missing trailing entries are
     // implicitly `true` (row is kept).
     let filter = BooleanArray::from_iter(
         selection
             .iter()
             .copied()
-            .chain(std::iter::repeat_n(true, padded_rows)),
+            .chain(std::iter::repeat_n(true, n_rows_to_pad)),
     );
-    Ok((filter_record_batch(&batch, &filter)?, padded_rows))
+    Ok((filter_record_batch(&batch, &filter)?, n_rows_to_pad))
 }
 
 impl Stream for DeltaScanMetaStream {
