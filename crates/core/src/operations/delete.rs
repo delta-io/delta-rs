@@ -37,10 +37,13 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
+use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
@@ -359,14 +362,87 @@ async fn execute(
             .await?;
         metrics.num_removed_files = removes.len();
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((removes, metrics));
     };
+
+    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate.clone()))?;
+    let partition_columns = snapshot
+        .table_configuration()
+        .metadata()
+        .partition_columns()
+        .clone();
+    let mut props = crate::delta_datafusion::FindFilesExprProperties {
+        partition_columns,
+        partition_only: true,
+        result: Ok(()),
+    };
+    for term in &skipping_pred {
+        term.visit(&mut props)?;
+        std::mem::replace(&mut props.result, Ok(()))?;
+    }
+
+    if props.partition_only {
+        let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
+        let removes: Vec<_> = match crate::delta_datafusion::engine::to_delta_predicate(
+            &partition_predicate,
+        ) {
+            Ok(delta_predicate) => {
+                // `Snapshot::files` documents predicate filtering as "best effort" file skipping
+                // because, in general, files may contain a mix of matching and non-matching rows.
+                //
+                // For partition-only predicates, partition values are constant per file, so
+                // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
+                // a file either fully matches or does not. It is therefore safe to treat this as
+                // the authoritative match set for DELETE.
+                snapshot
+                    .file_views(log_store.as_ref(), Some(Arc::new(delta_predicate)))
+                    .map_ok(|f| f.remove_action(true).into())
+                    .try_collect()
+                    .await?
+            }
+            Err(err) => {
+                tracing::debug!(
+                    ?err,
+                    "Partition-only delete predicate not convertible to kernel; falling back to DataFusion evaluation"
+                );
+
+                let matching_paths = Arc::new(
+                    find_file_paths_by_partition_predicate_datafusion(
+                        session,
+                        &snapshot,
+                        &partition_predicate,
+                    )
+                    .await?,
+                );
+                snapshot
+                    .file_views(log_store.as_ref(), None)
+                    .try_filter_map(|f| {
+                        let matching_paths = Arc::clone(&matching_paths);
+                        async move {
+                            Ok(matching_paths
+                                .contains(f.path_raw())
+                                .then(|| f.remove_action(true).into()))
+                        }
+                    })
+                    .try_collect()
+                    .await?
+            }
+        };
+
+        metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
+        metrics.num_removed_files = removes.len();
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
+
+        return Ok((removes, metrics));
+    }
 
     let maybe_scan_plan = scan_files_where_matches(session, &snapshot, predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
         // no files contain data matching the predicate, so nothing more todo.
+        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((vec![], metrics));
     };
 
@@ -389,12 +465,6 @@ async fn execute(
         .try_collect()
         .await?;
     metrics.num_removed_files = removes.len();
-
-    if files_scan.partition_only {
-        // if we are deleting entire files only, no need to rescue any data or write cdc files.
-        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
-        return Ok((removes, metrics));
-    }
 
     let counted_scan = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
@@ -457,6 +527,84 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
     Ok((actions, metrics))
+}
+
+async fn find_file_paths_by_partition_predicate_datafusion(
+    session: &dyn Session,
+    snapshot: &EagerSnapshot,
+    predicate: &Expr,
+) -> DeltaResult<std::collections::HashSet<String>> {
+    use arrow_array::RecordBatch;
+    use arrow_array::StringArray;
+    use arrow_schema::DataType;
+    use arrow_schema::Field;
+    use arrow_schema::Schema;
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    use datafusion::logical_expr::col;
+
+    use crate::delta_datafusion::PATH_COLUMN;
+    use crate::errors::DeltaTableError;
+    use datafusion::datasource::{MemTable, provider_as_source};
+    use datafusion::physical_plan::collect;
+
+    let batch = snapshot.add_actions_table(true)?;
+    let schema = batch.schema();
+    let mut arrays = Vec::with_capacity(schema.fields().len());
+    let mut fields = Vec::with_capacity(schema.fields().len());
+
+    arrays.push(
+        batch
+            .column_by_name("path")
+            .ok_or(DeltaTableError::Generic(
+                "Column with name `path` does not exist".to_owned(),
+            ))?
+            .to_owned(),
+    );
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+
+    for field in schema.fields() {
+        if let Some(name) = field.name().strip_prefix("partition.") {
+            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
+            fields.push(field.as_ref().clone().with_name(name));
+        }
+    }
+
+    let schema = Arc::new(Schema::new(fields));
+    let mem_table = MemTable::try_new(
+        schema.clone(),
+        vec![vec![RecordBatch::try_new(schema, arrays)?]],
+    )?;
+
+    let plan = LogicalPlanBuilder::scan(
+        "partition_predicate",
+        provider_as_source(Arc::new(mem_table)),
+        None,
+    )?
+    .filter(predicate.to_owned())?
+    .project([col(PATH_COLUMN)])?
+    .build()?;
+
+    let exec = session.create_physical_plan(&plan).await?;
+    let batches = collect(exec, session.task_ctx()).await?;
+
+    let mut paths = std::collections::HashSet::new();
+    for batch in batches {
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .ok_or_else(|| DeltaTableError::Generic(format!("Column `{PATH_COLUMN}` missing")))?;
+        let array = array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Column `{PATH_COLUMN}` was not Utf8"))
+            })?;
+
+        for path in array.iter().flatten() {
+            paths.insert(path.to_string());
+        }
+    }
+
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -833,6 +981,370 @@ mod tests {
 
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_removes_empty_files_in_matching_partitions()
+    -> DeltaResult<()> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use arrow_array::{Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+        use chrono::Utc;
+        use object_store::PutPayload;
+        use object_store::path::Path as ObjectStorePath;
+
+        use crate::DeltaTable;
+        use crate::kernel::{
+            Action, Add, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
+
+        // Partition columns match the issue report shape: dt + hour.
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "hour".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let file_empty = "dt=2025-11-12/hour=0/empty.parquet";
+        let file_nonempty = "dt=2025-11-12/hour=0/nonempty.parquet";
+        let file_other = "dt=2025-11-13/hour=0/other.parquet";
+
+        let now_ms = Utc::now().timestamp_millis();
+
+        let add = |path: &str, dt: &str, hour: &str, size: i64| Add {
+            path: path.to_string(),
+            partition_values: HashMap::from([
+                ("dt".to_string(), Some(dt.to_string())),
+                ("hour".to_string(), Some(hour.to_string())),
+            ]),
+            size,
+            modification_time: now_ms,
+            data_change: true,
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        };
+
+        // Prepare parquet bytes up front so the Add actions can have accurate sizes.
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("dt", DataType::Utf8, true),
+            Field::new("hour", DataType::Int32, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let empty_batch = RecordBatch::new_empty(Arc::clone(&arrow_schema));
+        let empty_bytes = crate::test_utils::get_parquet_bytes(&empty_batch).unwrap();
+
+        let nonempty_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(StringArray::from(vec!["2025-11-12"])),
+                Arc::new(Int32Array::from(vec![0])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+        let nonempty_bytes = crate::test_utils::get_parquet_bytes(&nonempty_batch).unwrap();
+
+        let other_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(StringArray::from(vec!["2025-11-13"])),
+                Arc::new(Int32Array::from(vec![0])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+        let other_bytes = crate::test_utils::get_parquet_bytes(&other_batch).unwrap();
+
+        // Create the table with 3 files in the log (2 in the matching partition, 1 outside).
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["dt", "hour"])
+            .with_actions(vec![
+                Action::Add(add(file_empty, "2025-11-12", "0", empty_bytes.len() as i64)),
+                Action::Add(add(
+                    file_nonempty,
+                    "2025-11-12",
+                    "0",
+                    nonempty_bytes.len() as i64,
+                )),
+                Action::Add(add(file_other, "2025-11-13", "0", other_bytes.len() as i64)),
+            ])
+            .await?;
+
+        // Write one empty parquet file and one non-empty parquet file for the matching partition.
+        // The current (broken) behavior removes only the non-empty file because `distinct(file_id)`
+        // never returns a row for the empty file.
+        let store = table.object_store();
+        store
+            .put(
+                &ObjectStorePath::from(file_empty),
+                PutPayload::from(empty_bytes),
+            )
+            .await?;
+        store
+            .put(
+                &ObjectStorePath::from(file_nonempty),
+                PutPayload::from(nonempty_bytes),
+            )
+            .await?;
+        store
+            .put(
+                &ObjectStorePath::from(file_other),
+                PutPayload::from(other_bytes),
+            )
+            .await?;
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 3);
+
+        let (table, metrics) = table.delete().with_predicate("dt < '2025-11-13'").await?;
+
+        // Correct behavior: both files in dt=2025-11-12 should be removed, even if one is empty.
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 2);
+        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_does_not_delete_null_partition_values() -> DeltaResult<()> {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use arrow_array::{Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+        use chrono::Utc;
+        use object_store::PutPayload;
+        use object_store::path::Path as ObjectStorePath;
+
+        use crate::DeltaTable;
+        use crate::kernel::{
+            Action, Add, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let file_match = "dt=2025-11-12/match.parquet";
+        let file_null = "dt=__HIVE_DEFAULT_PARTITION__/null.parquet";
+        let file_other = "dt=2025-11-13/other.parquet";
+
+        let now_ms = Utc::now().timestamp_millis();
+
+        let add = |path: &str, dt: Option<&str>, size: i64| Add {
+            path: path.to_string(),
+            partition_values: HashMap::from([("dt".to_string(), dt.map(|dt| dt.to_string()))]),
+            size,
+            modification_time: now_ms,
+            data_change: true,
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        };
+
+        let arrow_schema = Arc::new(Schema::new(vec![
+            Field::new("dt", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+
+        let match_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("2025-11-12")])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+        let match_bytes = crate::test_utils::get_parquet_bytes(&match_batch).unwrap();
+
+        let null_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(StringArray::from(vec![None::<&str>])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+        let null_bytes = crate::test_utils::get_parquet_bytes(&null_batch).unwrap();
+
+        let other_batch = RecordBatch::try_new(
+            Arc::clone(&arrow_schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("2025-11-13")])),
+                Arc::new(Int32Array::from(vec![1])),
+            ],
+        )?;
+        let other_bytes = crate::test_utils::get_parquet_bytes(&other_batch).unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["dt"])
+            .with_actions(vec![
+                Action::Add(add(
+                    file_match,
+                    Some("2025-11-12"),
+                    match_bytes.len() as i64,
+                )),
+                Action::Add(add(file_null, None, null_bytes.len() as i64)),
+                Action::Add(add(
+                    file_other,
+                    Some("2025-11-13"),
+                    other_bytes.len() as i64,
+                )),
+            ])
+            .await?;
+
+        // Write parquet files so this test remains valid even if the implementation regresses.
+        let store = table.object_store();
+        store
+            .put(
+                &ObjectStorePath::from(file_match),
+                PutPayload::from(match_bytes),
+            )
+            .await?;
+        store
+            .put(
+                &ObjectStorePath::from(file_null),
+                PutPayload::from(null_bytes),
+            )
+            .await?;
+        store
+            .put(
+                &ObjectStorePath::from(file_other),
+                PutPayload::from(other_bytes),
+            )
+            .await?;
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 3);
+
+        let (table, metrics) = table.delete().with_predicate("dt < '2025-11-13'").await?;
+
+        // SQL NULL semantics: NULL < '2025-11-13' is NULL (not true), so the NULL-partition file
+        // should not be selected for deletion.
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_does_not_require_data_file_scan() -> DeltaResult<()> {
+        use std::collections::HashMap;
+
+        use chrono::Utc;
+
+        use crate::DeltaTable;
+        use crate::kernel::{
+            Action, Add, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "hour".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let file_missing_0 = "dt=2025-11-12/hour=0/missing0.parquet";
+        let file_missing_1 = "dt=2025-11-12/hour=1/missing1.parquet";
+        let file_other = "dt=2025-11-13/hour=0/other.parquet";
+
+        let now_ms = Utc::now().timestamp_millis();
+
+        let add = |path: &str, dt: &str, hour: &str| Add {
+            path: path.to_string(),
+            partition_values: HashMap::from([
+                ("dt".to_string(), Some(dt.to_string())),
+                ("hour".to_string(), Some(hour.to_string())),
+            ]),
+            size: 0,
+            modification_time: now_ms,
+            data_change: true,
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        };
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["dt", "hour"])
+            .with_actions(vec![
+                Action::Add(add(file_missing_0, "2025-11-12", "0")),
+                Action::Add(add(file_missing_1, "2025-11-12", "1")),
+                Action::Add(add(file_other, "2025-11-13", "0")),
+            ])
+            .await?;
+
+        // Intentionally DO NOT write the parquet files to the object store. If partition-only
+        // deletes regress to a row-producing scan, this test should fail trying to read
+        // missing files.
+        let (table, metrics) = table.delete().with_predicate("dt < '2025-11-13'").await?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 2);
+        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 1);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1347,8 +1859,6 @@ mod tests {
             ],
         )
         .unwrap();
-
-        println!("protodol: {:?}", table.snapshot().unwrap().protocol());
 
         let table = table
             .write(vec![batch])
