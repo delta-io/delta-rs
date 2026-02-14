@@ -231,10 +231,12 @@ impl EagerSnapshot {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let batches = self.add_actions_batches(flatten)?;
+        let (expression, table_schema) = self.add_actions_expr_and_schema()?;
+        let batches =
+            self.add_actions_batches_with_schema(flatten, expression, table_schema.clone())?;
         if batches.is_empty() {
             // Return an empty batch with the correct schema
-            return self.add_actions_batches_empty(flatten);
+            return self.add_actions_batches_empty(flatten, &table_schema);
         }
         Ok(concat_batches(batches[0].schema_ref(), &batches)?)
     }
@@ -244,12 +246,20 @@ impl EagerSnapshot {
     /// limit for tables with a very large number of files.
     ///
     /// See [Self::add_actions_table] for schema details.
-    pub fn add_actions_batches(
+    pub(crate) fn add_actions_batches(
         &self,
         flatten: bool,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
         let (expression, table_schema) = self.add_actions_expr_and_schema()?;
+        self.add_actions_batches_with_schema(flatten, expression, table_schema)
+    }
 
+    fn add_actions_batches_with_schema(
+        &self,
+        flatten: bool,
+        expression: Expression,
+        table_schema: DataType,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
         let files = self.files()?;
         if files.is_empty() {
             return Ok(vec![]);
@@ -337,9 +347,9 @@ impl EagerSnapshot {
     fn add_actions_batches_empty(
         &self,
         flatten: bool,
+        table_schema: &DataType,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let (_, table_schema) = self.add_actions_expr_and_schema()?;
-        let DataType::Struct(struct_type) = &table_schema else {
+        let DataType::Struct(struct_type) = table_schema else {
             return Err(DeltaTableError::Generic(
                 "Expected Struct type for table schema".to_string(),
             ));
@@ -416,6 +426,10 @@ mod tests {
                 .field_with_name("partition.modified")
                 .is_ok()
         );
+
+        let concatenated = concat_batches(flattened_batches[0].schema_ref(), &flattened_batches)?;
+        let single = snapshot.add_actions_table(true)?;
+        assert_eq!(concatenated, single);
         Ok(())
     }
 }
