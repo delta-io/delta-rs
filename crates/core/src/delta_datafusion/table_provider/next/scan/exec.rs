@@ -43,6 +43,18 @@ pub(crate) struct DvMaskResult {
     pub should_remove: bool,
 }
 
+/// Consume the per-file deletion-vector keep-mask for the current batch.
+///
+/// The keep-mask is stored once per file and consumed incrementally as parquet
+/// batches are produced:
+/// - If the mask is shorter than the batch, missing trailing entries are
+///   treated as `true` (keep row).
+/// - If the mask is longer than the batch, the remainder is preserved for the
+///   next batch from the same file.
+///
+/// This function intentionally does not error when `selection_vector.len()` is
+/// greater than `batch_num_rows`; that is expected when one file spans multiple
+/// input batches.
 pub(crate) fn consume_dv_mask(
     selection_vector: &mut Vec<bool>,
     batch_num_rows: usize,
@@ -282,6 +294,7 @@ impl ExecutionPlan for DeltaScanExec {
             file_id_column: self.file_id_column.clone(),
             return_file_ids: self.retain_file_ids,
             pending: VecDeque::new(),
+            schema_adapter: super::SchemaAdapter::new(Arc::clone(&self.scan_plan.result_schema)),
         }))
     }
 
@@ -360,10 +373,12 @@ struct DeltaScanStream {
     /// Denotes if file ids should be returned as part of the output
     return_file_ids: bool,
     pending: VecDeque<RecordBatch>,
+    /// Cached schema adapter for efficient batch adaptation across batches
+    schema_adapter: super::SchemaAdapter,
 }
 
 impl DeltaScanStream {
-    fn batch_project(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    fn batch_project(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         if batch.num_rows() == 0 {
@@ -377,18 +392,34 @@ impl DeltaScanStream {
 
         file_runs
             .into_iter()
-            .map(|(file_id, slice)| self.batch_project_single_file(slice, file_id, file_id_idx))
+            .map(|(file_id, slice)| {
+                Self::batch_project_single_file_inner(
+                    &self.scan_plan,
+                    &self.kernel_type,
+                    &self.transforms,
+                    &self.selection_vectors,
+                    self.return_file_ids,
+                    &mut self.schema_adapter,
+                    slice,
+                    file_id,
+                    file_id_idx,
+                )
+            })
             .collect::<Result<Vec<_>>>()
     }
 
-    fn batch_project_single_file(
-        &self,
+    fn batch_project_single_file_inner(
+        scan_plan: &KernelScanPlan,
+        kernel_type: &KernelDataType,
+        transforms: &HashMap<String, ExpressionRef>,
+        selection_vectors: &DashMap<String, Vec<bool>>,
+        return_file_ids: bool,
+        schema_adapter: &mut super::SchemaAdapter,
         batch: RecordBatch,
         file_id: String,
         file_id_idx: usize,
     ) -> Result<RecordBatch> {
-        let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
-        {
+        let dv_result = if let Some(mut selection_vector) = selection_vectors.get_mut(&file_id) {
             consume_dv_mask(&mut selection_vector, batch.num_rows())
         } else {
             DvMaskResult {
@@ -398,7 +429,7 @@ impl DeltaScanStream {
         };
 
         if dv_result.should_remove {
-            self.selection_vectors.remove(&file_id);
+            selection_vectors.remove(&file_id);
         }
 
         let mut batch = if let Some(selection) = dv_result.selection {
@@ -410,12 +441,12 @@ impl DeltaScanStream {
         let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
-        let result = if let Some(transform) = self.transforms.get(&file_id) {
+        let result = if let Some(transform) = transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    self.scan_plan.scan.physical_schema().clone(),
+                    scan_plan.scan.physical_schema().clone(),
                     transform.clone(),
-                    self.kernel_type.clone(),
+                    kernel_type.clone(),
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -426,14 +457,15 @@ impl DeltaScanStream {
             batch
         };
 
-        if self.return_file_ids {
+        if return_file_ids {
             super::finalize_transformed_batch(
                 result,
-                &self.scan_plan,
+                scan_plan,
                 Some((file_id_col, Arc::new(file_id_field))),
+                schema_adapter,
             )
         } else {
-            super::finalize_transformed_batch(result, &self.scan_plan, None)
+            super::finalize_transformed_batch(result, scan_plan, None, schema_adapter)
         }
     }
 }
@@ -1162,6 +1194,7 @@ mod tests {
             futures::stream::iter(input_batches.into_iter().map(Ok)),
         ));
 
+        let schema_adapter = super::super::SchemaAdapter::new(Arc::clone(&scan_plan.result_schema));
         DeltaScanStream {
             scan_plan,
             kernel_type,
@@ -1172,6 +1205,7 @@ mod tests {
             file_id_column: FILE_ID_COLUMN_DEFAULT.to_string(),
             return_file_ids,
             pending: VecDeque::new(),
+            schema_adapter,
         }
     }
 
@@ -1194,7 +1228,7 @@ mod tests {
         assert!(selection_vectors.contains_key("f1"));
         assert!(selection_vectors.contains_key("f2"));
 
-        let stream = test_scan_stream(
+        let mut stream = test_scan_stream(
             Arc::clone(&scan_plan),
             kernel_type,
             selection_vectors,
@@ -1265,7 +1299,7 @@ mod tests {
             false,
         )?;
 
-        let stream = test_scan_stream(
+        let mut stream = test_scan_stream(
             Arc::clone(&scan_plan),
             kernel_type,
             selection_vectors,
@@ -1477,5 +1511,22 @@ mod tests {
                 should_remove: true,
             }
         );
+    }
+
+    #[test]
+    fn test_dv_long_mask_retains_remainder_for_next_batch() {
+        use super::{DvMaskResult, consume_dv_mask};
+
+        let mut sv = vec![true, false, false, true];
+        let result = consume_dv_mask(&mut sv, 2);
+
+        assert_eq!(
+            result,
+            DvMaskResult {
+                selection: Some(vec![true, false]),
+                should_remove: false,
+            }
+        );
+        assert_eq!(sv, vec![false, true]);
     }
 }

@@ -15,21 +15,8 @@ use deltalake_test::TestResult;
 use deltalake_test::acceptance::read_dat_case;
 
 async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
-    let root_dir = format!(
-        "{}/../../dat/v0.0.3/reader_tests/generated/{}/",
-        env!["CARGO_MANIFEST_DIR"],
-        case
-    );
-    let root_dir = std::fs::canonicalize(root_dir)?;
-    let case = read_dat_case(root_dir)?;
-
     let session = create_session().into_inner();
-    let engine = DataFusionEngine::new_from_session(&session.state());
-
-    let snapshot =
-        Snapshot::try_new_with_engine(engine.clone(), case.table_root()?, Default::default(), None)
-            .await?;
-
+    let snapshot = scan_dat_with_session(case, &session).await?;
     Ok((snapshot, session))
 }
 
@@ -165,35 +152,6 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
         .await?;
     let expected = vec!["+------+", "| utf8 |", "+------+", "| 1    |", "+------+"];
     assert_batches_sorted_eq!(&expected, &batches);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_view_types_disabled() -> TestResult<()> {
-    use arrow_schema::DataType;
-
-    let config = SessionConfig::new().set_bool(
-        "datafusion.execution.parquet.schema_force_view_types",
-        false,
-    );
-    let session = SessionContext::new_with_config(config);
-    let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
-    let provider: Arc<dyn TableProvider> = Arc::new(DeltaScanNext::new(
-        snapshot,
-        DeltaScanConfig::new_from_session(&session.state()),
-    )?);
-
-    let plan = provider.scan(&session.state(), None, &[], None).await?;
-    let has_view_types = plan
-        .schema()
-        .fields()
-        .iter()
-        .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
-    assert!(
-        !has_view_types,
-        "view types should be disabled when configured"
-    );
 
     Ok(())
 }

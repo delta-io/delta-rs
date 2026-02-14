@@ -42,7 +42,7 @@ use datafusion_datasource::{
     PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
-use datafusion_physical_expr_adapter::BatchAdapterFactory;
+use datafusion_physical_expr_adapter::{BatchAdapter, BatchAdapterFactory};
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
 };
@@ -472,6 +472,7 @@ fn finalize_transformed_batch(
     batch: RecordBatch,
     scan_plan: &KernelScanPlan,
     file_id_col: Option<(ArrayRef, FieldRef)>,
+    schema_adapter: &mut SchemaAdapter,
 ) -> Result<RecordBatch> {
     let result = if let Some(projection) = scan_plan.result_projection.as_ref() {
         batch.project(projection)?
@@ -480,7 +481,11 @@ fn finalize_transformed_batch(
     };
     // NOTE: most data is read properly typed already, however columns added via
     // literals in the transformations may need to be cast to the physical expected type.
-    let result = cast_record_batch(result, &scan_plan.result_schema)?;
+    let result = if result.schema_ref().eq(&scan_plan.result_schema) {
+        result
+    } else {
+        schema_adapter.adapt(result)?
+    };
     if let Some((arr, field)) = file_id_col {
         let arr = if arr.data_type() != field.data_type() {
             let options = CastOptions {
@@ -504,14 +509,47 @@ fn finalize_transformed_batch(
     }
 }
 
-fn cast_record_batch(batch: RecordBatch, target_schema: &SchemaRef) -> Result<RecordBatch> {
-    if batch.schema_ref().eq(target_schema) {
-        return Ok(batch);
+/// Caches a [`BatchAdapter`] for the most recently seen source schema, avoiding
+/// repeated expression-tree construction when consecutive batches share the same
+/// physical schema (the common case within a single file).
+struct SchemaAdapter {
+    factory: BatchAdapterFactory,
+    /// Single-entry cache: the source schema for the currently cached adapter.
+    cached_source: Option<SchemaRef>,
+    cached_adapter: Option<BatchAdapter>,
+}
+
+impl SchemaAdapter {
+    fn new(target_schema: SchemaRef) -> Self {
+        Self {
+            factory: BatchAdapterFactory::new(target_schema),
+            cached_source: None,
+            cached_adapter: None,
+        }
     }
 
-    let adapter_factory = BatchAdapterFactory::new(Arc::clone(target_schema));
-    let adapter = adapter_factory.make_adapter(batch.schema())?;
-    adapter.adapt_batch(&batch)
+    /// Adapt the batch to the target schema, using a cached adapter when the
+    /// source schema matches the previous call.
+    fn adapt(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
+        let source_schema = batch.schema();
+        let can_reuse = matches!(
+            (&self.cached_source, &self.cached_adapter),
+            (Some(cached_source), Some(_)) if cached_source.eq(&source_schema)
+        );
+        let needs_rebuild = !can_reuse;
+        if needs_rebuild {
+            let adapter = self.factory.make_adapter(Arc::clone(&source_schema))?;
+            self.cached_source = Some(source_schema);
+            self.cached_adapter = Some(adapter);
+        }
+        match self.cached_adapter.as_ref() {
+            Some(adapter) => adapter.adapt_batch(&batch),
+            None => plan_err!(
+                "schema adapter cache entry missing for source schema: {:?}",
+                batch.schema()
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -552,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_record_batch_empty_input_synthesizes_nullable_columns() {
+    fn test_schema_adapter_synthesizes_nullable_columns() {
         let source_schema = Arc::new(Schema::new(Fields::empty()));
         let source = RecordBatch::try_new_with_options(
             source_schema,
@@ -562,7 +600,8 @@ mod tests {
         .unwrap();
 
         let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
-        let adapted = cast_record_batch(source, &target_schema).unwrap();
+        let mut adapter = SchemaAdapter::new(target_schema.clone());
+        let adapted = adapter.adapt(source).unwrap();
 
         assert_eq!(adapted.schema().as_ref(), target_schema.as_ref());
         assert_eq!(adapted.num_rows(), 2);
@@ -575,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_record_batch_empty_input_missing_non_nullable_column_errors() {
+    fn test_schema_adapter_missing_non_nullable_column_errors() {
         let source_schema = Arc::new(Schema::new(Fields::empty()));
         let source = RecordBatch::try_new_with_options(
             source_schema,
@@ -585,7 +624,9 @@ mod tests {
         .unwrap();
 
         let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
-        let err = cast_record_batch(source, &target_schema)
+        let mut adapter = SchemaAdapter::new(target_schema);
+        let err = adapter
+            .adapt(source)
             .expect_err("missing non-nullable columns should error");
         match err {
             DataFusionError::Execution(msg) => {
@@ -605,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_record_batch_invalid_scalar_cast_errors() {
+    fn test_schema_adapter_invalid_scalar_cast_errors() {
         let source_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, true)]));
         let source = RecordBatch::try_new(
             source_schema,
@@ -614,7 +655,9 @@ mod tests {
         .unwrap();
 
         let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
-        let err = cast_record_batch(source, &target_schema)
+        let mut adapter = SchemaAdapter::new(target_schema);
+        let err = adapter
+            .adapt(source)
             .expect_err("invalid value cast should fail under DataFusion default cast semantics");
         match err {
             DataFusionError::ArrowError(inner, _) => {
@@ -628,7 +671,39 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_record_batch_overflow_cast_errors() {
+    fn test_schema_adapter_type_widening() {
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let source = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            ],
+        )
+        .unwrap();
+
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let mut adapter = SchemaAdapter::new(target_schema.clone());
+        let adapted = adapter.adapt(source).unwrap();
+
+        assert_eq!(adapted.schema().as_ref(), target_schema.as_ref());
+        assert_eq!(adapted.num_rows(), 3);
+        let id = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(id.values(), &[1i64, 2, 3]);
+    }
+
+    #[test]
+    fn test_schema_adapter_overflow_cast_errors() {
         let source_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
         let source = RecordBatch::try_new(
             source_schema,
@@ -637,7 +712,9 @@ mod tests {
         .unwrap();
 
         let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
-        let err = cast_record_batch(source, &target_schema)
+        let mut adapter = SchemaAdapter::new(target_schema);
+        let err = adapter
+            .adapt(source)
             .expect_err("overflow cast should fail under DataFusion default cast semantics");
         match err {
             DataFusionError::ArrowError(inner, _) => {
@@ -648,6 +725,37 @@ mod tests {
             }
             other => panic!("expected arrow cast error for overflow cast, got: {other}"),
         }
+    }
+
+    #[test]
+    fn test_schema_adapter_caches_across_calls() {
+        let source_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let target_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+        let mut adapter = SchemaAdapter::new(target_schema);
+
+        let batch1 = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        let batch2 = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![Arc::new(Int32Array::from(vec![2]))],
+        )
+        .unwrap();
+
+        let _ = adapter.adapt(batch1).unwrap();
+        assert!(adapter.cached_source.is_some());
+
+        // Second call with the same schema should hit the cache (no rebuild).
+        let adapted = adapter.adapt(batch2).unwrap();
+        assert_eq!(adapted.num_rows(), 1);
+        let id = adapted
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(id.values(), &[2i64]);
     }
 
     #[tokio::test]
