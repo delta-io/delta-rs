@@ -378,9 +378,8 @@ async fn execute(
         result: Ok(()),
     };
     for term in &skipping_pred {
-        props.result = Ok(());
         term.visit(&mut props)?;
-        props.result?;
+        std::mem::replace(&mut props.result, Ok(()))?;
     }
 
     if props.partition_only {
@@ -466,15 +465,6 @@ async fn execute(
         .try_collect()
         .await?;
     metrics.num_removed_files = removes.len();
-
-    if files_scan.partition_only {
-        // Note: Partition-only predicates are handled earlier using log metadata.
-        // This branch is kept defensively in case `scan_files_where_matches` ever determines
-        // a predicate is partition-only after simplification.
-        // if we are deleting entire files only, no need to rescue any data or write cdc files.
-        metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
-        return Ok((removes, metrics));
-    }
 
     let counted_scan = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
