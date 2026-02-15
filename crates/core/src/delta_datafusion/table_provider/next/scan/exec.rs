@@ -1363,6 +1363,60 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_split_by_file_id_runs_preserves_dictionary_key_mapping() -> TestResult {
+        use arrow::datatypes::{Field, Schema};
+        use arrow_array::{DictionaryArray, Int32Array, StringArray, UInt16Array};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int32, false),
+            Field::new(
+                FILE_ID_COLUMN_DEFAULT,
+                DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+                false,
+            ),
+        ]));
+
+        // Dictionary keys intentionally start with key=1 to ensure run labels are taken from keys,
+        // not from row indexes.
+        let keys = UInt16Array::from(vec![Some(1), Some(1), Some(0), Some(0), Some(1)]);
+        let values = StringArray::from(vec!["f0", "f1"]);
+        let file_ids = DictionaryArray::new(keys, Arc::new(values));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![10, 11, 20, 21, 12])),
+                Arc::new(file_ids),
+            ],
+        )?;
+
+        let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
+        let runs = split_by_file_id_runs(&batch, file_id_idx)?;
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].0, "f1");
+        assert_eq!(runs[1].0, "f0");
+        assert_eq!(runs[2].0, "f1");
+
+        let run0 = runs[0]
+            .1
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let run1 = runs[1]
+            .1
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        let run2 = runs[2]
+            .1
+            .column(0)
+            .as_primitive::<arrow::datatypes::Int32Type>();
+        assert_eq!(run0.values(), &[10, 11]);
+        assert_eq!(run1.values(), &[20, 21]);
+        assert_eq!(run2.values(), &[12]);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_poll_next_fanout_preserves_file_ids() -> TestResult {
         use futures::StreamExt;
