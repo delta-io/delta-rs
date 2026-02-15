@@ -386,7 +386,7 @@ fn coalesce_batches(input: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, DeltaTa
 
     let schema = input[0].schema();
     let mut coalescer = BatchCoalescer::new(schema, COALESCE_TARGET_BATCH_SIZE);
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(input.len());
 
     for batch in input {
         coalescer.push_batch(batch)?;
