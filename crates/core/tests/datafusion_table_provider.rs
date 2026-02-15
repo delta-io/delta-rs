@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::catalog::TableProvider;
 use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
-use datafusion::prelude::{SessionContext, col, lit};
+use datafusion::prelude::{SessionConfig, SessionContext, col, lit};
+use deltalake_core::delta_datafusion::DeltaScanConfig;
 use deltalake_core::delta_datafusion::DeltaScanNext;
 use deltalake_core::delta_datafusion::create_session;
 use deltalake_core::delta_datafusion::engine::DataFusionEngine;
@@ -13,6 +15,12 @@ use deltalake_test::TestResult;
 use deltalake_test::acceptance::read_dat_case;
 
 async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
+    let session = create_session().into_inner();
+    let snapshot = scan_dat_with_session(case, &session).await?;
+    Ok((snapshot, session))
+}
+
+async fn scan_dat_with_session(case: &str, session: &SessionContext) -> TestResult<Snapshot> {
     let root_dir = format!(
         "{}/../../dat/v0.0.3/reader_tests/generated/{}/",
         env!["CARGO_MANIFEST_DIR"],
@@ -21,14 +29,12 @@ async fn scan_dat(case: &str) -> TestResult<(Snapshot, SessionContext)> {
     let root_dir = std::fs::canonicalize(root_dir)?;
     let case = read_dat_case(root_dir)?;
 
-    let session = create_session().into_inner();
     let engine = DataFusionEngine::new_from_session(&session.state());
-
     let snapshot =
         Snapshot::try_new_with_engine(engine.clone(), case.table_root()?, Default::default(), None)
             .await?;
 
-    Ok((snapshot, session))
+    Ok(snapshot)
 }
 
 async fn collect_plan(
@@ -108,6 +114,43 @@ async fn test_all_primitive_types() -> TestResult<()> {
         "| 4     | 4     | 4.0     |",
         "+-------+-------+---------+",
     ];
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
+    use arrow_schema::DataType;
+
+    let config =
+        SessionConfig::new().set_bool("datafusion.execution.parquet.schema_force_view_types", true);
+    let session = SessionContext::new_with_config(config);
+    let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
+    let provider: Arc<dyn TableProvider> = Arc::new(DeltaScanNext::new(
+        snapshot,
+        DeltaScanConfig::new_from_session(&session.state()),
+    )?);
+
+    let plan = provider.scan(&session.state(), None, &[], None).await?;
+    let has_view_types = plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
+    assert!(
+        has_view_types,
+        "view types should be present when configured"
+    );
+
+    let filter = col("utf8").eq(lit("1"));
+    let batches = session
+        .read_table(provider.clone())?
+        .filter(filter)?
+        .select(vec![col("utf8")])?
+        .collect()
+        .await?;
+    let expected = vec!["+------+", "| utf8 |", "+------+", "| 1    |", "+------+"];
     assert_batches_sorted_eq!(&expected, &batches);
 
     Ok(())
@@ -220,6 +263,30 @@ async fn test_column_mapping() -> TestResult<()> {
 async fn test_deletion_vectors() -> TestResult<()> {
     let (snapshot, session) = scan_dat("deletion_vectors").await?;
     let provider = DeltaScanNext::builder().with_snapshot(snapshot).await?;
+
+    let plan = provider.scan(&session.state(), None, &[], None).await?;
+    let batches: Vec<_> = collect_plan(plan, &session).await?;
+    let expected = vec![
+        "+--------+-----+------------+",
+        "| letter | int | date       |",
+        "+--------+-----+------------+",
+        "| b      | 228 | 1978-12-01 |",
+        "+--------+-----+------------+",
+    ];
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_deletion_vectors_multi_batch() -> TestResult<()> {
+    let config = SessionConfig::new().with_batch_size(1);
+    let session = SessionContext::new_with_config(config);
+    let snapshot = scan_dat_with_session("deletion_vectors", &session).await?;
+    let provider: Arc<dyn TableProvider> = Arc::new(DeltaScanNext::new(
+        snapshot,
+        DeltaScanConfig::new_from_session(&session.state()),
+    )?);
 
     let plan = provider.scan(&session.state(), None, &[], None).await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;

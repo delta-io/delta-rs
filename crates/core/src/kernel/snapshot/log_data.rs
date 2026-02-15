@@ -111,16 +111,11 @@ mod datafusion {
     use std::sync::{Arc, LazyLock};
 
     use ::datafusion::common::Column;
-    use ::datafusion::common::DataFusionError;
     use ::datafusion::common::scalar::ScalarValue;
-    use ::datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-    use ::datafusion::functions_aggregate::min_max::{MaxAccumulator, MinAccumulator};
     use ::datafusion::physical_optimizer::pruning::PruningStatistics;
-    use ::datafusion::physical_plan::Accumulator;
     use arrow::compute::concat;
-    use arrow_arith::aggregate::sum;
-    use arrow_array::{Array, RecordBatch, StringArray, StructArray};
-    use arrow_array::{ArrayRef, BooleanArray, Int64Array, UInt64Array};
+    use arrow_array::{Array, StringArray};
+    use arrow_array::{ArrayRef, BooleanArray, UInt64Array};
     use arrow_schema::DataType as ArrowDataType;
     use delta_kernel::expressions::Expression;
     use delta_kernel::schema::{DataType, PrimitiveType};
@@ -129,255 +124,11 @@ mod datafusion {
 
     use super::*;
     use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt as _;
-    use crate::kernel::arrow::extract::{extract_and_cast_opt, extract_column};
     use crate::{DeltaResult, DeltaTableError};
 
     use crate::kernel::ARROW_HANDLER;
-    use crate::kernel::arrow::extract::extract_and_cast;
-
-    const COL_NUM_RECORDS: &str = "numRecords";
-    const COL_MIN_VALUES: &str = "minValues";
-    const COL_MAX_VALUES: &str = "maxValues";
-    const COL_NULL_COUNT: &str = "nullCount";
-
-    #[derive(Debug, Default, Clone)]
-    enum AccumulatorType {
-        Min,
-        Max,
-        #[default]
-        Unused,
-    }
-    // TODO validate this works with "wide and narrow" builds / stats
-
-    /// Helper for processing data from the materialized Delta log.
-    struct FileStatsAccessor<'a> {
-        sizes: &'a Int64Array,
-        stats: &'a StructArray,
-    }
-
-    impl<'a> FileStatsAccessor<'a> {
-        pub(crate) fn try_new(data: &'a RecordBatch) -> DeltaResult<Self> {
-            let sizes = extract_and_cast::<Int64Array>(data, "size")?;
-            let stats = extract_and_cast::<StructArray>(data, "stats_parsed")?;
-            Ok(Self { sizes, stats })
-        }
-    }
-
-    impl FileStatsAccessor<'_> {
-        fn collect_count(&self, name: &str) -> Precision<usize> {
-            let num_records = extract_and_cast_opt::<Int64Array>(self.stats, name);
-            if let Some(num_records) = num_records {
-                if num_records.is_empty() {
-                    Precision::Exact(0)
-                } else if let Some(null_count_mulls) = num_records.nulls() {
-                    if null_count_mulls.null_count() > 0 {
-                        Precision::Absent
-                    } else {
-                        sum(num_records)
-                            .map(|s| Precision::Exact(s as usize))
-                            .unwrap_or(Precision::Absent)
-                    }
-                } else {
-                    sum(num_records)
-                        .map(|s| Precision::Exact(s as usize))
-                        .unwrap_or(Precision::Absent)
-                }
-            } else {
-                Precision::Absent
-            }
-        }
-
-        fn column_bounds(
-            &self,
-            path_step: &str,
-            name: &str,
-            fun_type: AccumulatorType,
-        ) -> Precision<ScalarValue> {
-            let mut path = name.split('.');
-            let array = if let Ok(array) = extract_column(self.stats, path_step, &mut path) {
-                array
-            } else {
-                return Precision::Absent;
-            };
-
-            if array.data_type().is_primitive() {
-                let accumulator: Option<Box<dyn Accumulator>> = match fun_type {
-                    AccumulatorType::Min => MinAccumulator::try_new(array.data_type())
-                        .map_or(None, |a| Some(Box::new(a))),
-                    AccumulatorType::Max => MaxAccumulator::try_new(array.data_type())
-                        .map_or(None, |a| Some(Box::new(a))),
-                    _ => None,
-                };
-
-                if let Some(mut accumulator) = accumulator {
-                    return accumulator
-                        .update_batch(&[array.clone()])
-                        .ok()
-                        .and_then(|_| accumulator.evaluate().ok())
-                        .map(Precision::Exact)
-                        .unwrap_or(Precision::Absent);
-                }
-
-                return Precision::Absent;
-            }
-
-            match array.data_type() {
-                ArrowDataType::Struct(fields) => fields
-                    .iter()
-                    .map(|f| {
-                        self.column_bounds(
-                            path_step,
-                            &format!("{name}.{}", f.name()),
-                            fun_type.clone(),
-                        )
-                    })
-                    .map(|s| match s {
-                        Precision::Exact(s) => Some(s),
-                        _ => None,
-                    })
-                    .collect::<Option<Vec<_>>>()
-                    .map(|o| {
-                        let arrays = o
-                            .into_iter()
-                            .map(|sv| sv.to_array())
-                            .collect::<Result<Vec<_>, DataFusionError>>()
-                            .unwrap();
-                        let sa = StructArray::new(fields.clone(), arrays, None);
-                        Precision::Exact(ScalarValue::Struct(Arc::new(sa)))
-                    })
-                    .unwrap_or(Precision::Absent),
-                _ => Precision::Absent,
-            }
-        }
-
-        fn num_records(&self) -> Precision<usize> {
-            self.collect_count(COL_NUM_RECORDS)
-        }
-
-        fn total_size_files(&self) -> Precision<usize> {
-            let size = self
-                .sizes
-                .iter()
-                .flat_map(|s| s.map(|s| s as usize))
-                .sum::<usize>();
-            Precision::Inexact(size)
-        }
-
-        fn column_stats(&self, name: impl AsRef<str>) -> DeltaResult<ColumnStatistics> {
-            let null_count_col = format!("{COL_NULL_COUNT}.{}", name.as_ref());
-            let null_count = self.collect_count(&null_count_col);
-
-            let min_value = self.column_bounds(COL_MIN_VALUES, name.as_ref(), AccumulatorType::Min);
-            let min_value = match &min_value {
-                Precision::Exact(value) if value.is_null() => Precision::Absent,
-                // TODO this is a hack, we should not be casting here but rather when we read the checkpoint data.
-                // it seems sometimes the min/max values are stored as nanoseconds and sometimes as microseconds?
-                Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
-                    ScalarValue::TimestampMicrosecond(a.map(|v| v / 1000), b.clone()),
-                ),
-                _ => min_value,
-            };
-
-            let max_value = self.column_bounds(COL_MAX_VALUES, name.as_ref(), AccumulatorType::Max);
-            let max_value = match &max_value {
-                Precision::Exact(value) if value.is_null() => Precision::Absent,
-                Precision::Exact(ScalarValue::TimestampNanosecond(a, b)) => Precision::Exact(
-                    ScalarValue::TimestampMicrosecond(a.map(|v| v / 1000), b.clone()),
-                ),
-                _ => max_value,
-            };
-
-            Ok(ColumnStatistics {
-                null_count,
-                max_value,
-                min_value,
-                sum_value: Precision::Absent,
-                distinct_count: Precision::Absent,
-                byte_size: Precision::Absent,
-            })
-        }
-    }
-
-    trait StatsExt {
-        fn add(&self, other: &Self) -> Self;
-    }
-
-    impl StatsExt for ColumnStatistics {
-        fn add(&self, other: &Self) -> Self {
-            Self {
-                null_count: self.null_count.add(&other.null_count),
-                max_value: self.max_value.max(&other.max_value),
-                min_value: self.min_value.min(&other.min_value),
-                sum_value: Precision::Absent,
-                distinct_count: self.distinct_count.add(&other.distinct_count),
-                byte_size: Precision::Absent,
-            }
-        }
-    }
 
     impl LogDataHandler<'_> {
-        fn accessors(&self) -> Option<Vec<FileStatsAccessor<'_>>> {
-            self.data
-                .iter()
-                .map(FileStatsAccessor::try_new)
-                .try_collect()
-                .ok()
-        }
-
-        fn num_records(&self) -> Precision<usize> {
-            if let Some(accessors) = self.accessors() {
-                return accessors
-                    .iter()
-                    .map(|a| a.num_records())
-                    .reduce(|acc, num_records| acc.add(&num_records))
-                    .unwrap_or(Precision::Absent);
-            }
-            Precision::Absent
-        }
-
-        fn total_size_files(&self) -> Precision<usize> {
-            if let Some(accessors) = self.accessors() {
-                return accessors
-                    .iter()
-                    .map(|a| a.total_size_files())
-                    .reduce(|acc, size| acc.add(&size))
-                    .unwrap_or(Precision::Absent);
-            }
-            Precision::Absent
-        }
-
-        pub(crate) fn column_stats(&self, name: impl AsRef<str>) -> Option<ColumnStatistics> {
-            if let Some(accessors) = self.accessors() {
-                return accessors
-                    .iter()
-                    .map(|a| a.column_stats(name.as_ref()))
-                    .collect::<Result<Vec<_>, _>>()
-                    .ok()?
-                    .iter()
-                    .fold(None::<ColumnStatistics>, |acc, stats| match (acc, stats) {
-                        (None, stats) => Some(stats.clone()),
-                        (Some(acc), stats) => Some(acc.add(stats)),
-                    });
-            }
-            None
-        }
-
-        pub(crate) fn statistics(&self) -> Option<Statistics> {
-            let num_rows = self.num_records();
-            let total_byte_size = self.total_size_files();
-            let column_statistics = self
-                .config
-                .schema()
-                .fields()
-                .map(|f| self.column_stats(f.name()))
-                .collect::<Option<Vec<_>>>()?;
-            Some(Statistics {
-                num_rows,
-                total_byte_size,
-                column_statistics,
-            })
-        }
-
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
             let schema = self.config.schema();
             let field = schema.field(&column.name)?;
@@ -672,23 +423,5 @@ mod df_tests {
         //     json_action.min_values().unwrap(),
         //     struct_action.min_values().unwrap()
         // );
-    }
-
-    #[tokio::test]
-    #[ignore = "re-enable once https://github.com/delta-io/delta-kernel-rs/issues/1075 is resolved."]
-    async fn df_stats_delta_1_2_1_struct_stats_table() {
-        let table_path = std::path::Path::new("../test/tests/data/delta-1.2.1-only-struct-stats");
-        let table_uri =
-            url::Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
-
-        let file_stats = table_from_struct_stats
-            .snapshot()
-            .unwrap()
-            .snapshot()
-            .log_data();
-
-        let col_stats = file_stats.statistics();
-        println!("{col_stats:?}");
     }
 }

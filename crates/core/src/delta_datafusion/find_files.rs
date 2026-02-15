@@ -25,8 +25,8 @@ use percent_encoding::percent_decode_str;
 use tracing::*;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
-use crate::delta_datafusion::file_id::wrap_file_id_value;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
+use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, DeltaScanNext,
     FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
@@ -323,33 +323,48 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .map(|f| f.add_action())
         .collect_vec();
 
-    let batch = snapshot.add_actions_table(true)?;
-    let schema = batch.schema();
-    let mut arrays = Vec::with_capacity(schema.fields().len());
-    let mut fields = Vec::with_capacity(schema.fields().len());
+    // Use add_actions_batches to avoid concatenating all file metadata into a
+    // single RecordBatch which can exceed the 2GB Arrow 32-bit offset limit
+    // for tables with a very large number of files.
+    let all_batches = snapshot.add_actions_batches(true)?;
+    if all_batches.is_empty() {
+        return Ok(vec![]);
+    }
 
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
+    let first_schema = all_batches[0].schema();
+    let mut fields = Vec::with_capacity(first_schema.fields().len());
     fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for field in schema.fields() {
+    for field in first_schema.fields() {
         if let Some(name) = field.name().strip_prefix("partition.") {
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
             fields.push(field.as_ref().clone().with_name(name));
         }
     }
-
     let schema = Arc::new(Schema::new(fields));
-    let mem_table = MemTable::try_new(
-        schema.clone(),
-        vec![vec![RecordBatch::try_new(schema, arrays)?]],
-    )?;
+
+    let mut mem_batches = Vec::with_capacity(all_batches.len());
+    for batch in &all_batches {
+        let batch_schema = batch.schema();
+        let mut arrays = Vec::with_capacity(schema.fields().len());
+
+        arrays.push(
+            batch
+                .column_by_name("path")
+                .ok_or(DeltaTableError::Generic(
+                    "Column with name `path` does not exist".to_owned(),
+                ))?
+                .to_owned(),
+        );
+
+        for field in batch_schema.fields() {
+            if field.name().strip_prefix("partition.").is_some() {
+                arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
+            }
+        }
+
+        mem_batches.push(RecordBatch::try_new(schema.clone(), arrays)?);
+    }
+
+    let mem_table = MemTable::try_new(schema, vec![mem_batches])?;
 
     let ctx = SessionContext::new();
     let mut df = ctx.read_table(Arc::new(mem_table))?;
@@ -410,10 +425,6 @@ pub(crate) struct MatchedFilesScan {
     /// we do not (yet) have full coverage to translate datafusion to
     /// kernel predicates.
     pub(crate) delta_predicate: Arc<Predicate>,
-    /// The predicate contains only partition column references
-    ///
-    /// This implies that for each matched file all data matches.
-    pub(crate) partition_only: bool,
 }
 
 impl MatchedFilesScan {
@@ -467,9 +478,8 @@ pub(crate) async fn scan_files_where_matches(
         result: Ok(()),
     };
     for term in &skipping_pred {
-        visitor.result = Ok(());
         term.visit(&mut visitor)?;
-        visitor.result?
+        std::mem::replace(&mut visitor.result, Ok(()))?;
     }
 
     // convert to a delta predicate that can be applied to kernel scans.
@@ -521,16 +531,31 @@ pub(crate) async fn scan_files_where_matches(
         .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
         .collect_vec();
 
-    // Create a table scan limiting the data to that originating from valid files.
-    // TODO(delta-io/delta-rs#4113): Avoid plan-time `IN (...)` lists by pushing a matched-file
-    // allowlist into scan planning.
-    let file_list = valid_files
-        .iter()
-        .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string()))
-        .map(|v| lit(wrap_file_id_value(v)))
-        .collect_vec();
-    let plan = LogicalPlanBuilder::scan("source", table_source, None)?
-        .filter(col(FILE_ID_COLUMN_DEFAULT).in_list(file_list, false))?
+    // Create a table scan limited to the matched files by forwarding an explicit
+    // file selection into the table provider.
+    let table_root = snapshot
+        .snapshot()
+        .scan_builder()
+        .build()?
+        .table_root()
+        .clone();
+    let file_selection = FileSelection::from_paths(
+        valid_files
+            .iter()
+            .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string())),
+        &table_root,
+    )?
+    .with_missing_file_policy(MissingFilePolicy::Ignore);
+    let selected_provider = DeltaScanNext::builder()
+        .with_eager_snapshot(snapshot.clone())
+        .with_file_skipping_predicates(skipping_pred)
+        .with_file_column(FILE_ID_COLUMN_DEFAULT)
+        .build()
+        .await?
+        .with_file_selection(file_selection);
+    let selected_table_source = provider_as_source(Arc::new(selected_provider));
+
+    let plan = LogicalPlanBuilder::scan("source", selected_table_source, None)?
         .drop_columns([FILE_ID_COLUMN_DEFAULT])?
         .build()?;
 
@@ -539,7 +564,6 @@ pub(crate) async fn scan_files_where_matches(
         valid_files,
         predicate,
         delta_predicate,
-        partition_only: visitor.partition_only,
     }))
 }
 
@@ -549,8 +573,11 @@ mod tests {
     use datafusion::prelude::{col, lit};
 
     use crate::{
+        DeltaTable,
         delta_datafusion::create_session,
+        protocol::SaveMode,
         test_utils::{TestResult, open_fs_path},
+        writer::test_utils::{get_delta_schema, get_record_batch},
     };
 
     use super::*;
@@ -573,6 +600,65 @@ mod tests {
         let plan = session.create_physical_plan(scan.scan()).await?;
         let _data = collect(plan, session.task_ctx()).await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_files_where_matches_plan_has_no_file_id_in_list_filter() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/simple_table");
+        table.load().await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let predicate = col("id").gt(lit(-1i64));
+        let Some(scan) = scan_files_where_matches(&session, &snapshot, predicate).await? else {
+            panic!("Expected at least one matching file");
+        };
+
+        let plan_debug = format!("{:?}", scan.scan());
+        assert!(
+            !(plan_debug.contains("InList(") && plan_debug.contains(FILE_ID_COLUMN_DEFAULT)),
+            "unexpected plan with file-id IN filter: {plan_debug}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_returns_empty_for_empty_table() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(table.snapshot()?.snapshot(), &predicate).await?;
+        assert!(matches.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_filters_partition_values() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let total_actions = snapshot.log_data().iter().count();
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(snapshot, &predicate).await?;
+
+        assert!(!matches.is_empty());
+        assert!(matches.len() < total_actions);
         Ok(())
     }
 }

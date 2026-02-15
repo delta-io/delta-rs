@@ -46,7 +46,7 @@ use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
@@ -57,7 +57,6 @@ use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
-use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
 pub(crate) use self::session::DeltaSessionExt;
@@ -65,7 +64,7 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session,
 };
-pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
@@ -299,13 +298,6 @@ pub(crate) fn get_path_column<'a>(
         .ok_or_else(err)?
         .downcast_dict::<StringArray>()
         .ok_or_else(err)
-}
-
-impl DeltaTableState {
-    /// Provide table level statistics to Datafusion
-    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        self.snapshot.log_data().statistics()
-    }
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -624,7 +616,7 @@ mod tests {
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use delta_kernel::schema::ArrayType;
-    use futures::{StreamExt, stream::BoxStream};
+    use futures::{StreamExt, TryStreamExt, stream::BoxStream};
     use object_store::ObjectMeta;
     use object_store::{
         GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
@@ -637,7 +629,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -736,6 +728,84 @@ mod tests {
             .try_into_physical_plan(&task_ctx, &codec)
             .expect("from proto");
         assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_preserves_file_selection() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let table_root = snapshot
+            .scan_builder()
+            .build()
+            .unwrap()
+            .table_root()
+            .clone();
+        let selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(selected_file_ids.len(), 1);
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(
+                FileSelection::new(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+            );
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaScanNext>()
+            .unwrap();
+
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let decoded_file_ids = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.as_array())
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let decoded_policy = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("missing_file_policy"))
+            .and_then(|value| value.as_str())
+            .unwrap();
+
+        assert_eq!(decoded_file_ids, selected_file_ids);
+        assert_eq!(decoded_policy, "Ignore");
     }
 
     #[tokio::test]

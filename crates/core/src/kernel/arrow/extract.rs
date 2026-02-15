@@ -24,21 +24,6 @@ impl ProvidesColumnByName for StructArray {
 
 /// Extracts a column by name and casts it to the given type array type `T`.
 ///
-/// Returns an error if the column does not exist or if the column is not of type `T`.
-///
-/// Note: this is currently only used in the datafusion build so disabled elsewhere
-#[cfg(feature = "datafusion")]
-pub(crate) fn extract_and_cast<'a, T: Array + 'static>(
-    arr: &'a dyn ProvidesColumnByName,
-    name: &'a str,
-) -> crate::DeltaResult<&'a T> {
-    extract_and_cast_opt::<T>(arr, name).ok_or(crate::DeltaTableError::Generic(format!(
-        "missing-column: {name}"
-    )))
-}
-
-/// Extracts a column by name and casts it to the given type array type `T`.
-///
 /// Returns `None` if the column does not exist or if the column is not of type `T`.
 pub(crate) fn extract_and_cast_opt<'a, T: Array + 'static>(
     array: &'a dyn ProvidesColumnByName,

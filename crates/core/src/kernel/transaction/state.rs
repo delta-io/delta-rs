@@ -11,7 +11,6 @@ use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistic
 use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
-use crate::table::state::DeltaTableState;
 
 pub struct AddContainer<'a> {
     inner: &'a Vec<Add>,
@@ -218,32 +217,6 @@ impl PruningStatistics for EagerSnapshot {
     }
 }
 
-impl PruningStatistics for DeltaTableState {
-    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.min_values(column)
-    }
-
-    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.max_values(column)
-    }
-
-    fn num_containers(&self) -> usize {
-        self.snapshot.num_containers()
-    }
-
-    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.null_counts(column)
-    }
-
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.snapshot.row_counts(column)
-    }
-
-    fn contained(&self, column: &Column, values: &HashSet<ScalarValue>) -> Option<BooleanArray> {
-        self.snapshot.contained(column, values)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -251,9 +224,9 @@ mod tests {
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
 
-    use super::*;
     use crate::delta_datafusion::{DataFusionMixins, files_matching_predicate};
     use crate::kernel::Action;
+    use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
 
     fn init_table_actions() -> Vec<Action> {

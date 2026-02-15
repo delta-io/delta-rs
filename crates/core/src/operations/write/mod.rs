@@ -477,7 +477,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     },
                 )?;
 
-                update_datafusion_session(&this.log_store, &session, Some(operation_id))?;
+                update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
                 let mut schema_drift = false;
@@ -542,7 +542,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     }
                 }
 
-                if let Some(new_schema) = new_schema {
+                if let Some(new_schema) = new_schema.as_ref() {
                     let mut schema_evolution_projection =
                         Vec::with_capacity(new_schema.fields().len());
                     for field in new_schema.fields() {
@@ -594,8 +594,17 @@ impl std::future::IntoFuture for WriteBuilder {
                     };
 
                     if should_update_schema {
+                        // Use the merged Arrow schema (not the DataFusion plan schema) when
+                        // performing schema evolution. DataFusion expressions do not reliably
+                        // preserve Arrow field metadata, which would otherwise strip column
+                        // metadata such as generated column expressions.
                         let schema_struct: StructType =
-                            source.schema().as_arrow().try_into_kernel()?;
+                            match (this.schema_mode, schema_drift, new_schema.as_deref()) {
+                                (Some(SchemaMode::Merge), true, Some(schema)) => {
+                                    schema.try_into_kernel()?
+                                }
+                                _ => source.schema().as_arrow().try_into_kernel()?,
+                            };
                         // Verify if delta schema changed
                         if &schema_struct != snapshot.schema().as_ref() {
                             let current_protocol = snapshot.protocol();

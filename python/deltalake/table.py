@@ -413,6 +413,21 @@ class DeltaTable:
             allow_out_of_range=allow_out_of_range,
         )
 
+    def deletion_vectors(self) -> RecordBatchReader:
+        """
+        Return deletion vectors for data files in this table.
+
+        Returns:
+            RecordBatchReader: A reader with two columns:
+                - filepath (str): fully-qualified file URI.
+                - selection_vector (list[bool]): row keep mask where True means keep and False means deleted.
+
+        Notes:
+            Only files that have deletion vectors are returned.
+            Deletion vectors are materialized in memory before being exposed as record batches.
+        """
+        return self._table.deletion_vectors()
+
     @property
     def table_uri(self) -> str:
         return self._table.table_uri()
@@ -539,7 +554,9 @@ class DeltaTable:
         keep_versions: list[int] | None = None,
     ) -> list[str]:
         """
-        Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
+        Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table.
+        Here "not referenced" means all removed files (from vacuum/delete/update/merge) older than the retention threshold,
+        plus any files not mentioned in the logs (unless they start with underscore).
 
         Args:
             retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
@@ -547,7 +564,8 @@ class DeltaTable:
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
-            full: when set to True, will perform a "full" vacuum and remove all files not referenced in the transaction log
+            full: when set to True, will perform a "full" vacuum and remove all files not referenced the transaction log.
+                when False, it will only vacuum not referenced files since last log checkpoint (or since genesis if no checkpoint exists).
             keep_versions: An optional list of versions to keep. If provided, files from these versions will not be deleted.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.

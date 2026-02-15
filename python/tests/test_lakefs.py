@@ -402,7 +402,12 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
         }
     )
 
-    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
 
     last_action = dt.history(1)[0]
 

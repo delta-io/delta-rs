@@ -4,7 +4,6 @@ import tempfile
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
-from random import random
 from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
@@ -1059,11 +1058,22 @@ def test_is_deltatable_valid_path():
     assert DeltaTable.is_deltatable(table_path)
 
 
-def test_is_deltatable_invalid_path():
-    # Nonce ensures that the table_path always remains an invalid table path.
-    nonce = int(random() * 10000)
-    table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
-    assert not DeltaTable.is_deltatable(table_path)
+def test_is_deltatable_empty_path(tmp_path: Path):
+    not_delta_path = tmp_path / "not_delta_table"
+    # Ensure path exists
+    not_delta_path.mkdir()
+    assert not DeltaTable.is_deltatable(str(not_delta_path))
+
+
+def test_is_deltatable_invalid_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+
+
+def test_is_deltatable_does_not_create_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+    assert not not_existing_path.exists()
 
 
 def test_is_deltatable_with_storage_opts():
@@ -1168,6 +1178,52 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         .read_all()
     )
     assert expected == actual
+
+
+def test_deletion_vectors_api_smoke():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    expected_selection_vector = [
+        [False, True, True, True, True, True, True, True, True, False]
+    ]
+    expected_suffix = (
+        "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    )
+    expected_filepath = next(
+        Path(path).resolve().as_uri()
+        for path in dt.file_uris()
+        if path.endswith(expected_suffix)
+    )
+    assert expected_filepath.endswith(expected_suffix)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+
+    table = vectors.read_all()
+    assert table.num_rows == 1
+    assert table["filepath"].to_pylist() == [expected_filepath]
+    assert table["selection_vector"].to_pylist() == expected_selection_vector
+
+    table_second = dt.deletion_vectors().read_all()
+    assert table_second["filepath"].to_pylist() == [expected_filepath]
+    assert table_second["selection_vector"].to_pylist() == expected_selection_vector
+
+
+def test_deletion_vectors_empty_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+    assert vectors.read_all().num_rows == 0
+
+
+def test_deletion_vectors_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(Exception, match="without files"):
+        dt.deletion_vectors()
 
 
 def test_read_deletion_vectors():
