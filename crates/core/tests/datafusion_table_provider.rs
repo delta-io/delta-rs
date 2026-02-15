@@ -160,8 +160,10 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
 async fn test_builder_with_session_seeds_scan_config_from_session() -> TestResult<()> {
     use arrow_schema::DataType;
 
-    let config = SessionConfig::new()
-        .set_bool("datafusion.execution.parquet.schema_force_view_types", false);
+    let config = SessionConfig::new().set_bool(
+        "datafusion.execution.parquet.schema_force_view_types",
+        false,
+    );
     let session = SessionContext::new_with_config(config);
     let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
     let provider = DeltaScanNext::builder()
