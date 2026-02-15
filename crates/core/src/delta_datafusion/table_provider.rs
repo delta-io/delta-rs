@@ -629,7 +629,10 @@ impl TableProviderBuilder {
     }
 
     /// Provide a DataFusion session for scan config defaults.
-    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+    pub fn with_session<S>(mut self, session: Arc<S>) -> Self
+    where
+        S: Session + 'static,
+    {
         self.session = Some(session);
         self
     }

@@ -533,7 +533,7 @@ pub struct DeltaTableFactory {}
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let table = if cmd.options.is_empty() {
@@ -543,7 +543,22 @@ impl TableProviderFactory for DeltaTableFactory {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(table.table_provider().await?)
+        let table_uri = table.log_store().root_url().clone();
+        let (session_state, _) = resolve_session_state(
+            Some(ctx),
+            SessionFallbackPolicy::DeriveFromTrait,
+            || create_session().state(),
+            SessionResolveContext {
+                operation: "DeltaTableFactory::create",
+                table_uri: Some(&table_uri),
+                cdc: false,
+            },
+        )?;
+
+        Ok(table
+            .table_provider()
+            .with_session(Arc::new(session_state))
+            .await?)
     }
 }
 

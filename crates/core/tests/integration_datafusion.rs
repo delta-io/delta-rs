@@ -20,6 +20,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_plan::metrics::Label;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
+use datafusion::prelude::SessionConfig;
 use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
@@ -41,8 +42,16 @@ use deltalake_test::utils::*;
 use serial_test::serial;
 use url::Url;
 
-pub fn context_with_delta_table_factory() -> SessionContext {
+fn context_with_delta_table_factory() -> SessionContext {
     let mut state = SessionStateBuilder::new().build();
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    SessionContext::new_with_state(state)
+}
+
+fn context_with_delta_table_factory_with_config(config: SessionConfig) -> SessionContext {
+    let mut state = SessionStateBuilder::new().with_config(config).build();
     state
         .table_factories_mut()
         .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
@@ -189,6 +198,65 @@ mod local {
         );
 
         Ok(())
+    }
+
+    async fn assert_registered_table_has_no_view_types(
+        ctx: &SessionContext,
+        table_name: &str,
+    ) -> Result<()> {
+        let provider = ctx.table_provider(table_name).await?;
+        let plan = provider.scan(&ctx.state(), None, &[], None).await?;
+        let has_view_types = plan.schema().fields().iter().any(|field| {
+            matches!(
+                field.data_type(),
+                ArrowDataType::Utf8View | ArrowDataType::BinaryView
+            )
+        });
+
+        assert!(
+            !has_view_types,
+            "view types should be disabled when schema_force_view_types is false in session config"
+        );
+        Ok(())
+    }
+
+    async fn assert_sql_registration_honors_session_scan_config(
+        options_clause: Option<&str>,
+    ) -> Result<()> {
+        let config = SessionConfig::new().set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let ctx = context_with_delta_table_factory_with_config(config);
+
+        let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        d.push("../test/tests/data/delta-0.8.0-partitioned");
+        let location = d.to_str().unwrap();
+        let sql = match options_clause {
+            Some(options) => format!(
+                "CREATE EXTERNAL TABLE demo STORED AS DELTATABLE OPTIONS ({options}) LOCATION '{location}'"
+            ),
+            None => {
+                format!("CREATE EXTERNAL TABLE demo STORED AS DELTATABLE LOCATION '{location}'")
+            }
+        };
+        ctx.sql(sql.as_str()).await?;
+
+        assert_registered_table_has_no_view_types(&ctx, "demo").await
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_sql_registration_honors_session_scan_config() -> Result<()> {
+        assert_sql_registration_honors_session_scan_config(None).await
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_sql_registration_with_options_honors_session_scan_config() -> Result<()>
+    {
+        assert_sql_registration_honors_session_scan_config(Some(
+            "'DYNAMO_LOCK_OWNER_NAME' 'session-regression'",
+        ))
+        .await
     }
 
     #[tokio::test]
