@@ -5,6 +5,7 @@ use std::sync::Arc;
 use arrow::compute::concat_batches;
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::record_batch::RecordBatch;
+use arrow_select::coalesce::BatchCoalescer;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::column_expr_ref;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField};
@@ -278,14 +279,17 @@ impl EagerSnapshot {
             .map(|file| evaluator.evaluate_arrow(file.clone()))
             .collect::<Result<Vec<_>, _>>()?;
 
-        if flatten {
+        let results = if flatten {
             results
                 .into_iter()
                 .map(|batch| Ok(batch.normalize(".", None)?))
-                .collect()
+                .collect::<Result<Vec<_>, DeltaTableError>>()?
         } else {
-            Ok(results)
-        }
+            results
+        };
+
+        // Coalesce small batches into larger ones for efficiency.
+        coalesce_batches(results)
     }
 
     /// Build the expression and output schema used by add_actions_table / add_actions_batches.
@@ -365,6 +369,40 @@ impl EagerSnapshot {
     }
 }
 
+/// Target number of rows per coalesced batch. Matches DataFusion's default batch size.
+const COALESCE_TARGET_BATCH_SIZE: usize = 8192;
+
+/// Coalesce many small [RecordBatch]es into fewer, larger ones.
+///
+/// tables with many small commits can produce thousands of
+/// single-row batches from the kernel evaluator. This function merges them
+/// into batches of approximately [`COALESCE_TARGET_BATCH_SIZE`] rows using
+/// Arrow's [`BatchCoalescer`], which is more memory-efficient than
+/// [`concat_batches`].
+fn coalesce_batches(input: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, DeltaTableError> {
+    if input.len() <= 1 {
+        return Ok(input);
+    }
+
+    let schema = input[0].schema();
+    let mut coalescer = BatchCoalescer::new(schema, COALESCE_TARGET_BATCH_SIZE);
+    let mut output = Vec::new();
+
+    for batch in input {
+        coalescer.push_batch(batch)?;
+        while let Some(done) = coalescer.next_completed_batch() {
+            output.push(done);
+        }
+    }
+
+    coalescer.finish_buffered_batch()?;
+    while let Some(done) = coalescer.next_completed_batch() {
+        output.push(done);
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,6 +412,7 @@ mod tests {
     #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::get_record_batch;
     use crate::{DeltaResult, DeltaTable};
+    use arrow_array::Int32Array;
 
     /// <https://github.com/delta-io/delta-rs/issues/3918>
     #[tokio::test]
@@ -430,6 +469,73 @@ mod tests {
         let concatenated = concat_batches(flattened_batches[0].schema_ref(), &flattened_batches)?;
         let single = snapshot.add_actions_table(true)?;
         assert_eq!(concatenated, single);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_batches_non_empty_non_flatten_has_partition_struct() -> DeltaResult<()>
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+
+        // Non-flattened batches should have a nested "partition" struct column
+        let batches = snapshot.add_actions_batches(false)?;
+        assert!(!batches.is_empty());
+        let schema = batches[0].schema();
+        assert!(
+            schema.field_with_name("partition").is_ok(),
+            "non-flattened schema should contain a nested 'partition' field"
+        );
+        assert!(
+            schema.field_with_name("partition.modified").is_err(),
+            "non-flattened schema should NOT contain flattened 'partition.modified'"
+        );
+
+        // Concatenated batches should equal the single-batch add_actions_table output
+        let concatenated = concat_batches(batches[0].schema_ref(), &batches)?;
+        let single = snapshot.add_actions_table(false)?;
+        assert_eq!(concatenated, single);
+        Ok(())
+    }
+
+    #[test]
+    fn test_coalesce_batches_merges_small_batches() -> DeltaResult<()> {
+        let schema = Arc::new(ArrowSchema::new(vec![arrow::datatypes::Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            false,
+        )]));
+
+        let input_batches = vec![
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![1]))])?,
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![2]))])?,
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))])?,
+        ];
+
+        let output_batches = coalesce_batches(input_batches)?;
+        assert_eq!(output_batches.len(), 1);
+        assert_eq!(output_batches[0].num_rows(), 3);
+
+        let value_array = output_batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("expected Int32Array column");
+        assert_eq!(
+            value_array.iter().collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+
         Ok(())
     }
 }
