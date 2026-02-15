@@ -44,6 +44,7 @@ use datafusion::physical_expr_adapter::{DefaultPhysicalExprAdapterFactory, Physi
 use delta_kernel::Version;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
+use itertools::Itertools;
 use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -402,10 +403,10 @@ impl<'a> DeltaScanBuilder<'a> {
                 if logical_filter.is_none() && self.limit.is_none() {
                     let files = self
                         .snapshot
-                        .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                        .log_data()
+                        .iter()
+                        .map(|f| f.add_action())
+                        .collect_vec();
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
                 } else {
@@ -427,10 +428,10 @@ impl<'a> DeltaScanBuilder<'a> {
 
                     let file_actions: Vec<_> = self
                         .snapshot
-                        .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
-                        .try_collect::<Vec<_>>()
-                        .await?;
+                        .log_data()
+                        .iter()
+                        .map(|f| f.add_action())
+                        .collect_vec();
 
                     for (action, keep) in
                         file_actions.into_iter().zip(files_to_prune.iter().cloned())
