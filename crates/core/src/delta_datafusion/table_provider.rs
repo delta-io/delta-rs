@@ -569,14 +569,27 @@ impl<'a> DeltaScanBuilder<'a> {
 /// A table provider can be built by providing either a log store, a Snapshot,
 /// or an eager snapshot. If some Snapshot is provided, that will be used directly,
 /// and no IO will be performed when building the provider.
-#[derive(Debug)]
 pub struct TableProviderBuilder {
     log_store: Option<Arc<dyn LogStore>>,
     snapshot: Option<SnapshotWrapper>,
+    session: Option<Arc<dyn Session>>,
     file_column: Option<String>,
     table_version: Option<Version>,
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
+}
+
+impl fmt::Debug for TableProviderBuilder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TableProviderBuilder")
+            .field("log_store", &self.log_store)
+            .field("snapshot", &self.snapshot)
+            .field("has_session", &self.session.is_some())
+            .field("file_column", &self.file_column)
+            .field("table_version", &self.table_version)
+            .field("file_skipping_predicates", &self.file_skipping_predicates)
+            .finish()
+    }
 }
 
 impl Default for TableProviderBuilder {
@@ -590,6 +603,7 @@ impl TableProviderBuilder {
         Self {
             log_store: None,
             snapshot: None,
+            session: None,
             file_column: None,
             table_version: None,
             file_skipping_predicates: None,
@@ -611,6 +625,12 @@ impl TableProviderBuilder {
     /// Provide a snapshot to use for the table provider
     pub fn with_snapshot(mut self, snapshot: impl Into<Arc<Snapshot>>) -> Self {
         self.snapshot = Some(SnapshotWrapper::Snapshot(snapshot.into()));
+        self
+    }
+
+    /// Provide a DataFusion session for scan config defaults.
+    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
+        self.session = Some(session);
         self
     }
 
@@ -650,12 +670,17 @@ impl TableProviderBuilder {
         let TableProviderBuilder {
             log_store,
             snapshot,
+            session,
             file_column,
             table_version,
             file_skipping_predicates,
         } = self;
 
-        let mut config = DeltaScanConfig::new();
+        let mut config = session
+            .as_ref()
+            .map_or_else(DeltaScanConfig::new, |session| {
+                DeltaScanConfig::new_from_session(session.as_ref())
+            });
         if let Some(file_column) = file_column {
             config = config.with_file_column_name(file_column);
         }

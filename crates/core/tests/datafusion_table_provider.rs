@@ -157,6 +157,33 @@ async fn test_view_types_filter_exec_compatibility() -> TestResult<()> {
 }
 
 #[tokio::test]
+async fn test_builder_with_session_seeds_scan_config_from_session() -> TestResult<()> {
+    use arrow_schema::DataType;
+
+    let config = SessionConfig::new()
+        .set_bool("datafusion.execution.parquet.schema_force_view_types", false);
+    let session = SessionContext::new_with_config(config);
+    let snapshot = scan_dat_with_session("all_primitive_types", &session).await?;
+    let provider = DeltaScanNext::builder()
+        .with_snapshot(snapshot)
+        .with_session(Arc::new(session.state()))
+        .await?;
+
+    let plan = provider.scan(&session.state(), None, &[], None).await?;
+    let has_view_types = plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|field| matches!(field.data_type(), DataType::Utf8View | DataType::BinaryView));
+    assert!(
+        !has_view_types,
+        "view types should not be present when disabled in session config"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_multi_partitioned() -> TestResult<()> {
     let (snapshot, session) = scan_dat("multi_partitioned").await?;
     let provider = DeltaScanNext::builder().with_snapshot(snapshot).await?;
