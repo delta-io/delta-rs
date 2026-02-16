@@ -14,7 +14,7 @@ from typing import (
     Union,
 )
 
-from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core import RecordBatchReader, Table
 from arro3.core.types import (
     ArrowArrayExportable,
     ArrowSchemaExportable,
@@ -1031,43 +1031,49 @@ class DeltaTable:
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions(self, flatten: bool = False) -> RecordBatch:
-        """
-        Return a dataframe with all current add actions.
+    def get_add_actions(self, flatten: bool = False) -> Table:
+        """Return an Arrow table describing every file currently in the table.
 
-        Add actions represent the files that currently make up the table. This
-        data is a low-level representation parsed from the transaction log.
+        Each row corresponds to one data file (an *add* action in the
+        Delta transaction log).  The returned columns always include:
+
+        - ``path`` relative file path
+        - ``size_bytes`` file size in bytes
+        - ``modification_time`` last modification timestamp (ms)
+        - ``num_records`` row count (when stats are available)
+
+        When ``flatten=False`` (default), partition values and column
+        statistics are returned as nested struct columns (``partition``,
+        ``null_count``, ``min``, ``max``).
+
+        When ``flatten=True``, those structs are flattened into
+        top-level columns with dot-separated prefixes, e.g.
+        ``partition.year``, ``null_count.value``, ``min.value``.
 
         Args:
-            flatten: whether to flatten the schema. Partition values columns are
-                        given the prefix `partition.`, statistics (null_count, min, and max) are
-                        given the prefix `null_count.`, `min.`, and `max.`, and tags the
-                        prefix `tags.`. Nested field names are concatenated with `.`.
+            flatten: If True, flatten nested partition and statistics
+                columns into dot-separated top-level columns.
 
         Returns:
-            a PyArrow RecordBatch containing the add action data.
+            An arro3 Table containing one row per data file.
 
         Example:
             ```python
-            from pprint import pprint
             from deltalake import DeltaTable, write_deltalake
             import pyarrow as pa
-            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
-            write_deltalake("tmp", data, partition_by=["x"])
-            dt = DeltaTable("tmp")
-            df = dt.get_add_actions().to_pandas()
-            df["path"].sort_values(ignore_index=True)
-            0    x=1/0
-            1    x=2/0
-            2    x=3/0
-            ```
 
-            ```python
-            df = dt.get_add_actions(flatten=True).to_pandas()
-            df["partition.x"].sort_values(ignore_index=True)
-            0    1
-            1    2
-            2    3
+            data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+            write_deltalake("/tmp/my_table", data, partition_by=["x"])
+            dt = DeltaTable("/tmp/my_table")
+
+            # Default: partition values in a nested struct column
+            actions = dt.get_add_actions()
+            actions.column("path")
+            actions.column("partition").field("x")
+
+            # Flattened: partition values as top-level columns
+            flat = dt.get_add_actions(flatten=True)
+            flat.column("partition.x")
             ```
         """
         return self._table.get_add_actions(flatten)
