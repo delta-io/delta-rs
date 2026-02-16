@@ -199,6 +199,15 @@ impl DeltaTableState {
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         self.snapshot.add_actions_table(flatten)
     }
+
+    /// Get add action data as a list of [arrow::record_batch::RecordBatch]
+    /// without concatenating them into a single batch.
+    pub fn add_actions_batches(
+        &self,
+        flatten: bool,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
+        self.snapshot.add_actions_batches(flatten)
+    }
 }
 
 impl EagerSnapshot {
@@ -247,7 +256,7 @@ impl EagerSnapshot {
     /// limit for tables with a very large number of files.
     ///
     /// See [Self::add_actions_table] for schema details.
-    pub(crate) fn add_actions_batches(
+    pub fn add_actions_batches(
         &self,
         flatten: bool,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
