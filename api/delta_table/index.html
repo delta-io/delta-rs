@@ -4831,7 +4831,9 @@ newer versions.</p>
 
   <div class="doc doc-contents ">
   
-      <p>Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.</p>
+      <p>Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table.
+Here "not referenced" means all removed files (from vacuum/delete/update/merge) older than the retention threshold,
+plus any files not mentioned in the logs (unless they start with underscore).</p>
 
 
 
@@ -4923,7 +4925,8 @@ newer versions.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>when set to True, will perform a "full" vacuum and remove all files not referenced in the transaction log</p>
+              <p>when set to True, will perform a "full" vacuum and remove all files not referenced the transaction log.
+when False, it will only vacuum not referenced files since last log checkpoint (or since genesis if no checkpoint exists).</p>
             </div>
           </td>
           <td>
