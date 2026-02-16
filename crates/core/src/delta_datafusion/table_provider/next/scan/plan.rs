@@ -178,7 +178,7 @@ impl KernelScanPlan {
         )
     }
 
-    fn try_new_with_scan(
+    pub(crate) fn try_new_with_scan(
         scan: Arc<Scan>,
         config: &DeltaScanConfig,
         result_schema: SchemaRef,

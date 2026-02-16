@@ -32,7 +32,6 @@ use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
-
 use super::plan::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
@@ -89,21 +88,21 @@ pub(crate) fn consume_dv_mask(
 /// 4. Result is cast to [`result_schema`](KernelScanPlan::result_schema)
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
-    scan_plan: Arc<KernelScanPlan>,
+    pub(crate) scan_plan: Arc<KernelScanPlan>,
     /// Execution plan yielding the raw data read from data files.
     input: Arc<dyn ExecutionPlan>,
     /// Transforms to be applied to data eminating from individual files
-    transforms: Arc<HashMap<String, ExpressionRef>>,
+    pub(crate) transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
-    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    pub(crate) selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Column name for the file id
-    file_id_column: String,
+    pub(crate) file_id_column: String,
     /// plan properties
     properties: PlanProperties,
     /// Denotes if file ids should be returned as part of the output
-    retain_file_ids: bool,
+    pub(crate) retain_file_ids: bool,
     /// Aggregated partition column statistics
     partition_stats: HashMap<String, ColumnStatistics>,
 }

@@ -78,7 +78,7 @@ pub(crate) use data_validation::{
 pub(crate) use find_files::*;
 pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
-    next::DeltaScanExec,
+    next::{DeltaScanExec, DeltaNextPhysicalCodec},
 };
 pub(crate) use table_provider::{
     DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,

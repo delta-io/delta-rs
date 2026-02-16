@@ -72,9 +72,9 @@ pub struct Snapshot {
     /// Log segment containing all log files in the snapshot
     pub(crate) inner: Arc<KernelSnapshot>,
     /// Configuration for the current session
-    config: DeltaTableConfig,
+    pub(crate) config: DeltaTableConfig,
     /// Logical table schema
-    schema: SchemaRef,
+    pub(crate) schema: SchemaRef,
 }
 
 impl Snapshot {

@@ -43,7 +43,7 @@ use datafusion::catalog::{ScanArgs, ScanResult};
 use delta_kernel::table_configuration::TableConfiguration;
 use serde::{Deserialize, Serialize};
 
-pub use self::scan::DeltaScanExec;
+pub use self::scan::{DeltaScanExec, DeltaNextPhysicalCodec};
 pub(crate) use self::scan::KernelScanPlan;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;

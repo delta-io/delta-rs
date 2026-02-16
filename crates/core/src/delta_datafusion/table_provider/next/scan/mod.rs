@@ -53,6 +53,7 @@ use futures::{Stream, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
 use object_store::{ObjectMeta, path::Path};
 
+pub use self::codec::DeltaNextPhysicalCodec;
 pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
 pub(crate) use self::plan::{KernelScanPlan, supports_filters_pushdown};
@@ -71,6 +72,7 @@ mod exec;
 mod exec_meta;
 mod plan;
 mod replay;
+mod codec;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 
@@ -125,7 +127,7 @@ pub(super) async fn execution_plan(
         metrics,
         limit,
         file_id_field,
-        config.retain_file_id(),
+        config,
     )
     .await
 }
@@ -179,7 +181,7 @@ async fn get_data_scan_plan(
     metrics: ExecutionPlanMetricsSet,
     limit: Option<usize>,
     file_id_field: FieldRef,
-    retain_file_ids: bool,
+    config: &DeltaScanConfig,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -265,7 +267,7 @@ async fn get_data_scan_plan(
         Arc::new(dvs),
         partition_stats,
         file_id_column,
-        retain_file_ids,
+        config.retain_file_id(),
         metrics,
     );
 

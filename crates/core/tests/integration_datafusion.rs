@@ -2208,7 +2208,8 @@ mod deep {
     use datafusion_proto::protobuf::PhysicalPlanNode;
     use prost::Message;
     use tracing::info;
-    use deltalake_core::delta_datafusion::DeltaPhysicalCodec;
+    use deltalake_core::delta_datafusion::{DeltaNextPhysicalCodec, DeltaPhysicalCodec, DeltaScanExec};
+    use deltalake_core::delta_datafusion::table_provider_old::DeltaTableOldProvider;
     use deltalake_core::delta_datafusion::udtf::register_delta_table_udtf;
 
     #[allow(clippy::collapsible_if)]
@@ -2240,8 +2241,8 @@ mod deep {
             .pretty()
             .with_env_filter(filter)
             .finish();
-        tracing::subscriber::set_global_default(subscriber).unwrap();
-        let _ = pretty_env_logger::try_init().unwrap();
+        tracing::subscriber::set_global_default(subscriber).ok();
+        pretty_env_logger::try_init().ok();
 
         let config = SessionConfig::new()
             .set_bool("datafusion.sql_parser.enable_ident_normalization", false);
@@ -2337,8 +2338,8 @@ mod deep {
             .pretty()
             .with_env_filter(filter)
             .finish();
-        tracing::subscriber::set_global_default(subscriber).unwrap();
-        let _ = pretty_env_logger::try_init().unwrap();
+        tracing::subscriber::set_global_default(subscriber).ok();
+        pretty_env_logger::try_init().ok();
 
         let config = SessionConfig::new()
             .set_bool("datafusion.sql_parser.enable_ident_normalization", false)
@@ -2379,5 +2380,110 @@ mod deep {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_hstack_deep_column_pruning_next_codec() -> datafusion::common::Result<()> {
+        unsafe { std::env::set_var("DELTA_USE_EXPR_ADAPTER", "1"); }
+
+        let filter = tracing_subscriber::EnvFilter::from_default_env();
+        let subscriber = tracing_subscriber::fmt()
+            .pretty()
+            .with_env_filter(filter)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).ok();
+        pretty_env_logger::try_init().ok();
+
+        let config = SessionConfig::new()
+            .set_bool("datafusion.sql_parser.enable_ident_normalization", false);
+
+        let ctx = SessionContext::new_with_config(config);
+
+        register_delta_table_udtf(&ctx, None, None);
+
+        let delta_path = format!(
+            "{}/tests/data/deep",
+            env!("CARGO_MANIFEST_DIR")
+        );
+
+        let query = format!(r#"
+        select
+            t1._id, t1.productListItems['SKU'], _ACP_DATE
+        from
+            delta_table_next('file://{}') as t1
+        "#, delta_path);
+
+        let plan = ctx.state().create_logical_plan(&query).await.expect("Error creating logical plan");
+        let optimized_plan = ctx.state().optimize(&plan).expect("Error optimizing plan");
+        let state = ctx.state();
+        let query_planner = state.query_planner().clone();
+        let physical_plan = query_planner
+            .create_physical_plan(&optimized_plan, &state)
+            .await.expect("Error creating physical plan");
+        info!(
+            "Physical plan: {}",
+            displayable(physical_plan.deref()).set_show_schema(true).indent(true)
+        );
+        let proj1 = extract_projection_deep_from_plan(physical_plan.clone());
+        let batches1 = collect(physical_plan.clone(), ctx.state().task_ctx()).await?;
+        let results1 = pretty::pretty_format_batches_with_options(&batches1, &FormatOptions::default())?.to_string();
+        println!("{}", results1);
+
+        // codec
+        let codec = ComposedPhysicalExtensionCodec::new(
+            vec![
+                Arc::new(DefaultPhysicalExtensionCodec {}),
+                Arc::new(DeltaNextPhysicalCodec{})
+            ]
+        );
+
+        let proto = PhysicalPlanNode::try_from_physical_plan(physical_plan.clone(), &codec)
+            .unwrap();
+        let bytes = proto.encode_to_vec();
+        let plan_after_serde = PhysicalPlanNode::try_decode(&bytes)
+            .expect("Error try_decode")
+            .try_into_physical_plan(&ctx.task_ctx(), &codec)
+            .expect("try_into_physical_plan");
+        info!(
+            "Physical plan after serde: {}",
+            displayable(plan_after_serde.deref()).set_show_schema(true).indent(true)
+        );
+
+        let delta_scan = find_exec_node::<DeltaScanExec>(&plan_after_serde)
+            .expect("Error finding DeltaScanExec");
+        let data_source_exec = find_exec_node::<DataSourceExec>(&plan_after_serde)
+            .expect("Error finding DataSourceExec");
+        let (file_scan, other) = data_source_exec
+            .downcast_to_file_source::<ParquetSource>()
+            .expect("DataSourceExec is not a file source");
+        if let Some(expr_adapter) = file_scan.expr_adapter_factory.clone() {
+            let debug_format = format!("{:?}", expr_adapter);
+            // can't downcast here, no as_any for PhysicalExprAdapter
+            assert!(debug_format.contains("DeltaPhysicalExprAdapter"), "FileScanConfig does not have DeltaPhysicalExprAdapter after serde !");
+        } else {
+            assert_eq!(true, false, "FileScanConfig does not have an expr_adapter !");
+        }
+
+        let proj2 = extract_projection_deep_from_plan(plan_after_serde.clone());
+        let batches2 = collect(plan_after_serde.clone(), ctx.state().task_ctx()).await?;
+        let results2 = pretty::pretty_format_batches_with_options(&batches2, &FormatOptions::default())?.to_string();
+        println!("{}", results2);
+
+        assert_eq!(results1, results2, "Batches not equal !");
+        println!("proj1: {:?}", proj1);
+        println!("proj2: {:?}", proj2);
+
+        assert_eq!(proj1, proj2, "Deep Projection not equal !");
+
+        Ok(())
+    }
+
+    fn find_exec_node<T: ExecutionPlan + 'static>(input: &Arc<dyn ExecutionPlan>) -> Option<&T> {
+        if let Some(found) = input.as_any().downcast_ref::<T>() {
+            Some(found)
+        } else {
+            input.children().iter()
+                .find_map(|child| find_exec_node(child))
+        }
+    }
 
 }
+
