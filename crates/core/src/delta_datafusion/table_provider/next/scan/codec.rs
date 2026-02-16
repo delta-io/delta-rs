@@ -27,6 +27,7 @@ use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::expr_adapter::build_expr_adapter_factory;
 use crate::DeltaTableConfig;
+use crate::kernel::size_limits::SnapshotLoadMetrics;
 use crate::kernel::Snapshot;
 
 /// Codec for serializing/deserializing [`DeltaScanExec`] physical plans.
@@ -126,11 +127,13 @@ impl TryFrom<&DeltaScanExec> for DeltaScanExecWire {
             // At upgrade, RECHECK usage sites for DeltaTableConfig, we'll need to re-evaluate if
             //      stuff begins writing to it
             let delta_table_config = DeltaTableConfig::default();
+            let load_metrics = SnapshotLoadMetrics::from_snapshot(&exec_scan_plan_scan_snapshot);
             Snapshot {
                 inner: exec_scan_plan_scan_snapshot,
                 //
                 config: delta_table_config,
                 schema,
+                load_metrics,
             }
         };
 

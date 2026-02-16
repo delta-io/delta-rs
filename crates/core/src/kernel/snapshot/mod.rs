@@ -55,6 +55,7 @@ pub use self::log_data::*;
 pub use iterators::*;
 pub use scan::*;
 pub use stream::*;
+use crate::kernel::size_limits::SnapshotLoadMetrics;
 
 mod iterators;
 mod log_data;
@@ -75,6 +76,8 @@ pub struct Snapshot {
     pub(crate) config: DeltaTableConfig,
     /// Logical table schema
     pub(crate) schema: SchemaRef,
+    /// Metrics captured during snapshot loading
+    pub(crate) load_metrics: SnapshotLoadMetrics,
 }
 
 impl Snapshot {
@@ -106,13 +109,8 @@ impl Snapshot {
             }
         };
 
-        let snapshot = if let Some(limiter) = &config.log_size_limiter {
-            let segment = limiter.truncate(snapshot.log_segment().clone(), log_store).await?;
-            let table_configuration = snapshot.table_configuration().clone();
-            Arc::new(KernelSnapshot::new(segment, table_configuration))
-        } else {
-            snapshot
-        };
+        let (snapshot, load_metrics) =
+            size_limits::apply_optional_log_limiter(snapshot, config.log_size_limiter.as_ref(), log_store).await?;
 
         let schema = Arc::new(
             snapshot
@@ -126,6 +124,7 @@ impl Snapshot {
             inner: snapshot,
             config,
             schema,
+            load_metrics,
         })
     }
 
@@ -191,10 +190,13 @@ impl Snapshot {
                 .try_into_arrow()?,
         );
 
+        let load_metrics = SnapshotLoadMetrics::from_snapshot(snapshot.as_ref());
+
         Ok(Arc::new(Self {
             inner: snapshot,
             schema,
             config: self.config.clone(),
+            load_metrics,
         }))
     }
 
@@ -225,6 +227,11 @@ impl Snapshot {
     /// Get the table config which is loaded with of the snapshot
     pub fn load_config(&self) -> &DeltaTableConfig {
         &self.config
+    }
+
+    /// Get the metrics captured during snapshot loading
+    pub fn load_metrics(&self) -> &SnapshotLoadMetrics {
+        &self.load_metrics
     }
 
     /// Get the table root of the snapshot
@@ -675,6 +682,11 @@ impl EagerSnapshot {
         self.snapshot.load_config()
     }
 
+    /// Get the metrics captured during snapshot loading
+    pub fn load_metrics(&self) -> &SnapshotLoadMetrics {
+        self.snapshot.load_metrics()
+    }
+
     /// Well known table configuration
     pub fn table_properties(&self) -> &TableProperties {
         self.snapshot.table_properties()
@@ -828,11 +840,14 @@ mod tests {
                 .as_ref()
                 .try_into_arrow()?;
 
+            let load_metrics = SnapshotLoadMetrics::from_snapshot(&snapshot);
+
             Ok((
                 Self {
                     inner: snapshot,
                     config: Default::default(),
                     schema: Arc::new(schema),
+                    load_metrics,
                 },
                 log_store,
             ))

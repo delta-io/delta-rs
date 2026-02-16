@@ -5,12 +5,168 @@ use std::collections::HashMap;
 use std::convert::identity;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::ops::RangeInclusive;
+use std::sync::Arc;
 use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-use delta_kernel::Version;
+use delta_kernel::Snapshot;
 use itertools::Itertools;
 use strum::Display;
 use tracing::{debug, info, trace, warn};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotLoadMetrics {
+    /// Current version of the snapshot
+    pub current_version: i64,
+
+    /// Oldest commit version included in the loaded snapshot
+    /// None if only checkpoint was loaded (no commits)
+    pub oldest_version_loaded: Option<i64>,
+
+    /// Final log segment size in bytes (after truncation if applied)
+    pub loaded_log_segment_size: u64,
+
+    /// Whether log size limiting was applied during load
+    pub log_size_limiter_applied: bool,
+
+    /// Original log segment size in bytes (before any truncation)
+    /// None if no limiter was configured
+    pub original_log_segment_size: Option<u64>,
+
+    /// Number of commits discarded due to truncation
+    /// None if no truncation occurred
+    pub num_commits_discarded: Option<usize>,
+}
+
+impl Default for SnapshotLoadMetrics {
+    fn default() -> Self {
+        Self {
+            current_version: 0,
+            oldest_version_loaded: None,
+            loaded_log_segment_size: 0,
+            log_size_limiter_applied: false,
+            original_log_segment_size: None,
+            num_commits_discarded: None,
+        }
+    }
+}
+
+pub(crate) fn log_segment_total_byte_size(segment: &LogSegment) -> u64 {
+    segment
+        .checkpoint_parts
+        .iter()
+        .chain(segment.ascending_commit_files.iter())
+        .map(|p| p.location.size)
+        .sum()
+}
+
+pub(crate) async fn apply_optional_log_limiter(
+    snapshot: Arc<Snapshot>,
+    limiter: Option<&LogSizeLimiter>,
+    log_store: &dyn LogStore,
+) -> DeltaResult<(Arc<Snapshot>, SnapshotLoadMetrics)> {
+    let current_version = snapshot.version() as i64;
+
+    if let Some(limiter) = limiter {
+        let original_segment = snapshot.log_segment().clone();
+        let original_size = log_segment_total_byte_size(&original_segment);
+
+        let (truncated_segment, truncation_info) =
+            limiter.truncate(original_segment, log_store).await?;
+        let table_configuration = snapshot.table_configuration().clone();
+
+        let oldest_version = truncated_segment
+            .ascending_commit_files
+            .first()
+            .map(|p| p.version as i64);
+
+        let metrics = match truncation_info {
+            Some(info) => SnapshotLoadMetrics::with_truncation(
+                current_version,
+                oldest_version,
+                info.truncated_size,
+                info.original_size,
+                info.commits_discarded,
+            ),
+            None => SnapshotLoadMetrics::no_truncation(
+                current_version,
+                oldest_version,
+                original_size,
+            ),
+        };
+
+        Ok((
+            Arc::new(Snapshot::new(truncated_segment, table_configuration)),
+            metrics,
+        ))
+    } else {
+        let metrics = SnapshotLoadMetrics::from_snapshot(snapshot.as_ref());
+        Ok((snapshot, metrics))
+    }
+}
+
+impl SnapshotLoadMetrics {
+    pub fn from_snapshot(snapshot: &Snapshot) -> Self {
+        let log_segment = snapshot.log_segment();
+        let log_size = log_segment_total_byte_size(log_segment);
+        let oldest_version = log_segment
+            .ascending_commit_files
+            .first()
+            .map(|p| p.version as i64);
+
+        SnapshotLoadMetrics::no_truncation(
+            snapshot.version() as i64,
+            oldest_version,
+            log_size,
+        )
+    }
+
+    pub fn no_truncation(
+        version: i64,
+        oldest_version: Option<i64>,
+        log_segment_size: u64,
+    ) -> Self {
+        Self {
+            current_version: version,
+            oldest_version_loaded: oldest_version,
+            loaded_log_segment_size: log_segment_size,
+            log_size_limiter_applied: false,
+            original_log_segment_size: None,
+            num_commits_discarded: None,
+        }
+    }
+
+    pub fn with_truncation(
+        version: i64,
+        oldest_version: Option<i64>,
+        truncated_size: u64,
+        original_size: u64,
+        commits_discarded: usize,
+    ) -> Self {
+        Self {
+            current_version: version,
+            oldest_version_loaded: oldest_version,
+            loaded_log_segment_size: truncated_size,
+            log_size_limiter_applied: true,
+            original_log_segment_size: Some(original_size),
+            num_commits_discarded: Some(commits_discarded),
+        }
+    }
+
+    pub fn was_truncated(&self) -> bool {
+        self.log_size_limiter_applied && self.num_commits_discarded.is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TruncationInfo {
+    /// Original log segment size in bytes (before truncation)
+    pub original_size: u64,
+    /// Final log segment size in bytes (after truncation)
+    pub truncated_size: u64,
+    /// Number of commits discarded
+    pub commits_discarded: usize,
+}
 
 #[derive(Debug, Clone, PartialEq, Display, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,15 +231,11 @@ impl LogSizeLimiter {
             .transpose()
     }
 
-    pub(super) async fn truncate(&self, log_segment: LogSegment, log_store: &dyn LogStore) -> DeltaResult<LogSegment> {
-        let total_size: u64 = log_segment
-            .checkpoint_parts
-            .iter()
-            .chain(log_segment.ascending_commit_files.iter())
-            .map(|parsed_path| parsed_path.location.size)
-            .sum();
+    pub(super) async fn truncate(&self, log_segment: LogSegment, log_store: &dyn LogStore) -> DeltaResult<(LogSegment, Option<TruncationInfo>)> {
+        let total_size: u64 = log_segment_total_byte_size(&log_segment);
         let total_size = total_size;
         let size_limit = self.size_limit.get();
+        let original_commit_count = log_segment.ascending_commit_files.len();
 
         if total_size > size_limit {
             warn!(
@@ -97,17 +249,28 @@ impl LogSizeLimiter {
                         Table log segment size ({} bytes) exceeds maximum allowed size ({} bytes).
                         Consider increasing the size limit or using an oversize policy other than {}.
                     "#, total_size, self.size_limit, self.oversize_policy))),
-                OversizePolicy::UseTruncatedCommitLog(num_commits) =>
-                    truncated_commit_log(log_segment, log_store, num_commits, size_limit).await,
+                OversizePolicy::UseTruncatedCommitLog(num_commits) => {
+                    let (truncated_segment, truncated_size) =
+                        truncated_commit_log(log_segment, log_store, num_commits, size_limit).await?;
+                    let final_commit_count = truncated_segment.ascending_commit_files.len();
+                    let commits_discarded = original_commit_count.saturating_sub(final_commit_count);
+
+                    let truncation_info = TruncationInfo {
+                        original_size: total_size,
+                        truncated_size,
+                        commits_discarded,
+                    };
+                    Ok((truncated_segment, Some(truncation_info)))
+                }
             }
         } else {
             debug!("Log segment size ({} bytes) is within the limit of {} bytes", total_size, size_limit);
-            Ok(log_segment)
+            Ok((log_segment, None))
         }
     }
 }
 
-async fn truncated_commit_log(log_segment: LogSegment, log_store: &dyn LogStore, num_commits: &NonZeroUsize, size_limit: u64) -> DeltaResult<LogSegment> {
+async fn truncated_commit_log(log_segment: LogSegment, log_store: &dyn LogStore, num_commits: &NonZeroUsize, size_limit: u64) -> DeltaResult<(LogSegment, u64)> {
     let num_commits = num_commits.get();
     let truncated_log: Vec<ParsedLogPath> = if log_segment.ascending_commit_files.len() < num_commits {
         let segment_version = log_segment.end_version as usize;
@@ -126,25 +289,32 @@ async fn truncated_commit_log(log_segment: LogSegment, log_store: &dyn LogStore,
     };
     let mut truncated_log_size = 0_u64; // keep track of the total size to cut it shorter if needed
     let latest_commit_file = truncated_log.last().cloned();
-    Ok(LogSegment {
+    let final_commits: Vec<ParsedLogPath> = truncated_log.into_iter()
+        .rev()
+        .take_while(|file_meta| {
+            truncated_log_size += file_meta.location.size;
+            truncated_log_size <= size_limit
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+
+    // Calculate the actual final size
+    let final_size: u64 = final_commits.iter().map(|f| f.location.size).sum();
+
+    let segment = LogSegment {
         end_version: log_segment.end_version,
-        ascending_commit_files: truncated_log.into_iter()
-            .rev()
-            .take_while(|file_meta| {
-                truncated_log_size += file_meta.location.size;
-                truncated_log_size <= size_limit
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect(),
+        ascending_commit_files: final_commits,
         checkpoint_parts: vec![],
         ascending_compaction_files: vec![],
         log_root: log_store.log_root_url(),
         checkpoint_version: None,
         latest_crc_file: None,
         latest_commit_file,
-    })
+    };
+
+    Ok((segment, final_size))
 }
 
 async fn list_commit_files(
@@ -272,7 +442,9 @@ mod tests {
         let segment = create_log_segment(&log_store, None).await?;
         assert_segment_with_checkpoint(&segment, 90, 10);
         // total size < size limit
-        assert_eq!(limiter.truncate(segment.clone(), &log_store).await?, segment);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment.clone(), &log_store).await?;
+        assert_eq!(truncated_segment, segment);
+        assert_eq!(truncation_info, None);
 
         Ok(())
     }
@@ -311,15 +483,18 @@ mod tests {
 
         let segment = create_log_segment(&log_store, Some(25)).await?;
         assert_segment_with_checkpoint(&segment, 25, 0);
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 16..=25);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 16..=25);
 
         let segment = create_log_segment(&log_store, Some(7)).await?;
         assert_segment_with_checkpoint(&segment, 5, 2);
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 0..=7);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 0..=7);
 
         let segment = create_log_segment(&log_store, Some(19)).await?;
         assert_segment_with_checkpoint(&segment, 15, 4);
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 10..=19);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 10..=19);
 
         Ok(())
     }
@@ -337,12 +512,14 @@ mod tests {
         let segment = create_log_segment(&log_store, Some(30)).await?;
         assert_segment_with_commits_only(&segment, 0..=30);
         // size limit not exceeded: 31 commits * 10 bytes < 500 bytes, segment not truncated
-        assert_eq!(limiter.truncate(segment.clone(), &log_store).await?, segment);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment.clone(), &log_store).await?;
+        assert_eq!(truncated_segment, segment);
 
         let segment = create_log_segment(&log_store, Some(75)).await?;
         assert_segment_with_commits_only(&segment, 0..=75);
         // size limit exceeded: 75 commits * 10 bytes > 500 bytes; keeps the last 10 commits
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 66..=75);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 66..=75);
 
         Ok(())
     }
@@ -360,7 +537,8 @@ mod tests {
         let segment = create_log_segment(&log_store, Some(70)).await?;
         assert_segment_with_checkpoint(&segment, 50, 20);
         // less than 50 commits available in the vacuumed store
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 30..=70);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 30..=70);
 
         Ok(())
     }
@@ -378,7 +556,8 @@ mod tests {
         let segment = create_log_segment(&log_store, None).await?;
         assert_segment_with_checkpoint(&segment, 125, 25);
         // only loads 50 commits instead of the configured 100 to stay within the size limit
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 101..=150);
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 101..=150);
 
         Ok(())
     }
@@ -398,7 +577,8 @@ mod tests {
 
         let segment = create_log_segment(&log_store, Some(23)).await?;
         assert_segment_with_checkpoint(&segment, 20, 3);
-        assert_segment_with_commits_only(&limiter.truncate(segment, &log_store).await?, 4..=23 );
+        let (truncated_segment, truncation_info) = limiter.truncate(segment, &log_store).await?;
+        assert_segment_with_commits_only(&truncated_segment, 4..=23 );
         Ok(())
     }
 
@@ -456,8 +636,6 @@ mod tests {
         use object_store::{GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult};
         use std::ops::RangeInclusive;
         use std::sync::Arc;
-        use rand::seq::SliceRandom;
-        use rand::thread_rng;
         use url::Url;
         use uuid::Uuid;
 

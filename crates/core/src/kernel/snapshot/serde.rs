@@ -18,6 +18,7 @@ use url::Url;
 use crate::DeltaTableConfig;
 
 use super::{EagerSnapshot, Snapshot};
+use super::size_limits::SnapshotLoadMetrics;
 
 impl Serialize for Snapshot {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -219,10 +220,13 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .try_into_arrow()
             .map_err(de::Error::custom)?;
 
+        let load_metrics = SnapshotLoadMetrics::from_snapshot(&snapshot);
+
         Ok(Snapshot {
             inner: Arc::new(snapshot),
             schema: Arc::new(schema),
             config,
+            load_metrics,
         })
     }
 }
