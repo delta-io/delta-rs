@@ -302,33 +302,48 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .map(|f| f.add_action())
         .collect_vec();
 
-    let batch = snapshot.add_actions_table(true)?;
-    let schema = batch.schema();
-    let mut arrays = Vec::with_capacity(schema.fields().len());
-    let mut fields = Vec::with_capacity(schema.fields().len());
+    // Use add_actions_batches to avoid concatenating all file metadata into a
+    // single RecordBatch which can exceed the 2GB Arrow 32-bit offset limit
+    // for tables with a very large number of files.
+    let all_batches = snapshot.add_actions_batches(true)?;
+    if all_batches.is_empty() {
+        return Ok(vec![]);
+    }
 
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
+    let first_schema = all_batches[0].schema();
+    let mut fields = Vec::with_capacity(first_schema.fields().len());
     fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for field in schema.fields() {
+    for field in first_schema.fields() {
         if let Some(name) = field.name().strip_prefix("partition.") {
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
             fields.push(field.as_ref().clone().with_name(name));
         }
     }
-
     let schema = Arc::new(Schema::new(fields));
-    let mem_table = MemTable::try_new(
-        schema.clone(),
-        vec![vec![RecordBatch::try_new(schema, arrays)?]],
-    )?;
+
+    let mut mem_batches = Vec::with_capacity(all_batches.len());
+    for batch in &all_batches {
+        let batch_schema = batch.schema();
+        let mut arrays = Vec::with_capacity(schema.fields().len());
+
+        arrays.push(
+            batch
+                .column_by_name("path")
+                .ok_or(DeltaTableError::Generic(
+                    "Column with name `path` does not exist".to_owned(),
+                ))?
+                .to_owned(),
+        );
+
+        for field in batch_schema.fields() {
+            if field.name().strip_prefix("partition.").is_some() {
+                arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
+            }
+        }
+
+        mem_batches.push(RecordBatch::try_new(schema.clone(), arrays)?);
+    }
+
+    let mem_table = MemTable::try_new(schema, vec![mem_batches])?;
 
     let ctx = SessionContext::new();
     let mut df = ctx.read_table(Arc::new(mem_table))?;
@@ -374,4 +389,50 @@ fn df_logical_schema(
     fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
 
     Ok(Arc::new(Schema::new(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::prelude::{col, lit};
+
+    use crate::protocol::SaveMode;
+    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use crate::{DeltaResult, DeltaTable};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_scan_memory_table_returns_empty_for_empty_table() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(table.snapshot()?.snapshot(), &predicate).await?;
+        assert!(matches.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_filters_partition_values() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let total_actions = snapshot.log_data().iter().count();
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(snapshot, &predicate).await?;
+
+        assert!(!matches.is_empty());
+        assert!(matches.len() < total_actions);
+        Ok(())
+    }
 }
