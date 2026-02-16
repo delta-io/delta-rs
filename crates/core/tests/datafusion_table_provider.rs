@@ -58,21 +58,50 @@ fn file_id_at_row(batch: &RecordBatch, row: usize) -> Option<String> {
         .column(file_id_idx)
         .as_any()
         .downcast_ref::<DictionaryArray<UInt16Type>>()?;
+    if row >= dict.len() {
+        return None;
+    }
     if dict.is_null(row) {
         return None;
     }
 
     let key = dict.keys().value(row) as usize;
     if let Some(values) = dict.values().as_any().downcast_ref::<StringArray>() {
-        Some(values.value(key).to_string())
+        (key < values.len()).then(|| values.value(key).to_string())
     } else if let Some(values) = dict.values().as_any().downcast_ref::<StringViewArray>() {
-        Some(values.value(key).to_string())
+        (key < values.len()).then(|| values.value(key).to_string())
     } else {
         panic!(
             "unexpected file_id dictionary value type: {:?}",
             dict.values().data_type()
         );
     }
+}
+
+#[test]
+fn test_file_id_at_row_out_of_bounds_returns_none() {
+    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::{DictionaryArray, Int32Array, StringArray, UInt16Array};
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Int32, false),
+        Field::new(
+            "file_id",
+            DataType::Dictionary(DataType::UInt16.into(), DataType::Utf8.into()),
+            false,
+        ),
+    ]));
+    let file_ids = DictionaryArray::new(
+        UInt16Array::from(vec![Some(0)]),
+        Arc::new(StringArray::from(vec!["f0"])),
+    );
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Int32Array::from(vec![1])), Arc::new(file_ids)],
+    )
+    .expect("valid batch");
+
+    assert_eq!(file_id_at_row(&batch, 1), None);
 }
 
 #[tokio::test]
