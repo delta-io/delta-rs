@@ -59,8 +59,8 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyCapsule, PyDict, PyFrozenSet, PyModule};
 use pyo3::{IntoPyObjectExt, prelude::*};
-use pyo3_arrow::export::{Arro3RecordBatch, Arro3RecordBatchReader};
-use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema};
+use pyo3_arrow::export::{Arro3RecordBatchReader, Arro3Table};
+use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema, PyTable};
 use schema::PySchema;
 use serde_json::{Map, Value};
 use std::cmp::min;
@@ -1622,19 +1622,29 @@ impl RawDeltaTable {
 
         Ok(())
     }
-
-    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3RecordBatch> {
-        // replace with Arro3RecordBatch once new release is done for arro3.core
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3Table> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        let batch = self.with_table(|t| {
-            Ok(t.snapshot()
-                .map_err(PythonError::from)?
-                .add_actions_table(flatten)
-                .map_err(PythonError::from)?)
+        let table: PyTable = self.with_table(|t| -> PyResult<PyTable> {
+            let state = t.snapshot().map_err(PythonError::from)?;
+            let mut batches = state
+                .add_actions_batches(flatten)
+                .map_err(PythonError::from)?;
+
+            // Preserve schema on empty tables by materializing a single empty batch.
+            if batches.is_empty() {
+                batches.push(
+                    state
+                        .add_actions_table(flatten)
+                        .map_err(PythonError::from)?,
+                );
+            }
+
+            let schema = batches[0].schema_ref().clone();
+            PyTable::try_new(batches, schema)
         })?;
-        Ok(batch.into())
+        Ok(table.into())
     }
 
     pub fn get_add_file_sizes(&self) -> PyResult<HashMap<String, i64>> {
