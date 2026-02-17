@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-catalog-glue"
-version = "0.14.0"
+version = "0.15.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -25,7 +25,7 @@ aws-sdk-glue = { version = "1.120", default-features = false, features = [
     # Use the new default HTTPS client stack (no hyper 0.14).
     "default-https-client",
 ] }
-deltalake-core = { version = "0.30.0", path = "../core" }
+deltalake-core = { version = "0.31.0", path = "../core" }
 thiserror = { workspace = true }
 
 [dev-dependencies]
