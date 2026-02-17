@@ -30,19 +30,19 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 
 # crates.io dependencies
-aws-smithy-runtime-api = { version = "1.8" }
-aws-smithy-runtime = { version = "1.8", optional = true }
+aws-smithy-runtime-api = { version = "1.11" }
+aws-smithy-runtime = { version = "1.10", optional = true }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
 aws-config = { version = "1.8", features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "1.93.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "1.105.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "1.86.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.98.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
