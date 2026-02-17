@@ -39,14 +39,52 @@ use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
+fn parse_channel_size(raw: Option<&str>) -> usize {
+    raw.and_then(|s| s.parse::<usize>().ok())
+        .filter(|size| *size > 0)
+        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+}
+
 fn channel_size() -> usize {
     static CHANNEL_SIZE: OnceLock<usize> = OnceLock::new();
     *CHANNEL_SIZE.get_or_init(|| {
-        std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+        parse_channel_size(
+            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
+                .ok()
+                .as_deref(),
+        )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_WRITER_BATCH_CHANNEL_SIZE, parse_channel_size};
+
+    #[test]
+    fn channel_size_zero_falls_back_to_default() {
+        assert_eq!(
+            parse_channel_size(Some("0")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn channel_size_positive_value_is_used() {
+        assert_eq!(parse_channel_size(Some("8")), 8);
+    }
+
+    #[test]
+    fn channel_size_invalid_value_falls_back_to_default() {
+        assert_eq!(
+            parse_channel_size(Some("abc")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn channel_size_missing_value_falls_back_to_default() {
+        assert_eq!(parse_channel_size(None), DEFAULT_WRITER_BATCH_CHANNEL_SIZE);
+    }
 }
 
 /// Cap on concurrent writer tasks. Each writer holds open multipart uploads
