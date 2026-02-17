@@ -1,11 +1,11 @@
 [package]
 name = "deltalake-test"
-version = "0.13.0"
+version = "0.14.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-deltalake-core = { version = "0.30.0", path = "../core", features = [
+deltalake-core = { version = "0.31.0", path = "../core", features = [
     "integration_test",
 ] }
 
