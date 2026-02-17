@@ -2,6 +2,7 @@
 
 use std::sync::LazyLock;
 
+use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use arrow::compute::filter_record_batch;
@@ -65,7 +66,15 @@ pub(crate) async fn create_checkpoint_for(
 
     let root_store = log_store.root_object_store(operation_id);
     let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
-    let mut writer = AsyncArrowWriter::try_new(object_store_writer, first_batch.schema(), None)?;
+    let mut writer = AsyncArrowWriter::try_new(
+        object_store_writer,
+        first_batch.schema(),
+        Some(
+            WriterProperties::builder()
+                .set_compression(parquet::basic::Compression::SNAPPY)
+                .build(),
+        ),
+    )?;
     writer.write(&first_batch).await?;
 
     // Hold onto the schema used for future batches.
