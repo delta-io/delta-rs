@@ -31,9 +31,7 @@ use crate::delta_datafusion::{
     validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{
-    Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt,
-};
+use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::write::WriterStatsConfig;
@@ -48,6 +46,21 @@ fn channel_size() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+    })
+}
+
+/// Cap on concurrent writer tasks. Each writer holds open multipart uploads
+/// and in-memory buffers, so more writers means higher memory and FD usage.
+/// Defaults to `num_cpus` (matching DataFusion's `target_partitions`),
+/// clamped to [1, 128]. Override via `DELTARS_MAX_CONCURRENT_WRITERS`.
+fn max_concurrent_writers() -> usize {
+    static MAX_WRITERS: OnceLock<usize> = OnceLock::new();
+    *MAX_WRITERS.get_or_init(|| {
+        std::env::var("DELTARS_MAX_CONCURRENT_WRITERS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or_else(num_cpus::get)
+            .clamp(1, 128)
     })
 }
 
@@ -383,16 +396,19 @@ pub(crate) async fn write_exec_plan(
 
 /// Hash repartitions the plan by partition columns so each stream
 /// writes to disjoint Delta partitions.
+/// The output partition count is capped by `DELTARS_MAX_CONCURRENT_WRITERS`
 /// Returns the plan unchanged if there is only a single stream.
 fn repartition_by_partition_columns(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: &[String],
 ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-    let num_partitions = plan.output_partitioning().partition_count();
+    let original_count = plan.output_partitioning().partition_count();
 
-    if num_partitions <= 1 {
+    if original_count <= 1 {
         return Ok(plan);
     }
+
+    let num_partitions = original_count.min(max_concurrent_writers());
 
     let schema = plan.schema();
     let hash_exprs = partition_columns
