@@ -596,6 +596,9 @@ pub enum TableFeatures {
     /// timestamps without timezone support
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
+    /// Timestamps that are nanosecond resolution
+    #[serde(rename = "timestampNanos")]
+    TimestampNanos,
     /// version 2 of checkpointing
     V2Checkpoint,
     /// Append Only Tables
@@ -627,6 +630,7 @@ impl FromStr for TableFeatures {
             "columnMapping" => Ok(TableFeatures::ColumnMapping),
             "deletionVectors" => Ok(TableFeatures::DeletionVectors),
             "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            "timestampNanos" => Ok(TableFeatures::TimestampNanos),
             "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
             "appendOnly" => Ok(TableFeatures::AppendOnly),
             "invariants" => Ok(TableFeatures::Invariants),
@@ -649,6 +653,7 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::ColumnMapping => "columnMapping",
             TableFeatures::DeletionVectors => "deletionVectors",
             TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            TableFeatures::TimestampNanos => "timestampNanos",
             TableFeatures::V2Checkpoint => "v2Checkpoint",
             TableFeatures::AppendOnly => "appendOnly",
             TableFeatures::Invariants => "invariants",
@@ -707,6 +712,7 @@ impl TableFeatures {
                     | TableFeature::ColumnMapping
                     | TableFeature::DeletionVectors
                     | TableFeature::TimestampWithoutTimezone
+                    | TableFeature::TimestampNanos
                     | TableFeature::TypeWidening
                     | TableFeature::TypeWideningPreview
                     | TableFeature::V2Checkpoint

@@ -2230,9 +2230,9 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Long(val) => val.into_py_any(py)?,
         Float(val) => val.into_py_any(py)?,
         Double(val) => val.into_py_any(py)?,
-        Timestamp(_) => {
+        Timestamp(_) | TimestampNanos(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // scalar value to pa.timestamp("us","UTC")
+            // scalar value to pa.timestamp("us","UTC") or pa.timestamp("ns", "UTC")
             let value = value.serialize();
             format!("{value}Z").into_py_any(py)?
         }
