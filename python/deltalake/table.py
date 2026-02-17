@@ -1017,6 +1017,12 @@ class DeltaTable:
         """
         self._table.create_checkpoint()
 
+    def compact_logs(self, starting_version: int, ending_version: int) -> None:
+        """
+        Create a compaction log for a given version range.
+        """
+        self._table.compact_logs(starting_version, ending_version)
+
     def cleanup_metadata(self) -> None:
         """
         Delete expired log files before current version from table. The table log retention is based on

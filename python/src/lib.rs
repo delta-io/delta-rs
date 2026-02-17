@@ -51,6 +51,7 @@ use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::PartitionFilter;
+use deltalake::protocol::log_compaction::compact_logs;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
 use deltalake::table::state::DeltaTableState;
@@ -1596,6 +1597,60 @@ impl RawDeltaTable {
                         .await
                         .map_err(PythonError::from)
                         .map_err(PyErr::from),
+                    Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
+                }
+            });
+
+            // Runs lakefs post-execution for file operations
+            if store.name() == "LakeFSLogStore" {
+                rt().block_on(async {
+                    handle
+                        .after_post_commit_hook(store, true, operation_id)
+                        .await
+                })
+                .map_err(PythonError::from)?;
+            }
+            result
+        })?;
+
+        Ok(())
+    }
+
+    #[pyo3(signature = (starting_version, ending_version))]
+    pub fn compact_logs(
+        &self,
+        py: Python,
+        starting_version: i64,
+        ending_version: i64,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            let operation_id = Uuid::new_v4();
+            let handle = Arc::new(LakeFSCustomExecuteHandler {});
+            let store = &self.log_store()?;
+
+            // Runs lakefs pre-execution
+            if store.name() == "LakeFSLogStore" {
+                #[allow(clippy::await_holding_lock)]
+                rt().block_on(async {
+                    handle
+                        .before_post_commit_hook(store, true, operation_id)
+                        .await
+                })
+                .map_err(PythonError::from)?;
+            }
+
+            #[allow(clippy::await_holding_lock)]
+            let result = rt().block_on(async {
+                match self._table.lock() {
+                    Ok(table) => compact_logs(
+                        &table,
+                        starting_version as u64,
+                        ending_version as u64,
+                        Some(operation_id),
+                    )
+                    .await
+                    .map_err(PythonError::from)
+                    .map_err(PyErr::from),
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
                 }
             });
