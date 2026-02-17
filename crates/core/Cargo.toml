@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.30.1"
+version = "0.31.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -15,7 +15,7 @@ rust-version.workspace = true
 features = ["datafusion", "json"]
 
 [dependencies]
-deltalake-derive = { version = "0.30.0", path = "../derive" }
+deltalake-derive = { version = "0.31.0", path = "../derive" }
 
 delta_kernel.workspace = true
 
