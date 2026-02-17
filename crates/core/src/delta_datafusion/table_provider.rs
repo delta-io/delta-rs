@@ -405,7 +405,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         .snapshot
                         .log_data()
                         .iter()
-                        .map(|f| f.add_action())
+                        .map(|f| f.add_action_no_stats())
                         .collect_vec();
                     let files_scanned = files.len();
                     (files, files_scanned, 0, None)
@@ -432,7 +432,7 @@ impl<'a> DeltaScanBuilder<'a> {
                         .into_iter().zip(files_to_prune.iter().cloned())
                     {
                         // prune file based on predicate pushdown
-                        let action = file_view.add_action();
+                        let action = file_view.add_action_no_stats();
                         let num_records = file_view.num_records();
                         if keep {
                             // prune file based on limit pushdown

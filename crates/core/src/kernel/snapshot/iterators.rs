@@ -299,6 +299,24 @@ impl LogicalFileView {
         }
     }
 
+    /// Converts this file view into an Add action for log operations.
+    /// FIXME: Double json > stats conversion TOO EXPENSIVE
+    pub(crate) fn add_action_no_stats(&self) -> Add {
+        Add {
+            path: self.path().to_string(),
+            partition_values: self.partition_values_map(),
+            size: self.size(),
+            modification_time: self.modification_time(),
+            data_change: true,
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+        }
+    }
+
     /// Converts this file view into a Remove action for log operations.
     pub fn remove_action(&self, data_change: bool) -> Remove {
         Remove {
