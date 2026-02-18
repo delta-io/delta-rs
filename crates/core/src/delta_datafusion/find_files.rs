@@ -44,6 +44,17 @@ pub(crate) struct FindFiles {
     pub partition_scan: bool,
 }
 
+/// Abstraction over sources that can provide partition metadata add-action batches.
+pub(crate) trait PartitionAddActionsProvider {
+    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>>;
+}
+
+impl PartitionAddActionsProvider for EagerSnapshot {
+    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
+        EagerSnapshot::add_actions_partition_batches(self)
+    }
+}
+
 /// Finds files in a snapshot that match the provided predicate.
 #[instrument(
     skip_all,
@@ -322,7 +333,7 @@ async fn find_files_scan(
 /// partition predicates without materializing full add-action metadata.
 /// Returns `None` when the snapshot contains no add actions.
 pub(crate) fn add_actions_partition_mem_table(
-    snapshot: &EagerSnapshot,
+    snapshot: &(impl PartitionAddActionsProvider + ?Sized),
 ) -> DeltaResult<Option<MemTable>> {
     let add_action_batches = snapshot.add_actions_partition_batches()?;
     if add_action_batches.is_empty() {
@@ -726,6 +737,26 @@ mod tests {
             .map(|idx| format!("modified=2021-02-02/file-{idx:05}.parquet"))
             .collect::<HashSet<_>>();
         assert_eq!(match_paths, expected_paths);
+        Ok(())
+    }
+
+    struct MockPartitionProvider {
+        batches: Vec<RecordBatch>,
+    }
+
+    impl PartitionAddActionsProvider for MockPartitionProvider {
+        fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
+            Ok(self.batches.clone())
+        }
+    }
+
+    #[test]
+    fn test_add_actions_partition_mem_table_accepts_generic_provider() -> DeltaResult<()> {
+        let provider = MockPartitionProvider {
+            batches: Vec::new(),
+        };
+        let mem_table = add_actions_partition_mem_table(&provider)?;
+        assert!(mem_table.is_none());
         Ok(())
     }
 }
