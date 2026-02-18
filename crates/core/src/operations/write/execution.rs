@@ -39,6 +39,7 @@ use crate::operations::write::WriterStatsConfig;
 use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
+const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
 
 fn parse_channel_size(raw: Option<&str>) -> usize {
     raw.and_then(|s| s.parse::<usize>().ok())
@@ -65,10 +66,12 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use std::task::{Context, Poll};
+    use std::time::Duration;
 
     use arrow_array::{Int64Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use datafusion::common::Result as DataFusionResult;
+    use datafusion::error::DataFusionError;
     use datafusion::physical_plan::{RecordBatchStream, stream::RecordBatchStreamAdapter};
     use delta_kernel::table_properties::DataSkippingNumIndexedCols;
     use futures::{Stream, stream};
@@ -105,6 +108,30 @@ mod tests {
         assert_eq!(parse_channel_size(None), DEFAULT_WRITER_BATCH_CHANNEL_SIZE);
     }
 
+    fn write_streams_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            true,
+        )]))
+    }
+
+    fn write_streams_config(schema: Arc<ArrowSchema>) -> WriterConfig {
+        WriterConfig::new(
+            schema,
+            vec![],
+            None,
+            Some(1024),
+            Some(1024),
+            DataSkippingNumIndexedCols::NumColumns(32),
+            None,
+        )
+    }
+
+    fn write_streams_object_store() -> ObjectStoreRef {
+        Arc::new(InMemory::new()) as ObjectStoreRef
+    }
+
     struct PendingDropStream {
         schema: Arc<ArrowSchema>,
         dropped: Arc<AtomicBool>,
@@ -132,20 +159,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_streams_aborts_workers_when_writer_fails() {
-        let expected_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "id",
-            DataType::Int32,
-            true,
-        )]));
-        let config = WriterConfig::new(
-            expected_schema.clone(),
-            vec![],
-            None,
-            Some(1024),
-            Some(1024),
-            DataSkippingNumIndexedCols::NumColumns(32),
-            None,
-        );
+        let expected_schema = write_streams_schema();
+        let config = write_streams_config(expected_schema.clone());
 
         let dropped = Arc::new(AtomicBool::new(false));
         let pending_stream: SendableRecordBatchStream = Box::pin(PendingDropStream {
@@ -170,8 +185,9 @@ mod tests {
             )]),
         ));
 
-        let object_store = Arc::new(InMemory::new()) as ObjectStoreRef;
-        let result = write_streams(vec![pending_stream, failing_stream], object_store, config).await;
+        let object_store = write_streams_object_store();
+        let result =
+            write_streams(vec![pending_stream, failing_stream], object_store, config).await;
 
         assert!(
             result.is_err(),
@@ -180,6 +196,48 @@ mod tests {
         assert!(
             dropped.load(Ordering::SeqCst),
             "expected pending worker stream to be dropped when writer fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_streams_does_not_hang_when_worker_fails() {
+        let expected_schema = write_streams_schema();
+        let config = write_streams_config(expected_schema.clone());
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let pending_stream: SendableRecordBatchStream = Box::pin(PendingDropStream {
+            schema: expected_schema.clone(),
+            dropped: dropped.clone(),
+        });
+
+        let failing_worker_stream: SendableRecordBatchStream =
+            Box::pin(RecordBatchStreamAdapter::new(
+                expected_schema,
+                stream::iter(vec![Err::<RecordBatch, DataFusionError>(
+                    DataFusionError::Execution("worker stream failed".to_string()),
+                )]),
+            ));
+
+        let object_store = write_streams_object_store();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            write_streams(
+                vec![pending_stream, failing_worker_stream],
+                object_store,
+                config,
+            ),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "write_streams hung waiting for writer completion"
+        );
+        let result = result.unwrap();
+        assert!(result.is_err(), "expected worker stream failure to surface");
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "expected pending stream to be dropped when a worker fails"
         );
     }
 }
@@ -545,9 +603,10 @@ pub(crate) async fn write_streams(
     object_store: ObjectStoreRef,
     config: WriterConfig,
 ) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
+    let worker_count = streams.len();
     let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
 
-    let writer_handle = tokio::task::spawn(async move {
+    let mut writer_handle = tokio::task::spawn(async move {
         let mut writer = DeltaWriter::new(object_store, config);
         let mut total_write_ms: u64 = 0;
         let mut rows_written: u64 = 0;
@@ -561,44 +620,86 @@ pub(crate) async fn write_streams(
         Ok::<(Vec<Add>, u64, u64), DeltaTableError>((adds, total_write_ms, rows_written))
     });
 
-    let mut worker_handles = Vec::with_capacity(streams.len());
+    let mut worker_set = JoinSet::new();
     for mut stream in streams {
         let tx_clone = tx.clone();
-        worker_handles.push(tokio::task::spawn(async move {
+        worker_set.spawn(async move {
             while let Some(maybe_batch) = stream.next().await {
                 let batch = maybe_batch?;
                 tx_clone.send(batch).await.map_err(|_| {
-                    DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
+                    DeltaTableError::Generic(WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG.to_string())
                 })?;
             }
             Ok::<(), DeltaTableError>(())
-        }));
+        });
     }
 
     drop(tx);
 
-    let writer_result = writer_handle
-        .await
-        .map_err(|e| DeltaTableError::Generic(format!("writer join error: {e}")))
-        .and_then(|join_res| join_res);
-    let writer_failed = writer_result.is_err();
+    let mut worker_error: Option<DeltaTableError> = None;
+    let mut writer_result: Option<DeltaResult<(Vec<Add>, u64, u64)>> = None;
+    let mut workers_remaining = worker_count;
 
-    if writer_failed {
-        for handle in &worker_handles {
-            handle.abort();
+    while workers_remaining > 0 || writer_result.is_none() {
+        tokio::select! {
+            writer_join = &mut writer_handle, if writer_result.is_none() => {
+                let result = writer_join
+                    .map_err(|e| DeltaTableError::Generic(format!("writer join error: {e}")))
+                    .and_then(|join_res| join_res);
+                if result.is_err() && workers_remaining > 0 {
+                    worker_set.abort_all();
+                }
+                writer_result = Some(result);
+            }
+            worker_join = worker_set.join_next(), if workers_remaining > 0 => {
+                let Some(worker_join) = worker_join else {
+                    workers_remaining = 0;
+                    continue;
+                };
+                workers_remaining -= 1;
+
+                match worker_join {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        let writer_failed = writer_result.as_ref().is_some_and(Result::is_err);
+                        if worker_error.is_none()
+                            && !(writer_failed && is_writer_task_closed_error(&err))
+                        {
+                            worker_error = Some(err);
+                        }
+                        worker_set.abort_all();
+                    }
+                    Err(join_err) if join_err.is_cancelled() => {
+                        let writer_failed = writer_result.as_ref().is_some_and(Result::is_err);
+                        if worker_error.is_none() && !writer_failed {
+                            worker_error = Some(DeltaTableError::Generic(format!(
+                                "worker task unexpectedly cancelled while driving partition: {join_err}"
+                            )));
+                        }
+                    }
+                    Err(join_err) => {
+                        if worker_error.is_none() {
+                            worker_error = Some(DeltaTableError::Generic(format!(
+                                "worker join error when driving partition: {join_err}"
+                            )));
+                        }
+                        worker_set.abort_all();
+                    }
+                }
+            }
         }
     }
 
-    let mut worker_error: Option<DeltaTableError> = None;
-    for handle in worker_handles {
-        match handle.await {
+    while let Some(worker_join) = worker_set.join_next().await {
+        match worker_join {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                if worker_error.is_none() {
+                let writer_failed = writer_result.as_ref().is_some_and(Result::is_err);
+                if worker_error.is_none() && !(writer_failed && is_writer_task_closed_error(&err)) {
                     worker_error = Some(err);
                 }
             }
-            Err(join_err) if writer_failed && join_err.is_cancelled() => {}
+            Err(join_err) if join_err.is_cancelled() => {}
             Err(join_err) => {
                 if worker_error.is_none() {
                     worker_error = Some(DeltaTableError::Generic(format!(
@@ -609,7 +710,14 @@ pub(crate) async fn write_streams(
         }
     }
 
-    let (adds, write_time_ms, rows_written) = writer_result?;
+    let writer_result = writer_result.ok_or_else(|| {
+        DeltaTableError::Generic("writer task did not produce a result".to_string())
+    })?;
+    let (adds, write_time_ms, rows_written) = match writer_result {
+        Ok(values) => values,
+        Err(err) => return Err(err),
+    };
+
     if let Some(err) = worker_error {
         return Err(err);
     }
@@ -621,6 +729,10 @@ pub(crate) async fn write_streams(
             write_time_ms,
         },
     ))
+}
+
+fn is_writer_task_closed_error(err: &DeltaTableError) -> bool {
+    matches!(err, DeltaTableError::Generic(msg) if msg == WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG)
 }
 
 /// Hash repartitions the plan by partition columns so each stream
@@ -670,71 +782,20 @@ async fn write_data_plan(
         writer_stats_config.stats_columns.clone(),
     );
 
-    // Keep the previous single-writer fan-in path for unpartitioned tables.
+    // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
-        let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
-
-        let writer_handle = tokio::task::spawn(async move {
-            let mut writer = DeltaWriter::new(object_store.clone(), config);
-            let mut total_write_ms: u64 = 0;
-            while let Some(batch) = rx.recv().await {
-                let wstart = std::time::Instant::now();
-                writer.write(&batch).await?;
-                total_write_ms += wstart.elapsed().as_millis() as u64;
-            }
-            let adds = writer.close().await?;
-            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, total_write_ms))
-        });
-
         let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
-        let mut worker_handles = Vec::with_capacity(partition_streams.len());
         let scan_start = std::time::Instant::now();
-        for mut partition_stream in partition_streams {
-            let tx_clone = tx.clone();
-            let handle = tokio::task::spawn(async move {
-                while let Some(maybe_batch) = partition_stream.next().await {
-                    let batch = maybe_batch?;
-                    tx_clone.send(batch).await.map_err(|_| {
-                        DeltaTableError::Generic("Writer task closed unexpectedly".to_string())
-                    })?;
-                }
-                Ok::<(), DeltaTableError>(())
-            });
-            worker_handles.push(handle);
-        }
-        drop(tx);
-
-        let join_res = writer_handle
-            .await
-            .map_err(|e| DeltaTableError::Generic(format!("writer join error: {e}")))?;
-        let (adds, write_time_ms) = match join_res {
-            Ok(ok) => ok,
-            Err(e) => {
-                for handle in &worker_handles {
-                    handle.abort();
-                }
-                for handle in worker_handles {
-                    let _ = handle.await;
-                }
-                return Err(e);
-            }
-        };
-
-        for h in worker_handles {
-            let join_res = h.await.map_err(|e| {
-                DeltaTableError::Generic(format!("worker join error when driving partition: {e}"))
-            })?;
-            join_res?;
-        }
+        let (adds, stream_metrics) = write_streams(partition_streams, object_store, config).await?;
 
         let scan_time_ms = scan_start
             .elapsed()
             .as_millis()
-            .saturating_sub(write_time_ms as u128) as u64;
+            .saturating_sub(stream_metrics.write_time_ms as u128) as u64;
 
         let metrics = WriteExecutionPlanMetrics {
             scan_time_ms,
-            write_time_ms,
+            write_time_ms: stream_metrics.write_time_ms,
         };
 
         let actions = adds.into_iter().map(Action::Add).collect::<Vec<_>>();
