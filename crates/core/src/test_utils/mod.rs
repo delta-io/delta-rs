@@ -187,6 +187,58 @@ macro_rules! assert_batches_sorted_eq {
 
 pub use assert_batches_sorted_eq;
 
+/// Build a single add action fixture with default metadata values for tests.
+#[cfg(test)]
+pub(crate) fn make_test_add(
+    path: impl Into<String>,
+    partitions: &[(&str, &str)],
+    modification_time: i64,
+) -> crate::kernel::Add {
+    use crate::kernel::Add;
+
+    Add {
+        path: path.into(),
+        partition_values: partitions
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), Some((*v).to_string())))
+            .collect(),
+        size: 0,
+        modification_time,
+        data_change: true,
+        stats: None,
+        tags: None,
+        deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        clustering_provider: None,
+    }
+}
+
+/// Build add actions for a large partitioned fixture with alternating partition values.
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) fn multibatch_add_actions_for_partition(
+    action_count: usize,
+    partition_column: &str,
+    even_value: &str,
+    odd_value: &str,
+) -> Vec<crate::kernel::Action> {
+    use chrono::Utc;
+
+    use crate::kernel::Action;
+
+    let now_ms = Utc::now().timestamp_millis();
+    (0..action_count)
+        .map(|idx| {
+            let partition_value = if idx % 2 == 0 { even_value } else { odd_value };
+            Action::Add(make_test_add(
+                format!("{partition_column}={partition_value}/file-{idx:05}.parquet"),
+                &[(partition_column, partition_value)],
+                now_ms,
+            ))
+        })
+        .collect::<Vec<_>>()
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;

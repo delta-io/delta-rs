@@ -599,7 +599,7 @@ mod tests {
         DeltaTable,
         delta_datafusion::create_session,
         protocol::SaveMode,
-        test_utils::{TestResult, open_fs_path},
+        test_utils::{TestResult, multibatch_add_actions_for_partition, open_fs_path},
         writer::test_utils::{get_delta_schema, get_record_batch},
     };
 
@@ -682,6 +682,50 @@ mod tests {
 
         assert!(!matches.is_empty());
         assert!(matches.len() < total_actions);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_multibatch_stress_partition_filtering() -> TestResult {
+        use std::collections::HashSet;
+
+        let action_count = 9000usize;
+        let expected_matches = action_count / 2;
+        let actions = multibatch_add_actions_for_partition(
+            action_count,
+            "modified",
+            "2021-02-02",
+            "2021-02-03",
+        );
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_actions(actions)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let add_action_batches = snapshot.add_actions_partition_batches()?;
+        assert!(
+            add_action_batches.len() > 1,
+            "expected multi-batch partition metadata fixture"
+        );
+
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(snapshot, &predicate).await?;
+
+        assert_eq!(matches.len(), expected_matches);
+
+        let match_paths = matches
+            .iter()
+            .map(|add| add.path.clone())
+            .collect::<HashSet<_>>();
+        let expected_paths = (0..action_count)
+            .filter(|idx| idx % 2 == 0)
+            .map(|idx| format!("modified=2021-02-02/file-{idx:05}.parquet"))
+            .collect::<HashSet<_>>();
+        assert_eq!(match_paths, expected_paths);
         Ok(())
     }
 }

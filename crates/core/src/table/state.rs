@@ -440,6 +440,8 @@ mod tests {
     use super::*;
     #[cfg(feature = "datafusion")]
     use crate::protocol::SaveMode;
+    #[cfg(feature = "datafusion")]
+    use crate::test_utils::multibatch_add_actions_for_partition;
     use crate::writer::test_utils::get_delta_schema;
     #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::get_record_batch;
@@ -540,6 +542,64 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_batches_flatten_multibatch_stress() -> DeltaResult<()> {
+        let action_count = 9000;
+        let actions = multibatch_add_actions_for_partition(
+            action_count,
+            "modified",
+            "2021-02-02",
+            "2021-02-03",
+        );
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_actions(actions)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let batches = snapshot.add_actions_batches(true)?;
+        assert!(batches.len() > 1, "expected multi-batch add-actions output");
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(total_rows, action_count);
+
+        let concatenated = concat_batches(batches[0].schema_ref(), &batches)?;
+        let single = snapshot.add_actions_table(true)?;
+        assert_eq!(concatenated.num_rows(), action_count);
+        assert_eq!(concatenated, single);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_partition_batches_only_path_and_partitions() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let batches = snapshot.add_actions_partition_batches()?;
+        assert!(!batches.is_empty());
+
+        let schema = batches[0].schema();
+        assert!(schema.field_with_name("path").is_ok());
+        assert!(schema.field_with_name("partition.modified").is_ok());
+        assert!(schema.field_with_name("size_bytes").is_err());
+        assert!(schema.field_with_name("modification_time").is_err());
+        assert!(schema.field_with_name("num_records").is_err());
+        Ok(())
+    }
+
     #[test]
     fn test_coalesce_batches_merges_small_batches() -> DeltaResult<()> {
         let schema = Arc::new(ArrowSchema::new(vec![arrow::datatypes::Field::new(
@@ -554,7 +614,11 @@ mod tests {
             RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))])?,
         ];
 
-        let output_batches = coalesce_batches(input_batches)?;
+        let output_batches = coalesce_batches(
+            input_batches
+                .into_iter()
+                .map(Ok::<RecordBatch, DeltaTableError>),
+        )?;
         assert_eq!(output_batches.len(), 1);
         assert_eq!(output_batches[0].num_rows(), 3);
 

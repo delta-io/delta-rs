@@ -1320,6 +1320,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delete_partition_only_fallback_multibatch_ignores_missing_files()
+    -> DeltaResult<()> {
+        use chrono::Utc;
+
+        use crate::DeltaTable;
+        use crate::kernel::{
+            Action, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
+        use crate::test_utils::make_test_add;
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "hour".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let action_count = 9000;
+        let expected_removed = action_count / 2;
+        let now_ms = Utc::now().timestamp_millis();
+
+        let adds = (0..action_count)
+            .map(|idx| {
+                let hour = if idx % 2 == 0 { 10 } else { 20 };
+                let path = format!("dt=2025-11-12/hour={hour}/file-{idx:05}.parquet");
+                let hour_str = if hour == 10 { "10" } else { "20" };
+                Action::Add(make_test_add(
+                    path,
+                    &[("dt", "2025-11-12"), ("hour", hour_str)],
+                    now_ms,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["dt", "hour"])
+            .with_actions(adds)
+            .await?;
+
+        // Intentionally do not write parquet files. This validates that the partition-only
+        // DataFusion fallback path can resolve file candidates from metadata only.
+        let (table, metrics) = table
+            .delete()
+            .with_predicate("CAST(hour AS STRING) LIKE '1%'")
+            .await?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, expected_removed);
+        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(
+            state.log_data().num_files(),
+            action_count - expected_removed
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_delete_on_mixed_columns() {
         // Test predicates that contain non-partition and partition column
         let schema = get_arrow_schema(&None);
