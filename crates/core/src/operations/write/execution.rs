@@ -78,8 +78,8 @@ mod tests {
     use object_store::memory::InMemory;
 
     use super::{
-        DEFAULT_WRITER_BATCH_CHANNEL_SIZE, ObjectStoreRef, SendableRecordBatchStream, WriterConfig,
-        parse_channel_size, write_streams,
+        DEFAULT_WRITER_BATCH_CHANNEL_SIZE, ObjectStoreRef, SendableRecordBatchStream,
+        WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG, WriterConfig, parse_channel_size, write_streams,
     };
 
     #[test]
@@ -189,9 +189,16 @@ mod tests {
         let result =
             write_streams(vec![pending_stream, failing_stream], object_store, config).await;
 
+        let err = result
+            .expect_err("expected writer failure when stream schema mismatches writer config");
+        let err_msg = err.to_string();
         assert!(
-            result.is_err(),
-            "expected writer failure when stream schema mismatches writer config"
+            err_msg.contains("Unexpected Arrow schema"),
+            "expected writer schema mismatch error, got: {err_msg}"
+        );
+        assert!(
+            !err_msg.contains(WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG),
+            "expected primary writer failure, got channel-close fallback: {err_msg}"
         );
         assert!(
             dropped.load(Ordering::SeqCst),
