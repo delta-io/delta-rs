@@ -66,8 +66,8 @@ use crate::delta_datafusion::logical::{
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    Expression, create_session, resolve_session_state, scan_files_where_matches,
-    update_datafusion_session,
+    Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
+    scan_files_where_matches, update_datafusion_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -534,46 +534,18 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     snapshot: &EagerSnapshot,
     predicate: &Expr,
 ) -> DeltaResult<std::collections::HashSet<String>> {
-    use arrow_array::RecordBatch;
     use arrow_array::StringArray;
-    use arrow_schema::DataType;
-    use arrow_schema::Field;
-    use arrow_schema::Schema;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion::logical_expr::col;
 
     use crate::delta_datafusion::PATH_COLUMN;
     use crate::errors::DeltaTableError;
-    use datafusion::datasource::{MemTable, provider_as_source};
+    use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::collect;
 
-    let batch = snapshot.add_actions_table(true)?;
-    let schema = batch.schema();
-    let mut arrays = Vec::with_capacity(schema.fields().len());
-    let mut fields = Vec::with_capacity(schema.fields().len());
-
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for field in schema.fields() {
-        if let Some(name) = field.name().strip_prefix("partition.") {
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(field.as_ref().clone().with_name(name));
-        }
-    }
-
-    let schema = Arc::new(Schema::new(fields));
-    let mem_table = MemTable::try_new(
-        schema.clone(),
-        vec![vec![RecordBatch::try_new(schema, arrays)?]],
-    )?;
+    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+        return Ok(std::collections::HashSet::new());
+    };
 
     let plan = LogicalPlanBuilder::scan(
         "partition_predicate",

@@ -316,6 +316,68 @@ async fn find_files_scan(
     Ok(result)
 }
 
+/// Build a partition-metadata MemTable from snapshot add actions.
+///
+/// Projects only the `path` column and `partition.*` columns for evaluating
+/// partition predicates without materializing full add-action metadata.
+/// Returns `None` when the snapshot contains no add actions.
+pub(crate) fn add_actions_partition_mem_table(
+    snapshot: &EagerSnapshot,
+) -> DeltaResult<Option<MemTable>> {
+    let add_action_batches = snapshot.add_actions_partition_batches()?;
+    if add_action_batches.is_empty() {
+        return Ok(None);
+    }
+
+    let first_schema = add_action_batches[0].schema();
+    let mut projected_columns = Vec::with_capacity(first_schema.fields().len());
+    projected_columns.push((
+        "path".to_string(),
+        Field::new(PATH_COLUMN, DataType::Utf8, false),
+    ));
+    for field in first_schema.fields() {
+        if let Some(name) = field.name().strip_prefix("partition.") {
+            projected_columns.push((
+                field.name().to_string(),
+                field.as_ref().clone().with_name(name),
+            ));
+        }
+    }
+
+    let projected_schema = Arc::new(Schema::new(
+        projected_columns
+            .iter()
+            .map(|(_, field)| field.clone())
+            .collect::<Vec<_>>(),
+    ));
+
+    let mut projected_batches = Vec::with_capacity(add_action_batches.len());
+    for batch in add_action_batches {
+        let projected_arrays = projected_columns
+            .iter()
+            .map(|(source_column_name, _)| {
+                batch
+                    .column_by_name(source_column_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        DeltaTableError::Generic(format!(
+                            "Column with name `{source_column_name}` does not exist"
+                        ))
+                    })
+            })
+            .collect::<DeltaResult<Vec<_>>>()?;
+        projected_batches.push(RecordBatch::try_new(
+            projected_schema.clone(),
+            projected_arrays,
+        )?);
+    }
+
+    Ok(Some(MemTable::try_new(
+        projected_schema,
+        vec![projected_batches],
+    )?))
+}
+
 async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
     let actions = snapshot
         .log_data()
@@ -323,48 +385,9 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
         .map(|f| f.add_action())
         .collect_vec();
 
-    // Use add_actions_batches to avoid concatenating all file metadata into a
-    // single RecordBatch which can exceed the 2GB Arrow 32-bit offset limit
-    // for tables with a very large number of files.
-    let all_batches = snapshot.add_actions_batches(true)?;
-    if all_batches.is_empty() {
+    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
         return Ok(vec![]);
-    }
-
-    let first_schema = all_batches[0].schema();
-    let mut fields = Vec::with_capacity(first_schema.fields().len());
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-    for field in first_schema.fields() {
-        if let Some(name) = field.name().strip_prefix("partition.") {
-            fields.push(field.as_ref().clone().with_name(name));
-        }
-    }
-    let schema = Arc::new(Schema::new(fields));
-
-    let mut mem_batches = Vec::with_capacity(all_batches.len());
-    for batch in &all_batches {
-        let batch_schema = batch.schema();
-        let mut arrays = Vec::with_capacity(schema.fields().len());
-
-        arrays.push(
-            batch
-                .column_by_name("path")
-                .ok_or(DeltaTableError::Generic(
-                    "Column with name `path` does not exist".to_owned(),
-                ))?
-                .to_owned(),
-        );
-
-        for field in batch_schema.fields() {
-            if field.name().strip_prefix("partition.").is_some() {
-                arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            }
-        }
-
-        mem_batches.push(RecordBatch::try_new(schema.clone(), arrays)?);
-    }
-
-    let mem_table = MemTable::try_new(schema, vec![mem_batches])?;
+    };
 
     let ctx = SessionContext::new();
     let mut df = ctx.read_table(Arc::new(mem_table))?;

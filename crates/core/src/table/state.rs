@@ -264,6 +264,28 @@ impl EagerSnapshot {
         self.add_actions_batches_with_schema(flatten, expression, table_schema)
     }
 
+    /// Get add action metadata batches containing only path and partition columns.
+    ///
+    /// This is a fast-path for partition-only planning and file matching.
+    pub(crate) fn add_actions_partition_batches(
+        &self,
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        let mut expressions = vec![column_expr_ref!("path")];
+        let mut fields = vec![StructField::not_null("path", DataType::STRING)];
+
+        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
+            fields.push(StructField::nullable(
+                "partition",
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
+            ));
+            expressions.push(column_expr_ref!("partitionValues_parsed"));
+        }
+
+        let expression = Expression::Struct(expressions);
+        let table_schema = DataType::try_struct_type(fields)?;
+        self.add_actions_batches_with_schema(true, expression, table_schema)
+    }
+
     fn add_actions_batches_with_schema(
         &self,
         flatten: bool,
@@ -283,22 +305,18 @@ impl EagerSnapshot {
             table_schema,
         )?;
 
-        let results = files
-            .iter()
-            .map(|file| evaluator.evaluate_arrow(file.clone()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let evaluated_batches = files.iter().map(|file| {
+            let batch = evaluator.evaluate_arrow(file.clone())?;
+            if flatten {
+                Ok(batch.normalize(".", None)?)
+            } else {
+                Ok(batch)
+            }
+        });
 
-        let results = if flatten {
-            results
-                .into_iter()
-                .map(|batch| Ok(batch.normalize(".", None)?))
-                .collect::<Result<Vec<_>, DeltaTableError>>()?
-        } else {
-            results
-        };
-
-        // Coalesce small batches into larger ones for efficiency.
-        coalesce_batches(results)
+        // Coalesce small batches into larger ones for efficiency while streaming
+        // evaluator output instead of materializing all batches first.
+        coalesce_batches(evaluated_batches)
     }
 
     /// Build the expression and output schema used by add_actions_table / add_actions_batches.
@@ -388,21 +406,26 @@ const COALESCE_TARGET_BATCH_SIZE: usize = 8192;
 /// into batches of approximately [`COALESCE_TARGET_BATCH_SIZE`] rows using
 /// Arrow's [`BatchCoalescer`], which is more memory-efficient than
 /// [`concat_batches`].
-fn coalesce_batches(input: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, DeltaTableError> {
-    if input.len() <= 1 {
-        return Ok(input);
-    }
-
-    let schema = input[0].schema();
-    let mut coalescer = BatchCoalescer::new(schema, COALESCE_TARGET_BATCH_SIZE);
-    let mut output = Vec::with_capacity(input.len());
+fn coalesce_batches<I>(input: I) -> Result<Vec<RecordBatch>, DeltaTableError>
+where
+    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
+{
+    let mut coalescer = None;
+    let mut output = Vec::new();
 
     for batch in input {
-        coalescer.push_batch(batch)?;
-        while let Some(done) = coalescer.next_completed_batch() {
+        let batch = batch?;
+        let current = coalescer
+            .get_or_insert_with(|| BatchCoalescer::new(batch.schema(), COALESCE_TARGET_BATCH_SIZE));
+        current.push_batch(batch)?;
+        while let Some(done) = current.next_completed_batch() {
             output.push(done);
         }
     }
+
+    let Some(mut coalescer) = coalescer else {
+        return Ok(vec![]);
+    };
 
     coalescer.finish_buffered_batch()?;
     while let Some(done) = coalescer.next_completed_batch() {
