@@ -11,8 +11,9 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
+use super::normalize_table_url;
 use crate::logstore::storage::IORuntime;
-use crate::logstore::{object_store_factories, LogStoreRef, StorageConfig};
+use crate::logstore::{LogStoreRef, StorageConfig, object_store_factories};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 /// possible version specifications for loading a delta table
@@ -98,9 +99,9 @@ impl DeltaTableBuilder {
     /// # use deltalake_core::table::builder::*;
     /// # use url::Url;
     /// let url = Url::parse("memory:///test").unwrap();
-    /// let builder = DeltaTableBuilder::from_uri(url);
+    /// let builder = DeltaTableBuilder::from_url(url);
     /// ```
-    pub fn from_uri(table_url: Url) -> DeltaResult<Self> {
+    pub fn from_url(table_url: Url) -> DeltaResult<Self> {
         // We cannot trust that a [Url] has had it's .. segments canonicalized out of the path
         // See <https://github.com/servo/rust-url/issues/1086>
         let table_url = Url::parse(table_url.as_str()).map_err(|_| {
@@ -167,7 +168,7 @@ impl DeltaTableBuilder {
 
     /// Set the storage backend.
     ///
-    /// If a backend is not provided then it is derived from `table_uri`.
+    /// If a backend is not provided then it is derived from `location`.
     ///
     /// # Arguments
     ///
@@ -252,14 +253,14 @@ impl DeltaTableBuilder {
 
         if let Some((store, _url)) = self.storage_backend.as_ref() {
             debug!("Loading a logstore with a custom store: {store:?}");
-            crate::logstore::logstore_with(store.clone(), self.table_url.clone(), storage_config)
+            crate::logstore::logstore_with(store.clone(), &self.table_url, storage_config)
         } else {
             // If there has been no backend defined just default to the normal logstore look up
             debug!(
                 "Loading a logstore based off the location: {:?}",
                 self.table_url
             );
-            crate::logstore::logstore_for(self.table_url.clone(), storage_config)
+            crate::logstore::logstore_for(&self.table_url, storage_config)
         }
     }
 
@@ -406,7 +407,7 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let uri_type: UriType = resolve_uri_type(table_uri)?;
 
     // If it is a local path, we need to create it if it does not exist.
-    let mut url = match uri_type {
+    let url = match uri_type {
         UriType::LocalPath(path) => {
             if !path.exists() {
                 std::fs::create_dir_all(&path).map_err(|err| {
@@ -430,9 +431,10 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
         UriType::Url(url) => url,
     };
 
-    let trimmed_path = url.path().trim_end_matches('/').to_owned();
-    url.set_path(&trimmed_path);
-    Ok(url)
+    // We should always be normalizing the table URL because trailing or redundant slashes can be
+    // load bearing with [Url] and this helps ensure that a [Url] always meets our internal
+    // expectations of path segments and join-ability.
+    Ok(normalize_table_url(&url))
 }
 
 /// Validate that the given [PathBuf] does exist, otherwise return a
@@ -465,6 +467,7 @@ mod tests {
         assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
+        assert_eq!(Url::parse("s3://container/path/").unwrap(), uri.unwrap());
         #[cfg(not(windows))]
         {
             let uri = ensure_table_uri("file:///tmp/nonexistent/some/path");
@@ -479,16 +482,16 @@ mod tests {
         cfg_if::cfg_if! {
             if #[cfg(windows)] {
                 let roundtrip_cases = &[
-                    "s3://tests/data/delta-0.8.0",
+                    "s3://tests/data/delta-0.8.0/",
                     "memory://",
-                    "s3://bucket/my%20table", // Doesn't double-encode
+                    "s3://bucket/my%20table/", // Doesn't double-encode
                 ];
             } else {
                 let roundtrip_cases = &[
-                    "s3://tests/data/delta-0.8.0",
+                    "s3://tests/data/delta-0.8.0/",
                     "memory://",
                     "file:///",
-                    "s3://bucket/my%20table", // Doesn't double-encode
+                    "s3://bucket/my%20table/", // Doesn't double-encode
                 ];
             }
         }
@@ -503,9 +506,9 @@ mod tests {
             // extra slashes are removed
             (
                 "s3://tests/data/delta-0.8.0//",
-                "s3://tests/data/delta-0.8.0",
+                "s3://tests/data/delta-0.8.0/",
             ),
-            ("s3://bucket/my table", "s3://bucket/my%20table"),
+            ("s3://bucket/my table", "s3://bucket/my%20table/"),
         ];
 
         for (case, expected) in map_cases {
@@ -519,7 +522,7 @@ mod tests {
     fn test_windows_uri() {
         let map_cases = &[
             // extra slashes are removed
-            ("c:/", "file:///C:"),
+            ("c://", "file:///C:/"),
         ];
 
         for (case, expected) in map_cases {
@@ -541,7 +544,7 @@ mod tests {
         for path in paths {
             let expected = Url::from_directory_path(path).unwrap();
             let uri = ensure_table_uri(path.as_os_str().to_str().unwrap()).unwrap();
-            assert_eq!(expected.as_str().trim_end_matches('/'), uri.as_str());
+            assert_eq!(expected.as_str(), uri.as_str());
             assert!(path.exists());
         }
 
@@ -556,7 +559,7 @@ mod tests {
     #[test]
     fn test_ensure_table_uri_url() {
         // Urls should round trips as-is
-        let expected = Url::parse("memory:///test/tests/data/delta-0.8.0").unwrap();
+        let expected = Url::parse("memory:///test/tests/data/delta-0.8.0/").unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected, url);
 
@@ -565,7 +568,7 @@ mod tests {
         let path = tmp_path.join("data/delta-0.8.0");
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
-        assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+        assert_eq!(expected.as_str(), url.as_str());
     }
 
     #[test]
@@ -607,7 +610,7 @@ mod tests {
             let mut storage_opts = HashMap::<String, String>::new();
             storage_opts.insert(key.to_owned(), val.to_owned());
 
-            let table = DeltaTableBuilder::from_uri(table_uri)
+            let table = DeltaTableBuilder::from_url(table_uri)
                 .unwrap()
                 .with_storage_options(storage_opts);
             let found_opts = table.storage_options();

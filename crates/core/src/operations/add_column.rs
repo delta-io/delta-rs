@@ -10,7 +10,7 @@ use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    resolve_snapshot, EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt,
+    EagerSnapshot, MetadataExt, ProtocolExt as _, StructField, StructTypeExt, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -77,7 +77,8 @@ impl std::future::IntoFuture for AddColumnBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
             let mut metadata = snapshot.metadata().clone();
             let fields = match this.fields.clone() {

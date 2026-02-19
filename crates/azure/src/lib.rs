@@ -3,13 +3,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
-    ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig, default_logstore,
+    logstore_factories, object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use object_store::ObjectStoreScheme;
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
-use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;

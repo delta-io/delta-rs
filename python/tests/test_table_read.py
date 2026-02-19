@@ -4,7 +4,6 @@ import tempfile
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
-from random import random
 from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
@@ -180,7 +179,6 @@ def test_load_as_version_datetime_with_logs_removed(
 
     for file_name, dt_epoch in log_mtime_pairs:
         file_path = log_path / file_name
-        print(file_path)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
     dt = DeltaTable(tmp_path, version=expected_version)
@@ -423,11 +421,14 @@ def test_read_special_partition():
         r"x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
     )
 
-    assert set(dt.files()) == {file1, file2}
+    def path_matcher(full_path, expected):
+        return full_path.endswith(expected)
 
-    assert dt.files([("x", "=", "A/A")]) == [file1]
-    assert dt.files([("x", "=", "B B")]) == [file2]
-    assert dt.files([("x", "=", "c")]) == []
+    files = dt.file_uris()
+    assert path_matcher(files[0], file1) and path_matcher(files[1], file2)
+    assert path_matcher(dt.file_uris([("x", "=", "A/A")])[0], file1)
+    assert path_matcher(dt.file_uris([("x", "=", "B B")])[0], file2)
+    assert dt.file_uris([("x", "=", "c")]) == []
 
     table = dt.to_pyarrow_table()
 
@@ -553,8 +554,10 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    assert dt.files(partition_filters) == expected_paths
-    absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
+    from urllib.parse import urlparse
+
+    table_path = urlparse(dt.table_uri).path
+    absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
 
 
@@ -610,7 +613,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("invalid_operation", "=>", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
@@ -618,7 +621,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("invalid_operation", "=", ["3", "20"])]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
@@ -626,7 +629,7 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("unknown", "=", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files(partition_filters)
+        dt.file_uris(partition_filters)
     assert (
         str(exception.value)
         == "Data does not match the schema or partitions of the table: Field 'unknown' is not a root table field."
@@ -773,12 +776,12 @@ def test_read_multiple_tables_from_s3(s3_localstack):
     """
     for path in ["s3://deltars/simple", "s3://deltars/simple"]:
         t = DeltaTable(path)
-        assert t.files() == [
-            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+        assert t.file_uris() == [
+            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
 
 
@@ -793,12 +796,12 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
     def read_table():
         b.wait()
         t = DeltaTable("s3://deltars/simple")
-        assert t.files() == [
-            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+        assert t.file_uris() == [
+            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
 
     threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
@@ -1055,11 +1058,22 @@ def test_is_deltatable_valid_path():
     assert DeltaTable.is_deltatable(table_path)
 
 
-def test_is_deltatable_invalid_path():
-    # Nonce ensures that the table_path always remains an invalid table path.
-    nonce = int(random() * 10000)
-    table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
-    assert not DeltaTable.is_deltatable(table_path)
+def test_is_deltatable_empty_path(tmp_path: Path):
+    not_delta_path = tmp_path / "not_delta_table"
+    # Ensure path exists
+    not_delta_path.mkdir()
+    assert not DeltaTable.is_deltatable(str(not_delta_path))
+
+
+def test_is_deltatable_invalid_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+
+
+def test_is_deltatable_does_not_create_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+    assert not not_existing_path.exists()
 
 
 def test_is_deltatable_with_storage_opts():
@@ -1137,7 +1151,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         {
             "date": Array(
                 ["2021-01-01", "2021-01-02", "2021-01-03"],
-                ArrowField("date", type=DataType.string(), nullable=True),
+                ArrowField("date", type=DataType.string_view(), nullable=True),
             ),
             "dayOfYear": Array(
                 [1, 2, 3],
@@ -1145,7 +1159,7 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
             ),
             "value": Array(
                 ["a", "b", "c"],
-                ArrowField("value", type=DataType.string(), nullable=True),
+                ArrowField("value", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1164,3 +1178,72 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
         .read_all()
     )
     assert expected == actual
+
+
+def test_deletion_vectors_api_smoke():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    expected_selection_vector = [
+        [False, True, True, True, True, True, True, True, True, False]
+    ]
+    expected_suffix = (
+        "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    )
+    expected_filepath = next(
+        Path(path).resolve().as_uri()
+        for path in dt.file_uris()
+        if path.endswith(expected_suffix)
+    )
+    assert expected_filepath.endswith(expected_suffix)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+
+    table = vectors.read_all()
+    assert table.num_rows == 1
+    assert table["filepath"].to_pylist() == [expected_filepath]
+    assert table["selection_vector"].to_pylist() == expected_selection_vector
+
+    table_second = dt.deletion_vectors().read_all()
+    assert table_second["filepath"].to_pylist() == [expected_filepath]
+    assert table_second["selection_vector"].to_pylist() == expected_selection_vector
+
+
+def test_deletion_vectors_empty_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+    assert vectors.read_all().num_rows == 0
+
+
+def test_deletion_vectors_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(Exception, match="without files"):
+        dt.deletion_vectors()
+
+
+def test_read_deletion_vectors():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
+        "value"
+    ].to_pylist() == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+@pytest.mark.pandas
+def test_nested_runtimes(tmp_path):
+    import pandas as pd
+
+    csv_path = tmp_path / "csv_data"
+    pd.DataFrame({"id": [1, 2, 3], "name": ["a", "b", "c"]}).to_csv(
+        csv_path, index=False
+    )
+
+    con = QueryBuilder()
+    con.execute(f"CREATE EXTERNAL TABLE raw_csv STORED AS CSV LOCATION '{csv_path}'")
+    df = con.execute("SELECT * FROM raw_csv")
+    write_deltalake(tmp_path / "delta", df, mode="overwrite")

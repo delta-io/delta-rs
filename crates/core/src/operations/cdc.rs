@@ -2,11 +2,13 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
+use crate::DeltaResult;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, LogicalPlanExt as _};
 use crate::kernel::EagerSnapshot;
 use crate::table::config::TablePropertiesExt as _;
-use crate::DeltaResult;
 
 use datafusion::common::ScalarValue;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::*;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
@@ -14,40 +16,42 @@ pub const CDC_COLUMN_NAME: &str = "_change_type";
 /// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
-    pre_dataframe: DataFrame,
-    post_dataframe: DataFrame,
+    pre_dataframe: LogicalPlan,
+    post_dataframe: LogicalPlan,
 }
 
 impl CDCTracker {
-    ///  construct
-    pub(crate) fn new(pre_dataframe: DataFrame, post_dataframe: DataFrame) -> Self {
+    pub(crate) fn new(pre_dataframe: LogicalPlan, post_dataframe: LogicalPlan) -> Self {
         Self {
             pre_dataframe,
             post_dataframe,
         }
     }
 
-    pub(crate) fn collect(self) -> DeltaResult<DataFrame> {
+    pub(crate) fn collect(self) -> DeltaResult<LogicalPlan> {
         // Collect _all_ the batches for consideration
         let pre_df = self.pre_dataframe;
         let post_df = self.post_dataframe;
 
         // There is certainly a better way to do this other than stupidly cloning data for diffing
         // purposes, but this is the quickest and easiest way to "diff" the two sets of batches
-        let preimage = pre_df.clone().except(post_df.clone())?;
-        let postimage = post_df.except(pre_df)?;
+        let preimage = LogicalPlanBuilder::except(pre_df.clone(), post_df.clone(), true)?;
+        let postimage = LogicalPlanBuilder::except(post_df, pre_df, true)?;
 
-        let preimage = preimage.with_column(
+        let preimage = preimage.into_builder().with_column(
             "_change_type",
             lit(ScalarValue::Utf8(Some("update_preimage".to_string()))),
         )?;
 
-        let postimage = postimage.with_column(
-            "_change_type",
-            lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
-        )?;
+        let postimage = postimage
+            .into_builder()
+            .with_column(
+                "_change_type",
+                lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
+            )?
+            .build()?;
 
-        let final_df = preimage.union(postimage)?;
+        let final_df = preimage.union(postimage)?.build()?;
         Ok(final_df)
     }
 }
@@ -85,11 +89,6 @@ pub(crate) fn should_write_cdc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
-    use crate::kernel::{Action, PrimitiveType};
-    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::operations::DeltaOps;
-    use crate::{DeltaTable, TableProperty};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::RecordBatch;
@@ -98,11 +97,16 @@ mod tests {
     use datafusion::datasource::{MemTable, TableProvider};
     use delta_kernel::table_features::TableFeature;
 
+    use super::*;
+    use crate::kernel::{Action, PrimitiveType};
+    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
+    use crate::{DeltaTable, TableProperty};
+
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
     #[tokio::test]
     async fn test_should_write_cdc_basic_table() {
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -118,13 +122,11 @@ mod tests {
         assert!(!result, "A default table should not create CDC files");
     }
 
-    ///
     /// This test manually creates a table with writer version 4 that has the configuration sets
-    ///
     #[tokio::test]
     async fn test_should_write_cdc_table_with_configuration() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -146,13 +148,12 @@ mod tests {
         );
     }
 
-    ///
     /// This test creates a writer version 7 table which has a slightly different way of
     /// determining whether CDC files should be written or not.
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_no_writer_feature() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -173,7 +174,6 @@ mod tests {
         );
     }
 
-    ///
     /// This test creates a writer version 7 table with a writer table feature enabled for CDC and
     /// therefore should write CDC files
     #[tokio::test]
@@ -182,7 +182,7 @@ mod tests {
             .append_writer_features(vec![TableFeature::ChangeDataFeed])
             .as_kernel();
         let actions = vec![Action::Protocol(protocol)];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -231,12 +231,21 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
         match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
+            Ok(plan) => {
+                let batches = ctx
+                    .execute_logical_plan(plan)
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                let _ = arrow::util::pretty::print_batches(&batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+------------------+",
@@ -397,12 +406,21 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
         match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
+            Ok(plan) => {
+                let batches = ctx
+                    .execute_logical_plan(plan)
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                let _ = arrow::util::pretty::print_batches(&batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+--------------------------+------------------+",

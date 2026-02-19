@@ -8,7 +8,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{lit, Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use either::{Left, Right};
 use futures::TryStreamExt as _;
@@ -30,7 +30,7 @@ impl ReferenceTableCheck {
 }
 
 fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
-    let res = match expr {
+    match expr {
         Expr::Alias(alias) => references_table(&alias.expr, table),
         Expr::Column(col) => col
             .relation
@@ -56,8 +56,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
         Expr::IsNull(inner) => references_table(inner, table),
         Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
-    };
-    res
+    }
 }
 
 fn construct_placeholder(

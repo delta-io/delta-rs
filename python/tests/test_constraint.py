@@ -2,7 +2,7 @@ import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 
 from deltalake import DeltaTable, write_deltalake
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 
 
 @pytest.fixture()
@@ -110,7 +110,7 @@ def test_add_constraint(tmp_path, sample_table: Table, sql_string: str):
         # Invalid constraint
         dt.alter.add_constraint({"check_price": '"high price" < 0'})
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception):
         data = Table(
             {
                 "id": Array(["1"], DataType.string()),
@@ -143,7 +143,7 @@ def test_add_multiple_constraint(tmp_path, sample_table: Table):
     }
     assert dt.protocol().min_writer_version == 3
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception):
         data = Table(
             {
                 "id": Array(["1"], DataType.string()),

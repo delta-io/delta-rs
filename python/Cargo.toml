@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.3.0"
+version = "1.4.2"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
@@ -9,7 +9,7 @@ homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 
 [lib]
@@ -17,16 +17,22 @@ name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
 
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-unity"]
+
 [dependencies]
 delta_kernel.workspace = true
+url.workspace = true
 
 pyo3-arrow = { version = "0.14.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
+arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
+datafusion-execution = { version = "52.1.0" }
 
 # serde
 serde = { workspace = true }
@@ -46,6 +52,14 @@ num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
+
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
+    "aws",
+    "azure",
+    "gcp",
+    "r2",
+] }
 
 # opentelemetry
 tracing-opentelemetry = { workspace = true }

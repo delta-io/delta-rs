@@ -16,7 +16,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = RestoreBuilder::new(table.object_store(), table.state).with_version_to_restore(1).await?;
 //! ````
 
@@ -27,17 +27,17 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
 use futures::TryStreamExt;
-use object_store::path::Path;
+use futures::future::BoxFuture;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use serde::Serialize;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
 use crate::kernel::{
-    resolve_snapshot, Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove,
+    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -331,7 +331,7 @@ async fn check_files_available(
             Err(ObjectStoreError::NotFound { .. }) => {
                 return Err(DeltaTableError::from(RestoreError::MissingDataFile(
                     file.path.clone(),
-                )))
+                )));
             }
             Err(e) => return Err(DeltaTableError::from(e)),
         }
@@ -347,7 +347,8 @@ impl std::future::IntoFuture for RestoreBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -368,7 +369,7 @@ impl std::future::IntoFuture for RestoreBuilder {
 
             let mut table =
                 DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            table.update().await?;
+            table.update_state().await?;
             Ok((table, metrics))
         })
     }
@@ -378,24 +379,20 @@ impl std::future::IntoFuture for RestoreBuilder {
 #[cfg(feature = "datafusion")]
 mod tests {
 
+    use crate::DeltaResult;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
-    use crate::{DeltaOps, DeltaResult};
 
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
     #[tokio::test]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
-        use std::collections::HashMap;
-
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
         let first_v = table.version().unwrap();
 
-        let constraint = DeltaOps(table)
+        let constraint = table
             .add_constraint()
             .with_constraint("my_custom_constraint", "value < 100")
             .await;
@@ -410,10 +407,7 @@ mod tests {
         assert!(constraints.len() == 1);
         assert_eq!(constraints[0].name, "my_custom_constraint");
 
-        let (table, _metrics) = DeltaOps(table)
-            .restore()
-            .with_version_to_restore(first_v)
-            .await?;
+        let (table, _metrics) = table.restore().with_version_to_restore(first_v).await?;
         assert_ne!(table.version(), Some(first_v));
 
         let constraints = table.state.unwrap().table_config().get_constraints();

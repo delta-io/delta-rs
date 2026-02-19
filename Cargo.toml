@@ -1,14 +1,14 @@
 [workspace]
-members = ["crates/*", "delta-inspect", "python"]
+members = ["crates/*", "python"]
 exclude = []
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.86"
+authors = ["Qingping Hou <dave2008713@gmail.com>", "R Tyler Croy <rtyler@brokenco.de>"]
+rust-version = "1.88"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 description = "Native Delta Lake implementation in Rust"
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
@@ -16,7 +16,7 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-delta_kernel = { version = "0.18.0", features = [
+delta_kernel = { version = "0.19.0", features = [
     "arrow-57",
     "default-engine-rustls",
     "internal-api",
@@ -38,10 +38,12 @@ arrow-select = { version = "57" }
 object_store = { version = "0.12.1" }
 parquet = { version = "57" }
 
-# datafusion
-datafusion = "51.0"
-datafusion-ffi = "51.0"
-datafusion-proto = "51.0"
+# datafusion 52.1
+datafusion = { version = "52.1.0" }
+datafusion-datasource = { version = "52.1.0" }
+datafusion-physical-expr-adapter = { version = "52.1.0" }
+datafusion-ffi = { version = "52.1.0" }
+datafusion-proto = { version = "52.1.0" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
@@ -127,15 +129,15 @@ debug = true
 # CI profile - optimized for Continuous Integration
 # Usage: cargo build --profile=ci
 [profile.ci]
-inherits = "dev"           
-debug = false              
-incremental = false        
+inherits = "dev"
+debug = false
+incremental = false
 
 [profile.ci.package."*"]
-opt-level = 3              
-debug = false             
-debug-assertions = false   
-strip = "debuginfo"       
+opt-level = 3
+debug = false
+debug-assertions = false
+strip = "debuginfo"
 incremental = false
 
 # Python wheel release profile - for PyPI distribution
@@ -144,4 +146,13 @@ incremental = false
 inherits = "release"
 opt-level = 3
 codegen-units = 1
-lto = "fat"         
+lto = "fat"
+
+
+# Python wheel release profile ARM - for PyPI distribution
+# Usage: maturin build --profile python-release-arm (via .github/workflows/python_release.yml)
+[profile.python-release-arm]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "thin"

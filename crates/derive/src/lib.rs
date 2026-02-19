@@ -4,11 +4,11 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::quote;
 use syn::parse::Parser;
-use syn::{
-    parse_macro_input, punctuated::Punctuated, Data, DeriveInput, Field, Fields, Lit, Meta,
-    MetaNameValue, Token, Type,
-};
 use syn::{Attribute, Error, Expr, Ident, Result};
+use syn::{
+    Data, DeriveInput, Field, Fields, Lit, Meta, MetaNameValue, Token, Type, parse_macro_input,
+    punctuated::Punctuated,
+};
 
 /// Derive macro for implementing the TryUpdateKey trait
 ///
@@ -251,8 +251,11 @@ fn determine_parser(ty: &Type) -> Result<(proc_macro2::TokenStream, bool)> {
             } else if type_str.contains("String") {
                 quote! { crate::logstore::config::parse_string }
             } else {
-                return Err(Error::new_spanned(ty,
-                    format!("Unsupported field type: {type_str}. Consider implementing a custom parser.")
+                return Err(Error::new_spanned(
+                    ty,
+                    format!(
+                        "Unsupported field type: {type_str}. Consider implementing a custom parser."
+                    ),
                 ));
             };
 
@@ -287,11 +290,11 @@ fn extract_field_attributes(attrs: &[Attribute]) -> Result<FieldAttributes> {
         if attr.path().is_ident("doc") {
             // Handle doc comments
             let meta = attr.meta.require_name_value()?;
-            if let Expr::Lit(expr_lit) = &meta.value {
-                if let Lit::Str(lit_str) = &expr_lit.lit {
-                    // Collect all doc strings - they might span multiple lines
-                    doc_strings.push(lit_str.value().trim().to_string());
-                }
+            if let Expr::Lit(expr_lit) = &meta.value
+                && let Lit::Str(lit_str) = &expr_lit.lit
+            {
+                // Collect all doc strings - they might span multiple lines
+                doc_strings.push(lit_str.value().trim().to_string());
             }
         }
         if attr.path().is_ident("delta") {
@@ -303,19 +306,17 @@ fn extract_field_attributes(attrs: &[Attribute]) -> Result<FieldAttributes> {
                     for val in parsed {
                         match val {
                             Meta::NameValue(MetaNameValue { path, value, .. }) => {
-                                if path.is_ident("alias") {
-                                    if let Expr::Lit(lit_expr) = &value {
-                                        if let Lit::Str(lit_str) = &lit_expr.lit {
-                                            aliases.push(lit_str.value());
-                                        }
-                                    }
+                                if path.is_ident("alias")
+                                    && let Expr::Lit(lit_expr) = &value
+                                    && let Lit::Str(lit_str) = &lit_expr.lit
+                                {
+                                    aliases.push(lit_str.value());
                                 }
-                                if path.is_ident("environment") || path.is_ident("env") {
-                                    if let Expr::Lit(lit_expr) = &value {
-                                        if let Lit::Str(lit_str) = &lit_expr.lit {
-                                            environments.push(lit_str.value());
-                                        }
-                                    }
+                                if (path.is_ident("environment") || path.is_ident("env"))
+                                    && let Expr::Lit(lit_expr) = &value
+                                    && let Lit::Str(lit_str) = &lit_expr.lit
+                                {
+                                    environments.push(lit_str.value());
                                 }
                             }
                             Meta::Path(path) => {

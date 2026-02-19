@@ -9,7 +9,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, TableFeatures
 from deltalake._internal import Field, PrimitiveType, Schema
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.writer import write_deltalake
 from tests.test_alter import _sort_fields
@@ -124,7 +124,7 @@ def test_delete(lakefs_path: str, sample_table: Table, lakefs_storage_options):
 
     dataset = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert dataset.num_rows == 0
-    assert len(dt.files()) == 0
+    assert len(dt.file_uris()) == 0
 
 
 @pytest.mark.lakefs
@@ -132,7 +132,6 @@ def test_delete(lakefs_path: str, sample_table: Table, lakefs_storage_options):
 def test_optimize_min_commit_interval(
     lakefs_path: str, sample_table: Table, lakefs_storage_options
 ):
-    print(lakefs_path)
     write_deltalake(
         lakefs_path,
         sample_table,
@@ -265,11 +264,12 @@ def test_add_constraint(lakefs_path, sample_table: Table, lakefs_storage_options
         # Invalid constraint
         dt.alter.add_constraint({"check_price": "price < 0"})
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception, match="Invalid data found:"):
         data = Table(
             {
                 "id": Array(
-                    ["1"], type=ArrowField("id", type=DataType.string(), nullable=True)
+                    ["1"],
+                    type=ArrowField("id", type=DataType.string_view(), nullable=True),
                 ),
                 "price": Array(
                     [-1], type=ArrowField("price", type=DataType.int64(), nullable=True)
@@ -362,7 +362,9 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
 
     source_table = Table(
         {
-            "id": Array(["5"], type=ArrowField("id", DataType.string(), nullable=True)),
+            "id": Array(
+                ["5"], type=ArrowField("id", DataType.string_view(), nullable=True)
+            ),
             "weight": Array(
                 [105], type=ArrowField("weight", DataType.int32(), nullable=True)
             ),
@@ -383,7 +385,7 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
         {
             "id": Array(
                 ["1", "2", "3", "4"],
-                type=ArrowField("id", DataType.string(), nullable=True),
+                type=ArrowField("id", DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 [0, 1, 2, 3],
@@ -400,7 +402,12 @@ def test_merge(lakefs_path, sample_table: Table, lakefs_storage_options):
         }
     )
 
-    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
 
     last_action = dt.history(1)[0]
 
@@ -477,7 +484,7 @@ def sample_table_update():
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                type=ArrowField("id", DataType.string(), nullable=True),
+                type=ArrowField("id", DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)),
@@ -516,7 +523,7 @@ def test_update(lakefs_path, sample_table_update: Table, lakefs_storage_options)
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                type=ArrowField("id", DataType.string(), nullable=True),
+                type=ArrowField("id", DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)),

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.29.4"
+version = "0.31.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -25,14 +25,14 @@ features = [
 ]
 
 [dependencies]
-deltalake-core = { version = "0.29.0", path = "../core", default-features = false }
-deltalake-aws = { version = "0.12.0", path = "../aws", default-features = false, optional = true }
-deltalake-azure = { version = "0.12.0", path = "../azure", optional = true }
-deltalake-gcp = { version = "0.13.0", path = "../gcp", optional = true }
-deltalake-hdfs = { version = "0.13.0", path = "../hdfs", optional = true }
-deltalake-lakefs = { version = "0.12.0", path = "../lakefs", optional = true }
-deltalake-catalog-glue = { version = "0.13.0", path = "../catalog-glue", optional = true }
-deltalake-catalog-unity = { version = "0.13.0", path = "../catalog-unity", optional = true }
+deltalake-core = { version = "0.31.0", path = "../core", default-features = false }
+deltalake-aws = { version = "0.14.0", path = "../aws", default-features = false, optional = true }
+deltalake-azure = { version = "0.14.0", path = "../azure", optional = true }
+deltalake-gcp = { version = "0.15.0", path = "../gcp", optional = true }
+deltalake-hdfs = { version = "0.15.0", path = "../hdfs", optional = true }
+deltalake-lakefs = { version = "0.14.0", path = "../lakefs", optional = true }
+deltalake-catalog-glue = { version = "0.15.0", path = "../catalog-glue", optional = true }
+deltalake-catalog-unity = { version = "0.15.0", path = "../catalog-unity", optional = true }
 delta_kernel = { workspace = true }
 ctor = "0.6"
 

@@ -2,11 +2,11 @@ use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
-use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::create_session;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
-use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
+use deltalake::operations::merge::MergeBuilder;
 use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
@@ -18,10 +18,10 @@ use std::sync::Arc;
 use crate::datafusion::LazyTableProvider;
 use crate::error::PythonError;
 use crate::utils::rt;
-use crate::writer::{maybe_lazy_cast_reader, ArrowStreamBatchGenerator};
+use crate::writer::{ArrowStreamBatchGenerator, maybe_lazy_cast_reader};
 use crate::{
-    maybe_create_commit_properties, set_writer_properties, PyCommitProperties,
-    PyPostCommitHookProperties, PyWriterProperties,
+    PyCommitProperties, PyPostCommitHookProperties, PyWriterProperties,
+    maybe_create_commit_properties, set_writer_properties,
 };
 
 #[pyclass(module = "deltalake._internal")]
@@ -54,7 +54,7 @@ impl PyMergeBuilder {
         commit_properties: Option<PyCommitProperties>,
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
-        let ctx = SessionContext::new();
+        let ctx = create_session().into_inner();
 
         let source = source
             .into_reader()

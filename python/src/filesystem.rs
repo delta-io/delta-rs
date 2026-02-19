@@ -1,11 +1,11 @@
+use crate::RawDeltaTable;
 use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree, warn};
-use crate::RawDeltaTable;
-use deltalake::logstore::object_store::{
-    path::Path, DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload,
-    PutPayloadMut,
-};
 use deltalake::DeltaTableBuilder;
+use deltalake::logstore::object_store::{
+    DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload, PutPayloadMut,
+    path::Path,
+};
 use parking_lot::Mutex;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
@@ -13,12 +13,13 @@ use pyo3::types::{IntoPyDict, PyBytes, PyType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use url::Url;
 
 const DEFAULT_MAX_BUFFER_SIZE: usize = 5 * 1024 * 1024;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
-    pub(crate) root_url: String,
+    pub(crate) root_url: Url,
     pub(crate) options: HashMap<String, String>,
 }
 
@@ -52,7 +53,7 @@ impl DeltaFileSystemHandler {
     ) -> PyResult<Self> {
         let table_url =
             deltalake::table::builder::parse_table_uri(&table_uri).map_err(PythonError::from)?;
-        let storage = DeltaTableBuilder::from_uri(table_url)
+        let storage = DeltaTableBuilder::from_url(table_url.clone())
             .map_err(PythonError::from)?
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
@@ -62,7 +63,7 @@ impl DeltaFileSystemHandler {
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table_uri,
+                root_url: table_url,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -81,7 +82,7 @@ impl DeltaFileSystemHandler {
         Ok(Self {
             inner: storage,
             config: FsConfig {
-                root_url: table.with_table(|t| Ok(t.table_uri()))?,
+                root_url: table.with_table(|t| Ok(t.table_url().clone()))?,
                 options: options.unwrap_or_default(),
             },
             known_sizes,
@@ -144,14 +145,14 @@ impl DeltaFileSystemHandler {
         let mut infos = Vec::with_capacity(paths.len());
         for file_path in paths {
             let path = Self::parse_path(&file_path);
-            let listed = py.allow_threads(|| {
+            let listed = py.detach(|| {
                 rt().block_on(self.inner.list_with_delimiter(Some(&path)))
                     .map_err(PythonError::from)
             })?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = py.allow_threads(|| rt().block_on(self.inner.head(&path)));
+                let maybe_meta = py.detach(|| rt().block_on(self.inner.head(&path)));
                 match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
@@ -330,7 +331,7 @@ impl DeltaFileSystemHandler {
 
     pub fn __getnewargs__(&self) -> PyResult<(String, Option<HashMap<String, String>>)> {
         Ok((
-            self.config.root_url.clone(),
+            self.config.root_url.to_string(),
             Some(self.config.options.clone()),
         ))
     }
@@ -480,7 +481,7 @@ impl ObjectInputFile {
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
         let data = if nbytes > 0 {
-            py.allow_threads(|| {
+            py.detach(|| {
                 rt().block_on(self.store.get_range(&self.path, range))
                     .map_err(PythonError::from)
             })?
@@ -576,7 +577,7 @@ impl ObjectOutputStream {
 #[pymethods]
 impl ObjectOutputStream {
     fn close(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| {
+        py.detach(|| {
             self.closed = true;
             if !self.buffer.is_empty() {
                 self.upload_buffer()?;
@@ -632,7 +633,7 @@ impl ObjectOutputStream {
         self.check_closed()?;
         let py = data.py();
         let bytes = data.as_bytes();
-        py.allow_threads(|| {
+        py.detach(|| {
             let len = bytes.len();
             for chunk in bytes.chunks(self.max_buffer_size) {
                 // this will never overflow
@@ -658,7 +659,7 @@ impl ObjectOutputStream {
     }
 
     fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| self.upload_buffer())
+        py.detach(|| self.upload_buffer())
     }
 
     fn fileno(&self) -> PyResult<()> {

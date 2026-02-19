@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use deltalake_core::{
+    DeltaResult, DeltaTableError,
     logstore::{LogStore as _, LogStoreRef},
     operations::CustomExecuteHandler,
-    DeltaResult, DeltaTableError,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -30,7 +30,7 @@ impl CustomExecuteHandler for LakeFSCustomExecuteHandler {
         if let Some(lakefs_store) = log_store.clone().as_any().downcast_ref::<LakeFSLogStore>() {
             let (repo, _, _) = lakefs_store
                 .client
-                .decompose_url(lakefs_store.config().location.to_string());
+                .decompose_url(lakefs_store.config().location().to_string());
             let result = lakefs_store
                 .client
                 .delete_branch(repo, lakefs_store.client.get_transaction(operation_id)?)
@@ -93,7 +93,7 @@ mod tests {
     use crate::register_handlers;
 
     use super::*;
-    use deltalake_core::logstore::{logstore_for, ObjectStoreRegistry, StorageConfig};
+    use deltalake_core::logstore::{ObjectStoreRegistry, StorageConfig, logstore_for};
     use http::StatusCode;
     use maplit::hashmap;
     use std::sync::OnceLock;
@@ -112,7 +112,7 @@ mod tests {
         };
 
         let storage_config = StorageConfig::parse_options(raw_options).unwrap();
-        logstore_for(location, storage_config).unwrap()
+        logstore_for(&location, storage_config).unwrap()
     }
 
     #[inline]
@@ -145,13 +145,13 @@ mod tests {
             .as_any()
             .downcast_ref::<LakeFSLogStore>()
         {
-            assert!(lakefs_store
-                .prefixed_registry
-                .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
-                        .unwrap()
-                )
-                .is_ok());
+            let table_url =
+                Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
+                    .unwrap();
+            assert!(
+                lakefs_store.prefixed_registry.get_store(&table_url).is_ok(),
+                "The LakeFSLogStore did not have the URL {table_url:?} we expected: {lakefs_store:?}"
+            );
 
             assert!(lakefs_store.client.get_transaction(operation_id).is_ok())
         } else {
@@ -186,13 +186,17 @@ mod tests {
             .as_any()
             .downcast_ref::<LakeFSLogStore>()
         {
-            assert!(lakefs_store
-                .prefixed_registry
-                .get_store(
-                    &Url::parse(format!("lakefs://repo/delta-tx-{operation_id}/table").as_str())
+            assert!(
+                lakefs_store
+                    .prefixed_registry
+                    .get_store(
+                        &Url::parse(
+                            format!("lakefs://repo/delta-tx-{operation_id}/table").as_str()
+                        )
                         .unwrap()
-                )
-                .is_ok());
+                    )
+                    .is_ok()
+            );
 
             assert!(lakefs_store.client.get_transaction(operation_id).is_ok())
         } else {
@@ -326,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_error_with_invalid_log_store() {
         let location = Url::parse("memory:///table").unwrap();
-        let invalid_default_store = logstore_for(location, StorageConfig::default()).unwrap();
+        let invalid_default_store = logstore_for(&location, StorageConfig::default()).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();
@@ -381,7 +385,7 @@ mod tests {
         // When file operations is false, the commit hook executor is a noop, since we don't need
         // to create any branches, or commit and merge them back.
         let location = Url::parse("memory:///table").unwrap();
-        let invalid_default_store = logstore_for(location, StorageConfig::default()).unwrap();
+        let invalid_default_store = logstore_for(&location, StorageConfig::default()).unwrap();
 
         let handler = LakeFSCustomExecuteHandler {};
         let operation_id = Uuid::new_v4();

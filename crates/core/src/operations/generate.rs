@@ -70,6 +70,7 @@
 //!             └── part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet
 //! ```
 use bytes::{BufMut, BytesMut};
+use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -78,9 +79,9 @@ use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
-use crate::logstore::object_store::PutPayload;
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
+use crate::logstore::object_store::PutPayload;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -122,17 +123,14 @@ impl std::future::IntoFuture for GenerateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let snapshot = resolve_snapshot(this.log_store(), this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(this.log_store(), this.snapshot.clone(), true, None).await?;
             let mut payloads = HashMap::new();
             let manifest_part = PathPart::parse("manifest").expect("This is not possible");
 
-            for add in this
-                .snapshot
-                .clone()
-                .expect("A GenerateBuilder with no snapshot is not a valid state!")
-                .log_data()
-                .into_iter()
-            {
+            let mut file_stream = snapshot.file_views(&this.log_store, None);
+            while let Some(add) = file_stream.next().await {
+                let add = add?;
                 let path = add.object_store_path();
                 // The output_path is more or less the tree structure as the original file, just
                 // inside the _symlink_format_manifest directory. This makes it easier to avoid
@@ -173,7 +171,7 @@ impl std::future::IntoFuture for GenerateBuilder {
             }
             Ok(DeltaTable::new_with_state(
                 this.log_store().clone(),
-                DeltaTableState::new(snapshot),
+                DeltaTableState::new(snapshot.clone()),
             ))
         })
     }
@@ -185,9 +183,9 @@ mod tests {
 
     use futures::StreamExt;
 
+    use crate::DeltaTable;
     use crate::kernel::schema::{DataType, PrimitiveType};
     use crate::kernel::{Action, Add};
-    use crate::DeltaOps;
 
     #[tokio::test]
     async fn test_generate() -> DeltaResult<()> {
@@ -195,7 +193,7 @@ mod tests {
             path: "some-files.parquet".into(),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_actions(actions)
@@ -216,7 +214,10 @@ mod tests {
                 break;
             }
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 
@@ -228,7 +229,7 @@ mod tests {
             partition_values: HashMap::from([("locale".to_string(), Some("us".to_string()))]),
             ..Default::default()
         })];
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_column(
@@ -261,7 +262,10 @@ mod tests {
                 "The 'root' manifest file is not expected in a partitioned table!"
             );
         }
-        assert!(found, "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix");
+        assert!(
+            found,
+            "The _symlink_format_manifest/manifest was not found in the Delta table's object store prefix"
+        );
         Ok(())
     }
 }

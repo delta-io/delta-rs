@@ -2,7 +2,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let builder = CdfLoadBuilder::new(table.log_store(), table.snapshot())
 //!     .with_starting_version(3);
 //!
@@ -13,29 +13,26 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
-use datafusion::common::config::TableParquetOptions;
 use datafusion::common::ScalarValue;
+use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
-use datafusion::datasource::physical_plan::{
-    FileGroup, FileScanConfigBuilder, FileSource, ParquetSource,
-};
-use datafusion::physical_expr::{expressions, PhysicalExpr};
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::table_schema::TableSchema;
+use datafusion::physical_expr::{PhysicalExpr, expressions};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
 use tracing::log;
 
-use crate::delta_datafusion::{register_store, DataFusionMixins};
+use crate::DeltaTableError;
+use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{resolve_snapshot, Action, Add, AddCDCFile, CommitInfo, EagerSnapshot};
-use crate::logstore::{get_actions, LogStoreRef};
-use crate::DeltaTableError;
+use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, resolve_snapshot};
+use crate::logstore::{LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
 /// Builder for create a read of change data feeds for delta tables
@@ -127,16 +124,15 @@ impl CdfLoadBuilder {
     async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<i64> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
-            if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await {
-                if let Ok(actions) = get_actions(v, &bytes) {
-                    if actions.iter().any(|action| {
-                        matches!(action, Action::CommitInfo(CommitInfo {
+            if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
+                && let Ok(actions) = get_actions(v, &bytes)
+                && actions.iter().any(|action| {
+                    matches!(action, Action::CommitInfo(CommitInfo {
                             timestamp: Some(t), ..
                         }) if ts.timestamp_millis() < *t)
-                    }) {
-                        return Ok(v);
-                    }
-                }
+                })
+            {
+                return Ok(v);
             }
         }
         Ok(0)
@@ -219,14 +215,13 @@ impl CdfLoadBuilder {
             timestamp: Some(latest_timestamp),
             ..
         })) = latest_version_commit
+            && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
-            if starting_timestamp.timestamp_millis() > *latest_timestamp {
-                return if self.allow_out_of_range {
-                    Ok((change_files, add_files, remove_files))
-                } else {
-                    Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
-                };
-            }
+            return if self.allow_out_of_range {
+                Ok((change_files, add_files, remove_files))
+            } else {
+                Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
+            };
         }
 
         log::debug!(
@@ -255,13 +250,11 @@ impl CdfLoadBuilder {
                 if let Some(Action::CommitInfo(CommitInfo {
                     timestamp: Some(t), ..
                 })) = version_commit
+                    && (starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis())
                 {
-                    if starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis()
-                    {
-                        log::debug!("Version: {version} skipped, due to commit timestamp");
-                        continue;
-                    }
+                    log::debug!("Version: {version} skipped, due to commit timestamp");
+                    continue;
                 }
             }
 
@@ -347,16 +340,16 @@ impl CdfLoadBuilder {
     }
 
     /// Executes the scan
-    pub(crate) async fn build(
+    pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true).await?;
+        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
 
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
-        register_store(self.log_store.clone(), session.runtime_env().as_ref());
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
 
         let partition_values = snapshot.metadata().partition_columns().clone();
         let schema = snapshot.input_schema();
@@ -402,48 +395,62 @@ impl CdfLoadBuilder {
             Self::get_remove_action_type(),
         )?;
 
-        // Create the parquet scans for each associated type of file.
-        let mut parquet_source = ParquetSource::new(TableParquetOptions::new());
+        let cdc_partition_fields: Vec<Arc<Field>> =
+            cdc_partition_cols.into_iter().map(Arc::new).collect();
+        let add_remove_partition_fields: Vec<Arc<Field>> = add_remove_partition_cols
+            .into_iter()
+            .map(Arc::new)
+            .collect();
+
+        let cdc_table_schema = TableSchema::new(Arc::clone(&cdc_file_schema), cdc_partition_fields);
+        let add_table_schema = TableSchema::new(
+            Arc::clone(&add_remove_file_schema),
+            add_remove_partition_fields.clone(),
+        );
+        let remove_table_schema = TableSchema::new(
+            Arc::clone(&add_remove_file_schema),
+            add_remove_partition_fields,
+        );
+
+        let parquet_options = TableParquetOptions {
+            global: session.config().options().execution.parquet.clone(),
+            ..Default::default()
+        };
+
+        let mut cdc_source = ParquetSource::new(cdc_table_schema)
+            .with_table_parquet_options(parquet_options.clone());
+        let mut add_source = ParquetSource::new(add_table_schema)
+            .with_table_parquet_options(parquet_options.clone());
+        let mut remove_source =
+            ParquetSource::new(remove_table_schema).with_table_parquet_options(parquet_options);
+
         if let Some(filters) = filters {
-            parquet_source = parquet_source.with_predicate(Arc::clone(filters));
+            cdc_source = cdc_source.with_predicate(Arc::clone(filters));
+            add_source = add_source.with_predicate(Arc::clone(filters));
+            remove_source = remove_source.with_predicate(Arc::clone(filters));
         }
-        let parquet_source: Arc<dyn FileSource> = Arc::new(parquet_source);
+
         let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&cdc_file_schema),
-                Arc::clone(&parquet_source),
-            )
-            .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
-            .with_table_partition_cols(cdc_partition_cols)
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(cdc_source))
+                .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
+                .build(),
         );
 
         let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&add_remove_file_schema),
-                Arc::clone(&parquet_source),
-            )
-            .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
-            .with_table_partition_cols(add_remove_partition_cols.clone())
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(add_source))
+                .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
+                .build(),
         );
 
         let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(
-                self.log_store.object_store_url(),
-                Arc::clone(&add_remove_file_schema),
-                parquet_source,
-            )
-            .with_file_groups(
-                remove_file_groups
-                    .into_values()
-                    .map(FileGroup::from)
-                    .collect(),
-            )
-            .with_table_partition_cols(add_remove_partition_cols)
-            .build(),
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(remove_source))
+                .with_file_groups(
+                    remove_file_groups
+                        .into_values()
+                        .map(FileGroup::from)
+                        .collect(),
+                )
+                .build(),
         );
 
         // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
@@ -479,22 +486,6 @@ impl CdfLoadBuilder {
     }
 }
 
-#[allow(unused)]
-/// Helper function to collect batches associated with reading CDF data
-pub(crate) async fn collect_batches(
-    num_partitions: usize,
-    stream: Arc<dyn ExecutionPlan>,
-    ctx: SessionContext,
-) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
-    let mut batches = vec![];
-    for p in 0..num_partitions {
-        let data: Vec<RecordBatch> =
-            crate::operations::collect_sendable_stream(stream.execute(p, ctx.task_ctx())?).await?;
-        batches.extend_from_slice(&data);
-    }
-    Ok(batches)
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -504,13 +495,14 @@ pub(crate) mod tests {
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
     use datafusion::common::assert_batches_sorted_eq;
+    use datafusion::physical_plan::collect;
     use datafusion::prelude::SessionContext;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
-    use crate::{DeltaOps, DeltaTable, TableProperty};
+    use crate::{DeltaTable, TableProperty};
     use std::path::Path;
     use url::Url;
 
@@ -520,19 +512,14 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
         assert_batches_sorted_eq! {
             [
                 "+----+--------+------------+------------------+-----------------+-------------------------+",
@@ -573,21 +560,16 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await
             .unwrap();
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
 
         assert_batches_sorted_eq! {
             [
@@ -623,19 +605,14 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
 
         assert_batches_sorted_eq! {
             ["+----+--------+------------+-------------------+---------------+--------------+----------------+------------------+-----------------+-------------------------+",
@@ -678,9 +655,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(4)
             .with_ending_version(1)
             .build(&ctx.state(), None)
@@ -701,9 +678,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .build(&ctx.state(), None)
             .await;
@@ -723,20 +700,15 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(5)
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
             .await?;
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table.clone(),
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
 
         assert!(batches.is_empty());
 
@@ -750,9 +722,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await;
@@ -773,20 +745,15 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .with_allow_out_of_range()
             .build(&ctx.state(), None)
             .await?;
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table.clone(),
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
 
         assert!(batches.is_empty());
 
@@ -799,9 +766,9 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/simple_table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await;
@@ -822,19 +789,14 @@ pub(crate) mod tests {
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
-        let table = DeltaOps::try_from_uri(table_uri)
+        let table = DeltaTable::try_from_url(table_uri)
             .await?
-            .load_cdf()
+            .scan_cdf()
             .with_starting_timestamp(ending_timestamp.and_utc())
             .build(&ctx.state(), None)
             .await?;
 
-        let batches = collect_batches(
-            table.properties().output_partitioning().partition_count(),
-            table,
-            ctx,
-        )
-        .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
 
         assert_batches_sorted_eq! {
             [
@@ -865,7 +827,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_use_remove_actions_for_deletions() -> TestResult {
         let delta_schema = TestSchemas::simple();
-        let table: DeltaTable = DeltaOps::new_in_memory()
+        let table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
@@ -900,13 +862,13 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps(table)
+        let table = table
             .write(vec![batch])
             .await
             .expect("Failed to write first batch");
         assert_eq!(table.version(), Some(1));
 
-        let table = DeltaOps(table)
+        let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await
@@ -914,23 +876,17 @@ pub(crate) mod tests {
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
-        let cdf_scan = DeltaOps(table.clone())
-            .load_cdf()
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
             .with_starting_version(0)
             .build(&ctx.state(), None)
             .await
             .expect("Failed to load CDF");
 
-        let mut batches = collect_batches(
-            cdf_scan
-                .properties()
-                .output_partitioning()
-                .partition_count(),
-            cdf_scan,
-            ctx,
-        )
-        .await
-        .expect("Failed to collect batches");
+        let mut batches = collect(cdf_scan, ctx.task_ctx())
+            .await
+            .expect("Failed to collect batches");
 
         // The batches will contain a current _commit_timestamp which shouldn't be check_append_only
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();

@@ -16,7 +16,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
@@ -29,9 +29,6 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::execution::context::SessionState;
-use datafusion::execution::memory_pool::FairSpillPool;
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::execution::SessionStateBuilder;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -45,23 +42,26 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
-use serde::{de::Error as DeError, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 use uuid::Uuid;
 
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
-use crate::delta_datafusion::DeltaTableProvider;
+use crate::delta_datafusion::{
+    DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
+    SessionResolveContext, resolve_session_state,
+};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{resolve_snapshot, EagerSnapshot};
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt, Remove};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
+use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version, to_kernel_predicate};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -215,12 +215,11 @@ pub struct OptimizeBuilder<'a> {
     preserve_insertion_order: bool,
     /// Maximum number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
-    /// Maximum number of bytes allowed in memory before spilling to disk
-    max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    session_fallback_policy: SessionFallbackPolicy,
     min_commit_interval: Option<Duration>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
@@ -232,6 +231,33 @@ impl super::Operation for OptimizeBuilder<'_> {
     fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
         self.custom_execute_handler.clone()
     }
+}
+
+/// Create a SessionState configured for optimize operations with custom spill settings.
+///
+/// This is the recommended way to configure memory and disk limits for optimize operations.
+/// The created SessionState should be passed to [`OptimizeBuilder`] via [`with_session_state`](OptimizeBuilder::with_session_state).
+///
+/// # Arguments
+/// * `max_spill_size` - Maximum bytes in memory before spilling to disk. If `None`, uses DataFusion's default memory pool.
+/// * `max_temp_directory_size` - Maximum disk space for temporary spill files. If `None`, uses DataFusion's default disk manager.
+pub fn create_session_state_for_optimize(
+    max_spill_size: Option<usize>,
+    max_temp_directory_size: Option<u64>,
+) -> SessionState {
+    if max_spill_size.is_none() && max_temp_directory_size.is_none() {
+        return DeltaSessionContext::new().state();
+    }
+
+    let mut builder = DeltaRuntimeEnvBuilder::new();
+    if let Some(spill_size) = max_spill_size {
+        builder = builder.with_max_spill_size(spill_size);
+    }
+    if let Some(directory_size) = max_temp_directory_size {
+        builder = builder.with_max_temp_directory_size(directory_size);
+    }
+
+    DeltaSessionContext::with_runtime_env(builder.build()).state()
 }
 
 impl<'a> OptimizeBuilder<'a> {
@@ -246,10 +272,10 @@ impl<'a> OptimizeBuilder<'a> {
             commit_properties: CommitProperties::default(),
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
-            max_spill_size: 20 * 1024 * 1024 * 1024, // 20 GB.
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
             session: None,
+            session_fallback_policy: SessionFallbackPolicy::default(),
             custom_execute_handler: None,
         }
     }
@@ -296,16 +322,6 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Max spill size
-    #[deprecated(
-        since = "0.29.0",
-        note = "Pass in a `SessionState` configured with a `RuntimeEnv` and a `FairSpillPool`"
-    )]
-    pub fn with_max_spill_size(mut self, max_spill_size: usize) -> Self {
-        self.max_spill_size = max_spill_size;
-        self
-    }
-
     /// Min commit interval
     pub fn with_min_commit_interval(mut self, min_commit_interval: Duration) -> Self {
         self.min_commit_interval = Some(min_commit_interval);
@@ -318,9 +334,25 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// The Datafusion session state to use
+    /// Set the DataFusion session used for planning and execution.
+    ///
+    /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
+    ///
+    /// If `session` is not a `SessionState`, the default policy is to log a warning and fall back to
+    /// internal defaults. To make this strict (error instead), set
+    /// `with_session_fallback_policy(SessionFallbackPolicy::RequireSessionState)`.
+    ///
+    /// Example: `Arc::new(create_session().state())`.
     pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    ///
+    /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
+    pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
+        self.session_fallback_policy = policy;
         self
     }
 }
@@ -333,7 +365,8 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), true).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
@@ -345,20 +378,16 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     .set_created_by(format!("delta-rs version {}", crate_version()))
                     .build()
             });
-            let session = this
-                .session
-                .and_then(|session| session.as_any().downcast_ref::<SessionState>().cloned())
-                .unwrap_or_else(|| {
-                    let memory_pool = FairSpillPool::new(this.max_spill_size);
-                    let runtime = RuntimeEnvBuilder::new()
-                        .with_memory_pool(Arc::new(memory_pool))
-                        .build_arc()
-                        .unwrap();
-                    SessionStateBuilder::new()
-                        .with_default_features()
-                        .with_runtime_env(runtime)
-                        .build()
-                });
+            let (session, _) = resolve_session_state(
+                this.session.as_deref(),
+                this.session_fallback_policy,
+                || create_session_state_for_optimize(None, None),
+                SessionResolveContext {
+                    operation: "optimize",
+                    table_uri: Some(this.log_store.root_url()),
+                    cdc: false,
+                },
+            )?;
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -387,7 +416,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             let mut table =
                 DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
-            table.update().await?;
+            table.update_state().await?;
             Ok((table, metrics))
         })
     }
@@ -942,7 +971,17 @@ async fn build_compaction_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
@@ -1045,16 +1084,26 @@ async fn build_zorder_plan(
         .filter(|col| !field_names.contains(col))
         .collect_vec();
     if !unknown_columns.is_empty() {
-        return Err(DeltaTableError::Generic(
-            format!("Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"),
-        ));
+        return Err(DeltaTableError::Generic(format!(
+            "Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"
+        )));
     }
 
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
-    let mut file_stream = snapshot.file_views_by_partitions(log_store, filters);
+
+    let predicate = if filters.is_empty() {
+        None
+    } else {
+        Some(Arc::new(to_kernel_predicate(
+            filters,
+            snapshot.schema().as_ref(),
+        )?))
+    };
+
+    let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         let partition_values = file
@@ -1332,13 +1381,13 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = crate::DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_save_mode(crate::protocol::SaveMode::Append)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["moDified".into()]))
                     .await;
@@ -1378,14 +1427,14 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_partition_columns(vec!["country"])
                     .with_save_mode(crate::protocol::SaveMode::Overwrite)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
                     .await;
@@ -1419,14 +1468,14 @@ pub(super) mod zorder {
                 )
                 .unwrap();
                 // write some data
-                let table = crate::DeltaOps::new_in_memory()
+                let table = DeltaTable::new_in_memory()
                     .write(vec![batch.clone()])
                     .with_partition_columns(vec!["country"])
                     .with_save_mode(crate::protocol::SaveMode::Overwrite)
                     .await
                     .unwrap();
 
-                let res = crate::DeltaOps(table)
+                let res = table
                     .optimize()
                     .with_type(OptimizeType::ZOrder(vec!["modified".into()]))
                     .await;
@@ -1540,7 +1589,7 @@ pub(super) mod zorder {
     #[cfg(test)]
     mod test {
         use arrow_array::{
-            cast::as_generic_binary_array, new_empty_array, StringArray, UInt8Array,
+            StringArray, UInt8Array, cast::as_generic_binary_array, new_empty_array,
         };
         use arrow_schema::DataType;
 
@@ -1591,7 +1640,6 @@ pub(super) mod zorder {
 
         #[tokio::test]
         async fn works_on_spark_table() {
-            use crate::DeltaOps;
             use tempfile::TempDir;
             // Create a temporary directory
             let tmp_dir = TempDir::new().expect("Failed to make temp dir");
@@ -1604,7 +1652,7 @@ pub(super) mod zorder {
             let table_uri =
                 ensure_table_uri(tmp_dir.path().join(table_name).to_str().unwrap()).unwrap();
             // Run optimize
-            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
+            let (_, metrics) = DeltaTable::try_from_url(table_uri)
                 .await
                 .unwrap()
                 .optimize()

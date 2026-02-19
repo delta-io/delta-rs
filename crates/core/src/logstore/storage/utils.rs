@@ -1,8 +1,8 @@
 //! Utility functions for working across Delta tables
 
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;

@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -24,7 +25,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .unwrap();
 
-    let table = deltalake::open_table("/tmp/my_table").await.unwrap();
+    let delta_path = Url::from_directory_path("/tmp/my_table").unwrap();
+    let table = deltalake::open_table(delta_path).await.unwrap();
     let _table = DeltaOps(table)
         .write(vec![data])
         .with_save_mode(SaveMode::Overwrite)

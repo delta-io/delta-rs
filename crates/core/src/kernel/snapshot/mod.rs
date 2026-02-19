@@ -34,18 +34,18 @@ use delta_kernel::{
     Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
 };
 use futures::future::ready;
-use futures::stream::{once, BoxStream};
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::path::Path;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use serde_json::Deserializer;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
-use crate::kernel::arrow::engine_ext::{kernel_to_arrow, ExpressionEvaluatorExt};
-use crate::kernel::{spawn_blocking_with_span, StructType, ARROW_HANDLER};
+use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
+use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{to_kernel_predicate, DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
 pub use iterators::*;
@@ -145,21 +145,19 @@ impl Snapshot {
 
     /// Update the snapshot to the given version
     pub async fn update(
-        &mut self,
-        log_store: &dyn LogStore,
+        self: Arc<Self>,
+        engine: Arc<dyn Engine>,
         target_version: Option<u64>,
-    ) -> DeltaResult<()> {
+    ) -> DeltaResult<Arc<Self>> {
         if let Some(version) = target_version {
             if version == self.version() as u64 {
-                return Ok(());
+                return Ok(self);
             }
             if version < self.version() as u64 {
                 return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
             }
         }
 
-        // TODO: bundle operation id with log store ...
-        let engine = log_store.engine(None);
         let current = self.inner.clone();
         let snapshot = spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_from(current);
@@ -171,16 +169,19 @@ impl Snapshot {
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-        self.inner = snapshot;
-        self.schema = Arc::new(
-            self.inner
+        let schema = Arc::new(
+            snapshot
                 .table_configuration()
                 .schema()
                 .as_ref()
                 .try_into_arrow()?,
         );
 
-        Ok(())
+        Ok(Arc::new(Self {
+            inner: snapshot,
+            schema,
+            config: self.config.clone(),
+        }))
     }
 
     /// Get the table version of the snapshot
@@ -257,9 +258,12 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata(engine)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
+        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+            Ok(s) => s.boxed(),
+            Err(err) => Box::pin(once(ready(Err(err)))),
+        }
     }
 
     pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
@@ -278,9 +282,40 @@ impl Snapshot {
         let engine = log_store.engine(None);
         let stream = scan
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
-            .map(|d| Ok(kernel_to_arrow(d?)?.scan_files));
+            .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        ScanRowOutStream::new(self.inner.clone(), stream).boxed()
+        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+            Ok(s) => s.boxed(),
+            Err(err) => Box::pin(once(ready(Err(err)))),
+        }
+    }
+
+    /// Stream the active files in the snapshot
+    ///
+    /// This function returns a stream of [`LogicalFileView`] objects,
+    /// which represent the active files in the snapshot.
+    ///
+    /// ## Parameters
+    ///
+    /// * `log_store` - A reference to a [`LogStore`] implementation.
+    /// * `predicate` - An optional predicate to filter the files.
+    ///
+    /// ## Returns
+    ///
+    /// A stream of [`LogicalFileView`] objects.
+    pub fn file_views(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        self.files(log_store, predicate)
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
+            })
+            .try_flatten()
+            .boxed()
     }
 
     /// Get the commit infos in the snapshot
@@ -322,10 +357,10 @@ impl Snapshot {
         {
             // safety: object store path are always valid urls paths.
             let dummy_path = dummy_url.join(meta.location.as_ref()).unwrap();
-            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)? {
-                if matches!(parsed_path.file_type, LogPathFileType::Commit) {
-                    commit_files.push(meta);
-                }
+            if let Some(parsed_path) = ParsedLogPath::try_from(dummy_path)?
+                && matches!(parsed_path.file_type, LogPathFileType::Commit)
+            {
+                commit_files.push(meta);
             }
         }
         commit_files.sort_unstable_by(|a, b| b.location.cmp(&a.location));
@@ -463,7 +498,7 @@ impl Snapshot {
 /// A snapshot of a Delta table that has been eagerly loaded into memory.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EagerSnapshot {
-    snapshot: Snapshot,
+    snapshot: Arc<Snapshot>,
     // logical files in the snapshot
     files: Vec<RecordBatch>,
 }
@@ -472,8 +507,16 @@ pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
     maybe_snapshot: Option<EagerSnapshot>,
     require_files: bool,
+    version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
+        if let Some(version) = version
+            && snapshot.version() as Version != version
+        {
+            return Err(DeltaTableError::Generic(
+                "Provided snapshot version does not match the requested version".to_string(),
+            ));
+        }
         if require_files {
             snapshot.with_files(log_store).await
         } else {
@@ -482,7 +525,7 @@ pub(crate) async fn resolve_snapshot(
     } else {
         let mut config = DeltaTableConfig::default();
         config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, None).await
+        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
     }
 }
 
@@ -494,12 +537,12 @@ impl EagerSnapshot {
         version: Option<i64>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
-        Self::try_new_with_snapshot(log_store, snapshot).await
+        Self::try_new_with_snapshot(log_store, snapshot.into()).await
     }
 
     pub(crate) async fn try_new_with_snapshot(
         log_store: &dyn LogStore,
-        snapshot: Snapshot,
+        snapshot: Arc<Snapshot>,
     ) -> DeltaResult<Self> {
         let files = match snapshot.load_config().require_files {
             true => snapshot.files(log_store, None).try_collect().await?,
@@ -508,12 +551,21 @@ impl EagerSnapshot {
         Ok(Self { snapshot, files })
     }
 
-    pub(crate) async fn with_files(mut self, log_store: &dyn LogStore) -> DeltaResult<Self> {
+    pub(crate) async fn with_files(self, log_store: &dyn LogStore) -> DeltaResult<Self> {
         if self.snapshot.config.require_files {
             return Ok(self);
         }
-        self.snapshot.config.require_files = true;
-        Self::try_new_with_snapshot(log_store, self.snapshot).await
+        let mut config = self.snapshot.config.clone();
+        config.require_files = true;
+        Self::try_new_with_snapshot(
+            log_store,
+            Snapshot {
+                config,
+                ..(*self.snapshot).clone()
+            }
+            .into(),
+        )
+        .await
     }
 
     pub(crate) fn files(&self) -> DeltaResult<&[RecordBatch]> {
@@ -535,7 +587,11 @@ impl EagerSnapshot {
             return Ok(());
         }
 
-        self.snapshot.update(log_store, target_version).await?;
+        self.snapshot = self
+            .snapshot
+            .clone()
+            .update(log_store.engine(None), target_version)
+            .await?;
 
         self.files = self
             .snapshot
@@ -629,27 +685,7 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if !self.snapshot.load_config().require_files {
-            return Box::pin(once(ready(Err(DeltaTableError::NotInitializedWithFiles(
-                "file_views".into(),
-            )))));
-        }
-
-        self.snapshot
-            .files_from(
-                log_store,
-                predicate,
-                self.version() as u64,
-                Box::new(self.files.clone().into_iter()),
-                None,
-            )
-            .map_ok(|batch| {
-                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
-                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
-                })
-            })
-            .try_flatten()
-            .boxed()
+        self.snapshot.file_views(log_store, predicate)
     }
 
     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
@@ -719,7 +755,7 @@ mod tests {
     use super::*;
     use crate::{
         kernel::transaction::CommitData,
-        test_utils::{assert_batches_sorted_eq, TestResult, TestTables},
+        test_utils::{TestResult, TestTables, assert_batches_sorted_eq},
     };
 
     impl Snapshot {
@@ -773,7 +809,10 @@ mod tests {
                 .files(log_store.as_ref(), None)
                 .try_collect()
                 .await?;
-            Ok(Self { snapshot, files })
+            Ok(Self {
+                snapshot: snapshot.into(),
+                files,
+            })
         }
     }
 

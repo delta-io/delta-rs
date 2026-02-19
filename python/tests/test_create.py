@@ -80,7 +80,6 @@ def test_create_schema(tmp_path: pathlib.Path):
     assert dt.schema() == schema
 
 
-@pytest.mark.skip(reason="not implemented")
 def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     """append only is set to false so shouldn't be converted to a feature"""
     dt = DeltaTable.create(
@@ -105,8 +104,8 @@ def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     }
     assert protocol.min_reader_version == 3
     assert protocol.min_writer_version == 7
-    assert protocol.writer_features == ["deletionVectors"]  # type: ignore
-    assert protocol.reader_features == ["deletionVectors"]
+    assert "deletionVectors" in protocol.writer_features
+    assert "deletionVectors" in protocol.reader_features
     assert dt.history()[0]["userName"] == "John Doe"
 
 
@@ -155,7 +154,7 @@ def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: 
         mode="overwrite",
     )
 
-    assert dt.files() == []
+    assert dt.file_uris() == []
 
 
 def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):

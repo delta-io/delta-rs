@@ -11,7 +11,7 @@ defaults:
 jobs:
   validate-release-tag:
     name: Validate git tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v5
       - name: compare git tag with cargo metadata
@@ -45,7 +45,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args: --skip-existing --no-sdist -m python/Cargo.toml --profile python-release
 
   release-pypi-windows:
     needs: validate-release-tag
@@ -58,6 +58,10 @@ jobs:
         with:
           cache-targets: false
 
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
         env:
@@ -65,12 +69,12 @@ jobs:
         with:
           target: x86_64-pc-windows-msvc
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          args: --skip-existing --no-sdist -m python/Cargo.toml  --profile python-release
 
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
-    name: PyPI release manylinux-2_17 x86_64
-    runs-on: ubuntu-latest
+    name: PyPI release on Linux (x86_64-manylinux-2_17)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -78,19 +82,21 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Publish manylinux to pypi x86_64 (with sdist)
+      - name: Publish manylinux to pypi x86_64 (without sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: x86_64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml --profile python-release
+          container: off
+          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
+          manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
     needs: validate-release-tag
-    name: PyPI release manylinux-2_28 aarch64
-    runs-on: ubuntu-latest
+    name: PyPI release on Linux (aarch64-manylinux-2_28)
+    runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
 
@@ -98,20 +104,21 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Publish manylinux to pypi aarch64 manylinux-2_28 (without sdist)
+      - name: Publish manylinux to pypi aarch64 (without sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: aarch64-unknown-linux-gnu
           command: publish
-          args: --skip-existing -m python/Cargo.toml --no-sdist --profile python-release
+          container: off
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release-arm
           manylinux: "2_28"
 
   release-pypi-musl-x86-64:
     needs: validate-release-tag
-    name: PyPI release musl-2_17 x86_64
-    runs-on: ubuntu-latest
+    name: PyPI release on Linux (x86_64-musl)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -119,14 +126,14 @@ jobs:
         with:
           cache-targets: false
 
-      - name: Publish manylinux to pypi x86_64 (with sdist)
+      - name: Publish musl to pypi x86_64 (with sdist)
         uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: x86_64-unknown-linux-musl
           command: publish
-          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release
 
   release-docs:
     needs:
@@ -140,7 +147,7 @@ jobs:
       ]
     permissions:
       contents: write
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Trigger the docs release event
         uses: peter-evans/repository-dispatch@v2

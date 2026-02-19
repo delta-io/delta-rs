@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-gcp"
-version = "0.13.0"
+version = "0.15.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.29.0", path = "../core", features = ["cloud"] }
+deltalake-core = { version = "0.31.0", path = "../core", features = ["cloud"] }
 
 # workspace depenndecies
 async-trait = { workspace = true }

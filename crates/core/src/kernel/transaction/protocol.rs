@@ -5,13 +5,17 @@ use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{
-    contains_timestampntz, Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema,
+    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 
+use tracing::log::*;
+
 static READER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
+static READER_V3: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::DeletionVectors]));
 #[cfg(feature = "datafusion")]
 static WRITER_V2: LazyLock<HashSet<TableFeature>> =
     LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
@@ -97,6 +101,7 @@ impl ProtocolChecker {
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampntz");
         let contains_timestampntz = contains_timestampntz(schema.fields());
         let required_features: Option<&[TableFeature]> =
             match snapshot.protocol().min_writer_version() {
@@ -126,11 +131,19 @@ impl ProtocolChecker {
     }
 
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        trace!(
+            "validating that min reader version {} can be read",
+            protocol.min_reader_version()
+        );
+
         let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
+            3 => Some(READER_V3.clone()),
             _ => protocol.reader_features_set(),
         };
+        trace!("my reader features: {:?}", self.reader_features);
+        trace!("desired reader features: {required_features:?}");
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
             if diff.peek().is_some() {
@@ -157,6 +170,9 @@ impl ProtocolChecker {
             6 => Some(WRITER_V6.clone()),
             _ => snapshot.protocol().writer_features_set(),
         };
+
+        trace!("my writer features: {:?}", self.writer_features);
+        trace!("required writer features: {required_features:?}");
 
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.writer_features).peekable();
@@ -220,6 +236,7 @@ impl ProtocolChecker {
 pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
     reader_features.insert(TableFeature::TimestampWithoutTimezone);
+    reader_features.insert(TableFeature::DeletionVectors);
     // reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
@@ -232,6 +249,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
         writer_features.insert(TableFeature::CheckConstraints);
         writer_features.insert(TableFeature::GeneratedColumns);
     }
+    writer_features.insert(TableFeature::DeletionVectors);
     // writer_features.insert(TableFeature::ColumnMapping);
     // writer_features.insert(TableFeature::IdentityColumns);
 
@@ -243,12 +261,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, Add, Metadata, PrimitiveType, ProtocolInner, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
-    use crate::TableProperty;
 
     fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
         ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
@@ -325,80 +343,116 @@ mod tests {
         let actions = create_actions(1, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(2, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_err());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_err()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(2, "false", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(7, "true", vec![TableFeature::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_err());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_err()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(7, "false", vec![TableFeature::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(7, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -626,7 +680,7 @@ mod tests {
         let checker_5 = ProtocolChecker::new(Default::default(), WRITER_V4.clone());
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
 
-        let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
+        let table = crate::DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",

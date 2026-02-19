@@ -1,10 +1,10 @@
 use std::sync::{Arc, OnceLock};
 
 use deltalake::logstore::object_store::{
-    path::Path, Error as ObjectStoreError, ListResult, ObjectStore, Result as ObjectStoreResult,
+    Error as ObjectStoreError, ListResult, ObjectStore, Result as ObjectStoreResult, path::Path,
 };
-use futures::future::{join_all, BoxFuture, FutureExt};
 use futures::StreamExt;
+use futures::future::{BoxFuture, FutureExt, join_all};
 use pyo3::types::{IntoPyDict, PyAnyMethods, PyModule};
 use pyo3::{Bound, IntoPyObjectExt, PyAny, PyResult, Python};
 use tokio::runtime::Runtime;

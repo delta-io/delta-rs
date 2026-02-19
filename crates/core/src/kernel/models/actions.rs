@@ -6,9 +6,9 @@ use delta_kernel::schema::{DataType, StructField};
 use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::{error::Error, DeltaResult};
-use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
+use crate::kernel::{DeltaResult, error::Error};
+use crate::kernel::{StructType, StructTypeExt};
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
@@ -268,6 +268,7 @@ impl Default for ProtocolInner {
 
 impl ProtocolInner {
     /// Create a new protocol action
+    #[cfg(test)]
     pub(crate) fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
@@ -452,11 +453,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                    )));
                 }
             }
         }
@@ -472,11 +477,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                    )));
                 }
             }
         }
@@ -503,7 +512,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -533,7 +544,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -603,6 +616,7 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    MaterializePartitionColumns,
 }
 
 impl FromStr for TableFeatures {
@@ -623,6 +637,7 @@ impl FromStr for TableFeatures {
             "rowTracking" => Ok(TableFeatures::RowTracking),
             "domainMetadata" => Ok(TableFeatures::DomainMetadata),
             "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            "materializePartitionColumns" => Ok(TableFeatures::MaterializePartitionColumns),
             _ => Err(()),
         }
     }
@@ -644,6 +659,7 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::RowTracking => "rowTracking",
             TableFeatures::DomainMetadata => "domainMetadata",
             TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+            TableFeatures::MaterializePartitionColumns => "materializePartitionColumns",
         }
     }
 }
@@ -682,7 +698,8 @@ impl TableFeatures {
                     | TableFeature::DomainMetadata
                     | TableFeature::IcebergCompatV1
                     | TableFeature::IcebergCompatV2
-                    | TableFeature::ClusteredTable => (None, Some(feature)),
+                    | TableFeature::ClusteredTable
+                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
                     // ReaderWriter features
                     TableFeature::CatalogManaged
@@ -710,10 +727,11 @@ impl TableFeatures {
 }
 
 ///Storage type of deletion vector
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
+    #[default]
     UuidRelativePath,
     /// Stored as inline string.
     #[serde(rename = "i")]
@@ -721,12 +739,6 @@ pub enum StorageType {
     /// Stored at an absolute path.
     #[serde(rename = "p")]
     AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
-    }
 }
 
 impl FromStr for StorageType {
@@ -1057,12 +1069,14 @@ pub struct Sidecar {
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 /// The isolation level applied during transaction
+#[derive(Default)]
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
     /// exists a serial sequence of executing them one-at-a-time that generates
     /// the same outcome as that seen in the table. For the write operations,
     /// the serial sequence is exactly the same as that seen in the table’s history.
+    #[default]
     Serializable,
 
     /// A weaker isolation level than Serializable. It ensures only that the write
@@ -1080,11 +1094,6 @@ pub enum IsolationLevel {
 
 // Spark assumes Serializable as default isolation level
 // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1023
-impl Default for IsolationLevel {
-    fn default() -> Self {
-        Self::Serializable
-    }
-}
 
 impl AsRef<str> for IsolationLevel {
     fn as_ref(&self) -> &str {
@@ -1112,7 +1121,7 @@ impl FromStr for IsolationLevel {
 pub(crate) mod serde_path {
     use std::str::Utf8Error;
 
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+    use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>

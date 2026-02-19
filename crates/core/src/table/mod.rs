@@ -1,29 +1,29 @@
 //! Delta Table read and write implementation
 
-use std::cmp::{min, Ordering};
+use std::cmp::{Ordering, min};
 use std::fmt;
 use std::fmt::Formatter;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
+use futures::future::ready;
+use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use url::Url;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
 use crate::logstore::{
-    commit_uri_from_version, extract_version_from_filename, LogStoreConfig, LogStoreExt,
-    LogStoreRef, ObjectStoreRef,
+    LogStoreConfig, LogStoreExt, LogStoreRef, ObjectStoreRef, commit_uri_from_version,
+    extract_version_from_filename,
 };
 use crate::partitions::PartitionFilter;
-use crate::{DeltaResult, DeltaTableError};
-
-// NOTE: this use can go away when peek_next_commit is removed off of [DeltaTable]
-pub use crate::logstore::PeekCommit;
+use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
 pub mod builder;
 pub mod config;
@@ -90,9 +90,11 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let log_store =
-                    crate::logstore::logstore_for(storage_config.location, storage_config.options)
-                        .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
+                let log_store = crate::logstore::logstore_for(
+                    storage_config.location(),
+                    storage_config.options().clone(),
+                )
+                .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
                 let table = DeltaTable {
                     state,
@@ -120,6 +122,20 @@ impl DeltaTable {
         }
     }
 
+    /// Create a new [`DeltaTable`] instance, backed by an un-initialized in memory table
+    ///
+    /// Using this will not persist any changes beyond the lifetime of the table object.
+    /// The main purpose of in-memory tables is for use in testing.
+    ///
+    /// ```
+    /// use deltalake_core::DeltaTable;
+    /// let table = DeltaTable::new_in_memory();
+    /// ```
+    pub fn new_in_memory() -> Self {
+        let url = Url::parse("memory:///").unwrap();
+        DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+    }
+
     /// Create a new [`DeltaTable`] from a [`DeltaTableState`] without loading any
     /// data from backing storage.
     ///
@@ -145,8 +161,8 @@ impl DeltaTable {
     }
 
     /// The URI of the underlying data
-    pub fn table_uri(&self) -> String {
-        self.log_store.root_uri()
+    pub fn table_url(&self) -> &Url {
+        self.log_store.root_url()
     }
 
     /// get a shared reference to the log store
@@ -176,7 +192,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
-    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+    pub async fn update_state(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
 
@@ -186,24 +202,18 @@ impl DeltaTable {
         &mut self,
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        match self.state.as_mut() {
-            Some(state) => state.update(&self.log_store, max_version).await,
-            _ => {
-                let state =
-                    DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version)
-                        .await?;
-                self.state = Some(state);
-                Ok(())
-            }
-        }
+        self.state = Some(
+            DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
+        );
+        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }
@@ -233,7 +243,7 @@ impl DeltaTable {
     pub async fn history(
         &self,
         limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo>, DeltaTableError> {
+    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
         let infos = self
             .snapshot()?
             .snapshot()
@@ -266,9 +276,19 @@ impl DeltaTable {
                 Err(DeltaTableError::NotInitialized)
             }));
         };
+
+        if filters.is_empty() {
+            return state.snapshot().file_views(&self.log_store, None);
+        }
+
+        let predicate =
+            match crate::to_kernel_predicate(filters, state.snapshot().schema().as_ref()) {
+                Ok(predicate) => Arc::new(predicate),
+                Err(err) => return Box::pin(once(ready(Err(err)))),
+            };
         state
             .snapshot()
-            .file_views_by_partitions(&self.log_store, filters)
+            .file_views(&self.log_store, Some(predicate))
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -373,7 +393,7 @@ impl DeltaTable {
             Err(DeltaTableError::InvalidVersion(_)) => {
                 return Err(DeltaTableError::NotATable(
                     log_store.table_root_url().to_string(),
-                ))
+                ));
             }
             Err(e) => return Err(e),
         };
@@ -410,15 +430,40 @@ impl DeltaTable {
 
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "DeltaTable({})", self.table_uri())?;
+        writeln!(f, "DeltaTable({})", self.table_url())?;
         writeln!(f, "\tversion: {:?}", self.version())
     }
 }
 
 impl std::fmt::Debug for DeltaTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "DeltaTable <{}>", self.table_uri())
+        write!(f, "DeltaTable <{}>", self.table_url())
     }
+}
+
+/// Normalize a given [Url] to **always** contain a trailing slash. This is critically important
+/// for assumptions about [Url] equivalency and more importantly for **joining** on a Url`.
+///
+/// This function will also remove redundant slashes in the ]Url] path which can cause other
+/// equivalency failures
+///
+/// ```ignore
+///  left.join("_delta_log"); // produces `s3://bucket/prefix/_delta_log`
+///  right.join("_delta_log"); // produces `s3://bucket/_delta_log`
+/// ```
+pub fn normalize_table_url(url: &Url) -> Url {
+    let mut new_segments = vec![];
+    for segment in url.path().split('/') {
+        if !segment.is_empty() {
+            new_segments.push(segment);
+        }
+    }
+    // Add a trailing slash segment
+    new_segments.push("");
+
+    let mut url = url.clone();
+    url.set_path(&new_segments.join("/"));
+    url
 }
 
 #[cfg(test)]
@@ -429,6 +474,33 @@ mod tests {
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
+
+    #[test]
+    fn test_normalize_table_url() {
+        for (u, path) in [
+            (Url::parse("s3://bucket/prefix/").unwrap(), "/prefix/"),
+            (Url::parse("s3://bucket/prefix").unwrap(), "/prefix/"),
+            (
+                Url::parse("s3://bucket/prefix with space/").unwrap(),
+                "/prefix%20with%20space/",
+            ),
+            (
+                Url::parse("s3://bucket/special&chars/你好/😊").unwrap(),
+                "/special&chars/%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A/",
+            ),
+            (
+                Url::parse("s3://bucket/prefix/with/redundant/slashes//").unwrap(),
+                "/prefix/with/redundant/slashes/",
+            ),
+        ] {
+            assert_eq!(
+                normalize_table_url(&u).path(),
+                path,
+                "Failed to normalize: {}",
+                u.as_str()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn table_round_trip() {

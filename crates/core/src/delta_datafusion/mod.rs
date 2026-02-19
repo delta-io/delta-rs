@@ -14,7 +14,7 @@
 //!   )
 //!       .await
 //!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
+//!   ctx.register_table("demo", table.table_provider().await.unwrap()).unwrap();
 //!
 //!   let batches = ctx
 //!       .sql("SELECT * FROM demo").await.unwrap()
@@ -28,67 +28,73 @@ use std::sync::Arc;
 
 use arrow::array::types::UInt16Type;
 use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
-use arrow_cast::display::array_value_to_string;
-use arrow_cast::{cast_with_options, CastOptions};
+use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
-    SchemaRef as ArrowSchemaRef, TimeUnit,
+    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    TimeUnit,
 };
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
+use datafusion::datasource::TableProvider;
 use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
-use datafusion::datasource::{MemTable, TableProvider};
-use datafusion::execution::context::SessionContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::TaskContext;
+use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
-use itertools::Itertools;
-use url::Url;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{
-    Add, DataCheck, EagerSnapshot, Invariant, LogDataHandler, Snapshot, StructTypeExt,
-};
-use crate::logstore::{LogStore, LogStoreRef};
-use crate::table::config::TablePropertiesExt as _;
-use crate::table::state::DeltaTableState;
-use crate::table::{Constraint, GeneratedColumn};
-use crate::{open_table, open_table_with_storage_options, DeltaTable};
+use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
+use crate::{open_table, open_table_with_storage_options};
 
-pub use self::session::*;
+pub(crate) use self::session::DeltaSessionExt;
+pub use self::session::{
+    DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
+    create_session,
+};
+pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
+pub(crate) use self::utils::*;
+pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use data_validation::{
+    DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
+};
 pub(crate) use find_files::*;
+pub use table_provider::{
+    DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
+    next::DeltaScanExec,
+};
+pub(crate) use table_provider::{
+    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
+};
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
 pub mod cdf;
+mod data_validation;
 pub mod engine;
 pub mod expr;
+mod file_id;
 mod find_files;
 pub mod logical;
 pub mod physical;
 pub mod planner;
-mod schema_adapter;
 mod session;
+pub use session::SessionFallbackPolicy;
+pub(crate) use session::{SessionResolveContext, resolve_session_state};
 mod table_provider;
-
-pub use cdf::scan::DeltaCdfTableProvider;
-pub(crate) use table_provider::DeltaScanBuilder;
-pub use table_provider::{DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider};
+pub(crate) mod utils;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -232,7 +238,7 @@ fn _arrow_schema(
                 let corrected = if wrap_partitions {
                     match field.data_type() {
                         // Only dictionary-encode types that may be large
-                        // // https://github.com/apache/arrow-datafusion/pull/5545
+                        // https://github.com/apache/arrow-datafusion/pull/5545
                         ArrowDataType::Utf8
                         | ArrowDataType::LargeUtf8
                         | ArrowDataType::Binary
@@ -292,62 +298,6 @@ pub(crate) fn get_path_column<'a>(
         .ok_or_else(err)?
         .downcast_dict::<StringArray>()
         .ok_or_else(err)
-}
-
-impl DeltaTableState {
-    /// Provide table level statistics to Datafusion
-    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        self.snapshot.log_data().statistics()
-    }
-}
-
-// each delta table must register a specific object store, since paths are internally
-// handled relative to the table root.
-pub(crate) fn register_store(store: LogStoreRef, env: &RuntimeEnv) {
-    let object_store_url = store.object_store_url();
-    let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, store.object_store(None));
-}
-
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
-pub(crate) fn df_logical_schema(
-    snapshot: &EagerSnapshot,
-    file_column_name: &Option<String>,
-    schema: Option<ArrowSchemaRef>,
-) -> DeltaResult<SchemaRef> {
-    let input_schema = match schema {
-        Some(schema) => schema,
-        None => snapshot.input_schema(),
-    };
-    let table_partition_cols = snapshot.metadata().partition_columns();
-
-    let mut fields: Vec<Arc<Field>> = input_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-
-    if let Some(file_column_name) = file_column_name {
-        fields.push(Arc::new(Field::new(
-            file_column_name,
-            ArrowDataType::Utf8,
-            true,
-        )));
-    }
-
-    Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -488,197 +438,6 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-/// Responsible for checking batches of data conform to table's invariants, constraints and nullability.
-#[derive(Clone, Default)]
-pub struct DeltaDataChecker {
-    constraints: Vec<Constraint>,
-    invariants: Vec<Invariant>,
-    generated_columns: Vec<GeneratedColumn>,
-    non_nullable_columns: Vec<String>,
-    ctx: SessionContext,
-}
-
-impl DeltaDataChecker {
-    /// Create a new DeltaDataChecker with no invariants or constraints
-    pub fn empty() -> Self {
-        Self {
-            invariants: vec![],
-            constraints: vec![],
-            generated_columns: vec![],
-            non_nullable_columns: vec![],
-            ctx: DeltaSessionContext::default().into(),
-        }
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of invariants
-    pub fn new_with_invariants(invariants: Vec<Invariant>) -> Self {
-        Self {
-            invariants,
-            constraints: vec![],
-            generated_columns: vec![],
-            non_nullable_columns: vec![],
-            ctx: DeltaSessionContext::default().into(),
-        }
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of constraints
-    pub fn new_with_constraints(constraints: Vec<Constraint>) -> Self {
-        Self {
-            constraints,
-            invariants: vec![],
-            generated_columns: vec![],
-            non_nullable_columns: vec![],
-            ctx: DeltaSessionContext::default().into(),
-        }
-    }
-
-    /// Create a new DeltaDataChecker with a specified set of generated columns
-    pub fn new_with_generated_columns(generated_columns: Vec<GeneratedColumn>) -> Self {
-        Self {
-            constraints: vec![],
-            invariants: vec![],
-            generated_columns,
-            non_nullable_columns: vec![],
-            ctx: DeltaSessionContext::default().into(),
-        }
-    }
-
-    /// Specify the Datafusion context
-    pub fn with_session_context(mut self, context: SessionContext) -> Self {
-        self.ctx = context;
-        self
-    }
-
-    /// Add the specified set of constraints to the current DeltaDataChecker's constraints
-    pub fn with_extra_constraints(mut self, constraints: Vec<Constraint>) -> Self {
-        self.constraints.extend(constraints);
-        self
-    }
-
-    /// Create a new DeltaDataChecker
-    pub fn new(snapshot: &EagerSnapshot) -> Self {
-        let invariants = snapshot.schema().get_invariants().unwrap_or_default();
-        let generated_columns = snapshot
-            .schema()
-            .get_generated_columns()
-            .unwrap_or_default();
-        let constraints = snapshot.table_properties().get_constraints();
-        let non_nullable_columns = snapshot
-            .schema()
-            .fields()
-            .filter_map(|f| {
-                if !f.is_nullable() {
-                    Some(f.name().clone())
-                } else {
-                    None
-                }
-            })
-            .collect_vec();
-        Self {
-            invariants,
-            constraints,
-            generated_columns,
-            non_nullable_columns,
-            ctx: DeltaSessionContext::default().into(),
-        }
-    }
-
-    /// Check that a record batch conforms to table's invariants.
-    ///
-    /// If it does not, it will return [DeltaTableError::InvalidData] with a list
-    /// of values that violated each invariant.
-    pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        self.check_nullability(record_batch)?;
-        self.enforce_checks(record_batch, &self.invariants).await?;
-        self.enforce_checks(record_batch, &self.constraints).await?;
-        self.enforce_checks(record_batch, &self.generated_columns)
-            .await
-    }
-
-    /// Return true if all the nullability checks are valid
-    fn check_nullability(&self, record_batch: &RecordBatch) -> Result<bool, DeltaTableError> {
-        let mut violations = Vec::with_capacity(self.non_nullable_columns.len());
-        for col in self.non_nullable_columns.iter() {
-            if let Some(arr) = record_batch.column_by_name(col) {
-                if arr.null_count() > 0 {
-                    violations.push(format!(
-                        "Non-nullable column violation for {col}, found {} null values",
-                        arr.null_count()
-                    ));
-                }
-            } else {
-                violations.push(format!(
-                    "Non-nullable column violation for {col}, not found in batch!"
-                ));
-            }
-        }
-        if !violations.is_empty() {
-            Err(DeltaTableError::InvalidData { violations })
-        } else {
-            Ok(true)
-        }
-    }
-
-    async fn enforce_checks<C: DataCheck>(
-        &self,
-        record_batch: &RecordBatch,
-        checks: &[C],
-    ) -> Result<(), DeltaTableError> {
-        if checks.is_empty() {
-            return Ok(());
-        }
-        let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-        table.schema();
-        // Use a random table name to avoid clashes when running multiple parallel tasks, e.g. when using a partitioned table
-        let table_name: String = uuid::Uuid::new_v4().to_string();
-        self.ctx.register_table(&table_name, Arc::new(table))?;
-
-        let mut violations: Vec<String> = Vec::with_capacity(checks.len());
-
-        for check in checks {
-            if check.get_name().contains('.') {
-                return Err(DeltaTableError::Generic(
-                    "delta constraints for nested columns are not supported at the moment."
-                        .to_string(),
-                ));
-            }
-
-            let field_to_select = if check.as_any().is::<Constraint>() {
-                "*"
-            } else {
-                check.get_name()
-            };
-            let sql = format!(
-                "SELECT {} FROM `{table_name}` WHERE NOT ({}) LIMIT 1",
-                field_to_select,
-                check.get_expression()
-            );
-
-            let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
-            if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-                let value: String = dfs[0]
-                    .columns()
-                    .iter()
-                    .map(|c| array_value_to_string(c, 0).unwrap_or(String::from("null")))
-                    .join(", ");
-
-                let msg = format!(
-                    "Check or Invariant ({}) violated by value in row: [{value}]",
-                    check.get_expression(),
-                );
-                violations.push(msg);
-            }
-        }
-
-        self.ctx.deregister_table(&table_name)?;
-        if !violations.is_empty() {
-            Err(DeltaTableError::InvalidData { violations })
-        } else {
-            Ok(())
-        }
-    }
-}
-
 /// A codec for deltalake physical plans
 #[derive(Debug)]
 pub struct DeltaPhysicalCodec {}
@@ -692,13 +451,12 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
-        let delta_scan = DeltaScan {
-            table_uri: wire.table_uri,
-            parquet_scan: (*inputs)[0].clone(),
-            config: wire.config,
-            logical_schema: wire.logical_schema,
-            metrics: ExecutionPlanMetricsSet::new(),
-        };
+        let delta_scan = DeltaScan::new(
+            &wire.table_url,
+            wire.config,
+            (*inputs)[0].clone(),
+            wire.logical_schema,
+        );
         Ok(Arc::new(delta_scan))
     }
 
@@ -712,11 +470,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
 
-        let wire = DeltaScanWire {
-            table_uri: delta_scan.table_uri.to_owned(),
-            config: delta_scan.config.clone(),
-            logical_schema: delta_scan.logical_schema.clone(),
-        };
+        let wire = DeltaScanWire::from(delta_scan);
         serde_json::to_writer(buf, &wire)
             .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
@@ -748,7 +502,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         _schema: SchemaRef,
         _ctx: &TaskContext,
     ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
-        let provider: DeltaTable = serde_json::from_slice(buf)
+        let provider: DeltaScanNext = serde_json::from_slice(buf)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))?;
         Ok(Arc::new(provider))
     }
@@ -759,14 +513,14 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let table = node
+        let scan = node
             .as_ref()
             .as_any()
-            .downcast_ref::<DeltaTable>()
+            .downcast_ref::<DeltaScanNext>()
             .ok_or_else(|| {
                 DataFusionError::Internal("Can't encode non-delta tables".to_string())
             })?;
-        serde_json::to_writer(buf, table)
+        serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
 }
@@ -779,17 +533,32 @@ pub struct DeltaTableFactory {}
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = if cmd.options.is_empty() {
+        let table = if cmd.options.is_empty() {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table(table_url).await?
         } else {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(Arc::new(provider))
+        let table_uri = table.log_store().root_url().clone();
+        let (session_state, _) = resolve_session_state(
+            Some(ctx),
+            SessionFallbackPolicy::DeriveFromTrait,
+            || create_session().state(),
+            SessionResolveContext {
+                operation: "DeltaTableFactory::create",
+                table_uri: Some(&table_uri),
+                cdc: false,
+            },
+        )?;
+
+        Ok(table
+            .table_provider()
+            .with_session(Arc::new(session_state))
+            .await?)
     }
 }
 
@@ -839,9 +608,11 @@ impl From<Column> for DeltaColumn {
 
 #[cfg(test)]
 mod tests {
-    use crate::logstore::default_logstore::DefaultLogStore;
+    use crate::DeltaTable;
     use crate::logstore::ObjectStoreRef;
+    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
+    use crate::test_utils::open_fs_path;
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
@@ -853,25 +624,27 @@ mod tests {
     use datafusion::datasource::source::DataSourceExec;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{visit_execution_plan, ExecutionPlanVisitor, PhysicalExpr};
-    use datafusion::prelude::{col, SessionConfig};
+    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
+    use datafusion::prelude::{SessionConfig, col};
+    use datafusion_datasource::file::FileSource as _;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use delta_kernel::schema::ArrayType;
-    use futures::{stream::BoxStream, StreamExt};
+    use futures::{StreamExt, TryStreamExt, stream::BoxStream};
     use object_store::ObjectMeta;
     use object_store::{
-        path::Path, GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore,
-        PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
+        PutOptions, PutPayload, PutResult, path::Path,
     };
     use serde_json::json;
     use std::fmt::{self, Debug, Display, Formatter};
-    use std::ops::{Deref, Range};
-    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+    use std::ops::Range;
+    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+    use url::Url;
 
     use super::*;
-
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -946,181 +719,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_enforce_invariants() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", ArrowDataType::Utf8, false),
-            Field::new("b", ArrowDataType::Int32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
-            ],
-        )
-        .unwrap();
-        // Empty invariants is okay
-        let invariants: Vec<Invariant> = vec![];
-        assert!(DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await
-            .is_ok());
-
-        // Valid invariants return Ok(())
-        let invariants = vec![
-            Invariant::new("a", "a is not null"),
-            Invariant::new("b", "b < 1000"),
-        ];
-        assert!(DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await
-            .is_ok());
-
-        // Violated invariants returns an error with list of violations
-        let invariants = vec![
-            Invariant::new("a", "a is null"),
-            Invariant::new("b", "b < 100"),
-        ];
-        let result = DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
-        if let Err(DeltaTableError::InvalidData { violations }) = result {
-            assert_eq!(violations.len(), 2);
-        }
-
-        // Irrelevant invariants return a different error
-        let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-
-        // Nested invariants are unsupported
-        let struct_fields = schema.fields().clone();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "x",
-            ArrowDataType::Struct(struct_fields),
-            false,
-        )]));
-        let inner = Arc::new(StructArray::from(batch));
-        let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
-
-        let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new_with_invariants(invariants)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
-    }
-
-    #[tokio::test]
-    async fn test_enforce_constraints() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", ArrowDataType::Utf8, false),
-            Field::new("b", ArrowDataType::Int32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
-            ],
-        )
-        .unwrap();
-        // Empty constraints is okay
-        let constraints: Vec<Constraint> = vec![];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
-
-        // Valid invariants return Ok(())
-        let constraints = vec![
-            Constraint::new("custom_a", "a is not null"),
-            Constraint::new("custom_b", "b < 1000"),
-        ];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
-
-        // Violated invariants returns an error with list of violations
-        let constraints = vec![
-            Constraint::new("custom_a", "a is null"),
-            Constraint::new("custom_B", "b < 100"),
-        ];
-        let result = DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
-        if let Err(DeltaTableError::InvalidData { violations }) = result {
-            assert_eq!(violations.len(), 2);
-        }
-
-        // Irrelevant constraints return a different error
-        let constraints = vec![Constraint::new("custom_c", "c > 2000")];
-        let result = DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-    }
-
-    /// Ensure that constraints when there are spaces in the field name still work
-    ///
-    /// See <https://github.com/delta-io/delta-rs/pull/3374>
-    #[tokio::test]
-    async fn test_constraints_with_spacey_fields() -> DeltaResult<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", ArrowDataType::Utf8, false),
-            Field::new("b bop", ArrowDataType::Int32, false),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::StringArray::from(vec![
-                    "a", "b bop", "c", "d",
-                ])),
-                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
-            ],
-        )?;
-
-        // Valid invariants return Ok(())
-        let constraints = vec![
-            Constraint::new("custom a", "a is not null"),
-            Constraint::new("custom_b", "`b bop` < 1000"),
-        ];
-        assert!(DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await
-            .is_ok());
-
-        // Violated invariants returns an error with list of violations
-        let constraints = vec![
-            Constraint::new("custom_a", "a is null"),
-            Constraint::new("custom_B", "\"b bop\" < 100"),
-        ];
-        let result = DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
-        if let Err(DeltaTableError::InvalidData { violations }) = result {
-            assert_eq!(violations.len(), 2);
-        }
-
-        // Irrelevant constraints return a different error
-        let constraints = vec![Constraint::new("custom_c", "c > 2000")];
-        let result = DeltaDataChecker::new_with_constraints(constraints)
-            .check_batch(&batch)
-            .await;
-        assert!(result.is_err());
-        Ok(())
-    }
-
     #[test]
     fn roundtrip_test_delta_exec_plan() {
         let ctx = SessionContext::new();
@@ -1130,13 +728,12 @@ mod tests {
             Field::new("a", ArrowDataType::Utf8, false),
             Field::new("b", ArrowDataType::Int32, false),
         ]));
-        let exec_plan = Arc::from(DeltaScan {
-            table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(schema.clone())),
-            config: DeltaScanConfig::default(),
-            logical_schema: schema.clone(),
-            metrics: ExecutionPlanMetricsSet::new(),
-        });
+        let exec_plan = Arc::from(DeltaScan::new(
+            &Url::parse("s3://my_bucket/this/is/some/path").unwrap(),
+            DeltaScanConfig::default(),
+            Arc::from(EmptyExec::new(schema.clone())),
+            schema.clone(),
+        ));
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
                 .expect("to proto");
@@ -1149,38 +746,108 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delta_table_provider_with_config() {
-        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
-            .canonicalize()
+    async fn roundtrip_test_delta_logical_codec_preserves_file_selection() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
             .unwrap();
-        let table_url = url::Url::from_directory_path(table_path).unwrap();
-        let table = crate::open_table(table_url).await.unwrap();
-        let config = DeltaScanConfigBuilder::new()
-            .with_file_column_name(&"file_source")
-            .build(table.snapshot().unwrap().snapshot())
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let table_root = snapshot
+            .scan_builder()
+            .build()
+            .unwrap()
+            .table_root()
+            .clone();
+        let selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(selected_file_ids.len(), 1);
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(
+                FileSelection::new(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+            );
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
             .unwrap();
 
-        let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store,
-            config,
-        )
-        .unwrap();
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaScanNext>()
+            .unwrap();
 
-        let df = ctx.sql("select * from test").await.unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let decoded_file_ids = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.as_array())
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let decoded_policy = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("missing_file_policy"))
+            .and_then(|value| value.as_str())
+            .unwrap();
+
+        assert_eq!(decoded_file_ids, selected_file_ids);
+        assert_eq!(decoded_policy, "Ignore");
+    }
+
+    #[tokio::test]
+    async fn delta_table_provider_with_config() {
+        let table = open_fs_path("../test/tests/data/delta-2.2.0-partitioned-types");
+        let provider = table
+            .table_provider()
+            .with_file_column("file_source")
+            .await
+            .unwrap();
+        let ctx = SessionContext::new();
+        ctx.register_table("test", provider).unwrap();
+
+        let df = ctx
+            .sql("select c3, c1, c2, right(file_source, 77) as file_source from test")
+            .await
+            .unwrap();
         let actual = df.collect().await.unwrap();
-        let expected = vec! [
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| c3 | c1 | c2 | file_source                                                                   |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-                "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
-                "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
-                "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
-                "+----+----+----+-------------------------------------------------------------------------------+",
-            ];
+        let expected = vec![
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| c3 | c1 | c2 | file_source                                                                   |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+            "| 4  | 6  | a  | c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet |",
+            "| 5  | 4  | c  | c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet |",
+            "| 6  | 5  | b  | c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet |",
+            "+----+----+----+-------------------------------------------------------------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -1194,7 +861,7 @@ mod tests {
             Field::new("value", ArrowDataType::Int32, true),
         ]));
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(get_delta_schema().fields().cloned())
             .with_partition_columns(["modified", "id"])
@@ -1217,28 +884,22 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-
-        let log_store = table.log_store();
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store,
-            config,
-        )
-        .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let logical_schema = provider.schema();
         let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.runtime_env().register_object_store(
+            table.log_store().root_url(),
+            table.log_store().object_store(None),
+        );
+        ctx.register_table("test", provider).unwrap();
 
-        let expected_logical_order = vec!["value", "modified", "id"];
+        let expected_logical_order = vec!["id", "value", "modified"];
         let actual_order: Vec<String> = logical_schema
             .fields()
             .iter()
@@ -1248,14 +909,14 @@ mod tests {
         let df = ctx.sql("select * from test").await.unwrap();
         let actual = df.collect().await.unwrap();
         let expected = vec![
-            "+-------+------------+----+",
-            "| value | modified   | id |",
-            "+-------+------------+----+",
-            "| 1     | 2021-02-01 | A  |",
-            "| 10    | 2021-02-01 | B  |",
-            "| 100   | 2021-02-02 | D  |",
-            "| 20    | 2021-02-02 | C  |",
-            "+-------+------------+----+",
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 20    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
         assert_eq!(expected_logical_order, actual_order);
@@ -1284,7 +945,7 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1370,13 +1031,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch2])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch1])
             .with_schema_mode(SchemaMode::Merge)
             .with_save_mode(crate::protocol::SaveMode::Append)
@@ -1434,7 +1095,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1524,13 +1185,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch1])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
-        let table = crate::DeltaOps(table)
+        let table = table
             .write(vec![batch2])
             .with_schema_mode(SchemaMode::Merge)
             .with_save_mode(crate::protocol::SaveMode::Append)
@@ -1569,7 +1230,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_multiple_predicate_pushdown() {
-        use crate::datafusion::prelude::SessionContext;
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("moDified", ArrowDataType::Utf8, true),
             Field::new("id", ArrowDataType::Utf8, true),
@@ -1591,16 +1251,20 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch.clone()])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
             .unwrap();
 
         let datafusion = SessionContext::new();
-        let table = Arc::new(table);
+        table
+            .update_datafusion_session(&datafusion.state())
+            .unwrap();
 
-        datafusion.register_table("snapshot", table).unwrap();
+        datafusion
+            .register_table("snapshot", table.table_provider().await.unwrap())
+            .unwrap();
 
         let df = datafusion
             .sql("select * from snapshot where id > 10000 and id < 20000")
@@ -1614,7 +1278,7 @@ mod tests {
     async fn test_delta_scan_builder_no_scan_config() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1642,7 +1306,7 @@ mod tests {
     async fn test_delta_scan_builder_scan_config_disable_pushdown() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1673,7 +1337,7 @@ mod tests {
     async fn test_delta_scan_applies_parquet_options() {
         let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
         let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1726,27 +1390,24 @@ mod tests {
                 .downcast_ref::<ParquetSource>()
             {
                 self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.predicate().cloned();
+                self.predicate = parquet_source.filter();
             }
 
             Ok(true)
         }
     }
 
+    // Run a query that filters out all files and sorts.
+    // Verify that it returns an empty set of rows without panicking.
+    //
+    // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
+    // datafusion rejected.
     #[tokio::test]
     async fn passes_sanity_checker_when_all_files_filtered() {
-        // Run a query that filters out all files and sorts.
-        // Verify that it returns an empty set of rows without panicking.
-        //
-        // Historically, we had a bug that caused us to emit a query plan with 0 partitions, which
-        // datafusion rejected.
-        let table_path = std::path::Path::new("../test/tests/data/delta-2.2.0-partitioned-types")
-            .canonicalize()
+        let table = open_fs_path("../test/tests/data/delta-2.2.0-partitioned-types");
+        let ctx = create_session().into_inner();
+        ctx.register_table("test", table.table_provider().await.unwrap())
             .unwrap();
-        let table_url = url::Url::from_directory_path(table_path).unwrap();
-        let table = crate::open_table(table_url).await.unwrap();
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
 
         let df = ctx
             .sql("select * from test where c3 = 100 ORDER BY c1 ASC")
@@ -1758,47 +1419,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_check_nullability() -> DeltaResult<()> {
-        use arrow::array::StringArray;
-
-        let data_checker = DeltaDataChecker {
-            non_nullable_columns: vec!["zed".to_string(), "yap".to_string()],
-            ..Default::default()
-        };
-
-        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
-        let nulls: Arc<dyn Array> = Arc::new(StringArray::new_null(1));
-        let batch = RecordBatch::try_from_iter(vec![("a", arr), ("zed", nulls)]).unwrap();
-
-        let result = data_checker.check_nullability(&batch);
-        assert!(
-            result.is_err(),
-            "The result should have errored! {result:?}"
-        );
-
-        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter(vec![("zed", arr)]).unwrap();
-        let result = data_checker.check_nullability(&batch);
-        assert!(
-            result.is_err(),
-            "The result should have errored! {result:?}"
-        );
-
-        let arr: Arc<dyn Array> = Arc::new(StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter(vec![("zed", arr.clone()), ("yap", arr)]).unwrap();
-        let _ = data_checker.check_nullability(&batch)?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_delta_scan_uses_parquet_column_pruning() {
         let small: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["a"]));
-        let large: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["b"
-            .repeat(1024)
-            .as_str()]));
+        let large: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec![
+            "b".repeat(1024).as_str(),
+        ]));
         let batch = RecordBatch::try_from_iter(vec![("small", small), ("large", large)]).unwrap();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .write(vec![batch])
             .with_save_mode(crate::protocol::SaveMode::Append)
             .await
@@ -1841,10 +1468,9 @@ mod tests {
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
         let expected = vec![
+            ObjectStoreOperation::Get(LocationType::Commit),
             ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
             ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
-            #[expect(clippy::single_range_in_vec_init)]
-            ObjectStoreOperation::GetRanges(LocationType::Data, vec![4..46]),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;
@@ -1855,7 +1481,7 @@ mod tests {
     async fn test_push_down_filter_panic_2602() -> DeltaResult<()> {
         use crate::kernel::schema::{DataType, PrimitiveType};
         let ctx = SessionContext::new();
-        let table = crate::DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_column("id", DataType::Primitive(PrimitiveType::Long), true, None)
             .with_column(
@@ -1882,8 +1508,10 @@ mod tests {
                 None,
             )
             .await?;
+        table.update_datafusion_session(&ctx.state()).unwrap();
 
-        ctx.register_table("snapshot", Arc::new(table)).unwrap();
+        ctx.register_table("snapshot", table.table_provider().await.unwrap())
+            .unwrap();
 
         let df = ctx
             .sql("select * from snapshot where id > 10000 and id < 20000")
@@ -1938,10 +1566,10 @@ mod tests {
         fn from(value: &Path) -> Self {
             let dummy_url = Url::parse("dummy:///").unwrap();
             let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
-            if let Some(parsed) = parsed {
-                if matches!(parsed.file_type, LogPathFileType::Commit) {
-                    return LocationType::Commit;
-                }
+            if let Some(parsed) = parsed
+                && matches!(parsed.file_type, LogPathFileType::Commit)
+            {
+                return LocationType::Commit;
             }
             if value.to_string().starts_with("part-") {
                 LocationType::Data

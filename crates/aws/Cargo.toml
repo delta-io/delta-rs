@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.12.1"
+version = "0.14.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.29.0", path = "../core" , features = ["cloud"]}
+deltalake-core = { version = "0.31.0", path = "../core" , features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
@@ -30,19 +30,19 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 
 # crates.io dependencies
-aws-smithy-runtime-api = { version = "1.8" }
-aws-smithy-runtime = { version = "1.8", optional = true }
+aws-smithy-runtime-api = { version = "1.11" }
+aws-smithy-runtime = { version = "1.10", optional = true }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
 aws-config = { version = "1.8", features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "1.93.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "1.105.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "1.86.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.98.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
@@ -54,6 +54,7 @@ chrono = { workspace = true }
 deltalake-core = { path = "../core" }
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
+pretty_assertions = "1"
 rand = "0.8"
 serde_json = { workspace = true }
 serial_test = "3"
@@ -68,7 +69,8 @@ native-tls = [
 ]
 rustls = [
     "aws-config/client-hyper",
-    "aws-config/rustls",
-    "aws-sdk-dynamodb/rustls",
-    "aws-sdk-sts/rustls",
+    # Use the new AWS SDK default HTTPS client stack (hyper 1.x + rustls via aws-lc-rs),
+    # not the legacy `rustls` feature which pins us to hyper 0.14.
+    "aws-sdk-dynamodb/default-https-client",
+    "aws-sdk-sts/default-https-client",
 ]

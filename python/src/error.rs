@@ -1,11 +1,11 @@
 use arrow_schema::ArrowError;
 use deltalake::datafusion::error::DataFusionError;
-use deltalake::{errors::DeltaTableError, ObjectStoreError};
+use deltalake::{ObjectStoreError, errors::DeltaTableError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyRuntimeError,
     PyValueError,
 };
-use pyo3::{create_exception, PyErr};
+use pyo3::{PyErr, create_exception};
 use std::error::Error;
 use std::fmt::Display;
 
@@ -27,9 +27,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         // protocol errors
         DeltaTableError::InvalidJsonLog { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidStatsJson { .. } => DeltaProtocolError::new_err(err.to_string()),
-        DeltaTableError::InvalidData { violations } => {
-            DeltaProtocolError::new_err(format!("Invariant violations: {violations:?}"))
-        }
+        DeltaTableError::InvalidData { message } => DeltaProtocolError::new_err(message),
 
         // commit errors
         DeltaTableError::Transaction { source } => CommitFailedError::new_err(source.to_string()),

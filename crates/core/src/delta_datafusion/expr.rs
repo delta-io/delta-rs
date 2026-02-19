@@ -29,7 +29,7 @@ use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::Result as DFResult;
-use datafusion::common::{config::ConfigOptions, DFSchema, Result, ScalarValue, TableReference};
+use datafusion::common::{DFSchema, Result, ScalarValue, TableReference, config::ConfigOptions};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_nested::make_array::MakeArray;
@@ -194,9 +194,7 @@ pub(crate) struct DeltaContextProvider<'a> {
 }
 
 impl<'a> DeltaContextProvider<'a> {
-    fn new(session: &'a dyn Session) -> Self {
-        // default planners are [CoreFunctionPlanner, NestedFunctionPlanner, FieldAccessPlanner,
-        // UserDefinedFunctionPlanner]
+    fn try_new(session: &'a dyn Session) -> DeltaResult<Self> {
         let planners: Vec<Arc<dyn ExprPlanner>> = vec![
             Arc::new(CoreFunctionPlanner::default()),
             Arc::new(CustomNestedFunctionPlanner::default()),
@@ -204,20 +202,26 @@ impl<'a> DeltaContextProvider<'a> {
             Arc::new(datafusion::functions::unicode::planner::UnicodeFunctionPlanner),
             Arc::new(datafusion::functions::datetime::planner::DatetimeFunctionPlanner),
         ];
-        // Disable the above for testing
-        //let planners = state.expr_planners();
-        let new_state = session
-            .as_any()
-            .downcast_ref::<SessionState>()
-            .map(|state| SessionStateBuilder::new_from_existing(state.clone()))
-            .unwrap_or_default()
+        let (base_state, _) = crate::delta_datafusion::resolve_session_state(
+            Some(session),
+            crate::delta_datafusion::SessionFallbackPolicy::DeriveFromTrait,
+            || SessionStateBuilder::new().with_default_features().build(),
+            crate::delta_datafusion::SessionResolveContext {
+                operation: "parse_predicate_expression",
+                table_uri: None,
+                cdc: false,
+            },
+        )?;
+
+        let new_state = SessionStateBuilder::new_from_existing(base_state)
             .with_expr_planners(planners.clone())
             .build();
-        DeltaContextProvider {
+
+        Ok(DeltaContextProvider {
             planners,
             state: new_state,
             _phantom: PhantomData,
-        }
+        })
     }
 }
 
@@ -283,7 +287,7 @@ pub fn parse_predicate_expression(
             source: Box::new(err),
         })?;
 
-    let context_provider = DeltaContextProvider::new(session);
+    let context_provider = DeltaContextProvider::try_new(session)?;
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
@@ -495,6 +499,13 @@ struct ScalarValueFormat<'a> {
 impl fmt::Display for ScalarValueFormat<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.scalar {
+            ScalarValue::Dictionary(_key_type, inner) => write!(
+                f,
+                "{}",
+                ScalarValueFormat {
+                    scalar: inner.as_ref()
+                }
+            )?,
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
             ScalarValue::Float64(e) => format_option!(f, e)?,
@@ -578,7 +589,9 @@ impl fmt::Display for ScalarValueFormat<'_> {
 #[cfg(test)]
 mod test {
     use arrow_schema::DataType as ArrowDataType;
-    use datafusion::common::{Column, ScalarValue, ToDFSchema};
+    use datafusion::common::{Column, DFSchema, ScalarValue, ToDFSchema};
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::execution::runtime_env::RuntimeEnvBuilder;
     use datafusion::functions::core::arrow_cast;
     use datafusion::functions::core::expr_ext::FieldAccessor;
     use datafusion::functions::encoding::expr_fn::decode;
@@ -586,14 +599,19 @@ mod test {
     use datafusion::functions_nested::expr_ext::{IndexAccessor, SliceAccessor};
     use datafusion::functions_nested::expr_fn::cardinality;
     use datafusion::logical_expr::expr::ScalarFunction;
-    use datafusion::logical_expr::{col, lit, BinaryExpr, Cast, Expr, ExprSchemable};
-    use datafusion::prelude::SessionContext;
+    use datafusion::logical_expr::{BinaryExpr, Cast, Expr, ExprSchemable, col, lit};
+    use datafusion::prelude::{SessionConfig, SessionContext};
 
+    use crate::DeltaTable;
+    use crate::delta_datafusion::planner::DeltaPlanner;
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
-    use crate::{DeltaOps, DeltaTable};
+    use crate::test_utils::datafusion::{WrapperSession, make_test_scalar_udf};
 
     use super::fmt_expr_to_sql;
+    use super::parse_predicate_expression;
+
+    const TEST_UDF_NAME: &str = "delta_rs_parse_expr_test_udf";
 
     struct ParseTest {
         expr: Expr,
@@ -706,13 +724,41 @@ mod test {
         ])
         .unwrap();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(schema.fields().cloned())
             .await
             .unwrap();
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    fn make_incompatible_session_with_udf() -> WrapperSession {
+        let runtime_env = RuntimeEnvBuilder::new().build_arc().unwrap();
+        let config = SessionConfig::new();
+        let udf = make_test_scalar_udf(TEST_UDF_NAME);
+
+        let state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .with_query_planner(DeltaPlanner::new())
+            .with_scalar_functions(vec![udf])
+            .build();
+
+        WrapperSession::new(state)
+    }
+
+    #[test]
+    fn parse_predicate_expression_preserves_udfs_for_non_session_state() {
+        let wrapper = make_incompatible_session_with_udf();
+        let schema = DFSchema::empty();
+
+        let expr = parse_predicate_expression(&schema, format!("{TEST_UDF_NAME}(1) = 1"), &wrapper);
+        assert!(
+            expr.is_ok(),
+            "Expected UDF to be available during parsing but got: {expr:?}"
+        );
     }
 
     #[tokio::test]
@@ -760,6 +806,24 @@ mod test {
                 expr: col("_binary").eq(lit(ScalarValue::Binary(Some(vec![0xAA, 0x00, 0xFF])))),
                 expected: "_binary = decode('aa00ff', 'hex')".to_string(),
                 override_expected_expr: Some(col("_binary").eq(decode(lit("aa00ff"), lit("hex")))),
+            },
+            ParseTest {
+                expr: col("id").eq(lit(ScalarValue::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ScalarValue::Utf8(Some("A".into()))),
+                ))),
+                expected: "id = 'A'".to_string(),
+                // Parsing canonicalizes away dictionary wrappers.
+                override_expected_expr: Some(col("id").eq(lit(ScalarValue::Utf8(Some("A".into()))))),
+            },
+            ParseTest {
+                expr: col("value").eq(lit(ScalarValue::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ScalarValue::Int32(Some(3))),
+                ))),
+                expected: "value = 3".to_string(),
+                // Parsing canonicalizes away dictionary wrappers.
+                override_expected_expr: Some(col("value").eq(lit(ScalarValue::Int64(Some(3))))),
             },
             simple!(
                 col("value").between(lit(20_i64), lit(30_i64)),

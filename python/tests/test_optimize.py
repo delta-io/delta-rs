@@ -144,11 +144,11 @@ def test_optimize_schema_evolved_table(
         {
             "foo": Array(
                 ["1", None],
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
             "bar": Array(
                 [None, "1"],
-                ArrowField("bar", type=DataType.string(), nullable=True),
+                ArrowField("bar", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -188,7 +188,7 @@ def test_zorder_with_space_partition(tmp_path: pathlib.Path):
     partitioned_df = test_table.to_pandas(
         partitions=[("country", "=", "United States")],
     )
-    print(partitioned_df)
+    _ = partitioned_df
 
     test_table.optimize.z_order(columns=["user"])
 
@@ -266,3 +266,49 @@ def test_optimize_schema_evolved_3185(tmp_path):
     assert dt.version() == 2
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+
+
+def test_compact_with_spill_parameters(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+    old_num_files = len(dt.file_uris())
+
+    dt.optimize.compact(
+        max_spill_size=100 * 1024 * 1024 * 1024,  # 100 GB
+        max_temp_directory_size=500 * 1024 * 1024 * 1024,  # 500 GB
+    )
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 1
+    assert len(dt.file_uris()) <= old_num_files
+
+
+def test_z_order_with_spill_parameters(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    dt.optimize.z_order(
+        columns=["sold", "price"],
+        max_spill_size=100 * 1024 * 1024 * 1024,  # 100 GB
+        max_temp_directory_size=500 * 1024 * 1024 * 1024,  # 500 GB
+    )
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 1
+    assert len(dt.file_uris()) == 1
