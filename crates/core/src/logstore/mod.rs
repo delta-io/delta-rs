@@ -62,7 +62,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
 use futures::StreamExt;
 use object_store::ObjectStoreScheme;
-use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, path::Path};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
