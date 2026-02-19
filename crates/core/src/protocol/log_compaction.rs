@@ -13,6 +13,7 @@ use crate::protocol::to_rb;
 
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
+#[tracing::instrument(skip(log_store, snapshot), fields(operation = "log_compaction", start_version = start_version, end_version = end_version, table_uri = %log_store.root_url()))]
 pub(crate) async fn compact_logs_for(
     start_version: u64,
     end_version: u64,
@@ -29,12 +30,19 @@ pub(crate) async fn compact_logs_for(
             "Invalid version range: end_version {end_version} must be greater than start_version {start_version}"
         )));
     }
+    let mut inner_snapshot = snapshot.inner.clone();
 
-    let new_snapshot = KernelSnapshot::builder_from(snapshot.inner.clone())
-        .at_version(end_version)
-        .build(task_engine.as_ref())?;
+    if end_version > inner_snapshot.version() {
+        inner_snapshot = spawn_blocking_with_span(move || {
+            KernelSnapshot::builder_from(inner_snapshot)
+                .at_version(end_version)
+                .build(task_engine.as_ref())
+        })
+        .await
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+    }
 
-    let mut lc_writer = new_snapshot.log_compaction_writer(start_version, end_version)?;
+    let mut lc_writer = inner_snapshot.log_compaction_writer(start_version, end_version)?;
 
     let lc_url = lc_writer.compaction_path();
     let lc_path = Path::from_url_path(lc_url.path())?;
