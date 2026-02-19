@@ -322,10 +322,17 @@ pub(crate) fn parse_partitions(
                                 _ => panic!("unexpected scalar type"),
                             }))) as ArrayRef
                         }
-
                         PrimitiveType::Timestamp => Arc::new(
                             TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::Timestamp(t) => Some(*t),
+                                Scalar::Null(_) => None,
+                                _ => panic!("unexpected scalar type"),
+                            }))
+                            .with_timezone("UTC"),
+                        ) as ArrayRef,
+                        PrimitiveType::TimestampNanos => Arc::new(
+                            TimestampNanosecondArray::from_iter(values.iter().map(|v| match v {
+                                Scalar::TimestampNanos(t) => Some(*t),
                                 Scalar::Null(_) => None,
                                 _ => panic!("unexpected scalar type"),
                             }))
