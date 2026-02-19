@@ -404,7 +404,7 @@ def test_merge_casting_table_provider(tmp_path):
         {
             "a": 1,
             "ts": pd.date_range(
-                "2021-01-01", "2021-01-02", freq="h", tz="America/Chicago"
+                "2021-01-01", "2021-01-02", freq="h", tz="America/Chicago", unit="us"
             ),
         }
     )
@@ -414,7 +414,7 @@ def test_merge_casting_table_provider(tmp_path):
         {
             "a": 2,
             "ts": pd.date_range(
-                "2021-01-01", "2021-01-03", freq="h", tz="America/Chicago"
+                "2021-01-01", "2021-01-03", freq="h", tz="America/Chicago", unit="us"
             ),
         }
     )

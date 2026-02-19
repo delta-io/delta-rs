@@ -2179,6 +2179,8 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     ]
     columns = ["ts", "ins", "date", "fb", "fc"]
     df = pd.DataFrame(data, columns=columns)
+    # Versions of Pandas < 3 default to nanoseconds:
+    df["ts"] = df["ts"].astype(pd.DatetimeTZDtype("us", "UTC"))
     write_deltalake(
         table_or_uri=tmp_path,
         data=df,
