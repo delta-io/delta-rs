@@ -29,10 +29,7 @@ use std::sync::Arc;
 use arrow::array::types::UInt16Type;
 use arrow::array::{Array, DictionaryArray, RecordBatch, StringArray, TypedDictionaryArray};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{
-    DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
-    TimeUnit,
-};
+use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef, TimeUnit};
 use datafusion::catalog::{Session, TableProviderFactory};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
@@ -55,7 +52,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::AsAny;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
-
+use tracing::info;
 use crate::delta_datafusion::expr::parse_predicate_expression;
 use crate::delta_datafusion::table_provider::DeltaScanWire;
 use crate::ensure_table_uri;
@@ -99,11 +96,13 @@ mod session;
 pub use session::SessionFallbackPolicy;
 pub(crate) use session::{SessionResolveContext, resolve_session_state};
 use crate::delta_datafusion::expr_adapter::build_expr_adapter_factory;
+use crate::delta_datafusion::schema_null::rewrite_schema_with_nullable_fields;
 mod table_provider;
 pub mod udtf;
 pub(crate) mod utils;
 mod expr_adapter;
 pub mod table_provider_old;
+mod schema_null;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -234,7 +233,7 @@ fn _arrow_schema(
     partition_columns: &[String],
     wrap_partitions: bool,
 ) -> ArrowSchemaRef {
-    let fields = schema
+    let mut fields = schema
         .fields()
         .into_iter()
         .filter(|f| !partition_columns.contains(&f.name().to_string()))
@@ -263,7 +262,11 @@ fn _arrow_schema(
             }),
         )
         .collect::<Vec<_>>();
-    Arc::new(ArrowSchema::new(fields))
+
+    let mut schema = Arc::new(ArrowSchema::new(fields));
+    // @Hstack - add the option to have an env var that can nullify fields in the delta schema
+    schema = rewrite_schema_with_nullable_fields(schema);
+    schema
 }
 
 pub(crate) fn files_matching_predicate<'a>(
