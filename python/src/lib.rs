@@ -304,6 +304,36 @@ impl RawDeltaTable {
         })
     }
 
+    /// Shallow-clone this table to a target location, returning a new RawDeltaTable for the target.
+    ///
+    /// The clone references the same data files as the source table and does not copy data files.
+    ///
+    /// Limitations: currently only `file://` URLs are supported for both source and target.
+    #[pyo3(signature = (target_uri))]
+    pub fn shallow_clone(&self, py: Python, target_uri: String) -> PyResult<RawDeltaTable> {
+        let options = self._config.options.clone();
+        py.allow_threads(|| {
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            // Ensure target is a proper table URL
+            let target_url = deltalake::table::builder::ensure_table_uri(&target_uri)
+                .map_err(PythonError::from)?;
+
+            let cmd = DeltaOps(table).clone_table().with_target(target_url);
+
+            let target_table = rt()
+                .block_on(cmd.into_future())
+                .map_err(PythonError::from)?;
+
+            Ok(RawDeltaTable {
+                _table: Arc::new(Mutex::new(target_table)),
+                _config: FsConfig {
+                    root_url: target_uri,
+                    options,
+                },
+            })
+        })
+    }
+
     #[pyo3(signature = (table_uri, storage_options = None))]
     #[staticmethod]
     pub fn is_deltatable(

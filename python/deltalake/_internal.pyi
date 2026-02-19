@@ -84,6 +84,7 @@ class RawDeltaTable:
         data_catalog_id: str | None = None,
         catalog_options: dict[str, str] | None = None,
     ) -> str: ...
+    def shallow_clone(self, target_uri: str) -> RawDeltaTable: ...
     @staticmethod
     def is_deltatable(
         table_uri: str, storage_options: dict[str, str] | None
