@@ -47,9 +47,15 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
         ),
         (
             Schema(
-                fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
+                fields=[Field("foo", DataType.timestamp("us", tz="Europe/Amsterdam"))]
             ),
             Schema(fields=[Field("foo", DataType.timestamp("us", tz="UTC"))]),
+        ),
+        (
+            Schema(
+                fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
+            ),
+            Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
         ),
         # Nullability variations
         (

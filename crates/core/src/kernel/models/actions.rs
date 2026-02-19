@@ -146,17 +146,30 @@ impl MetadataExt for Metadata {
     }
 }
 
-/// checks if table contains timestamp_ntz in any field including nested fields.
-pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
-    fn _check_type(dtype: &DataType) -> bool {
-        match dtype {
-            &DataType::TIMESTAMP_NTZ => true,
-            DataType::Array(inner) => _check_type(inner.element_type()),
-            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+/// checks if table contains a datatype in any field including nested fields.
+fn contains_datatype<'a>(
+    mut fields: impl Iterator<Item = &'a StructField>,
+    dtype: &DataType,
+) -> bool {
+    fn _check_type(dtype_to_check: &DataType, dtype: &DataType) -> bool {
+        match dtype_to_check {
+            to_check if dtype == to_check => true,
+            DataType::Array(inner) => _check_type(inner.element_type(), dtype),
+            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type(), dtype)),
             _ => false,
         }
     }
-    fields.any(|f| _check_type(f.data_type()))
+    fields.any(|f| _check_type(f.data_type(), dtype))
+}
+
+/// checks if table contains timestamp_ntz in any field including nested fields.
+pub fn contains_timestampntz<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
+    contains_datatype(fields, &DataType::TIMESTAMP_NTZ)
+}
+
+/// checks if table contains timestamp_nanos in any field including nested fields.
+pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
+    contains_datatype(fields, &DataType::TIMESTAMP_NANOS)
 }
 
 /// Extension trait for delta-kernel Protocol action.
@@ -407,9 +420,14 @@ impl ProtocolInner {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+        let contains_timestamp_nanos = self.contains_timestamp_nanos(schema.fields());
 
         if contains_timestamp_ntz {
             self = self.enable_timestamp_ntz()
+        }
+
+        if contains_timestamp_nanos {
+            self = self.enable_timestamp_nanos()
         }
 
         if !generated_cols.is_empty() {
@@ -562,6 +580,18 @@ impl ProtocolInner {
     fn enable_timestamp_ntz(mut self) -> Self {
         self = self.append_reader_features([TableFeature::TimestampWithoutTimezone]);
         self = self.append_writer_features([TableFeature::TimestampWithoutTimezone]);
+        self
+    }
+
+    /// checks if table contains timestamp_nanos in any field including nested fields.
+    fn contains_timestamp_nanos<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_timestamp_nanos(fields)
+    }
+
+    /// Enable timestamp_nanos in the protocol
+    fn enable_timestamp_nanos(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::TimestampNanos]);
+        self = self.append_writer_features([TableFeature::TimestampNanos]);
         self
     }
 
