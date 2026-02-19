@@ -1620,8 +1620,8 @@ impl RawDeltaTable {
     pub fn compact_logs(
         &self,
         py: Python,
-        starting_version: i64,
-        ending_version: i64,
+        starting_version: u64,
+        ending_version: u64,
     ) -> PyResult<()> {
         py.detach(|| {
             let operation_id = Uuid::new_v4();
@@ -1642,15 +1642,12 @@ impl RawDeltaTable {
             #[allow(clippy::await_holding_lock)]
             let result = rt().block_on(async {
                 match self._table.lock() {
-                    Ok(table) => compact_logs(
-                        &table,
-                        starting_version as u64,
-                        ending_version as u64,
-                        Some(operation_id),
-                    )
-                    .await
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from),
+                    Ok(table) => {
+                        compact_logs(&table, starting_version, ending_version, Some(operation_id))
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                    }
                     Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
                 }
             });
