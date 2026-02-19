@@ -93,6 +93,9 @@ validator = { version = "0.19", features = ["derive"] }
 criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test" }
+deltalake-aws = { path = "../aws" }
+deltalake-azure = { path = "../azure" }
+deltalake-gcp = { path = "../gcp" }
 dotenvy = "0"
 fs_extra = "1.2.0"
 pretty_assertions = "1.2.1"
@@ -103,6 +106,8 @@ tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+
 
 [features]
 default = ["rustls"]
@@ -151,6 +156,10 @@ required-features = ["datafusion"]
 [[test]]
 name = "commit_info_format"
 required-features = ["datafusion"]
+
+[[test]]
+name = "full_path"
+required-features = ["datafusion", "cloud"]
 
 [[test]]
 name = "integration"
