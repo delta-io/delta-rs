@@ -426,11 +426,19 @@ impl<'a> DeltaScanBuilder<'a> {
                     let mut rows_collected = 0;
                     let mut files = Vec::with_capacity(num_containers);
 
-                    for (file_view, keep) in self
-                        .snapshot
-                        .log_data()
-                        .into_iter().zip(files_to_prune.iter().cloned())
-                    {
+                    use rand::seq::SliceRandom;
+
+                    let mut indices = (0..num_containers).collect::<Vec<_>>();
+                    if self.limit.is_some() && std::env::var("DELTA_RS_SHUFFLE_FILES").is_ok() {
+                        let mut rng = rand::thread_rng();
+                        indices.shuffle(&mut rng);
+                    }
+
+                    let log_data_handler = self.snapshot.log_data();
+                    for i in indices {
+                        let file_view = log_data_handler.get(i).unwrap();
+                        let keep = files_to_prune[i];
+
                         // prune file based on predicate pushdown
                         let action = file_view.add_action_no_stats();
                         let num_records = file_view.num_records();
