@@ -2473,6 +2473,7 @@ def test_merge(tmp_path: pathlib.Path):
     new_df = pl.read_delta(str(tmp_path))
     assert_frame_equal(df, new_df, check_row_order=False)
 
+
 @pytest.mark.pyarrow
 def test_merge_with_spill_config(tmp_path: pathlib.Path):
     """Verify merge accepts and uses spill configuration without error."""

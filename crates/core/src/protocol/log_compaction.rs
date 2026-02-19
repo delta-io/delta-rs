@@ -10,8 +10,9 @@ use uuid::Uuid;
 use crate::kernel::{Snapshot, spawn_blocking_with_span};
 use crate::logstore::LogStore;
 use crate::protocol::to_rb;
-
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use arrow_json::LineDelimitedWriter;
+use object_store::MultipartUpload;
 
 #[tracing::instrument(skip(log_store, snapshot), fields(operation = "log_compaction", start_version = start_version, end_version = end_version, table_uri = %log_store.root_url()))]
 pub(crate) async fn compact_logs_for(
@@ -51,11 +52,11 @@ pub(crate) async fn compact_logs_for(
 
     let root_store = log_store.root_object_store(operation_id);
 
-    let mut writer = arrow_json::LineDelimitedWriter::new(Vec::new());
+    let mut upload = root_store.put_multipart(&lc_path).await?;
+    let mut buffer = Vec::with_capacity(8 * 1024 * 1024);
 
-    let mut current_batch;
     loop {
-        (current_batch, lc_data) = spawn_blocking_with_span(move || {
+        let (current_batch, lc_data_next) = spawn_blocking_with_span(move || {
             let Some(first_batch) = lc_data.next() else {
                 return Ok::<_, DeltaTableError>((None, lc_data));
             };
@@ -64,16 +65,26 @@ pub(crate) async fn compact_logs_for(
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
+        lc_data = lc_data_next;
+
         let Some(batch) = current_batch else {
             break;
         };
+
+        let mut writer = LineDelimitedWriter::new(&mut buffer);
         writer.write(&batch)?;
+        writer.finish()?;
+
+        if buffer.len() >= 5 * 1024 * 1024 {
+            upload.put_part(std::mem::take(&mut buffer).into()).await?;
+        }
     }
-    writer.finish()?;
 
-    let bytes = writer.into_inner();
+    if !buffer.is_empty() {
+        upload.put_part(buffer.into()).await?;
+    }
 
-    root_store.put(&lc_path, bytes.into()).await?;
+    upload.complete().await?;
 
     Ok(())
 }
