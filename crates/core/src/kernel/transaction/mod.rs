@@ -96,8 +96,8 @@ use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Trans
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
-use crate::protocol::DeltaOperation;
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
+use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, crate_version};
@@ -299,6 +299,15 @@ impl CommitData {
     ) -> Self {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
+            // Determine if this commit is a blind append. A blind append is defined as a
+            // WRITE operation with mode Append that does not include any Remove actions.
+            let is_blind_append = matches!(
+                &operation,
+                DeltaOperation::Write { mode: SaveMode::Append, .. }
+            ) && !actions.iter().any(|a| matches!(a, Action::Remove(_)));
+            if is_blind_append {
+                commit_info.is_blind_append = Some(true);
+            }
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
             app_metadata.insert(
                 "clientVersion".to_string(),

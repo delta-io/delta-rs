@@ -1000,7 +1000,9 @@ pub struct CommitInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub isolation_level: Option<IsolationLevel>,
 
-    /// TODO
+    /// A flag indicating if the commit is a blind append.
+    /// A blind append is a write operation with mode Append that does not include any Remove actions.
+    /// https://books.japila.pl/delta-lake-internals/OptimisticTransactionImpl/?h=blind+app#isBlindAppend
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_blind_append: Option<bool>,
 
