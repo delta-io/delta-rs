@@ -70,7 +70,7 @@ pub(crate) async fn compact_logs_for(
     Ok(())
 }
 
-/// Creates checkpoint at current table version
+/// Creates a log compaction file for a specified version range
 pub async fn compact_logs(
     table: &DeltaTable,
     start_version: u64,
