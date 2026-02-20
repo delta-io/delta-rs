@@ -13,7 +13,7 @@ pub mod error;
 pub mod models;
 pub mod scalars;
 pub mod schema;
-mod snapshot;
+pub mod snapshot;
 pub mod transaction;
 
 pub use arrow::engine_ext::StructDataExt;

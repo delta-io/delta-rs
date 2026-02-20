@@ -57,6 +57,7 @@ mod log_data;
 mod scan;
 mod serde;
 mod stream;
+pub mod size_limits;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> =
     LazyLock::new(|| Arc::new(scan_row_schema().as_ref().try_into_arrow().unwrap()));
@@ -74,6 +75,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub async fn try_new_with_engine(
+        log_store: &dyn LogStore,
         engine: Arc<dyn Engine>,
         table_root: Url,
         config: DeltaTableConfig,
@@ -98,6 +100,14 @@ impl Snapshot {
                     return Err(e.into());
                 }
             }
+        };
+
+        let snapshot = if let Some(limiter) = &config.log_size_limiter {
+            let segment = limiter.truncate(snapshot.log_segment().clone(), log_store).await?;
+            let table_configuration = snapshot.table_configuration().clone();
+            Arc::new(KernelSnapshot::new(segment, table_configuration))
+        } else {
+            snapshot
         };
 
         let schema = Arc::new(
@@ -132,7 +142,7 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
+        Self::try_new_with_engine(log_store, engine, table_root, config, version.map(|v| v as u64)).await
     }
 
     pub fn scan_builder(&self) -> ScanBuilder {
