@@ -2472,3 +2472,32 @@ def test_merge(tmp_path: pathlib.Path):
 
     new_df = pl.read_delta(str(tmp_path))
     assert_frame_equal(df, new_df, check_row_order=False)
+
+
+def test_merge_with_spill_config(tmp_path: pathlib.Path):
+    """Verify merge accepts and uses spill configuration without error."""
+    import pyarrow as pa
+
+    from deltalake import DeltaTable, write_deltalake
+
+    data = pa.table({"id": [1, 2, 3], "value": [10, 20, 30]})
+    write_deltalake(str(tmp_path), data)
+
+    dt = DeltaTable(str(tmp_path))
+    new_data = pa.table({"id": [1, 2], "value": [100, 200]})
+
+    result = (
+        dt.merge(
+            source=new_data,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            max_spill_size=100_000_000,  # 100MB
+            max_temp_directory_size=1_000_000_000,  # 1GB
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    assert result["num_target_rows_updated"] == 2
+    assert result["num_target_rows_copied"] == 1
