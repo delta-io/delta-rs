@@ -49,8 +49,8 @@ use uuid::Uuid;
 use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
-    DeltaRuntimeEnvBuilder, DeltaSessionContext, DeltaTableProvider, SessionFallbackPolicy,
-    SessionResolveContext, resolve_session_state,
+    DeltaTableProvider, SessionFallbackPolicy, SessionResolveContext,
+    create_session_state_with_spill_config, resolve_session_state,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
@@ -233,33 +233,6 @@ impl super::Operation for OptimizeBuilder<'_> {
     }
 }
 
-/// Create a SessionState configured for optimize operations with custom spill settings.
-///
-/// This is the recommended way to configure memory and disk limits for optimize operations.
-/// The created SessionState should be passed to [`OptimizeBuilder`] via [`with_session_state`](OptimizeBuilder::with_session_state).
-///
-/// # Arguments
-/// * `max_spill_size` - Maximum bytes in memory before spilling to disk. If `None`, uses DataFusion's default memory pool.
-/// * `max_temp_directory_size` - Maximum disk space for temporary spill files. If `None`, uses DataFusion's default disk manager.
-pub fn create_session_state_for_optimize(
-    max_spill_size: Option<usize>,
-    max_temp_directory_size: Option<u64>,
-) -> SessionState {
-    if max_spill_size.is_none() && max_temp_directory_size.is_none() {
-        return DeltaSessionContext::new().state();
-    }
-
-    let mut builder = DeltaRuntimeEnvBuilder::new();
-    if let Some(spill_size) = max_spill_size {
-        builder = builder.with_max_spill_size(spill_size);
-    }
-    if let Some(directory_size) = max_temp_directory_size {
-        builder = builder.with_max_temp_directory_size(directory_size);
-    }
-
-    DeltaSessionContext::with_runtime_env(builder.build()).state()
-}
-
 impl<'a> OptimizeBuilder<'a> {
     /// Create a new [`OptimizeBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -381,7 +354,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),
                 this.session_fallback_policy,
-                || create_session_state_for_optimize(None, None),
+                || create_session_state_with_spill_config(None, None),
                 SessionResolveContext {
                     operation: "optimize",
                     table_uri: Some(this.log_store.root_url()),
