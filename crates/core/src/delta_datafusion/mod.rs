@@ -38,17 +38,21 @@ use datafusion::common::scalar::ScalarValue;
 use datafusion::common::{
     Column, DFSchema, DataFusionError, Result as DataFusionResult, TableReference, ToDFSchema,
 };
+use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::datasource::TableProvider;
-use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
+use datafusion::datasource::physical_plan::{wrap_partition_type_in_dict, ParquetSource};
 use datafusion::execution::TaskContext;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::{displayable, ExecutionPlan, Statistics};
+use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource::source::DataSourceExec;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use delta_kernel::AsAny;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 
@@ -94,6 +98,7 @@ pub mod planner;
 mod session;
 pub use session::SessionFallbackPolicy;
 pub(crate) use session::{SessionResolveContext, resolve_session_state};
+use crate::delta_datafusion::expr_adapter::build_expr_adapter_factory;
 mod table_provider;
 pub(crate) mod utils;
 mod expr_adapter;
@@ -460,10 +465,40 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
+
+        let delta_scan_input = (*inputs)[0].clone();
+        #[allow(clippy::collapsible_if)]
+
+        let new_delta_scan_input = delta_scan_input.transform(|plan| {
+            if let Some(ds_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+                if let Some(file_conf) = ds_exec
+                    .data_source()
+                    .as_any()
+                    .downcast_ref::<FileScanConfig>()
+                {
+                    let new_file_scan_config = FileScanConfigBuilder::from(file_conf.clone())
+                        .with_expr_adapter(build_expr_adapter_factory())
+                        .build();
+
+                    // DataSourceExec::from_data_source(new_file_scan_config)
+                    let new_plan = Arc::new(
+                        ds_exec
+                            .clone()
+                            .with_data_source(Arc::new(new_file_scan_config)),
+                    );
+                    Ok(Transformed::yes(new_plan))
+                } else {
+                    Ok(Transformed::no(plan))
+                }
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        }).expect("new plan").data;
+
         let delta_scan = DeltaScan::new(
             &wire.table_url,
             wire.config,
-            (*inputs)[0].clone(),
+            new_delta_scan_input,
             wire.logical_schema,
         );
         Ok(Arc::new(delta_scan))

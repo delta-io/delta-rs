@@ -62,6 +62,7 @@ use crate::{
         file_id::wrap_file_id_value,
     },
 };
+use crate::delta_datafusion::expr_adapter::build_expr_adapter_factory;
 
 mod exec;
 mod exec_meta;
@@ -370,6 +371,7 @@ async fn get_read_plan(
             .with_file_groups(file_groups)
             .with_statistics(statistics)
             .with_limit(limit)
+            .with_expr_adapter(build_expr_adapter_factory())
             .build();
 
         plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
