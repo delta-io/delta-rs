@@ -62,7 +62,7 @@ use crate::{open_table, open_table_with_storage_options};
 pub(crate) use self::session::DeltaSessionExt;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
-    create_session,
+    create_session, create_session_state_with_spill_config,
 };
 pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
 pub(crate) use self::utils::*;
