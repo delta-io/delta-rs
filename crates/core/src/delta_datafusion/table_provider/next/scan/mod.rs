@@ -39,10 +39,13 @@ use datafusion::{
     },
     prelude::Expr,
 };
+use datafusion::common::deep::has_deep_projection;
+use datafusion::common::internal_err;
 use datafusion_datasource::{
     PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
+use datafusion_datasource::file::FileSource;
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
 };
@@ -228,15 +231,32 @@ async fn get_data_scan_plan(
         scan_plan.parquet_predicate.as_ref()
     };
     let file_id_column = file_id_field.name().clone();
-    let pq_plan = get_read_plan(
-        session,
-        files_by_store,
-        &scan_plan.parquet_read_schema,
-        limit,
-        &file_id_field,
-        predicate,
-    )
-    .await?;
+    // @HStack @DeepProjection integration - rest is handled by DF,
+    // we just need to set the deep projections in the ParquetOpener via ProjectionExprs
+    // let pq_plan = if false {
+    let pq_plan = if let Some(result_projection_deep) = scan_plan.result_projection_deep.clone()
+        && has_deep_projection(&result_projection_deep) {
+        get_read_plan_deep(
+            session,
+            files_by_store,
+            &scan_plan.parquet_read_schema,
+            limit,
+            &file_id_field,
+            predicate,
+            result_projection_deep.clone()
+        )
+        .await?
+    } else {
+        get_read_plan(
+            session,
+            files_by_store,
+            &scan_plan.parquet_read_schema,
+            limit,
+            &file_id_field,
+            predicate,
+        )
+        .await?
+    };
 
     let exec = DeltaScanExec::new(
         Arc::new(scan_plan),
@@ -349,6 +369,101 @@ async fn get_read_plan(
         let mut file_source = ParquetSource::new(table_schema)
             .with_table_parquet_options(pq_options.clone())
             .with_parquet_file_reader_factory(reader_factory);
+
+        // TODO(roeap); we might be able to also push selection vectors into the read plan
+        // by creating parquet access plans. However we need to make sure this does not
+        // interfere with other delta features like row ids.
+        let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
+        if !has_selection_vectors && let Some(pred) = predicate {
+            // Predicate pushdown can reference the synthetic file-id partition column.
+            // Use the full read schema (data columns + file-id) when planning.
+            let physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
+            file_source = file_source
+                .with_predicate(physical)
+                .with_pushdown_filters(true);
+        }
+
+        let file_groups = partitioned_files_to_file_groups(files.into_iter().map(|file| file.0));
+        let (file_groups, statistics) =
+            compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
+
+        let config = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
+            .with_file_groups(file_groups)
+            .with_statistics(statistics)
+            .with_limit(limit)
+            .with_expr_adapter(build_expr_adapter_factory())
+            .build();
+
+        plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
+    }
+
+    Ok(match plans.len() {
+        0 => Arc::new(EmptyExec::new(full_read_schema.clone())),
+        1 => plans.remove(0),
+        _ => UnionExec::try_new(plans)?,
+    })
+}
+
+async fn get_read_plan_deep(
+    state: &dyn Session,
+    files_by_store: impl IntoIterator<Item = FilesByStore>,
+    // Schema of physical file columns to read from Parquet (no Delta partitions, no file-id).
+    //
+    // This is also the schema used for Parquet pruning/pushdown. It may include view types
+    // (e.g. Utf8View/BinaryView) depending on `DeltaScanConfig`.
+    parquet_read_schema: &SchemaRef,
+    limit: Option<usize>,
+    file_id_field: &FieldRef,
+    predicate: Option<&Expr>,
+    projection_deep: std::collections::HashMap<usize, Vec<String>>
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let mut plans = Vec::new();
+
+    let pq_options = TableParquetOptions {
+        global: state.config().options().execution.parquet.clone(),
+        ..Default::default()
+    };
+
+    // info!("get_read_plan parquet_read_schema: {:?}", parquet_read_schema);
+
+    let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
+    full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
+    let full_read_schema = Arc::new(full_read_schema.finish());
+    // info!("get_read_plan_deep full_read_schema: {:?}", parquet_read_schema);
+    let full_read_df_schema = full_read_schema.clone().to_dfschema()?;
+
+    for (store_url, files) in files_by_store.into_iter() {
+        let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
+            state.runtime_env().object_store(&store_url)?,
+            state.runtime_env().cache_manager.get_file_metadata_cache(),
+        ));
+
+        // NOTE: In the "next" provider, DataFusion's Parquet scan partition fields are file-id
+        // only. Delta partition columns/values are injected via kernel transforms and handled
+        // above Parquet, so they are not part of the Parquet partition schema here.
+        let table_schema =
+            TableSchema::new(parquet_read_schema.clone(), vec![file_id_field.clone()]);
+        // info!("get_read_plan_deep table_schema: {:?}", parquet_read_schema);
+        let full_table_schema = table_schema.table_schema().clone();
+        // info!("get_read_plan_deep full_table_schema: {:?}", full_table_schema);
+        let mut file_source = ParquetSource::new(table_schema)
+            .with_table_parquet_options(pq_options.clone())
+            .with_parquet_file_reader_factory(reader_factory);
+
+        if has_deep_projection(&projection_deep) {
+            // SAFETY - ParquetSource::new fills projection_exprs inside the ParquetSource
+            let mut projection_exprs = file_source.projection().unwrap().clone();
+            projection_exprs.projection_deep = Some(projection_deep.clone());
+            let new_file_source = file_source.try_pushdown_projection(&projection_exprs)?;
+            if let Some(new_file_source) = new_file_source {
+                file_source = new_file_source.as_any().downcast_ref::<ParquetSource>().unwrap().clone();
+            } else {
+                return internal_err!(
+                  "get_read_plan_deep, error pushing projections in pushdown with deep: {:?}",
+                    &projection_deep
+                );
+            }
+        }
 
         // TODO(roeap); we might be able to also push selection vectors into the read plan
         // by creating parquet access plans. However we need to make sure this does not

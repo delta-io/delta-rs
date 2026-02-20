@@ -68,6 +68,9 @@ pub(crate) struct KernelScanPlan {
     /// If set, indicates a projection to apply to the
     /// scan output to obtain the result schema
     pub(crate) result_projection: Option<Vec<usize>>,
+    /// If set, indicates a projection to apply to the
+    /// scan output to obtain the result schema
+    pub(crate) result_projection_deep: Option<std::collections::HashMap<usize, Vec<String>>>,
     /// Physical schema used for Parquet reads and predicate evaluation.
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
@@ -198,6 +201,7 @@ impl KernelScanPlan {
             result_schema,
             output_schema,
             result_projection,
+            result_projection_deep: None,
             parquet_read_schema,
             parquet_predicate,
         })
