@@ -52,19 +52,16 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          cd python
-          python -m venv venv
-          source venv/bin/activate
           make ${{ env.BUILD_ARGS }}
 
       - name: Install dependencies
         run: |
-          source python/venv/bin/activate
+          source python/.venv/bin/activate
           pip install -r docs/requirements.txt
 
       - name: Build
         run: |
-          source python/venv/bin/activate
+          source python/.venv/bin/activate
           mkdocs build
 
       - name: Deploy
