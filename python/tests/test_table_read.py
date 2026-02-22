@@ -346,20 +346,22 @@ def test_read_table_with_column_subset():
 
 @pytest.mark.pyarrow
 def test_read_table_as_category():
-    import pyarrow as pa
     import pyarrow.dataset as ds
+    from arro3.core import DataType
 
     table_path = "../crates/test/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
 
-    assert dt.schema().to_arrow().field("value").type == pa.string()
+    assert dt.schema().to_arrow().field("value").type == DataType.string()
 
     read_options = ds.ParquetReadOptions(dictionary_columns={"value"})
 
     data = dt.to_pyarrow_dataset(parquet_read_options=read_options).to_table()
+    assert data.schema.field("value").type == DataType.dictionary(
+        DataType.int32(), DataType.string()
+    )
 
-    assert data.schema.field("value").type == pa.dictionary(pa.int32(), pa.string())
-    assert data.schema.field("day").type == pa.string()
+    assert data.schema.field("day").type == DataType.string()
 
 
 @pytest.mark.pyarrow

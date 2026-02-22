@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
+from arro3.core import Schema as Arro3Schema
 
 from deltalake import (
     CommitProperties,
@@ -2397,7 +2398,9 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     table_schema = pq.read_table(
         tmp_path / dt.get_add_actions().column(0)[0].as_py()
     ).schema
-    assert table_schema.field("price").type == sample_table["price"].type
+    assert (
+        Arro3Schema.from_arrow(table_schema)["price"].type == sample_table["price"].type
+    )
 
 
 @pytest.mark.pyarrow
