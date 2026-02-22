@@ -31,6 +31,7 @@ use deltalake::delta_datafusion::{
 use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
 };
+use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -42,7 +43,7 @@ use deltalake::logstore::LogStoreRef;
 use deltalake::logstore::{IORuntime, ObjectStoreRef};
 use deltalake::operations::CustomExecuteHandler;
 use deltalake::operations::convert_to_delta::{ConvertToDeltaBuilder, PartitionStrategy};
-use deltalake::operations::optimize::{OptimizeType, create_session_state_for_optimize};
+use deltalake::operations::optimize::OptimizeType;
 use deltalake::operations::update_table_metadata::TableMetadataUpdate;
 use deltalake::operations::vacuum::VacuumMode;
 use deltalake::operations::write::WriteBuilder;
@@ -711,7 +712,7 @@ impl RawDeltaTable {
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {
                 let session =
-                    create_session_state_for_optimize(max_spill_size, max_temp_directory_size);
+                    create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
                 cmd = cmd.with_session_state(Arc::new(session));
             }
 
@@ -788,7 +789,7 @@ impl RawDeltaTable {
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {
                 let session =
-                    create_session_state_for_optimize(max_spill_size, max_temp_directory_size);
+                    create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
                 cmd = cmd.with_session_state(Arc::new(session));
             }
 
@@ -1098,6 +1099,8 @@ impl RawDeltaTable {
         merge_schema = false,
         safe_cast = false,
         streamed_exec = false,
+        max_spill_size = None,
+        max_temp_directory_size = None,
         writer_properties = None,
         post_commithook_properties = None,
         commit_properties = None,
@@ -1113,6 +1116,8 @@ impl RawDeltaTable {
         merge_schema: bool,
         safe_cast: bool,
         streamed_exec: bool,
+        max_spill_size: Option<usize>,
+        max_temp_directory_size: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -1136,6 +1141,8 @@ impl RawDeltaTable {
                 merge_schema,
                 safe_cast,
                 streamed_exec,
+                max_spill_size,
+                max_temp_directory_size,
                 writer_properties,
                 post_commithook_properties,
                 commit_properties,

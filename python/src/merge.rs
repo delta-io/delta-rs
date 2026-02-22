@@ -3,6 +3,7 @@ use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::delta_datafusion::create_session;
+use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
 use deltalake::operations::CustomExecuteHandler;
@@ -49,6 +50,8 @@ impl PyMergeBuilder {
         merge_schema: bool,
         safe_cast: bool,
         streamed_exec: bool,
+        max_spill_size: Option<usize>,
+        max_temp_directory_size: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -82,6 +85,12 @@ impl PyMergeBuilder {
         let mut cmd = MergeBuilder::new(log_store, Some(snapshot), predicate, source_df)
             .with_safe_cast(safe_cast)
             .with_streaming(streamed_exec);
+
+        if max_spill_size.is_some() || max_temp_directory_size.is_some() {
+            let session =
+                create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
+            cmd = cmd.with_session_state(Arc::new(session));
+        }
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);

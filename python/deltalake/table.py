@@ -720,6 +720,8 @@ class DeltaTable:
         error_on_type_mismatch: bool = True,
         writer_properties: WriterProperties | None = None,
         streamed_exec: bool = True,
+        max_spill_size: int | None = None,
+        max_temp_directory_size: int | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
     ) -> TableMerger:
@@ -737,6 +739,10 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
+            max_spill_size: The maximum number of bytes allowed in memory before spilling to disk.
+                If not specified, uses DataFusion's default.
+                Set this to avoid OOM when merging into large tables with a source table which touches a large number of files.
+            max_temp_directory_size: The maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties for the commit. If None, default values are used.
 
@@ -756,6 +762,8 @@ class DeltaTable:
             merge_schema=merge_schema,
             safe_cast=not error_on_type_mismatch,
             streamed_exec=streamed_exec,
+            max_spill_size=max_spill_size,
+            max_temp_directory_size=max_temp_directory_size,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,

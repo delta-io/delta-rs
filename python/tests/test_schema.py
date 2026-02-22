@@ -36,7 +36,7 @@ def test_table_schema():
 
 @pytest.mark.pyarrow
 def test_table_schema_pyarrow_simple():
-    import pyarrow as pa
+    from arro3.core import DataType
 
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
@@ -44,14 +44,14 @@ def test_table_schema_pyarrow_simple():
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "id"
-    assert field.type == pa.int64()
+    assert field.type == DataType.int64()
     assert field.nullable is True
     assert field.metadata == {}
 
 
 @pytest.mark.pyarrow
 def test_table_schema_pyarrow_020():
-    import pyarrow as pa
+    from arro3.core import DataType
 
     table_path = "../crates/test/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
@@ -59,7 +59,7 @@ def test_table_schema_pyarrow_020():
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "value"
-    assert field.type == pa.int32()
+    assert field.type == DataType.int32()
     assert field.nullable is True
     assert field.metadata == {}
 
