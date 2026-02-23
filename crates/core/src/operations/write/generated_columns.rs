@@ -2,7 +2,7 @@ use arrow_schema::Schema;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ScalarValue};
 use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col, when};
-use datafusion::prelude::lit;
+use datafusion::prelude::{cast, lit};
 use datafusion::{execution::SessionState, prelude::DataFrame};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_features::TableFeature;
@@ -49,12 +49,40 @@ pub fn with_generated_columns(
         }
 
         debug!("Adding missing generated column {}.", name);
-        let mut expr =
-            parse_predicate_expression(plan.schema(), &generated_col.generation_expr, session)?
-                .alias(name);
-        if let Ok(field) = table_schema.field_with_name(name) {
-            expr = expr.cast_to(field.data_type(), plan.schema())?;
-        }
+        // Try to resolve the generation expression against the current plan schema.
+        // When SchemaMode::Merge is used, the input batch may omit nullable columns
+        // that the expression references. In that case, parse_predicate_expression
+        // will fail because the column doesn't exist yet (schema evolution hasn't
+        // run). We fall back to a typed NULL placeholder so the pipeline can
+        // continue; schema evolution will later add the missing base columns as NULL,
+        // and DataValidationExec will see NULL IS NOT DISTINCT FROM NULL = true.
+        let expr = match parse_predicate_expression(
+            plan.schema(),
+            &generated_col.generation_expr,
+            session,
+        ) {
+            Ok(resolved) => {
+                let mut e = resolved.alias(name);
+                if let Ok(field) = table_schema.field_with_name(name) {
+                    e = e.cast_to(field.data_type(), plan.schema())?;
+                }
+                e
+            }
+            Err(_) => {
+                debug!(
+                    "Could not resolve generation expression for column {}, \
+                     inserting NULL placeholder (will be resolved after schema evolution).",
+                    name
+                );
+                // Use the target data type from the table schema if available,
+                // otherwise fall back to a bare NULL.
+                if let Ok(field) = table_schema.field_with_name(name) {
+                    cast(lit(ScalarValue::Null), field.data_type().clone()).alias(name)
+                } else {
+                    lit(ScalarValue::Null).alias(name)
+                }
+            }
+        };
         projection.push(expr);
     }
 
@@ -356,6 +384,63 @@ mod tests {
                 .schema()
                 .field_with_unqualified_name("user")
                 .is_err()
+        );
+    }
+
+    /// Test that a generated column referencing a column not in the input batch
+    /// does not fail, but instead produces a NULL placeholder.
+    /// This is the core fix for #4169.
+    #[test]
+    fn test_generated_column_referencing_missing_column_uses_null_placeholder() {
+        let session = create_test_session();
+        // Plan only has "id" — missing "user" column
+        let schema = Arc::new(Schema::new(vec![ArrowField::new(
+            "id",
+            ArrowDataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let source = provider_as_source(Arc::new(
+            MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap(),
+        ));
+        let plan = LogicalPlanBuilder::scan("test", source, None)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Table schema has id, user (nullable), and computed = user
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("user", ArrowDataType::Utf8, true),
+            ArrowField::new("computed", ArrowDataType::Utf8, true),
+        ]);
+
+        // "computed" references "user", which is NOT in the input plan
+        let generated_cols = vec![GeneratedColumn::new(
+            "computed",
+            "\"user\"",
+            &KernelDataType::STRING,
+        )];
+
+        // Previously this would fail with "column user not found"
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(
+            result.is_ok(),
+            "should not fail when generated column references a missing column: {:?}",
+            result.err()
+        );
+
+        let result_plan = result.unwrap();
+        assert_eq!(result_plan.schema().fields().len(), 2); // id + computed
+        assert!(
+            result_plan
+                .schema()
+                .field_with_unqualified_name("computed")
+                .is_ok()
         );
     }
 }
