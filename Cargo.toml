@@ -48,7 +48,7 @@ datafusion-proto = { version = "52.1.0" }
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0.27" }
+strum = { version = "0.28" }
 
 # "stdlib"
 bytes = { version = "1" }
