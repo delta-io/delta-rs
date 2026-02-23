@@ -1190,12 +1190,12 @@ class DeltaTable:
             post_commithook_properties=post_commithook_properties,
         )
 
-    def __datafusion_table_provider__(self) -> Any:
+    def __datafusion_table_provider__(self, session: Any | None = None) -> Any:
         """Return the DataFusion table provider PyCapsule interface.
 
         To support DataFusion features such as push down filtering, this function will return a PyCapsule
         interface that conforms to the FFI Table Provider required by DataFusion. From an end user perspective
-        you should not need to call this function directly. Instead you can use ``register_table_provider`` in
+        you should not need to call this function directly. Instead you can use ``register_table`` in
         the DataFusion SessionContext.
 
         Returns:
@@ -1210,7 +1210,7 @@ class DeltaTable:
             write_deltalake("tmp", data)
             dt = DeltaTable("tmp")
             ctx = SessionContext()
-            ctx.register_table_provider("test", table)
+            ctx.register_table("test", dt)
             ctx.table("test").show()
             ```
             Results in
@@ -1225,7 +1225,7 @@ class DeltaTable:
             +----+----+----+
             ```
         """
-        return self._table.__datafusion_table_provider__()
+        return self._table.__datafusion_table_provider__(session)
 
 
 class TableMerger:
