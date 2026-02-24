@@ -23,6 +23,18 @@ pub fn gc_is_enabled(snapshot: &EagerSnapshot) -> bool {
         .is_feature_enabled(&TableFeature::GeneratedColumns)
 }
 
+/// Returns `true` when the error indicates that a column referenced in the
+/// generation expression could not be found in the current plan schema.
+/// This happens during `SchemaMode::Merge` when the input batch omits
+/// nullable columns that schema evolution will add later.  All other errors
+/// (e.g. SQL syntax errors, type mismatches) should still be surfaced.
+fn is_column_resolution_error(err: &crate::DeltaTableError) -> bool {
+    let msg = err.to_string();
+    // DataFusion emits "No field named ..." for unresolved column references
+    // and "Schema error: ..." for broader schema resolution failures.
+    msg.contains("No field named") || msg.contains("Schema error")
+}
+
 pub fn with_generated_columns(
     session: &dyn Session,
     plan: LogicalPlan,
@@ -68,11 +80,11 @@ pub fn with_generated_columns(
                 }
                 e
             }
-            Err(_) => {
+            Err(ref err) if is_column_resolution_error(err) => {
                 debug!(
-                    "Could not resolve generation expression for column {}, \
+                    "Could not resolve generation expression for column {} ({}), \
                      inserting NULL placeholder (will be resolved after schema evolution).",
-                    name
+                    name, err
                 );
                 // Use the target data type from the table schema if available,
                 // otherwise fall back to a bare NULL.
@@ -82,6 +94,7 @@ pub fn with_generated_columns(
                     lit(ScalarValue::Null).alias(name)
                 }
             }
+            Err(err) => return Err(err.into()),
         };
         projection.push(expr);
     }
@@ -399,11 +412,8 @@ mod tests {
             ArrowDataType::Int32,
             false,
         )]));
-        let batch = RecordBatch::try_new(
-            schema,
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
         let source = provider_as_source(Arc::new(
             MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap(),
         ));
