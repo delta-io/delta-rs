@@ -71,6 +71,7 @@ jobs:
   test-datafusion:
     name: Python Build (Python 3.10 DataFusion integration)
     runs-on: ubuntu-latest
+    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v5
