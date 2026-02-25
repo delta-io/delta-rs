@@ -283,7 +283,7 @@ impl LogicalFileView {
     }
 
     /// Converts this file view into an Add action for log operations.
-    pub(crate) fn add_action(&self) -> Add {
+    pub fn add_action(&self) -> Add {
         Add {
             path: self.path().to_string(),
             partition_values: self.partition_values_map(),
