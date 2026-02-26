@@ -49,7 +49,6 @@ nav:
       - Home: index.md
       - Why Use Delta Lake: why-use-delta-lake.md
       - Delta Lake for big and small data: delta-lake-big-data-small-data.md
-      - Best practices: delta-lake-best-practices.md
   - Usage:
       - Installation: usage/installation.md
       - Overview: usage/overview.md
@@ -66,6 +65,7 @@ nav:
           - usage/writing/index.md
           - usage/writing/writing-to-s3-with-locking-provider.md
       - Deleting rows from a table: usage/deleting-rows-from-delta-lake-table.md
+      - Best practices: usage/delta-lake-best-practices.md
       - Optimize:
           - Small file compaction: usage/optimize/small-file-compaction-with-optimize.md
           - Z Order: usage/optimize/delta-lake-z-order.md
@@ -104,6 +104,9 @@ nav:
       - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
   - Upgrade guides:
       - Version 1.0.0: upgrade-guides/guide-1.0.0.md
+  - About:
+      - Contributing: about/contributing.md
+      - History: about/history.md
 not_in_nav: |
   /_build/
 
