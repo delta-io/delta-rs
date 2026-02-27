@@ -52,7 +52,7 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 
 ## Quick start
 
-- Install Rust, e.g. as described [here](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+- Install [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
 
 - Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
