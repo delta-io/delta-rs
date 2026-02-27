@@ -175,7 +175,7 @@ impl DeltaScanConfigBuilder {
             wrap_partition_values: self.wrap_partition_values.unwrap_or(true),
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
-            schema_force_view_types: false,
+            schema_force_view_types: true,
         })
     }
 }
@@ -209,7 +209,7 @@ impl DeltaScanConfig {
             file_column_name: None,
             wrap_partition_values: true,
             enable_parquet_pushdown: true,
-            schema_force_view_types: false,
+            schema_force_view_types: true,
             schema: None,
         }
     }
