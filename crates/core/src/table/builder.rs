@@ -110,13 +110,6 @@ impl DeltaTableBuilder {
             )
         })?;
 
-        if table_url.scheme() == "file" {
-            let path = table_url.to_file_path().map_err(|_| {
-                DeltaTableError::InvalidTableLocation(table_url.as_str().to_string())
-            })?;
-            ensure_file_location_exists(path)?;
-        }
-
         debug!("creating table builder with {table_url}");
 
         Ok(Self {
