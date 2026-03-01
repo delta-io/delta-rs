@@ -35,7 +35,7 @@ use tracing::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, TombstoneView, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -280,6 +280,8 @@ impl VacuumBuilder {
             _ => HashSet::new(),
         };
 
+        let mut file_count = 0;
+
         let expired_tombstones =
             get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?;
         let valid_files: HashSet<_> = snapshot
@@ -288,66 +290,62 @@ impl VacuumBuilder {
             .try_collect()
             .await?;
 
-        let mut files_to_delete = vec![];
-        let mut file_sizes = vec![];
-        let object_store = self.log_store.object_store(None);
-
-        let list_span = info_span!("list_files", operation = "vacuum");
-        let mut all_files = list_span.in_scope(|| object_store.list(None));
         let partition_columns = snapshot.metadata().partition_columns();
 
-        let mut file_count = 0;
-        while let Some(obj_meta) = all_files.next().await {
-            // TODO should we allow NotFound here in case we have a temporary commit file in the list
-            let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-            file_count += 1;
-            // file is still being tracked in table
-            if valid_files.contains(&obj_meta.location) {
-                continue;
+        let mut files_to_delete = vec![];
+        let mut file_sizes = vec![];
+
+        // VacuumMode::Lite file set
+        // Expired tombstones are *always deleted (*unless in keep list)
+        for tombs in expired_tombstones.iter() {
+            let path = Path::from(tombs.path().to_string());
+            if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
+                files_to_delete.push(path);
+                file_sizes.push(tombs.size().unwrap_or(0));
             }
-            // file is associated with a version that we are keeping
-            if keep_files.contains(&obj_meta.location.to_string()) {
-                debug!(
-                    "The file {:?} is in a version specified to be kept by the user, skipping",
-                    &obj_meta.location
-                );
-                continue;
-            }
-            if is_hidden_directory(partition_columns, &obj_meta.location)? {
-                continue;
-            }
-            // file is not an expired tombstone _and_ this is a "Lite" vacuum
-            // If the file is not an expired tombstone and we have gotten to here with a
-            // VacuumMode::Full then it should be added to the deletion plan
-            if !expired_tombstones.contains(obj_meta.location.as_ref()) {
-                // For files without tombstones (uncommitted or orphaned files),
-                // check their physical age to protect recently written files from deletion.
-                // This prevents race conditions where a concurrent writer's uncommitted files
-                // could be deleted before the transaction is committed.
-                let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
-                if file_age_millis < retention_period.num_milliseconds() {
-                    debug!(
-                        "The file {:?} is not in the log but too recent , protecting from vacuum",
+        }
+
+        if self.mode == VacuumMode::Full {
+            let object_store = self.log_store.object_store(None);
+
+            let list_span = info_span!("list_files", operation = "vacuum");
+            let mut all_files = list_span.in_scope(|| object_store.list(None));
+
+            let already_queued: HashSet<Path> = files_to_delete.iter().cloned().collect();
+
+            while let Some(obj_meta) = all_files.next().await {
+                // TODO should we allow NotFound here in case we have a temporary commit file in the list
+                let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
+                // If the file is not an expired tombstone
+                if !already_queued.contains(&obj_meta.location)
+                    && ok_to_delete(
                         &obj_meta.location,
-                    );
-                    continue;
-                }
-                if self.mode == VacuumMode::Lite {
-                    debug!(
-                        "The file {:?} was not referenced in a log file, but VacuumMode::Lite means it will not be vacuumed",
-                        &obj_meta.location
-                    );
-                    continue;
-                } else {
+                        &valid_files,
+                        &keep_files,
+                        partition_columns,
+                    )?
+                {
+                    // For files without tombstones (uncommitted or orphaned files),
+                    // check their physical age to protect recently written files from deletion.
+                    // This prevents race conditions where a concurrent writer's uncommitted files
+                    // could be deleted before the transaction is committed.
+                    let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
+                    if file_age_millis < retention_period.num_milliseconds() {
+                        debug!(
+                            "The file {:?} is not in the log but too recent , protecting from vacuum",
+                            &obj_meta.location,
+                        );
+                        continue;
+                    }
                     debug!(
                         "The file {:?} was not referenced in a log file, but VacuumMode::Full means it *will be vacuumed*",
                         &obj_meta.location
                     );
+                    files_to_delete.push(obj_meta.location);
+                    file_sizes.push(obj_meta.size as i64);
+                    file_count += 1;
                 }
             }
-
-            files_to_delete.push(obj_meta.location);
-            file_sizes.push(obj_meta.size as i64);
         }
         info!(
             files_scanned = file_count,
@@ -530,13 +528,29 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
             .any(|partition_column| path_name.starts_with(partition_column)))
 }
 
+/// Returns true if the file at `location` is a candidate for deletion.
+/// A file should NOT be deleted if it is still tracked in the table,
+/// associated with a kept version, or is a hidden directory.
+fn ok_to_delete(
+    location: &Path,
+    valid_files: &HashSet<Path>,
+    keep_files: &HashSet<String>,
+    partition_columns: &[String],
+) -> Result<bool, DeltaTableError> {
+    Ok(
+        !(valid_files.contains(location) // file is still being tracked in table
+        || keep_files.contains(&location.to_string()) // file is associated with a version that we are keeping
+        || is_hidden_directory(partition_columns, location)?),
+    )
+}
+
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 async fn get_stale_files(
     snapshot: &EagerSnapshot,
     retention_period: Duration,
     now_timestamp_millis: i64,
     store: &dyn LogStore,
-) -> DeltaResult<HashSet<String>> {
+) -> DeltaResult<Vec<TombstoneView>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
         .snapshot()
@@ -546,8 +560,7 @@ async fn get_stale_files(
             // then it's considered as a stale file
             ready(tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp)
         })
-        .map_ok(|tombstone| tombstone.path().to_string())
-        .try_collect::<HashSet<_>>()
+        .try_collect::<Vec<_>>()
         .await
 }
 

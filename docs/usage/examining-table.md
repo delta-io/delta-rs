@@ -144,6 +144,21 @@ data frame of the add actions data using `DeltaTable.get_add_actions`:
     1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
     ```
 
+!!! note
+
+    `DeltaTable.get_add_actions` returns an `arro3.core.Table`. If legacy code still expects a single PyArrow `RecordBatch`, you can adapt it like this:
+
+    ``` python
+    >>> import pyarrow as pa
+    >>> arro3_table = dt.get_add_actions(flatten=True)
+    >>> pa_table = pa.table(arro3_table).combine_chunks()
+    >>> legacy_batches = pa_table.to_batches(max_chunksize=None)
+    >>> legacy_batch = legacy_batches[0] if legacy_batches else pa.RecordBatch.from_arrays(
+    ...     [pa.array([], type=f.type) for f in pa_table.schema],
+    ...     schema=pa_table.schema,
+    ... )
+    ```
+
 === "Rust"
     ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();

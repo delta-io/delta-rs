@@ -66,8 +66,8 @@ use crate::delta_datafusion::logical::{
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    Expression, create_session, resolve_session_state, scan_files_where_matches,
-    update_datafusion_session,
+    Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
+    scan_files_where_matches, update_datafusion_session,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -534,46 +534,18 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     snapshot: &EagerSnapshot,
     predicate: &Expr,
 ) -> DeltaResult<std::collections::HashSet<String>> {
-    use arrow_array::RecordBatch;
     use arrow_array::StringArray;
-    use arrow_schema::DataType;
-    use arrow_schema::Field;
-    use arrow_schema::Schema;
     use datafusion::logical_expr::LogicalPlanBuilder;
     use datafusion::logical_expr::col;
 
     use crate::delta_datafusion::PATH_COLUMN;
     use crate::errors::DeltaTableError;
-    use datafusion::datasource::{MemTable, provider_as_source};
+    use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::collect;
 
-    let batch = snapshot.add_actions_table(true)?;
-    let schema = batch.schema();
-    let mut arrays = Vec::with_capacity(schema.fields().len());
-    let mut fields = Vec::with_capacity(schema.fields().len());
-
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for field in schema.fields() {
-        if let Some(name) = field.name().strip_prefix("partition.") {
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(field.as_ref().clone().with_name(name));
-        }
-    }
-
-    let schema = Arc::new(Schema::new(fields));
-    let mem_table = MemTable::try_new(
-        schema.clone(),
-        vec![vec![RecordBatch::try_new(schema, arrays)?]],
-    )?;
+    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+        return Ok(std::collections::HashSet::new());
+    };
 
     let plan = LogicalPlanBuilder::scan(
         "partition_predicate",
@@ -1343,6 +1315,80 @@ mod tests {
 
         let state = table.snapshot()?;
         assert_eq!(state.log_data().num_files(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_fallback_multibatch_ignores_missing_files()
+    -> DeltaResult<()> {
+        use chrono::Utc;
+
+        use crate::DeltaTable;
+        use crate::kernel::{
+            Action, DataType as DeltaDataType, PrimitiveType, StructField, StructType,
+        };
+        use crate::test_utils::make_test_add;
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "hour".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let action_count = 9000;
+        let expected_removed = action_count / 2;
+        let now_ms = Utc::now().timestamp_millis();
+
+        let adds = (0..action_count)
+            .map(|idx| {
+                let hour = if idx % 2 == 0 { 10 } else { 20 };
+                let path = format!("dt=2025-11-12/hour={hour}/file-{idx:05}.parquet");
+                let hour_str = if hour == 10 { "10" } else { "20" };
+                Action::Add(make_test_add(
+                    path,
+                    &[("dt", "2025-11-12"), ("hour", hour_str)],
+                    now_ms,
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["dt", "hour"])
+            .with_actions(adds)
+            .await?;
+
+        // Intentionally do not write parquet files. This validates that the partition-only
+        // DataFusion fallback path can resolve file candidates from metadata only.
+        let (table, metrics) = table
+            .delete()
+            .with_predicate("CAST(hour AS STRING) LIKE '1%'")
+            .await?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, expected_removed);
+        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(
+            state.log_data().num_files(),
+            action_count - expected_removed
+        );
 
         Ok(())
     }

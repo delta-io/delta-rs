@@ -28,7 +28,8 @@ Append two additional rows of data to the table:
     ```
 
 === "Rust"
-`rust
+
+    ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
     let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
@@ -42,7 +43,7 @@ Append two additional rows of data to the table:
                 "dd", "ee"
             ])),
         ])).with_save_mode(SaveMode::Append).await?;
-    `
+    ```
 
 Here are the updated contents of the Delta table:
 
@@ -64,13 +65,15 @@ Now let's see how to perform an overwrite transaction.
 
 Now let's see how to overwrite the existing Delta table.
 === "Python"
-`python
+
+    ```python
     df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
     write_deltalake("tmp/some-table", df, mode="overwrite")
-    `
+    ```
 
 === "Rust"
-`rust
+
+    ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
     let table = open_table(delta_path).await?;
     DeltaOps(table).write(RecordBatch::try_new(
@@ -84,7 +87,8 @@ Now let's see how to overwrite the existing Delta table.
                 "a", "b", "c",
             ])),
         ])).with_save_mode(SaveMode::Overwrite).await?;
-    `
+    ```
+
 Here are the contents of the Delta table after the overwrite operation:
 
 ```
@@ -105,11 +109,12 @@ Overwriting just performs a logical delete. It doesn't physically remove the pre
     ```
 
 === "Rust"
-`rust
+
+    ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
     let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;
-    `
+    ```
 
 ```
 +-------+----------+

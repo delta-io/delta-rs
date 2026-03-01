@@ -68,6 +68,28 @@ jobs:
           uv pip uninstall pyarrow
           uv run --no-sync pytest -n auto -m "not pyarrow and not pandas and not datafusion and not integration and not benchmark"
 
+  test-datafusion:
+    name: Python Build (Python 3.10 DataFusion integration)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+        with:
+          python-version: '3.10'
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Assert DataFusion major version
+        run: uv run --no-sync python -c "from importlib.metadata import version; v=version('datafusion'); assert v.split('.')[0]=='52', f'Expected 52.x, got {v}'"
+
+      - name: Run DataFusion integration test
+        run: DELTALAKE_RUN_DATAFUSION_TESTS=1 uv run --no-sync pytest -v tests/test_datafusion.py -m datafusion
+
   test-lakefs:
     name: Python Build (Python 3.10 LakeFS Integration tests)
     runs-on: ubuntu-latest
