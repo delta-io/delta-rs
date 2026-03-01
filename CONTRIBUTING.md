@@ -8,7 +8,7 @@ If you want to start contributing, first look at our good first issues: https://
 
 If you want to contribute something more substantial, see our "Projects seeking contributors" section on our roadmap: https://github.com/delta-io/delta-rs/issues/1128
 
-## AI-generated code
+## Using AI-generated code
 
 We recognise that AI coding assistants are now a regular part of many
 developers' workflows and can improve productivity. Thoughtful use of these
@@ -52,7 +52,7 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 
 ## Quick start
 
-- Install Rust, e.g. as described [here](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- Install [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
 
 - Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
@@ -72,16 +72,29 @@ If you want to claim an issue to work on, you can write the word `take` as a com
     cargo run --example basic_operations --features="datafusion"
     ```
 
-## Run the docs locally
-*This serves your local contents of docs via a web browser, handy for checking what they look like if you are making changes to docs or docstings*
+## Running the docs locally
 
-```sh
-(cd python; make develop)
-pip install -r docs/requirements.txt
-mkdocs serve
-```
+Preview your doc and docstring changes in a web browser:
 
-## To make a pull request (PR)
+- Install [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+- Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
+
+- Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
+    ```sh
+    cd python
+    make develop
+    ```
+
+- From the root directory, activate the uv environment and install the Python docs requirements.
+    ```sh
+    cd ..
+    source python/.venv/bin/activate
+    pip install -r docs/requirements.txt
+    ```
+
+- Run `mkdocs serve` to preview your doc changes at http://127.0.0.1:8000/delta-io/delta-rs/.
+
+## Making a pull request (PR)
 Make sure all the following steps run/pass locally before submitting a PR
 
 ```sh
@@ -93,6 +106,9 @@ make develop
 make unit-test
 make build-docs
 ```
+
+Note that all commits to `delta-rs` should be [signed](https://git-scm.com/docs/git-commit#Documentation/git-commit.txt--s), pull requests should be in lower case,
+and conform to [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#summary).
 
 ## Developing in VSCode
 

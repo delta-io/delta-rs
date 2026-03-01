@@ -27,8 +27,8 @@ Get metadata from a table with the
     ```rust
     let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
     let table = deltalake::open_table(delta_path).await?;
-    let metadata = table.metadata()?;
-    println!("metadata: {:?}", metadata);
+    let state = table.state.as_ref().unwrap();
+    println!("metadata: {:?}", state.metadata());
     ```
 
 
@@ -55,8 +55,9 @@ the table will be loaded into.
     Use `DeltaTable::get_schema` to retrieve the delta lake schema
     ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
-    let mut table = open_table(delta_path).await?;
-    let schema = table.get_schema()?;
+    let table = open_table(delta_path).await?;
+    let state = table.state.as_ref().unwrap();
+    let schema = state.schema();
     println!("schema: {:?}", schema);
     ```
 These schemas have a JSON representation that can be retrieved.
@@ -83,7 +84,7 @@ It is also possible to retrieve the Arrow schema:
     ```
 === "Rust"
     ```rust
-    let arrow_schema = table.snapshot()?.arrow_schema()?;
+    let arrow_schema = state.snapshot().arrow_schema();
     println!("arrow_schema: {:?}", schema);
     ```
 
@@ -122,7 +123,8 @@ To view the available history, use `DeltaTable.history`:
     ```rust
     let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
     let table = open_table(delta_path).await?;
-    let history = table.history(None).await?;
+    let history_iter = table.history(None).await?;
+    let history: Vec<_> = history_iter.collect();
     println!("Table history: {:#?}", history);
     ```
 ## Current Add Actions
