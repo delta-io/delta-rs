@@ -14,7 +14,7 @@ Let’s start with an example to explain these key concepts.  All the code cover
 
 Let’s start by creating a Delta table with a lot of small files so we can demonstrate the usefulness of the `optimize` command.
 
-Start by writing a function that generates on thousand rows of random data given a timestamp.
+Start by writing a function that generates one thousand rows of random data given a timestamp.
 
 === "Python"
     ```python

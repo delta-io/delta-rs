@@ -134,7 +134,7 @@ which provide the list of files that are part of the table and metadata
 about them, such as creation time, size, and statistics. You can get a
 data frame of the add actions data using `DeltaTable.get_add_actions`:
 
-<!-- spellchecker:off --!>
+<!-- spellchecker:off -->
 
 === "Python"
     ``` python
@@ -187,4 +187,4 @@ This works even with past versions of the table:
     println!("{}", pretty_format_batches(&vec![actions])?);
     ```
 
-<!-- spellchecker:on --!>
+<!-- spellchecker:on -->

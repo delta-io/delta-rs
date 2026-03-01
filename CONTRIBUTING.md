@@ -40,7 +40,7 @@ the following:
 * Break down large PRs into smaller ones to make review easier
 
 PR authors are also responsible for disclosing any copyrighted materials in
-submitted contributions. See the `[Apache Software
+submitted contributions. See the [Apache Software
 Foundation's](https://apache.org) [guidance on AI-generated
 code](https://www.apache.org/legal/generative-tooling.html) for further
 information on licensing considerations.
@@ -122,7 +122,7 @@ and conform to [conventional commits](https://www.conventionalcommits.org/en/v1.
 {
             "type": "lldb",
             "request": "attach",
-            "name": "LLDB Attach to Python'",
+            "name": "LLDB Attach to Python",
             "program": "${command:python.interpreterPath}",
             "pid": "${command:pickMyProcess}",
             "args": [],
@@ -138,7 +138,7 @@ and conform to [conventional commits](https://www.conventionalcommits.org/en/v1.
 4. Run the relevant Python code function in your terminal, execution should drop into the Python debugger showing `PDB` prompt
 5. Run the following in that prompt to get the Python process ID: `import os; os.getpid()`
 6. Run the `LLDB Attach to Python` from the `Run and Debug` panel of VSCode. This will prompt you for a Process ID to attach to, enter the Python process ID obtained earlier (this will also be in the dropdown but that dropdown will have many process IDs)
-7. LLDB make take couple of seconds to attach to the process
+7. LLDB may take a couple of seconds to attach to the process
 8. When the debugger is attached to the process (you will notice the debugger panels get filled with extra info), enter `c`+Enter in the `PDB` prompt in your terminal - the execution should continue until the breakpoint in Rust code is hit. From this point it's a standard debugging process.
 
 

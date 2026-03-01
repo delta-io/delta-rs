@@ -4,7 +4,7 @@ Delta Lake is a great storage system for pandas analyses.  This page shows how i
 
 Delta Lake is very easy to install for pandas analyses, just run `pip install deltalake`.
 
-Delta Lake allows for performance optimizations, so pandas queries can run much faster than the query run on data stored in CSV or Parquet.  See the following chart for the query runtime for the a Delta tables compared with CSV/Parquet.
+Delta Lake allows for performance optimizations, so pandas queries can run much faster than queries run on data stored in CSV or Parquet.  See the following chart for the query runtime for a Delta table compared with CSV/Parquet.
 
 ![](pandas-query-csv-parquet-delta.png)
 
