@@ -359,8 +359,6 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
 ///  * A valid URL, which will be parsed and returned
 ///  * A path to a directory, which will be created and then converted to a URL.
 ///
-/// If it is a local path, it will be created if it doesn't exist.
-///
 /// Extra slashes will be removed from the end path as well.
 ///
 /// Parse a table URI to a URL without creating directories.
@@ -428,19 +426,6 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     // load bearing with [Url] and this helps ensure that a [Url] always meets our internal
     // expectations of path segments and join-ability.
     Ok(normalize_table_url(&url))
-}
-
-/// Validate that the given [PathBuf] does exist, otherwise return a
-/// [DeltaTableError::InvalidTableLocation]
-fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
-    if !path.exists() {
-        let msg = format!(
-            "Local path \"{}\" does not exist or you don't have access!",
-            path.as_path().display(),
-        );
-        return Err(DeltaTableError::InvalidTableLocation(msg));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -698,5 +683,26 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn test_create_builder_from_non_existent_path() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let new_path = tmp_path.join("new_table");
+        assert!(!new_path.exists());
+
+        let builder_result =
+            DeltaTableBuilder::from_url(Url::from_directory_path(&new_path).unwrap());
+        assert!(
+            builder_result.is_ok(),
+            "Builder should be created successfully even if the path does not exist"
+        );
+
+        let builder = builder_result.unwrap();
+        assert_eq!(
+            builder.table_url.as_str(),
+            Url::from_directory_path(&new_path).unwrap().as_str()
+        );
     }
 }
