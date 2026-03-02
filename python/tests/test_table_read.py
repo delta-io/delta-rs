@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
+from urllib.parse import urlparse
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -1232,6 +1233,56 @@ def test_read_deletion_vectors():
     assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
         "value"
     ].to_pylist() == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+def test_deletion_vectors_table_with_deletion_logs():
+    table_path = "../crates/test/tests/data/table_with_deletion_logs"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors().read_all()
+    assert vectors.num_rows > 0
+
+    add_actions = dt.get_add_actions(flatten=True)
+    table_root = Path(table_path).resolve()
+    add_paths = add_actions["path"].to_pylist()
+    add_num_records = add_actions["num_records"].to_pylist()
+    num_records_by_file_path: dict[str, int] = {}
+    for add_path, num_records in zip(add_paths, add_num_records, strict=True):
+        file_path = (table_root / add_path).resolve().as_posix()
+        assert file_path not in num_records_by_file_path
+        num_records_by_file_path[file_path] = num_records
+
+    found_deleted_row = False
+    known_file_suffix = (
+        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
+    )
+    known_file_mask = None
+    known_file_num_records = None
+
+    for filepath, mask in zip(
+        vectors["filepath"].to_pylist(),
+        vectors["selection_vector"].to_pylist(),
+        strict=True,
+    ):
+        file_path = Path(urlparse(filepath).path).as_posix()
+        assert file_path in num_records_by_file_path
+
+        num_records = num_records_by_file_path[file_path]
+        filename = Path(file_path).name
+        assert len(mask) == num_records
+
+        if False in mask:
+            found_deleted_row = True
+        if filename == known_file_suffix:
+            known_file_mask = mask
+            known_file_num_records = num_records
+
+    assert found_deleted_row
+    assert known_file_mask is not None
+    assert known_file_num_records is not None
+    assert len(known_file_mask) == known_file_num_records
+    assert False in known_file_mask
+    assert known_file_mask[-1] is True
 
 
 @pytest.mark.pandas

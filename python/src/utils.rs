@@ -3,8 +3,9 @@ use std::sync::{Arc, OnceLock};
 use deltalake::logstore::object_store::{
     Error as ObjectStoreError, ListResult, ObjectStore, Result as ObjectStoreResult, path::Path,
 };
-use futures::StreamExt;
 use futures::future::{BoxFuture, FutureExt, join_all};
+use futures::stream::BoxStream;
+use futures::{StreamExt, TryStreamExt};
 use pyo3::types::{IntoPyDict, PyAnyMethods, PyModule};
 use pyo3::{Bound, IntoPyObjectExt, PyAny, PyResult, Python};
 use tokio::runtime::Runtime;
@@ -86,14 +87,26 @@ fn list_with_delimiter_recursive(
     .boxed()
 }
 
+/// Delete all objects under `prefix` using batched deletion.
+///
+/// Uses `ObjectStore::delete_stream` which leverages native bulk-delete
+/// APIs on backends that support them (e.g. S3 DeleteObjects) and
+/// concurrent individual deletes on others.
 pub async fn delete_dir(storage: &dyn ObjectStore, prefix: &Path) -> ObjectStoreResult<()> {
-    // TODO batch delete would be really useful now...
-    let mut stream = storage.list(Some(prefix));
-    while let Some(maybe_meta) = stream.next().await {
-        let meta = maybe_meta?;
-        storage.delete(&meta.location).await?;
-    }
-    Ok(())
+    let locations: BoxStream<'_, ObjectStoreResult<Path>> = storage
+        .list(Some(prefix))
+        .map_ok(|meta| meta.location)
+        .boxed();
+
+    storage
+        .delete_stream(locations)
+        .map(|res| match res {
+            Ok(_) => Ok(()),
+            Err(ObjectStoreError::NotFound { .. }) => Ok(()),
+            Err(err) => Err(err),
+        })
+        .try_for_each(|()| futures::future::ready(Ok(())))
+        .await
 }
 
 pub fn warn<'py>(

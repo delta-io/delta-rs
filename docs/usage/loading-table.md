@@ -109,7 +109,7 @@ the `DeltaTable.is_deltatable()` method.
 ## Custom Storage Backends
 
 While delta always needs its internal storage backend to work and be
-properly configured, in order to manage the delta log, it may sometime
+properly configured, in order to manage the delta log, it may sometimes
 be advantageous - and is common practice in the arrow world - to
 customize the storage interface used for reading the bulk data.
 
