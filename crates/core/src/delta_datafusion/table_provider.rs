@@ -590,6 +590,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("file_column", &self.file_column)
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
+            .field("file_selection", &self.file_selection)
             .finish()
     }
 }
@@ -720,25 +721,15 @@ impl TableProviderBuilder {
         };
 
         if let Some(log_store) = log_store.as_ref() {
-            let mut snapshot_root = match &snapshot {
-                SnapshotWrapper::Snapshot(snap) => {
-                    snap.scan_builder().build()?.table_root().clone()
-                }
-                SnapshotWrapper::EagerSnapshot(esnap) => esnap
-                    .snapshot()
-                    .scan_builder()
-                    .build()?
-                    .table_root()
-                    .clone(),
-            };
-            if !snapshot_root.path().ends_with('/') {
-                snapshot_root.set_path(&format!("{}/", snapshot_root.path()));
-            }
+            let snapshot_root_identity = canonical_table_root_identity(
+                snapshot.snapshot().scan_builder().build()?.table_root(),
+            );
             let log_store_root = log_store.table_root_url();
+            let log_store_root_identity = canonical_table_root_identity(&log_store_root);
 
-            let snapshot_root_redacted = next::redact_url_for_error(&snapshot_root);
-            let log_store_root_redacted = next::redact_url_for_error(&log_store_root);
-            if snapshot_root != log_store_root {
+            let snapshot_root_redacted = next::redact_url_for_error(&snapshot_root_identity);
+            let log_store_root_redacted = next::redact_url_for_error(&log_store_root_identity);
+            if snapshot_root_identity != log_store_root_identity {
                 return Err(DataFusionError::Plan(format!(
                     "Provided snapshot root ({snapshot_root_redacted}) does not match provided log store root ({log_store_root_redacted})"
                 )));
@@ -767,6 +758,15 @@ impl TableProviderBuilder {
 
         Ok(provider)
     }
+}
+
+fn canonical_table_root_identity(root: &url::Url) -> url::Url {
+    let mut root = next::ensure_table_root_url(&normalize_table_url(root));
+    let _ = root.set_username("");
+    let _ = root.set_password(None);
+    root.set_query(None);
+    root.set_fragment(None);
+    root
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -1422,7 +1422,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_builder_rejects_mismatched_snapshot_and_log_store() {
+    async fn test_builder_allows_matching_snapshot_and_log_store_root() {
+        let table = create_in_memory_id_table().await.unwrap();
+        let snapshot = table.snapshot().unwrap().snapshot().snapshot().clone();
+        let log_store = table.log_store();
+
+        let provider = next::DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .build()
+            .await;
+
+        assert!(
+            provider.is_ok(),
+            "unexpected error: {}",
+            provider.unwrap_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_builder_allows_same_root_with_different_query_on_log_store() {
         let one_url = Url::parse("memory:///same-root?snap-token").unwrap();
         let one_store =
             crate::logstore::logstore_for(&one_url, crate::logstore::StorageConfig::default())
@@ -1441,6 +1460,43 @@ mod tests {
         let snapshot = table_one.snapshot().unwrap().snapshot().snapshot().clone();
 
         let two_url = Url::parse("memory:///same-root?log-token").unwrap();
+        let two_store =
+            crate::logstore::logstore_for(&two_url, crate::logstore::StorageConfig::default())
+                .unwrap();
+
+        let provider = next::DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(two_store)
+            .build()
+            .await;
+
+        assert!(
+            provider.is_ok(),
+            "unexpected error: {}",
+            provider.unwrap_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_builder_rejects_mismatched_snapshot_and_log_store() {
+        let one_url = Url::parse("memory:///same-root?snap-token").unwrap();
+        let one_store =
+            crate::logstore::logstore_for(&one_url, crate::logstore::StorageConfig::default())
+                .unwrap();
+        let schema = StructType::try_new(vec![StructField::new(
+            "id".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            true,
+        )])
+        .unwrap();
+        let table_one = CreateBuilder::new()
+            .with_log_store(one_store)
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+        let snapshot = table_one.snapshot().unwrap().snapshot().snapshot().clone();
+
+        let two_url = Url::parse("memory:///different-root?log-token").unwrap();
         let two_store =
             crate::logstore::logstore_for(&two_url, crate::logstore::StorageConfig::default())
                 .unwrap();
@@ -1470,6 +1526,60 @@ mod tests {
             "unexpected error: {err_str}"
         );
     }
+
+    #[tokio::test]
+    async fn test_builder_with_file_selection_propagates_to_scan() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let table_root = snapshot
+            .scan_builder()
+            .build()
+            .unwrap()
+            .table_root()
+            .clone();
+        let missing_file_id = table_root
+            .join("__does_not_exist__.parquet")
+            .unwrap()
+            .to_string();
+
+        let provider = next::DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_selection(next::FileSelection::new([missing_file_id]))
+            .build()
+            .await
+            .unwrap();
+
+        let session = Arc::new(crate::delta_datafusion::create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let err = provider.scan(&state, None, &[], None).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("File selection contains"),
+            "unexpected error: {err_str}"
+        );
+    }
+
+    #[test]
+    fn test_canonical_table_root_identity_strips_username_query_and_fragment() {
+        let url =
+            Url::parse("https://urluser:urlpassword@example.com/path?token=abc#frag").unwrap();
+
+        let canonical = canonical_table_root_identity(&url);
+
+        assert_eq!(canonical.username(), "");
+        assert!(canonical.password().is_none());
+        assert!(canonical.query().is_none());
+        assert!(canonical.fragment().is_none());
+    }
+
     #[test]
     fn test_partitioned_file_from_action() {
         let mut partition_values = std::collections::HashMap::new();

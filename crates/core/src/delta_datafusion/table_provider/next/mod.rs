@@ -149,7 +149,7 @@ impl FileSelection {
     }
 }
 
-fn ensure_table_root_url(table_root_url: &Url) -> Url {
+pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
     if table_root_url.path().ends_with('/') {
         table_root_url.clone()
     } else {
