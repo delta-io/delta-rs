@@ -65,6 +65,6 @@ With `deltalake` you can manage data stored on a local file system or in the clo
 
 ## Next steps
 
-- Learn about [Querying Delta Tables](usage/querying-delta-tables/)
-- Learn about using `deltalake` [with Polars](integrations/delta-lake-polars/)
-- Learn about using `deltalake` [with DataFusion](integrations/delta-lake-datafusion/)
+- Learn about [Querying Delta Tables](usage/querying-delta-tables.md)
+- Learn about using `deltalake` [with Polars](integrations/delta-lake-polars.md)
+- Learn about using `deltalake` [with DataFusion](integrations/delta-lake-datafusion.md)
