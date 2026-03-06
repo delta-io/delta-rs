@@ -20,4 +20,4 @@ We value kind communication and building a productive, friendly environment for 
 
 Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  `deltalake` allows you to manage your dataset using a Delta Lake approach without any Java or Spark dependencies.
 
-A `DeltaTable` on disk is simply a directory that stores metadata in JSON files and data in Parquet files.
+A `DeltaTable` on disk is simply a directory that stores metadata in JSON files and data in [Apache Parquet](https://parquet.apache.org) files.
