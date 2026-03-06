@@ -2711,7 +2711,10 @@ def test_write_date64_normalizes_to_date32(tmp_path: pathlib.Path):
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
     assert result.schema.field("sales_date").type == pa.date32()
-    assert result.column("sales_date").to_pylist() == [date(2025, 10, 20), date(2025, 11, 15)]
+    assert result.column("sales_date").to_pylist() == [
+        date(2025, 10, 20),
+        date(2025, 11, 15),
+    ]
 
 
 @pytest.mark.pyarrow
@@ -2837,7 +2840,6 @@ def test_write_large_binary_normalizes_to_binary(tmp_path: pathlib.Path):
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
     assert result.column("data").to_pylist() == [b"abc", b"def"]
-
 
 
 @pytest.mark.pyarrow

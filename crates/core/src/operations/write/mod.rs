@@ -504,16 +504,22 @@ impl std::future::IntoFuture for WriteBuilder {
                 let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
 
                 if !Arc::ptr_eq(&source_schema, source.schema().inner()) {
+                    let original_schema = source.schema().inner();
                     let cast_projection: Vec<Expr> = source_schema
                         .fields()
                         .iter()
-                        .map(|field| {
-                            let cast_fn = if this.safe_cast { try_cast } else { cast };
-                            cast_fn(
-                                Expr::Column(Column::from_name(field.name())),
-                                field.data_type().clone(),
-                            )
-                            .alias(field.name())
+                        .zip(original_schema.fields().iter())
+                        .map(|(target, original)| {
+                            if target.data_type() != original.data_type() {
+                                let cast_fn = if this.safe_cast { try_cast } else { cast };
+                                cast_fn(
+                                    Expr::Column(Column::from_name(target.name())),
+                                    target.data_type().clone(),
+                                )
+                                .alias(target.name())
+                            } else {
+                                Expr::Column(Column::from_name(target.name()))
+                            }
                         })
                         .collect();
                     source = LogicalPlanBuilder::new(source)
