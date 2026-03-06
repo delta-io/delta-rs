@@ -1,4 +1,4 @@
-`deltalake` is a Rust-based re-implementation of the DeltaLake protocol originally developed at DataBricks. The `deltalake` library has APIs in Rust and Python. The `deltalake` implementation has no dependencies on Java, Spark or DataBricks.
+`delta-rs` is a Rust-based re-implementation of the [Delta Lake](https://delta.io) protocol originally developed at Databricks. The `deltalake` library has APIs in Rust and Python, and implementation has no dependencies on Java, Spark or Databricks.
 
 ## Contributing
 
