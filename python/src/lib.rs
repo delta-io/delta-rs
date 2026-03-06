@@ -1814,12 +1814,18 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    #[pyo3(signature = (properties, raise_if_not_exists, commit_properties=None))]
+    #[pyo3(signature = (
+        properties,
+        raise_if_not_exists,
+        commit_properties=None,
+        post_commithook_properties=None
+    ))]
     pub fn set_table_properties(
         &self,
         properties: HashMap<String, String>,
         raise_if_not_exists: bool,
         commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let table = self._table.lock().map_err(to_rt_err)?.clone();
         let mut cmd = table
@@ -1827,7 +1833,9 @@ impl RawDeltaTable {
             .with_properties(properties)
             .with_raise_if_not_exists(raise_if_not_exists);
 
-        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -1842,11 +1850,12 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (name, commit_properties=None))]
+    #[pyo3(signature = (name, commit_properties=None, post_commithook_properties=None))]
     pub fn set_table_name(
         &self,
         name: String,
         commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let update = TableMetadataUpdate {
             name: Some(name),
@@ -1855,7 +1864,9 @@ impl RawDeltaTable {
         let table = self._table.lock().map_err(to_rt_err)?.clone();
         let mut cmd = table.update_table_metadata().with_update(update);
 
-        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
@@ -1870,11 +1881,16 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    #[pyo3(signature = (description, commit_properties=None))]
+    #[pyo3(signature = (
+        description,
+        commit_properties=None,
+        post_commithook_properties=None
+    ))]
     pub fn set_table_description(
         &self,
         description: String,
         commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
         let update = TableMetadataUpdate {
             name: None,
@@ -1883,7 +1899,9 @@ impl RawDeltaTable {
         let table = self._table.lock().map_err(to_rt_err)?.clone();
         let mut cmd = table.update_table_metadata().with_update(update);
 
-        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 
