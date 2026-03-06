@@ -13,13 +13,14 @@ use datafusion::{
 use datafusion_datasource::sink::DataSink;
 use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools as _;
+use uuid::Uuid;
 
 use crate::{
     cast_record_batch,
     delta_datafusion::DataFusionMixins as _,
     kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
     logstore::LogStoreRef,
-    operations::write::writer::{DeltaWriter, WriterConfig},
+    operations::write::{execution::write_streams, writer::WriterConfig},
     protocol::{DeltaOperation, SaveMode},
     table::config::TablePropertiesExt as _,
 };
@@ -111,10 +112,23 @@ impl DataSink for DeltaDataSink {
         let target_schema = self.snapshot.input_schema();
         let table_props = self.snapshot.table_configuration().table_properties();
 
-        let mut stream = self.create_converted_stream(data, target_schema.clone());
+        let operation_id = Uuid::new_v4();
+        let stream = self.create_converted_stream(data, target_schema.clone());
         let partition_columns = self.snapshot.metadata().partition_columns();
-        let object_store = self.log_store.object_store(None);
+        let object_store = self.log_store.object_store(Some(operation_id));
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
+        let stream = {
+            let metric = total_rows_metric.clone();
+            Box::pin(RecordBatchStreamAdapter::new(
+                target_schema.clone(),
+                stream.map(move |batch_result| {
+                    if let Ok(ref batch) = batch_result {
+                        metric.add(batch.num_rows());
+                    }
+                    batch_result
+                }),
+            )) as SendableRecordBatchStream
+        };
         let config = WriterConfig::new(
             self.snapshot.read_schema(),
             partition_columns.clone(),
@@ -128,27 +142,12 @@ impl DataSink for DeltaDataSink {
                 .map(|c| c.iter().map(|c| c.to_string()).collect_vec()),
         );
 
-        let mut writer = DeltaWriter::new(object_store, config);
-        let mut total_rows = 0u64;
-
-        while let Some(batch_result) = stream.next().await {
-            let batch = batch_result?;
-            let batch_rows = batch.num_rows() as u64;
-            total_rows += batch_rows;
-            total_rows_metric.add(batch_rows as usize);
-            writer
-                .write(&batch)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        }
-
-        let mut actions = writer
-            .close()
+        let (adds, write_metrics) = write_streams(vec![stream], object_store, config)
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .into_iter()
-            .map(Action::Add)
-            .collect_vec();
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let total_rows = write_metrics.rows_written;
+
+        let mut actions = adds.into_iter().map(Action::Add).collect_vec();
 
         if self.save_mode == SaveMode::Overwrite {
             actions.extend(
@@ -173,6 +172,7 @@ impl DataSink for DeltaDataSink {
 
         CommitBuilder::default()
             .with_actions(actions)
+            .with_operation_id(operation_id)
             .build(Some(&self.snapshot), self.log_store.clone(), operation)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

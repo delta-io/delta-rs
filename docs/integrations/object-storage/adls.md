@@ -1,8 +1,8 @@
 # Azure ADLS Storage Backend
 
-`delta-rs` offers native support for using Microsoft Azure Data Lake Storage (ADSL) as an object storage backend.
+`delta-rs` offers native support for using Microsoft Azure Data Lake Storage (ADLS) as an object storage backend.
 
-You don’t need to install any extra dependencies to read/write Delta tables to S3 with engines that use `delta-rs`. You do need to configure your ADLS access credentials correctly.
+You don’t need to install any extra dependencies to read/write Delta tables to ADLS with engines that use `delta-rs`. You do need to configure your ADLS access credentials correctly.
 
 ## Passing Credentials Explicitly
 
@@ -29,7 +29,7 @@ storage_options = {
 }
 
 # write Delta to ADLS
-df_pl.write_delta(
+df.write_delta(
     f"abfs://{container}/delta_table",
     storage_options = storage_options
 )

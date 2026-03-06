@@ -49,6 +49,7 @@ use delta_kernel::{
 use futures::{Stream, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
 use object_store::{ObjectMeta, path::Path};
+use url::Url;
 
 pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
@@ -156,9 +157,11 @@ pub(super) async fn replay_deletion_vectors(
     // Only files with `dv_info.has_vector()` spawn tasks, so every item should carry a DV.
     // Guard with a typed error (instead of panic) in case that invariant drifts.
     let dvs: DashMap<_, _> = dv_stream
-        .and_then(|(url, dv)| {
+        .and_then(|(url, dv, num_records)| {
             ready(match dv {
-                Some(keep_mask) => Ok((url.to_string(), keep_mask)),
+                Some(keep_mask) => normalize_dv_keep_mask_for_api(keep_mask, num_records, &url)
+                    .map(|mask| (url.to_string(), mask))
+                    .map_err(DeltaTableError::from),
                 None => Err(DeltaTableError::generic(
                     "Invariant violation: DV task spawned for file without deletion vector",
                 )),
@@ -239,7 +242,7 @@ async fn replay_files(
 
     let dv_stream = stream.dv_stream.build();
     let dvs: DashMap<_, _> = dv_stream
-        .try_filter_map(|(url, dv)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
+        .try_filter_map(|(url, dv, _)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
         .try_collect()
         .await?;
 
@@ -249,6 +252,43 @@ async fn replay_files(
         .add(stream.metrics.num_scanned);
 
     Ok((files, transforms, dvs, metrics))
+}
+
+/// Normalize a DV keep mask for `deletion_vectors()`.
+///
+/// Kernel returns a sparse mask (up to the highest deleted row index). For API output we need one
+/// full mask per file, to do this we pad trailing entries with `true` up to `numRecords`. If `numRecords`
+/// is missing we fail, because we cannot know the correct full length.
+///
+/// This is API only. Scan execution does per batch normalization in `exec::consume_dv_mask` and
+/// `exec_meta::apply_selection_vector`.
+fn normalize_dv_keep_mask_for_api(
+    mut mask: Vec<bool>,
+    num_records: Option<u64>,
+    file_url: &Url,
+) -> Result<Vec<bool>> {
+    let redacted_url = super::redact_url_for_error(file_url);
+    let Some(num_records) = num_records else {
+        return plan_err!(
+            "Missing numRecords for file with deletion vector: {}",
+            redacted_url
+        );
+    };
+    let num_records = usize::try_from(num_records).map_err(|_| {
+        DataFusionError::Execution(format!(
+            "numRecords does not fit usize for file with deletion vector: {redacted_url}"
+        ))
+    })?;
+    if mask.len() > num_records {
+        return plan_err!(
+            "Deletion vector mask length {} exceeds numRecords {} for file: {}",
+            mask.len(),
+            num_records,
+            redacted_url
+        );
+    }
+    mask.resize(num_records, true);
+    Ok(mask)
 }
 
 async fn get_data_scan_plan(
@@ -587,6 +627,67 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
         assert_eq!(groups[1].len(), 1);
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_pads_short_mask_with_true() {
+        let url = Url::parse("file:///tmp/table/file.parquet").unwrap();
+        let actual = normalize_dv_keep_mask_for_api(vec![true, false], Some(4), &url).unwrap();
+        assert_eq!(actual, vec![true, false, true, true]);
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_keeps_equal_length_mask() {
+        let url = Url::parse("file:///tmp/table/file.parquet").unwrap();
+        let mask = vec![true, false, true];
+        let actual = normalize_dv_keep_mask_for_api(mask.clone(), Some(3), &url).unwrap();
+        assert_eq!(actual, mask);
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_pads_empty_mask_to_all_true() {
+        let url = Url::parse("file:///tmp/table/file.parquet").unwrap();
+        let actual = normalize_dv_keep_mask_for_api(Vec::new(), Some(3), &url).unwrap();
+        assert_eq!(actual, vec![true, true, true]);
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_errors_when_mask_longer_than_num_records() {
+        let url =
+            Url::parse("s3://user:secret@example.com/table/file.parquet?sig=token#frag").unwrap();
+        let expected_url = super::super::redact_url_for_error(&url);
+        let err = normalize_dv_keep_mask_for_api(vec![true, false, true], Some(2), &url)
+            .expect_err("longer mask should error");
+        let message = err.to_string();
+        assert!(message.contains("exceeds numRecords"));
+        assert!(message.contains(&expected_url));
+        assert!(!message.contains("sig=token"));
+        assert!(!message.contains("secret"));
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_errors_when_num_records_missing() {
+        let url =
+            Url::parse("s3://user:secret@example.com/table/file.parquet?sig=token#frag").unwrap();
+        let expected_url = super::super::redact_url_for_error(&url);
+        let err = normalize_dv_keep_mask_for_api(vec![true], None, &url)
+            .expect_err("missing numRecords should error");
+        let message = err.to_string();
+        assert!(message.contains("Missing numRecords"));
+        assert!(message.contains(&expected_url));
+        assert!(!message.contains("sig=token"));
+        assert!(!message.contains("secret"));
+    }
+
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_errors_when_num_records_overflow_usize() {
+        // This branch is only reachable on 32-bit targets where u64 may exceed usize.
+        let url = Url::parse("file:///tmp/table/file.parquet").unwrap();
+        let overflow_num_records = (usize::MAX as u64) + 1;
+        let err = normalize_dv_keep_mask_for_api(vec![true], Some(overflow_num_records), &url)
+            .expect_err("numRecords that does not fit usize should error");
+        assert!(err.to_string().contains("does not fit usize"));
     }
 
     #[test]

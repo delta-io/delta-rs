@@ -1,6 +1,6 @@
 # Advanced object storage configuration
 
-Delta-rs provides some addition values to be set in the storage_options for advanced use case:
+Delta-rs provides some additional values to be set in the storage_options for advanced use cases:
 
 - Limit concurrent requests overall
 - Set retry configuration

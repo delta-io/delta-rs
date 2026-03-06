@@ -34,7 +34,7 @@ Even deleting a few rows of data from a data lake is hard.  It’s even harder i
 
 Delta Lake makes it easy to run common data operations and executes them performantly under the hood.
 
-Delta Lake also executes write operations as transactions, which makes data operations safer and prevents downtime.  Write operations will cause data lakes to be in an unstable state while the computations is running.  For example, if you read a data lake while a delete operation is running, then you may get the wrong data.
+Delta Lake also executes write operations as transactions, which makes data operations safer and prevents downtime.  Write operations will cause data lakes to be in an unstable state while the computation is running.  For example, if you read a data lake while a delete operation is running, then you may get the wrong data.
 
 Let’s explore the benefits of reliable transactions in more detail.
 

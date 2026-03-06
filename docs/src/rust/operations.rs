@@ -9,7 +9,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use deltalake::datafusion::logical_expr::{col, lit};
     use deltalake::protocol::SaveMode;
-    use deltalake::DeltaOps;
 
     let schema = ArrowSchema::new(vec![
         Field::new("id", DataType::Utf8, true),
@@ -27,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let delta_path = Url::from_directory_path("/tmp/my_table").unwrap();
     let table = deltalake::open_table(delta_path).await.unwrap();
-    let _table = DeltaOps(table)
+    let _table = table
         .write(vec![data])
         .with_save_mode(SaveMode::Overwrite)
         .with_replace_where(col("id").eq(lit("1")))

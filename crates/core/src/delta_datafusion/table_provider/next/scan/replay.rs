@@ -142,7 +142,7 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
 
         #[pin]
         stream: S,
@@ -159,7 +159,7 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
@@ -210,12 +210,13 @@ where
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
                         let file_url = file.file_url.clone();
+                        let num_records = file.num_records;
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -464,6 +465,8 @@ struct ScanFileContextInner {
     pub size: u64,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
+    /// Number of records in the file from Add-file stats.
+    pub num_records: Option<u64>,
 
     pub dv_info: DvInfo,
 }
@@ -560,6 +563,7 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
         transform: scan_file.transform,
         file_url,
         size: scan_file.size as u64,
+        num_records: scan_file.stats.map(|stats| stats.num_records),
     });
     ctx.count += 1;
 }
