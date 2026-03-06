@@ -2767,3 +2767,202 @@ def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
         schema=schema,
     )
     assert expected_data == loaded_data, "The table contents do not match expectations"
+
+
+@pytest.mark.pyarrow
+def test_write_date64_normalizes_to_date32(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("sales_date", pa.date64(), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "sales_date": pa.array(
+                [date(2025, 10, 20), date(2025, 11, 15)], type=pa.date64()
+            ),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    date_field = delta_schema.fields[1]
+    assert date_field.type == PrimitiveType("date")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.schema.field("sales_date").type == pa.date32()
+    assert result.column("sales_date").to_pylist() == [date(2025, 10, 20), date(2025, 11, 15)]
+
+
+@pytest.mark.pyarrow
+def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    ts2 = datetime(2025, 11, 15, 8, 30, 0, 789012, tzinfo=timezone.utc)
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("ts", pa.timestamp("ns", tz="UTC"), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "ts": pa.array([ts1, ts2], type=pa.timestamp("ns", tz="UTC")),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    ts_field = delta_schema.fields[1]
+    assert ts_field.type == PrimitiveType("timestamp")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+    assert result.column("ts").to_pylist() == [ts1, ts2]
+
+
+@pytest.mark.pyarrow
+def test_write_timestamp_ntz_ns_normalizes_to_us(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456)
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("ts_ntz", pa.timestamp("ns"), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1], type=pa.int32()),
+            "ts_ntz": pa.array([ts1], type=pa.timestamp("ns")),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 1
+    assert result.schema.field("ts_ntz").type == pa.timestamp("us")
+
+
+@pytest.mark.pyarrow
+def test_write_large_string_normalizes_to_utf8(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("name", pa.large_string(), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "name": pa.array(["hello", "world"], type=pa.large_string()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    name_field = delta_schema.fields[1]
+    assert name_field.type == PrimitiveType("string")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.column("name").to_pylist() == ["hello", "world"]
+
+
+@pytest.mark.pyarrow
+def test_write_large_binary_normalizes_to_binary(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("data", pa.large_binary(), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "data": pa.array([b"abc", b"def"], type=pa.large_binary()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    data_field = delta_schema.fields[1]
+    assert data_field.type == PrimitiveType("binary")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.column("data").to_pylist() == [b"abc", b"def"]
+
+
+@pytest.mark.pyarrow
+def test_append_large_utf8_to_existing_utf8_table(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    schema_utf8 = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("name", pa.utf8(), nullable=True),
+        ]
+    )
+    batch1 = pa.table(
+        {
+            "id": pa.array([1], type=pa.int32()),
+            "name": pa.array(["first"], type=pa.utf8()),
+        },
+        schema=schema_utf8,
+    )
+    write_deltalake(tmp_path, batch1)
+
+    schema_large = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("name", pa.large_string(), nullable=True),
+        ]
+    )
+    batch2 = pa.table(
+        {
+            "id": pa.array([2], type=pa.int32()),
+            "name": pa.array(["second"], type=pa.large_string()),
+        },
+        schema=schema_large,
+    )
+    write_deltalake(tmp_path, batch2, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert set(result.column("name").to_pylist()) == {"first", "second"}
