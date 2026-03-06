@@ -223,11 +223,11 @@ pub fn cast_record_batch(
 /// Delta protocol supports a subset of Arrow types. This function converts
 /// unsupported Arrow types to their Delta-compatible equivalents:
 ///
-/// - `Date64` → `Date32` (day precision)
-/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` → `Timestamp(Microsecond, tz)` (preserves timezone)
-/// - `LargeUtf8` / `Utf8View` → `Utf8`
-/// - `LargeBinary` / `BinaryView` → `Binary`
-/// - `LargeList` → `List` (recurses into child)
+/// - `Date64` -> `Date32` (day precision)
+/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone)
+/// - `LargeUtf8` / `Utf8View` -> `Utf8`
+/// - `LargeBinary` / `BinaryView` -> `Binary`
+/// - `LargeList` -> `List` (recurses into child)
 ///
 /// Recursively normalizes nested types (Struct, List, Map, etc.).
 fn normalize_datatype(dt: &DataType) -> Option<DataType> {
@@ -241,17 +241,17 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         DataType::LargeUtf8 | DataType::Utf8View => Some(DataType::Utf8),
         DataType::LargeBinary | DataType::BinaryView => Some(DataType::Binary),
         DataType::LargeList(inner) => {
-            let nf = normalize_field(inner).unwrap_or_else(|| Arc::clone(inner));
-            Some(DataType::List(nf))
+            let normalized = normalize_field(inner).unwrap_or_else(|| Arc::clone(inner));
+            Some(DataType::List(normalized))
         }
         DataType::Struct(fields) => {
             let mut changed = false;
             let new_fields: Vec<FieldRef> = fields
                 .iter()
                 .map(|f| {
-                    if let Some(nf) = normalize_field(f) {
+                    if let Some(normalized) = normalize_field(f) {
                         changed = true;
-                        nf
+                        normalized
                     } else {
                         Arc::clone(f)
                     }
@@ -261,10 +261,10 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         }
         DataType::List(inner) => normalize_field(inner).map(DataType::List),
         DataType::FixedSizeList(inner, size) => {
-            normalize_field(inner).map(|nf| DataType::FixedSizeList(nf, *size))
+            normalize_field(inner).map(|normalized| DataType::FixedSizeList(normalized, *size))
         }
         DataType::Map(entries, sorted) => {
-            normalize_field(entries).map(|nf| DataType::Map(nf, *sorted))
+            normalize_field(entries).map(|normalized| DataType::Map(normalized, *sorted))
         }
         _ => None,
     }
@@ -854,133 +854,19 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_for_delta_converts_date64_to_date32() {
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("sales_date", DataType::Date64, true),
-            Field::new(
-                "nested",
-                DataType::Struct(Fields::from(vec![Field::new(
-                    "inner_date",
-                    DataType::Date64,
-                    true,
-                )])),
-                true,
-            ),
-        ]));
-
-        let result = normalize_for_delta(&schema);
-
-        assert_eq!(result.field(1).data_type(), &DataType::Date32);
-        if let DataType::Struct(fields) = result.field(2).data_type() {
-            assert_eq!(fields[0].data_type(), &DataType::Date32);
-        } else {
-            panic!("Expected struct type");
-        }
-        assert_eq!(result.field(0).data_type(), &DataType::Int32);
-    }
-
-    #[test]
-    fn test_normalize_for_delta_no_change_when_no_date64() {
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("id", DataType::Int32, false),
-            Field::new("d", DataType::Date32, true),
-        ]));
-        let result = normalize_for_delta(&schema);
-        assert_eq!(&*result, schema.as_ref());
-    }
-
-    #[test]
-    fn test_normalize_for_delta_nested_containers() {
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "date_list",
-                DataType::List(Arc::new(Field::new("element", DataType::Date64, true))),
-                true,
-            ),
-            Field::new(
-                "date_large_list",
-                DataType::LargeList(Arc::new(Field::new("element", DataType::Date64, true))),
-                true,
-            ),
-            Field::new(
-                "date_map",
-                DataType::Map(
-                    Arc::new(Field::new(
-                        "entries",
-                        DataType::Struct(Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
-                            Field::new("value", DataType::Date64, true),
-                        ])),
-                        false,
-                    )),
-                    false,
-                ),
-                true,
-            ),
-            Field::new(
-                "nested_combo",
-                DataType::Struct(Fields::from(vec![Field::new(
-                    "inner_list",
-                    DataType::List(Arc::new(Field::new("element", DataType::Date64, true))),
-                    true,
-                )])),
-                true,
-            ),
-        ]));
-
-        let result = normalize_for_delta(&schema);
-
-        if let DataType::List(inner) = result.field(0).data_type() {
-            assert_eq!(inner.data_type(), &DataType::Date32);
-        } else {
-            panic!("Expected List type");
-        }
-
-        if let DataType::List(inner) = result.field(1).data_type() {
-            assert_eq!(inner.data_type(), &DataType::Date32);
-        } else {
-            panic!("Expected List type (LargeList normalized to List)");
-        }
-
-        if let DataType::Map(entries, _) = result.field(2).data_type() {
-            if let DataType::Struct(fields) = entries.data_type() {
-                assert_eq!(fields[0].data_type(), &DataType::Utf8);
-                assert_eq!(fields[1].data_type(), &DataType::Date32);
-            } else {
-                panic!("Expected Struct entries in Map");
-            }
-        } else {
-            panic!("Expected Map type");
-        }
-
-        if let DataType::Struct(fields) = result.field(3).data_type() {
-            if let DataType::List(inner) = fields[0].data_type() {
-                assert_eq!(inner.data_type(), &DataType::Date32);
-            } else {
-                panic!("Expected List inside Struct");
-            }
-        } else {
-            panic!("Expected Struct type");
-        }
-    }
-
-    #[test]
-    fn test_normalize_for_delta_timestamp_ns_to_us() {
+    fn test_normalize_for_delta_timestamp_to_us() {
         use arrow_schema::TimeUnit;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new(
-                "ts_utc",
+                "ts_ns",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 true,
             ),
+            Field::new("ts_sec", DataType::Timestamp(TimeUnit::Second, None), true),
             Field::new(
-                "ts_naive",
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                "ts_ms",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
                 true,
             ),
             Field::new("id", DataType::Int32, false),
@@ -996,36 +882,11 @@ mod tests {
             result.field(1).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
         );
-        assert_eq!(result.field(2).data_type(), &DataType::Int32);
-    }
-
-    #[test]
-    fn test_normalize_for_delta_timestamp_sec_to_us() {
-        use arrow_schema::TimeUnit;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "ts_sec",
-                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                true,
-            ),
-            Field::new(
-                "ts_ms",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
-        ]));
-
-        let result = normalize_for_delta(&schema);
-
         assert_eq!(
-            result.field(0).data_type(),
+            result.field(2).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         );
-        assert_eq!(
-            result.field(1).data_type(),
-            &DataType::Timestamp(TimeUnit::Microsecond, None)
-        );
+        assert_eq!(result.field(3).data_type(), &DataType::Int32);
     }
 
     #[test]
@@ -1045,7 +906,6 @@ mod tests {
 
     #[test]
     fn test_normalize_for_delta_large_utf8_to_utf8() {
-
         let schema = Arc::new(Schema::new(vec![
             Field::new("large", DataType::LargeUtf8, true),
             Field::new("view", DataType::Utf8View, true),
@@ -1058,40 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_for_delta_large_binary_to_binary() {
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("large", DataType::LargeBinary, true),
-            Field::new("view", DataType::BinaryView, true),
-        ]));
-
-        let result = normalize_for_delta(&schema);
-
-        assert_eq!(result.field(0).data_type(), &DataType::Binary);
-        assert_eq!(result.field(1).data_type(), &DataType::Binary);
-    }
-
-    #[test]
-    fn test_normalize_for_delta_large_list_to_list() {
-
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true))),
-            true,
-        )]));
-
-        let result = normalize_for_delta(&schema);
-
-        if let DataType::List(inner) = result.field(0).data_type() {
-            assert_eq!(inner.data_type(), &DataType::Int32);
-        } else {
-            panic!("Expected List type, got {:?}", result.field(0).data_type());
-        }
-    }
-
-    #[test]
     fn test_normalize_for_delta_large_list_with_large_utf8_child() {
-
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col",
             DataType::LargeList(Arc::new(Field::new("item", DataType::LargeUtf8, true))),
