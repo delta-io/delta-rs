@@ -225,9 +225,6 @@ pub fn cast_record_batch(
 ///
 /// - `Date64` -> `Date32` (day precision)
 /// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone)
-/// - `LargeUtf8` / `Utf8View` -> `Utf8`
-/// - `LargeBinary` / `BinaryView` -> `Binary`
-/// - `LargeList` -> `List` (recurses into child)
 ///
 /// Recursively normalizes nested types (Struct, List, Map, etc.).
 fn normalize_datatype(dt: &DataType) -> Option<DataType> {
@@ -237,12 +234,6 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         | DataType::Timestamp(TimeUnit::Millisecond, tz)
         | DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
-        }
-        DataType::LargeUtf8 | DataType::Utf8View => Some(DataType::Utf8),
-        DataType::LargeBinary | DataType::BinaryView => Some(DataType::Binary),
-        DataType::LargeList(inner) => {
-            let normalized = normalize_field(inner).unwrap_or_else(|| Arc::clone(inner));
-            Some(DataType::List(normalized))
         }
         DataType::Struct(fields) => {
             let mut changed = false;
@@ -905,43 +896,12 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_for_delta_large_utf8_to_utf8() {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("large", DataType::LargeUtf8, true),
-            Field::new("view", DataType::Utf8View, true),
-        ]));
-
-        let result = normalize_for_delta(&schema);
-
-        assert_eq!(result.field(0).data_type(), &DataType::Utf8);
-        assert_eq!(result.field(1).data_type(), &DataType::Utf8);
-    }
-
-    #[test]
-    fn test_normalize_for_delta_large_list_with_large_utf8_child() {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "col",
-            DataType::LargeList(Arc::new(Field::new("item", DataType::LargeUtf8, true))),
-            true,
-        )]));
-
-        let result = normalize_for_delta(&schema);
-
-        if let DataType::List(inner) = result.field(0).data_type() {
-            assert_eq!(inner.data_type(), &DataType::Utf8);
-        } else {
-            panic!("Expected List type, got {:?}", result.field(0).data_type());
-        }
-    }
-
-    #[test]
     fn test_normalize_for_delta_nested_struct_with_mixed_types() {
         use arrow_schema::TimeUnit;
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "outer",
             DataType::Struct(Fields::from(vec![
-                Field::new("s", DataType::LargeUtf8, true),
                 Field::new(
                     "ts",
                     DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
@@ -959,12 +919,11 @@ mod tests {
         let result = normalize_for_delta(&schema);
 
         if let DataType::Struct(fields) = result.field(0).data_type() {
-            assert_eq!(fields[0].data_type(), &DataType::Utf8);
             assert_eq!(
-                fields[1].data_type(),
+                fields[0].data_type(),
                 &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
             );
-            if let DataType::List(inner) = fields[2].data_type() {
+            if let DataType::List(inner) = fields[1].data_type() {
                 assert_eq!(inner.data_type(), &DataType::Date32);
             } else {
                 panic!("Expected List type for dates field");
