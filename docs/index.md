@@ -9,40 +9,62 @@ With `deltalake` you can manage data stored on a local file system or in the clo
 1. Install the Python dependencies with `pip`:
 
     ```bash
-    pip install deltalake pyarrow tabulate
+    pip install deltalake pandas pyarrow tabulate
     ```
 
-    - `pyarrow` is needed for the DataFrame import
-    - `tabulate` is needed to print the DataFrame in the example
+    - `pyarrow` and `pandas` are needed for the DataFrame import
+    - `tabulate` is needed to print the DataFrame in final the example
 
-1. Create a Pandas `DataFrame` and write it to a `DeltaTable`:
+1. Import the required dependencies:
 
     ```python
     from deltalake import write_deltalake, DeltaTable
     import pandas as pd
+    ```
 
-    #  Create a Pandas DataFrame and write it to a DeltaTable:
+1. Create a Pandas `DataFrame` and write it to a `DeltaTable`:
+
+    ```python
     df = pd.DataFrame({"num": [8, 9], "letter": ["aa", "bb"]})
     write_deltalake("tmp/some-table", df)
+    ```
 
-    # Create a DeltaTable object to track metadata for the Delta table
+1. Create a DeltaTable object to track metadata for the Delta table:
+
+    ```python
     dt = DeltaTable("tmp/some-table")
+    ```
 
-    # Overwrite the DataFrame with new data
+1. Overwrite the DataFrame with new data:
+
+    ```python
     df = pd.DataFrame({"num": [11, 22], "letter": ["dd", "ee"]})
     write_deltalake("tmp/some-table", df, mode="overwrite")
+    ```
 
-    # Easily revert to version 0 of the table
+1. Easily revert to the original version (version 0) of the table:
+
+    ```python
     df = DeltaTable("tmp/some-table", version=0)
+    ```
 
-    # Print the the original version 0 data
+1. Confirm the reversion by printing the contents of the table using the Pandas[to_markdown()](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.to_markdown.html) function:
+
+    ```python
     print(df.to_pandas().to_markdown())
     ```
 
+1. Output shows the original data from step 3:
+
+    ```
+    |    |   num | letter   |
+    |---:|------:|:---------|
+    |  0 |     8 | aa       |
+    |  1 |     9 | bb       |
+    ```
 
 ## Next steps
 
-- Learn about Querying Delta Tables
-- Learn about using `deltalake` with Polars
-- Learn about using `deltalake` with DuckDB
-- Learn about using `deltalake` with DataFusion
+- Learn about [Querying Delta Tables](usage/querying-delta-tables/)
+- Learn about using `deltalake` [with Polars](integrations/delta-lake-polars/)
+- Learn about using `deltalake` [with DataFusion](integrations/delta-lake-datafusion/)
