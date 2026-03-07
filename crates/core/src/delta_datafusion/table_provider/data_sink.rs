@@ -133,7 +133,7 @@ impl DataSink for DeltaDataSink {
             self.snapshot.read_schema(),
             partition_columns.clone(),
             None,
-            Some(table_props.target_file_size().get() as usize),
+            Some(table_props.target_file_size()),
             None,
             table_props.num_indexed_cols(),
             table_props
