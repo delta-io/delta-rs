@@ -569,10 +569,7 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let target_file_size = table_config
-        .table_properties()
-        .target_file_size
-        .map(|v| v.get() as usize);
+    let target_file_size = table_config.table_properties().target_file_size;
     let partition_columns = table_config.metadata().partition_columns().clone();
 
     if write_as_cdc {
@@ -775,7 +772,7 @@ async fn write_data_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -867,7 +864,7 @@ async fn write_cdc_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
