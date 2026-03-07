@@ -104,8 +104,8 @@ impl FileSelection {
     /// Create a selection from pre-normalized file IDs.
     ///
     /// This constructor does not normalize or validate the input IDs.
-    /// Callers with relative paths or Add actions should prefer:
-    /// - [`FileSelection::from_paths`]
+    /// Callers with relative file paths or Add actions should prefer:
+    /// - [`FileSelection::from_file_paths`]
     /// - [`FileSelection::from_adds`]
     /// - [`normalize_path_as_file_id`]
     pub(crate) fn new(file_ids: impl IntoIterator<Item = String>) -> Self {
@@ -120,13 +120,13 @@ impl FileSelection {
         self
     }
 
-    pub(crate) fn from_paths(
-        paths: impl IntoIterator<Item = impl AsRef<str>>,
+    pub(crate) fn from_file_paths(
+        file_paths: impl IntoIterator<Item = impl AsRef<str>>,
         table_root_url: &Url,
     ) -> crate::DeltaResult<Self> {
         let table_root_url = ensure_table_root_url(table_root_url);
         let mut file_ids = HashSet::new();
-        for path in paths {
+        for path in file_paths {
             let file_id = normalize_path_as_file_id_with_table_root(
                 path.as_ref(),
                 &table_root_url,
@@ -145,7 +145,7 @@ impl FileSelection {
         adds: impl IntoIterator<Item = crate::kernel::Add>,
         table_root_url: &Url,
     ) -> crate::DeltaResult<Self> {
-        Self::from_paths(adds.into_iter().map(|a| a.path), table_root_url)
+        Self::from_file_paths(adds.into_iter().map(|a| a.path), table_root_url)
     }
 }
 
@@ -969,7 +969,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_with_file_selection_from_paths_reads_selected_file() -> TestResult {
+    async fn test_scan_with_file_selection_from_file_paths_reads_selected_file() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
         let table_root = snapshot.scan_builder().build()?.table_root().clone();
@@ -986,7 +986,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let selection = FileSelection::from_paths([selected_path.as_str()], &table_root)?;
+        let selection = FileSelection::from_file_paths([selected_path.as_str()], &table_root)?;
 
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
@@ -1147,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_selection_from_paths_normalizes_urls() -> TestResult {
+    fn test_file_selection_from_file_paths_normalizes_urls() -> TestResult {
         let cases = vec![
             (
                 "file:///tmp/delta",
@@ -1183,7 +1183,7 @@ mod tests {
 
         for (table_root, input, expected) in cases {
             let table_root = Url::parse(table_root).unwrap();
-            let selection = FileSelection::from_paths([input], &table_root)?;
+            let selection = FileSelection::from_file_paths([input], &table_root)?;
             assert!(selection.file_ids.contains(expected));
             assert_eq!(selection.missing_file_policy, MissingFilePolicy::Error);
         }
