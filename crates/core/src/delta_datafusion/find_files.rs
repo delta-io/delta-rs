@@ -573,7 +573,7 @@ pub(crate) async fn scan_files_where_matches(
         .build()?
         .table_root()
         .clone();
-    let file_selection = FileSelection::from_paths(
+    let file_selection = FileSelection::from_file_paths(
         valid_files
             .iter()
             .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string())),
