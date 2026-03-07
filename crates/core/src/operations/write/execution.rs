@@ -563,6 +563,7 @@ pub(crate) async fn write_exec_plan(
     target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    use std::num::NonZero;
     let writer_properties = session
         .config_options()
         .execution
@@ -571,7 +572,11 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let partition_columns = table_config.metadata().partition_columns().clone();
+    let target_file_size: Option<NonZero<u64>> = table_config
+        .table_properties()
+        .target_file_size
+        .map(NonZero::from);
+    let partition_columns = table_config.metadata().partition_columns().to_vec();
 
     if write_as_cdc {
         write_cdc_plan(

@@ -6,7 +6,7 @@ use arrow_ipc::writer::FileWriter;
 use delta_kernel::FileMeta;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::log_segment::{ListedLogFiles, LogSegment};
+use delta_kernel::log_segment::{ListedLogFilesBuilder, LogSegment};
 use delta_kernel::path::ParsedLogPath;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
@@ -280,13 +280,15 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .transpose()?
             .flatten();
 
-        let listed_log_files = ListedLogFiles::try_new(
+        let listed_log_files = ListedLogFilesBuilder {
             ascending_commit_files,
             ascending_compaction_files,
             checkpoint_parts,
             latest_crc_file,
             latest_commit_file,
-        )
+            ..Default::default()
+        }
+        .build()
         .map_err(de::Error::custom)?;
 
         let log_root = if !table_url.path().ends_with("/") {
@@ -297,8 +299,9 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             table_url.join("_delta_log/").unwrap()
         };
 
-        let log_segment = LogSegment::try_new(listed_log_files, log_root, Some(version as u64))
-            .map_err(de::Error::custom)?;
+        let log_segment =
+            LogSegment::try_new(listed_log_files, log_root, Some(version as u64), None)
+                .map_err(de::Error::custom)?;
 
         let table_configuration =
             TableConfiguration::try_new(metadata, protocol, table_url.clone(), version as u64)

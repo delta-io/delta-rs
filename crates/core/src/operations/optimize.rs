@@ -520,7 +520,7 @@ fn create_remove(
                         if v.is_null() {
                             None
                         } else {
-                            Some(v.serialize())
+                            Some(ScalarExt::serialize(v))
                         },
                     )
                 })
