@@ -73,7 +73,6 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
-use crate::table::config::{TablePropertiesExt, DEFAULT_TARGET_FILE_SIZE};
 
 pub mod configs;
 pub(crate) mod execution;
