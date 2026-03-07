@@ -5,7 +5,8 @@ use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{
-    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
+    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestamp_nanos,
+    contains_timestampntz,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -95,14 +96,12 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    /// Check can write_timestamp_ntz
-    pub fn check_can_write_timestamp_ntz(
+    fn check_can_write_feature(
         &self,
         snapshot: &EagerSnapshot,
-        schema: &Schema,
+        contains_feature: bool,
+        feature: TableFeature,
     ) -> Result<(), TransactionError> {
-        trace!("checking to see if {snapshot:?} can write timestampntz");
-        let contains_timestampntz = contains_timestampntz(schema.fields());
         let required_features: Option<&[TableFeature]> =
             match snapshot.protocol().min_writer_version() {
                 0..=6 => None,
@@ -110,19 +109,41 @@ impl ProtocolChecker {
             };
 
         if let Some(table_features) = required_features {
-            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
-                && contains_timestampntz
-            {
-                return Err(TransactionError::TableFeaturesRequired(
-                    TableFeature::TimestampWithoutTimezone,
-                ));
+            if !table_features.contains(&feature) && contains_feature {
+                return Err(TransactionError::TableFeaturesRequired(feature));
             }
-        } else if contains_timestampntz {
-            return Err(TransactionError::TableFeaturesRequired(
-                TableFeature::TimestampWithoutTimezone,
-            ));
+        } else if contains_feature {
+            return Err(TransactionError::TableFeaturesRequired(feature));
         }
         Ok(())
+    }
+
+    /// Check can write_timestamp_ntz
+    pub fn check_can_write_timestamp_ntz(
+        &self,
+        snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampntz");
+        self.check_can_write_feature(
+            snapshot,
+            contains_timestampntz(schema.fields()),
+            TableFeature::TimestampWithoutTimezone,
+        )
+    }
+
+    /// Check can write_timestamp_ntz
+    pub fn check_can_write_timestamp_nanos(
+        &self,
+        snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampnanos");
+        self.check_can_write_feature(
+            snapshot,
+            contains_timestamp_nanos(schema.fields()),
+            TableFeature::TimestampNanos,
+        )
     }
 
     /// Check if delta-rs can read form the given delta table.

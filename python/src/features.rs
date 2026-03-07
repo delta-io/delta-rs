@@ -9,6 +9,8 @@ pub enum TableFeatures {
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
     DeletionVectors,
+    /// nanosecond-resolution timestamps
+    TimestampNanos,
     /// timestamps without timezone support
     TimestampWithoutTimezone,
     /// version 2 of checkpointing
@@ -38,6 +40,7 @@ impl From<TableFeatures> for KernelTableFeatures {
         match value {
             TableFeatures::ColumnMapping => KernelTableFeatures::ColumnMapping,
             TableFeatures::DeletionVectors => KernelTableFeatures::DeletionVectors,
+            TableFeatures::TimestampNanos => KernelTableFeatures::TimestampNanos,
             TableFeatures::TimestampWithoutTimezone => {
                 KernelTableFeatures::TimestampWithoutTimezone
             }
