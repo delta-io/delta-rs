@@ -604,7 +604,7 @@ mod datafusion_utils {
     use datafusion::logical_expr::Expr;
     use datafusion::{catalog::Session, common::DFSchema};
 
-    use crate::{delta_datafusion::expr::parse_predicate_expression, DeltaResult};
+    use crate::{DeltaResult, delta_datafusion::expr::parse_predicate_expression};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     #[derive(Debug, Clone)]
