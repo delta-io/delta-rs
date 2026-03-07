@@ -560,6 +560,7 @@ pub(crate) async fn write_exec_plan(
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
     operation_id: Option<Uuid>,
+    target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let writer_properties = session
@@ -570,7 +571,6 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let target_file_size = table_config.table_properties().target_file_size;
     let partition_columns = table_config.metadata().partition_columns().clone();
 
     if write_as_cdc {
