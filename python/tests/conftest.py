@@ -134,6 +134,8 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
 def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
+    import azure.core
+
     account_name = "devstoreaccount1"
     config = dict(
         AZURE_STORAGE_ACCOUNT_NAME=account_name,
@@ -154,14 +156,21 @@ def azurite_creds():
     )
     env["AZURE_STORAGE_CONNECTION_STRING"] = conn_str
     wait_till_host_is_available(config["AZURE_STORAGE_ENDPOINT"])
+    container = None
     try:
         blob_client = blob.BlobServiceClient.from_connection_string(conn_str=conn_str)
+        print(blob_client)
         container = blob_client.create_container(
             name=config["AZURE_STORAGE_CONTAINER_NAME"]
         )
+        print(f"Container provisioned: {container}")
+        yield config
+    except azure.core.exceptions.ResourceExistsError:
+        # The container is already created, meh
         yield config
     finally:
-        container.delete_container()
+        if container:
+            container.delete_container()
 
 
 @pytest.fixture()
