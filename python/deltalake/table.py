@@ -1853,6 +1853,7 @@ class TableAlterer:
         properties: dict[str, str],
         raise_if_not_exists: bool = True,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
         """
         Set properties from the table.
@@ -1861,6 +1862,7 @@ class TableAlterer:
             properties: properties which set
             raise_if_not_exists: set if should raise if not exists.
             commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
             ```python
@@ -1881,12 +1883,14 @@ class TableAlterer:
             properties,
             raise_if_not_exists,
             commit_properties,
+            post_commithook_properties,
         )
 
     def set_table_name(
         self,
         name: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
         """
         Set the name of the table.
@@ -1894,7 +1898,7 @@ class TableAlterer:
         Args:
             name: the name of the table
             commit_properties: properties of the transaction commit. If None, default values are used.
-                              Note: This parameter is not yet implemented and will be ignored.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
             ```python
@@ -1903,12 +1907,15 @@ class TableAlterer:
             dt.alter.set_table_name("new_table_name")
             ```
         """
-        self.table._table.set_table_name(name, commit_properties)
+        self.table._table.set_table_name(
+            name, commit_properties, post_commithook_properties
+        )
 
     def set_table_description(
         self,
         description: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
         """
         Set the description of the table.
@@ -1916,7 +1923,7 @@ class TableAlterer:
         Args:
             description: the description of the table
             commit_properties: properties of the transaction commit. If None, default values are used.
-                              Note: This parameter is not yet implemented and will be ignored.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Example:
             ```python
@@ -1925,7 +1932,9 @@ class TableAlterer:
             dt.alter.set_table_description("new_table_description")
             ```
         """
-        self.table._table.set_table_description(description, commit_properties)
+        self.table._table.set_table_description(
+            description, commit_properties, post_commithook_properties
+        )
 
     def set_column_metadata(
         self,
