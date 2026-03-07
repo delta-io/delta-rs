@@ -432,7 +432,7 @@ impl RawDeltaTable {
             id: metadata.id().to_string(),
             name: metadata.name().map(String::from),
             description: metadata.description().map(String::from),
-            partition_columns: metadata.partition_columns().clone(),
+            partition_columns: metadata.partition_columns().to_vec(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
         })

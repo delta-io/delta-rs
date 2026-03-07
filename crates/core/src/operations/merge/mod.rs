@@ -1521,7 +1521,7 @@ async fn execute(
         Some(&snapshot),
         &state,
         write,
-        table_partition_cols.clone(),
+        table_partition_cols.to_vec(),
         log_store.object_store(Some(operation_id)),
         Some(snapshot.table_properties().target_file_size()),
         None,

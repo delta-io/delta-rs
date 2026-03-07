@@ -57,6 +57,7 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
         Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
         Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
         Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
+        Expression::ParseJson(_) => not_impl_err!("ParseJson expressions are not yet supported"),
     }
 }
 

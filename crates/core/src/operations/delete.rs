@@ -374,7 +374,7 @@ async fn execute(
         .table_configuration()
         .metadata()
         .partition_columns()
-        .clone();
+        .to_vec();
     let mut props = crate::delta_datafusion::FindFilesExprProperties {
         partition_columns,
         partition_only: true,
