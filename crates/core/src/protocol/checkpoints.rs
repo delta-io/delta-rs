@@ -46,81 +46,7 @@ pub(crate) async fn create_checkpoint_for(
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-    let cp_writer = snapshot.checkpoint()?;
-
-    let cp_url = cp_writer.checkpoint_path()?;
-    let cp_path = Path::from_url_path(cp_url.path())?;
-    let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
-
-    let (first_batch, mut cp_data) = spawn_blocking_with_span(move || {
-        let Some(first_batch) = cp_data.next() else {
-            return Err(DeltaTableError::Generic("No data".to_string()));
-        };
-        Ok((to_rb(first_batch?)?, cp_data))
-    })
-    .await
-    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-    let root_store = log_store.root_object_store(operation_id);
-    let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
-    let mut writer = AsyncArrowWriter::try_new(
-        object_store_writer,
-        first_batch.schema(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(parquet::basic::Compression::SNAPPY)
-                .build(),
-        ),
-    )?;
-    writer.write(&first_batch).await?;
-
-    // Hold onto the schema used for future batches.
-    // This ensures that each batch is consistent since the kernel will yeet back the data that it
-    // read from prior checkpoints regardless of whether they are identical in schema.
-    //
-    // See: <https://github.com/delta-io/delta-rs/issues/3527>!
-    let checkpoint_schema = first_batch.schema();
-
-    let mut current_batch;
-    loop {
-        (current_batch, cp_data) = spawn_blocking_with_span(move || {
-            let Some(first_batch) = cp_data.next() else {
-                return Ok::<_, DeltaTableError>((None, cp_data));
-            };
-            Ok((Some(to_rb(first_batch?)?), cp_data))
-        })
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-        let Some(batch) = current_batch else {
-            break;
-        };
-
-        // If the subsequently yielded batches do not match the first batch written for whatever
-        // reason, attempt to safely cast the batches to ensure a coherent checkpoint parquet file
-        //
-        // See also: <https://github.com/delta-io/delta-rs/issues/3527>
-        let batch = if batch.schema() != checkpoint_schema {
-            crate::cast_record_batch(&batch, checkpoint_schema.clone(), true, true)?
-        } else {
-            batch
-        };
-
-        writer.write(&batch).await?;
-    }
-
-    let _pq_meta = writer.close().await?;
-    let file_meta = root_store.head(&cp_path).await?;
-    let file_meta = FileMeta {
-        location: cp_url,
-        size: file_meta.size,
-        last_modified: file_meta.last_modified.timestamp_millis(),
-    };
-
-    spawn_blocking_with_span(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data))
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
+    snapshot.checkpoint(engine.as_ref())?;
     Ok(())
 }
 
@@ -333,7 +259,7 @@ mod tests {
             .ok())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_create_checkpoint_for() {
         let table_schema = get_delta_schema();
 
