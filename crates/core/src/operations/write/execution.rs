@@ -61,6 +61,7 @@ fn channel_size() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
     use std::pin::Pin;
     use std::sync::{
         Arc,
@@ -122,7 +123,7 @@ mod tests {
             schema,
             vec![],
             None,
-            Some(1024),
+            Some(NonZeroU64::new(1024).unwrap()),
             Some(1024),
             DataSkippingNumIndexedCols::NumColumns(32),
             None,
