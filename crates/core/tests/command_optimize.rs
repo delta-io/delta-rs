@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::time::Duration;
 use std::{error::Error, sync::Arc};
 
@@ -135,6 +136,36 @@ fn records_for_size(size: usize) -> usize {
     size / 12
 }
 
+fn generate_constant_batch<T: Into<String>>(
+    rows: usize,
+    value: i32,
+    partition: T,
+) -> Result<RecordBatch, Box<dyn Error>> {
+    let mut x_vec: Vec<i32> = Vec::with_capacity(rows);
+    let mut y_vec: Vec<i32> = Vec::with_capacity(rows);
+    let mut date_vec = Vec::with_capacity(rows);
+    let s = partition.into();
+
+    for _ in 0..rows {
+        x_vec.push(value);
+        y_vec.push(value.saturating_mul(2));
+        date_vec.push(s.clone());
+    }
+
+    let x_array = Int32Array::from(x_vec);
+    let y_array = Int32Array::from(y_vec);
+    let date_array = StringArray::from(date_vec);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
+        ])),
+        vec![Arc::new(x_array), Arc::new(y_array), Arc::new(date_array)],
+    )?)
+}
+
 #[tokio::test]
 async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     let context = setup_test(false).await?;
@@ -175,7 +206,9 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     let version = dt.version().unwrap();
     assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 5);
 
-    let optimize = dt.optimize().with_target_size(2_000_000);
+    let optimize = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(2_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     assert_eq!(version + 1, dt.version().unwrap());
@@ -490,7 +523,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
@@ -499,7 +532,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 0);
@@ -524,7 +557,9 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version();
-    let optimize = dt.optimize().with_target_size(10_000_000);
+    let optimize = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
 
     let expected_metric_details = MetricDetails {
@@ -599,7 +634,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 2);
     assert_eq!(metrics.num_files_removed, 4);
@@ -608,11 +643,75 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
     let optimize = dt
         .optimize()
         .with_filters(&filter)
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (dt, metrics) = optimize.await?;
     assert_eq!(metrics.num_files_added, 0);
     assert_eq!(metrics.num_files_removed, 0);
     assert_eq!(dt.version().unwrap(), version + 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that compact rewrite does not re-split a selected bin by target size.
+/// https://github.com/delta-io/delta-rs/issues/3855
+async fn test_compact_rewrite_is_unbounded_and_idempotent() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?.with_writer_properties(
+        WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::ZSTD(
+                parquet::basic::ZstdLevel::try_new(4).unwrap(),
+            ))
+            .build(),
+    );
+
+    write(
+        &mut writer,
+        &mut dt,
+        generate_constant_batch(400_000, 1, "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_constant_batch(400_000, 2, "2022-05-22")?,
+    )
+    .await?;
+
+    let source_adds: Vec<_> = dt.snapshot().unwrap().log_data().into_iter().collect();
+    assert_eq!(source_adds.len(), 2);
+    let source_total_size: u64 = source_adds
+        .iter()
+        .map(|add| u64::try_from(add.size()).unwrap())
+        .sum();
+    let target_size = NonZeroU64::new(source_total_size + 1).unwrap();
+
+    let make_uncompressed_writer_properties = || {
+        WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .set_max_row_group_size(64 * 1024)
+            .build()
+    };
+
+    let (dt, first_metrics) = dt
+        .optimize()
+        .with_target_size(target_size)
+        .with_writer_properties(make_uncompressed_writer_properties())
+        .await?;
+    assert_eq!(first_metrics.num_files_removed, 2);
+    assert_eq!(
+        first_metrics.num_files_added, 1,
+        "Compact rewrite should not re-split a single bin by target size"
+    );
+
+    let (_, second_metrics) = dt
+        .optimize()
+        .with_target_size(target_size)
+        .with_writer_properties(make_uncompressed_writer_properties())
+        .await?;
+    assert_eq!(second_metrics.num_files_added, 0);
+    assert_eq!(second_metrics.num_files_removed, 0);
 
     Ok(())
 }
@@ -644,7 +743,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
 
     let optimize = dt
         .optimize()
-        .with_target_size(2_000_000)
+        .with_target_size(NonZeroU64::new(2_000_000).unwrap())
         .with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
@@ -879,7 +978,7 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
                 .build(),
         )
         .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
-        .with_target_size(10_000_000);
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap());
     let (_, metrics) = optimize.await?;
 
     assert_eq!(metrics.num_files_added, 2);

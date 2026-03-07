@@ -77,6 +77,7 @@ use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::execution::write_exec_plan;
 use crate::protocol::DeltaOperation;
+use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
@@ -504,12 +505,14 @@ async fn execute(
     };
 
     let exec = session.create_physical_plan(&write_plan).await?;
+    let target_file_size = Some(snapshot.table_properties().target_file_size());
     let (mut actions, _) = write_exec_plan(
         session,
         log_store.as_ref(),
         snapshot.table_configuration(),
         exec.clone(),
         Some(operation_id),
+        target_file_size,
         write_cdc,
     )
     .await?;
