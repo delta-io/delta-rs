@@ -205,29 +205,29 @@ async fn replay_files(
         files.extend(file);
     }
 
-    if let Some(selection) = file_selection {
-        if selection.missing_file_policy == super::MissingFilePolicy::Error {
-            let found: std::collections::HashSet<_> =
-                files.iter().map(|f| f.file_url.to_string()).collect();
-            let all_missing: Vec<_> = selection.file_ids.difference(&found).sorted().collect();
+    if let Some(selection) = file_selection
+        && selection.missing_file_policy == super::MissingFilePolicy::Error
+    {
+        let found: std::collections::HashSet<_> =
+            files.iter().map(|f| f.file_url.to_string()).collect();
+        let all_missing: Vec<_> = selection.file_ids.difference(&found).sorted().collect();
 
-            if !all_missing.is_empty() {
-                let missing_total = all_missing.len();
-                let missing: Vec<_> = all_missing
-                    .iter()
-                    .take(10)
-                    .map(|id| super::redact_url_str_for_error(id))
-                    .collect();
-                let extra = if missing_total > missing.len() {
-                    format!(" (and {} more)", missing_total - missing.len())
-                } else {
-                    String::new()
-                };
-                return plan_err!(
-                    "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
-                    missing.join(", ")
-                );
-            }
+        if !all_missing.is_empty() {
+            let missing_total = all_missing.len();
+            let missing: Vec<_> = all_missing
+                .iter()
+                .take(10)
+                .map(|id| super::redact_url_str_for_error(id))
+                .collect();
+            let extra = if missing_total > missing.len() {
+                format!(" (and {} more)", missing_total - missing.len())
+            } else {
+                String::new()
+            };
+            return plan_err!(
+                "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
+                missing.join(", ")
+            );
         }
     }
 

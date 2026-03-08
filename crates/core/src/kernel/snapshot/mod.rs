@@ -523,8 +523,10 @@ pub(crate) async fn resolve_snapshot(
             Ok(snapshot)
         }
     } else {
-        let mut config = DeltaTableConfig::default();
-        config.require_files = require_files;
+        let config = DeltaTableConfig {
+            require_files,
+            ..Default::default()
+        };
         EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
     }
 }
