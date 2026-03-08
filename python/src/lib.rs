@@ -1492,13 +1492,12 @@ impl RawDeltaTable {
 
             match mode {
                 SaveMode::Overwrite => {
-                    let _converted_filters =
+                    let converted_filters =
                         convert_partition_filters(partitions_filters.unwrap_or_default())
                             .map_err(PythonError::from)?;
 
-                    let _state = self.cloned_state()?;
-                    let _log_store = self.log_store()?;
-                    /*
+                    let state = self.cloned_state()?;
+                    let log_store = self.log_store()?;
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
                             state
@@ -1512,7 +1511,6 @@ impl RawDeltaTable {
                         let remove_action = Action::Remove(old_add.remove_action(true));
                         actions.push(remove_action);
                     }
-                    */
 
                     // Update metadata with new schema
                     if &schema != existing_schema.as_ref() {
