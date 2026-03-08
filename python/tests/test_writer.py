@@ -2678,3 +2678,92 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
     assert dt.version() == 1, "Expected a write to have occurred!"
+
+
+@pytest.mark.pyarrow
+def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
+    """
+    Calling create_write_transaction with mode="overwrite" and non-empty
+    partition_by and partition_filters which match an existing partition
+    doesn't overwrite that partition but instead append.
+
+    <https://github.com/delta-io/delta-rs/issues/4126>
+    """
+    from arro3.io import write_parquet
+
+    from deltalake.transaction import AddAction
+
+    schema = Schema(
+        fields=[
+            Field("ds", type=PrimitiveType("string"), nullable=False),
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("price", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(
+        tmp_path,
+        schema,
+        partition_by=["ds"],
+        name="test_name",
+        description="test_desc",
+    )
+    assert dt.version() == 0
+
+    data = Table.from_pydict(
+        {
+            "ds": Array(["2026-03-08"], DataType.string()),
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(dt, data, mode="append")
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
+    assert 1 == len(dt.file_uris()), (
+        "There should only be one file in the table at this point"
+    )
+
+    # Technically this test doesn't need to write data in order to do any
+    # validation, but I think it's good practice to do a data validation for
+    # the ticket too
+    new_file_path = tmp_path.joinpath("ds=2026-01-01")
+    new_file_path.mkdir(parents=True)
+    new_file_path = new_file_path.joinpath("foo.parquet")
+    write_parquet(data, new_file_path)
+
+    action = AddAction(
+        "/ds=2026-01-01/foo.parquet",
+        new_file_path.stat().st_size,
+        {"ds": "2026-01-01"},
+        0,
+        True,
+        "{}",
+    )
+    dt.create_write_transaction(
+        actions=[action], mode="overwrite", schema=schema, partition_by=["ds"]
+    )
+
+    # Reload the table
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 2, (
+        "Expected a write to have occurred after create_write_transaction!"
+    )
+
+    assert dt.partitions() == [{"ds": "2026-01-01"}], (
+        "There were more partitions than expected"
+    )
+    assert 1 == len(dt.file_uris()), (
+        "An overwrite was specified so there should only be one file"
+    )
+    loaded_data = Table.from_arrow(dt.to_pyarrow_table())
+    expected_data = Table.from_pydict(
+        {
+            "ds": Array(["2026-01-01"], DataType.string()),
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+    assert expected_data == loaded_data, "The table contents do not match expectations"
