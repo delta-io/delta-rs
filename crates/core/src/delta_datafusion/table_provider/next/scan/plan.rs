@@ -415,7 +415,7 @@ fn process_predicate<'a>(
     let only_partition_refs = expr.column_refs().iter().all(|c| cols.contains(&c.name));
     let any_partition_refs =
         only_partition_refs || expr.column_refs().iter().any(|c| cols.contains(&c.name));
-    let has_file_id = expr.column_refs().iter().any(|c| file_id_column == &c.name);
+    let has_file_id = expr.column_refs().iter().any(|c| file_id_column == c.name);
 
     if has_file_id {
         // file-id filters cannot be evaluated in kernel and must not be pushed to parquet.

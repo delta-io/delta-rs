@@ -95,7 +95,6 @@ pub mod delta_datafusion;
 pub mod writer;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 use url::Url;
 

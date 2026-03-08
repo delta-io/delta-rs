@@ -119,20 +119,15 @@ where
 /// This is an opt-in knob on operations that accept `with_session_state(...)`. Defaults to
 /// `InternalDefaults` to preserve existing behavior.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionFallbackPolicy {
     /// If the provided session is not a `SessionState`, log a warning and use internal defaults.
+    #[default]
     InternalDefaults,
     /// Derive a `SessionState` from the `Session` trait (runtime/config/UDF registries).
     DeriveFromTrait,
     /// Return an error if the provided session is not a `SessionState`.
     RequireSessionState,
-}
-
-impl Default for SessionFallbackPolicy {
-    fn default() -> Self {
-        Self::InternalDefaults
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

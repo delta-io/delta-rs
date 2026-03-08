@@ -249,7 +249,7 @@ where
                 // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
-                    &this.scan_config,
+                    this.scan_config,
                     parsed_stats,
                     predicate_columns.as_ref(),
                 );
