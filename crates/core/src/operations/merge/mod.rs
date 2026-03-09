@@ -1735,6 +1735,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
+    use dashmap::DashSet;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::common::{Column, ScalarValue, TableReference, ToDFSchema};
     use datafusion::logical_expr::Expr;
@@ -1743,6 +1744,8 @@ mod tests {
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+    use datafusion::physical_plan::metrics::MetricBuilder;
     use datafusion::prelude::*;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
@@ -1752,6 +1755,9 @@ mod tests {
     use serde_json::json;
     use std::ops::Neg;
     use std::sync::Arc;
+    use url::Url;
+
+    use crate::delta_datafusion::{DeltaScanConfigBuilder, FILE_ID_COLUMN_DEFAULT, PATH_COLUMN};
 
     use super::MergeMetrics;
 
@@ -1766,6 +1772,281 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    #[tokio::test]
+    async fn test_merge_early_filter_does_not_row_filter_rewritten_files() {
+        // The MERGE early filter is intended for file skipping (kernel scan), not for row-level
+        // filtering / parquet pushdown. If it is forwarded as scan filters, rewritten files would
+        // lose rows that do not match the early filter.
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+
+        // Source has a single row, making the generalized early filter tight enough that a row
+        // filter would drop other rows in the rewritten file (e.g. B in the same partition file).
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![999])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-01"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let predicate = col("target.id")
+            .eq(col("source.id"))
+            .and(col("target.modified").eq(col("source.modified")));
+
+        let (table, metrics) = table
+            .merge(source, predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 999   | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_metrics_derive_skipped_files_when_scan_skip_metric_missing() {
+        // Next-provider scan metrics currently expose scanned-file counters but not skipped/pruned
+        // counters. MERGE should derive skipped files as (pre-merge total files - scanned files).
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        let pre_merge_files = table.snapshot().unwrap().log_data().num_files();
+        assert_eq!(pre_merge_files, 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![999])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-01"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+        let predicate = col("target.id")
+            .eq(col("source.id"))
+            .and(col("target.modified").eq(col("source.modified")));
+
+        let (_table, metrics) = table
+            .merge(source, predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(
+            metrics.num_target_files_skipped_during_scan,
+            pre_merge_files.saturating_sub(metrics.num_target_files_scanned)
+        );
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
+    #[test]
+    fn test_build_file_skipping_predicates_splits_conjunctions() {
+        let target = TableReference::parse_str("target");
+        let filter = col(Column::new(Some(target.clone()), "id"))
+            .eq(lit("A"))
+            .and(col(Column::new(Some(target.clone()), "modified")).eq(lit("2021-02-01")));
+
+        let predicates = super::build_file_skipping_predicates(Some(filter), Some("target"));
+
+        assert_eq!(predicates.len(), 2);
+        assert_eq!(
+            predicates[0],
+            col(Column::new_unqualified("id")).eq(lit("A"))
+        );
+        assert_eq!(
+            predicates[1],
+            col(Column::new_unqualified("modified")).eq(lit("2021-02-01"))
+        );
+    }
+
+    #[test]
+    fn test_build_file_skipping_predicates_none_returns_empty() {
+        let predicates = super::build_file_skipping_predicates(None, Some("target"));
+        assert!(predicates.is_empty());
+    }
+
+    #[test]
+    fn test_get_metric_any_or_returns_first_matching_metric() {
+        let metrics = ExecutionPlanMetricsSet::new();
+        MetricBuilder::new(&metrics)
+            .global_counter("files_scanned")
+            .add(7);
+        MetricBuilder::new(&metrics)
+            .global_counter("count_files_scanned")
+            .add(3);
+
+        let value = super::get_metric_any_or(
+            &metrics.clone_inner(),
+            &["count_files_scanned", "files_scanned"],
+            || 0,
+        );
+        assert_eq!(value, 3);
+    }
+
+    #[test]
+    fn test_get_metric_any_or_uses_fallback_when_missing() {
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let value = super::get_metric_any_or(
+            &metrics.clone_inner(),
+            &["count_files_pruned", "files_pruned"],
+            || 11,
+        );
+        assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn test_merge_remove_action_matching_normalizes_relative_paths() {
+        let survivors = Arc::new(DashSet::new());
+        survivors.insert("memory://merge-table/part-0001.parquet".to_string());
+        let table_root = Url::parse("memory://merge-table").unwrap();
+
+        assert!(
+            super::should_remove_rewritten_file(&survivors, "part-0001.parquet", &table_root,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_remove_action_matching_does_not_false_positive_on_unrelated_relative_path() {
+        let survivors = Arc::new(DashSet::new());
+        survivors.insert("memory://merge-table/part-9999.parquet".to_string());
+        let table_root = Url::parse("memory://merge-table").unwrap();
+
+        assert!(
+            !super::should_remove_rewritten_file(&survivors, "part-0001.parquet", &table_root,)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_merge_remove_action_matching_returns_error_when_root_cannot_join_path() {
+        let survivors = Arc::new(DashSet::new());
+        let table_root = Url::parse("mailto:owner@example.com").unwrap();
+
+        let err = super::should_remove_rewritten_file(&survivors, "part-0001.parquet", &table_root)
+            .expect_err("expected invalid path normalization to fail");
+        assert!(
+            err.to_string().contains("Failed to normalize"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_rewrite_removes_old_file_and_avoids_duplicate_rows() {
+        let (table, source) = setup().await;
+        let original_paths: Vec<String> = table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .into_iter()
+            .map(|add| add.path().to_string())
+            .collect();
+        assert!(!original_paths.is_empty());
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert!(metrics.num_target_files_added >= 1);
+        assert!(metrics.num_target_files_removed >= 1);
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
+        let removed_paths: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Remove(remove) => Some(remove.path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!removed_paths.is_empty());
+        assert!(
+            original_paths
+                .iter()
+                .any(|path| removed_paths.contains(path)),
+            "Expected at least one rewritten source file to be removed",
+        );
+
+        let table_for_query =
+            DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
+        let ctx = SessionContext::new();
+        table_for_query
+            .update_datafusion_session(&ctx.state())
+            .unwrap();
+        ctx.register_table("test", table_for_query.table_provider().await.unwrap())
+            .unwrap();
+        let duplicate_rows = ctx
+            .sql(
+                "SELECT id, value, modified, COUNT(*) AS cnt \
+                 FROM test \
+                 GROUP BY id, value, modified \
+                 HAVING cnt > 1",
+            )
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let duplicate_count: usize = duplicate_rows.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(
+            duplicate_count, 0,
+            "Expected merge output without duplicate rows"
+        );
     }
 
     // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
@@ -1927,6 +2208,201 @@ mod tests {
             },
             other => panic!("expected binary expr, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_user_file_id_column_collision() {
+        let delta_schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "modified".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                FILE_ID_COLUMN_DEFAULT.to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema)
+            .await
+            .unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, false),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(FILE_ID_COLUMN_DEFAULT, ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 2])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-02",
+                ])),
+                Arc::new(arrow::array::StringArray::from(vec!["alpha", "beta"])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        let file_column_name = DeltaScanConfigBuilder::default()
+            .with_file_column(true)
+            .build(table.snapshot().unwrap().snapshot())
+            .unwrap()
+            .file_column_name
+            .unwrap();
+        assert_ne!(file_column_name, FILE_ID_COLUMN_DEFAULT);
+
+        let ctx = SessionContext::new();
+        let source_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-03-01"])),
+                Arc::new(arrow::array::StringArray::from(vec!["beta-src"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(source_batch).unwrap();
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert!(table.snapshot().unwrap().log_data().num_files() >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_metrics_select_target_scan_when_source_is_delta_with_same_file_column_name()
+    {
+        let target_dir = tempfile::tempdir().unwrap();
+        let target_url = Url::from_directory_path(target_dir.path()).unwrap();
+        let target_table = DeltaTable::try_from_url(target_url)
+            .await
+            .unwrap()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await
+            .unwrap();
+        let target_table = write_data(target_table, &get_arrow_schema(&None)).await;
+        assert_eq!(target_table.snapshot().unwrap().log_data().num_files(), 1);
+
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_url = Url::from_directory_path(source_dir.path()).unwrap();
+        let source_table = DeltaTable::try_from_url(source_url)
+            .await
+            .unwrap()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await
+            .unwrap();
+        let source_schema = get_arrow_schema(&None);
+        let source_batch_1 = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-03-01"])),
+            ],
+        )
+        .unwrap();
+        let source_batch_2 = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![30])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-03-02"])),
+            ],
+        )
+        .unwrap();
+
+        let source_table = source_table
+            .write(vec![source_batch_1])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        let source_table = source_table
+            .write(vec![source_batch_2])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(source_table.snapshot().unwrap().log_data().num_files(), 2);
+
+        let ctx = SessionContext::new();
+        source_table
+            .update_datafusion_session(&ctx.state())
+            .unwrap();
+        ctx.register_table(
+            "source_table",
+            source_table
+                .table_provider()
+                .with_file_column(PATH_COLUMN)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        let source = ctx
+            .sql("SELECT id, value, modified FROM source_table")
+            .await
+            .unwrap();
+
+        let (_table, metrics) = target_table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        // Target has exactly one file to scan; source has two. If we accidentally read
+        // source scan metrics here, this assertion fails with 2.
+        assert_eq!(metrics.num_target_files_scanned, 1);
     }
 
     #[tokio::test]
