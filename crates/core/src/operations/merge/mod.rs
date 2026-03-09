@@ -46,6 +46,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
+use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
     Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
 };
@@ -53,7 +54,7 @@ use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
 };
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
-use datafusion::physical_plan::metrics::MetricBuilder;
+use datafusion::physical_plan::metrics::{MetricBuilder, MetricsSet};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
     execution::context::SessionState,
@@ -78,9 +79,9 @@ use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, ge
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::utils::coerce_predicate_literals;
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder, DeltaSessionExt,
-    DeltaTableProvider, SessionFallbackPolicy, SessionResolveContext, create_session,
-    resolve_session_state,
+    DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaScanExec, DeltaScanNext,
+    SessionFallbackPolicy, SessionResolveContext, create_session, normalize_path_as_file_id,
+    resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
@@ -118,6 +119,11 @@ const TARGET_COPY_METRIC: &str = "num_copied_rows";
 const TARGET_INSERTED_METRIC: &str = "num_target_inserted_rows";
 const TARGET_UPDATED_METRIC: &str = "num_target_updated_rows";
 const TARGET_DELETED_METRIC: &str = "num_target_deleted_rows";
+const TARGET_FILES_SCANNED_METRIC: &str = "count_files_scanned";
+const TARGET_FILES_SCANNED_METRIC_LEGACY: &str = "files_scanned";
+const TARGET_FILES_PRUNED_METRIC: &str = "count_files_pruned";
+const TARGET_FILES_SKIPPED_METRIC: &str = "count_files_skipped";
+const TARGET_FILES_PRUNED_METRIC_LEGACY: &str = "files_pruned";
 
 const SOURCE_COUNT_ID: &str = "merge_source_count";
 const TARGET_COUNT_ID: &str = "merge_target_count";
@@ -848,19 +854,24 @@ async fn execute(
         }),
     });
 
-    let scan_config = DeltaScanConfigBuilder::default()
+    let merge_scan_config = DeltaScanConfigBuilder::default()
         .with_file_column(true)
-        .with_parquet_pushdown(false)
-        .with_schema(snapshot.input_schema())
         .build(&snapshot)?;
+    let file_column = Arc::new(
+        merge_scan_config
+            .file_column_name
+            .expect("file column name must be set when file column is enabled"),
+    );
 
-    let target_provider = Arc::new(DeltaTableProvider::try_new(
-        snapshot.clone(),
-        log_store.clone(),
-        scan_config.clone(),
-    )?);
-
-    let target_provider = provider_as_source(target_provider);
+    // Build an initial target scan (no early filter yet) so we can resolve and analyze the join
+    // predicate before constructing file-skipping predicates.
+    let target_provider = provider_as_source(
+        DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_log_store(log_store.clone())
+            .with_file_column(file_column.as_str())
+            .await?,
+    );
     let target =
         LogicalPlanBuilder::scan(target_name.clone(), target_provider.clone(), None)?.build()?;
 
@@ -908,24 +919,25 @@ async fn execute(
 
     debug!("Using target subset filter: {commit_predicate:?}");
 
-    let file_column = Arc::new(scan_config.file_column_name.clone().unwrap());
-    // Need to manually push this filter into the scan... We want to PRUNE files not FILTER RECORDS
-    let target = match target_subset_filter {
-        Some(filter) => {
-            let filter = match &target_alias {
-                Some(alias) => remove_table_alias(filter, alias),
-                None => filter,
-            };
-            LogicalPlanBuilder::scan_with_filters(
-                target_name.clone(),
-                target_provider,
-                None,
-                vec![filter],
-            )?
-            .build()?
+    // Rebuild the target scan provider, wiring the early filter only as file-skipping predicates.
+    // Do not forward it as scan filters which could become row filtering / parquet pushdown.
+    let file_skipping_predicates =
+        build_file_skipping_predicates(target_subset_filter, target_alias.as_deref());
+
+    let target_provider = {
+        let mut builder = DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_log_store(log_store.clone())
+            .with_file_column(file_column.as_str());
+
+        if !file_skipping_predicates.is_empty() {
+            builder = builder.with_file_skipping_predicates(file_skipping_predicates);
         }
-        None => LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?,
+
+        provider_as_source(builder.await?)
     };
+
+    let target = LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?;
 
     let source = DataFrame::new(state.clone(), source.clone());
     let source = source.with_column(SOURCE_COLUMN, lit(true))?;
@@ -1322,7 +1334,7 @@ async fn execute(
         node: Arc::new(MergeBarrier {
             input: new_columns.clone(),
             expr: distribute_expr,
-            file_column,
+            file_column: Arc::clone(&file_column),
         }),
     });
 
@@ -1350,7 +1362,7 @@ async fn execute(
                     .when(col(TARGET_UPDATE_COLUMN).is_null(), lit("update"))
                     .end()?,
             )?
-            .drop_columns(&["__delta_rs_path"])? // WEIRD bug caused by interaction with unnest_columns, has to be dropped otherwise throws schema error
+            .drop_columns(&[file_column.as_str()])? // Required to avoid a schema error interacting with unnest_columns
             .with_column(
                 "__delta_rs_update_expanded",
                 when(
@@ -1399,9 +1411,15 @@ async fn execute(
 
     let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
     let source_count = find_metric_node(SOURCE_COUNT_ID, &write).ok_or_else(err)?;
+    let target_count = find_metric_node(TARGET_COUNT_ID, &write).ok_or_else(err)?;
     let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
-    let scan_count = find_node::<DeltaScan>(&write).ok_or_else(err)?;
+
+    // Read scan metrics from the target branch. If target metric wiring is unexpectedly absent,
+    // fall back to the first scan found in the full plan to preserve backward compatibility.
+    let scan_count = find_node::<DeltaScanExec>(&target_count)
+        .or_else(|| find_node::<DeltaScanExec>(&write))
+        .ok_or_else(err)?;
 
     let table_partition_cols = current_metadata.partition_columns().clone();
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
@@ -1434,12 +1452,20 @@ async fn execute(
         .unwrap()
         .survivors();
 
-    {
-        for action in snapshot.log_data() {
-            if survivors.contains(action.path().as_ref()) {
-                metrics.num_target_files_removed += 1;
-                actions.push(action.remove_action(true).into());
-            }
+    let table_root = snapshot
+        .snapshot()
+        .scan_builder()
+        .build()?
+        .table_root()
+        .clone();
+
+    for action in snapshot.log_data() {
+        let rel_path = action.path();
+        let rel_path_str = rel_path.as_ref();
+
+        if should_remove_rewritten_file(&survivors, rel_path_str, &table_root)? {
+            metrics.num_target_files_removed += 1;
+            actions.push(action.remove_action(true).into());
         }
     }
 
@@ -1455,8 +1481,45 @@ async fn execute(
     metrics.num_output_rows = metrics.num_target_rows_inserted
         + metrics.num_target_rows_updated
         + metrics.num_target_rows_copied;
-    metrics.num_target_files_scanned = get_metric(&scan_count_metrics, "files_scanned");
-    metrics.num_target_files_skipped_during_scan = get_metric(&scan_count_metrics, "files_pruned");
+    let target_files_scanned_metric_names = [
+        TARGET_FILES_SCANNED_METRIC,
+        TARGET_FILES_SCANNED_METRIC_LEGACY,
+    ];
+    metrics.num_target_files_scanned = get_metric_any_or(
+        &scan_count_metrics,
+        &target_files_scanned_metric_names,
+        || {
+            warn!(
+                %operation_id,
+                metric_names = ?target_files_scanned_metric_names,
+                "Missing target scan metric; defaulting target files scanned to zero"
+            );
+            0
+        },
+    );
+
+    let target_files_skipped_metric_names = [
+        TARGET_FILES_PRUNED_METRIC,
+        TARGET_FILES_SKIPPED_METRIC,
+        TARGET_FILES_PRUNED_METRIC_LEGACY,
+    ];
+    metrics.num_target_files_skipped_during_scan = get_metric_any_or(
+        &scan_count_metrics,
+        &target_files_skipped_metric_names,
+        || {
+            let derived = snapshot
+                .log_data()
+                .num_files()
+                .saturating_sub(metrics.num_target_files_scanned);
+            warn!(
+                %operation_id,
+                metric_names = ?target_files_skipped_metric_names,
+                derived,
+                "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+            );
+            derived
+        },
+    );
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
@@ -1550,6 +1613,51 @@ fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> Del
     Ok(simplifier.simplify(expr)?)
 }
 
+fn build_file_skipping_predicates(
+    target_subset_filter: Option<Expr>,
+    target_alias: Option<&str>,
+) -> Vec<Expr> {
+    let Some(filter) = target_subset_filter else {
+        return Vec::new();
+    };
+
+    let filter = match target_alias {
+        Some(alias) => remove_table_alias(filter, alias),
+        None => filter,
+    };
+
+    split_conjunction_owned(filter)
+}
+
+fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
+    names
+        .iter()
+        .find_map(|name| metrics.sum_by_name(name).map(|metric| metric.as_usize()))
+}
+
+fn get_metric_any_or(
+    metrics: &MetricsSet,
+    names: &[&str],
+    fallback: impl FnOnce() -> usize,
+) -> usize {
+    get_metric_any(metrics, names).unwrap_or_else(fallback)
+}
+
+fn should_remove_rewritten_file(
+    survivors: &barrier::BarrierSurvivorSet,
+    rel_path: &str,
+    table_root: &url::Url,
+) -> DeltaResult<bool> {
+    // Keep a defensive fallback to relative paths to avoid representation drift.
+    if survivors.contains(rel_path) {
+        return Ok(true);
+    }
+
+    // Next-provider `file_id` values are fully-qualified URLs; canonicalize Add.path against
+    // the snapshot table root before comparing against barrier survivors.
+    let full_id = normalize_path_as_file_id(rel_path, table_root, "merge remove")?;
+    Ok(survivors.contains(full_id.as_str()))
+}
 impl std::future::IntoFuture for MergeBuilder {
     type Output = DeltaResult<(DeltaTable, MergeMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -1577,7 +1685,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 },
             )?;
 
-            state.ensure_log_store_registered(this.log_store.as_ref())?;
+            update_datafusion_session(&state, this.log_store.as_ref(), Some(operation_id))?;
 
             let (snapshot, metrics) = execute(
                 this.predicate,
