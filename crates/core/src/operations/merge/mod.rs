@@ -79,8 +79,8 @@ use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, ge
 use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::delta_datafusion::utils::coerce_predicate_literals;
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaColumn, DeltaScanConfigBuilder, DeltaScanExec, DeltaScanNext,
-    SessionFallbackPolicy, SessionResolveContext, create_session, normalize_path_as_file_id,
+    DataFusionMixins, DeltaColumn, DeltaScanExec, DeltaScanNext, SessionFallbackPolicy,
+    SessionResolveContext, create_session, normalize_path_as_file_id, resolve_file_column_name,
     resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
@@ -854,17 +854,11 @@ async fn execute(
         }),
     });
 
-    let merge_scan_config = DeltaScanConfigBuilder::default()
-        .with_file_column(true)
-        .build(&snapshot)?;
-    let file_column = Arc::new(
-        merge_scan_config
-            .file_column_name
-            .expect("file column name must be set when file column is enabled"),
-    );
+    let file_column = Arc::new(resolve_file_column_name(
+        snapshot.input_schema().as_ref(),
+        None,
+    )?);
 
-    // Build an initial target scan (no early filter yet) so we can resolve and analyze the join
-    // predicate before constructing file-skipping predicates.
     let target_provider = provider_as_source(
         DeltaScanNext::builder()
             .with_eager_snapshot(snapshot.clone())
@@ -919,8 +913,7 @@ async fn execute(
 
     debug!("Using target subset filter: {commit_predicate:?}");
 
-    // Rebuild the target scan provider, wiring the early filter only as file-skipping predicates.
-    // Do not forward it as scan filters which could become row filtering / parquet pushdown.
+    // Apply the early filter only to file skipping.
     let file_skipping_predicates =
         build_file_skipping_predicates(target_subset_filter, target_alias.as_deref());
 
@@ -1362,7 +1355,7 @@ async fn execute(
                     .when(col(TARGET_UPDATE_COLUMN).is_null(), lit("update"))
                     .end()?,
             )?
-            .drop_columns(&[file_column.as_str()])? // Required to avoid a schema error interacting with unnest_columns
+            .drop_columns(&[file_column.as_str()])? // Avoid unnest schema errors.
             .with_column(
                 "__delta_rs_update_expanded",
                 when(
@@ -1415,8 +1408,7 @@ async fn execute(
     let op_count = find_metric_node(OUTPUT_COUNT_ID, &write).ok_or_else(err)?;
     let barrier = find_node::<MergeBarrierExec>(&write).ok_or_else(err)?;
 
-    // Read scan metrics from the target branch. If target metric wiring is unexpectedly absent,
-    // fall back to the first scan found in the full plan to preserve backward compatibility.
+    // Prefer target-branch scan metrics.
     let scan_count = find_node::<DeltaScanExec>(&target_count)
         .or_else(|| find_node::<DeltaScanExec>(&write))
         .ok_or_else(err)?;
@@ -1507,10 +1499,18 @@ async fn execute(
         &scan_count_metrics,
         &target_files_skipped_metric_names,
         || {
-            let derived = snapshot
-                .log_data()
-                .num_files()
-                .saturating_sub(metrics.num_target_files_scanned);
+            let total_files = snapshot.log_data().num_files();
+            let (derived, impossible_state) =
+                derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
+            if impossible_state {
+                warn!(
+                    %operation_id,
+                    total_files,
+                    scanned_files = metrics.num_target_files_scanned,
+                    metric_names = ?target_files_skipped_metric_names,
+                    "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
+                );
+            }
             warn!(
                 %operation_id,
                 metric_names = ?target_files_skipped_metric_names,
@@ -1621,12 +1621,18 @@ fn build_file_skipping_predicates(
         return Vec::new();
     };
 
+    // Strip the target alias before binding scan predicates.
     let filter = match target_alias {
         Some(alias) => remove_table_alias(filter, alias),
         None => filter,
     };
 
     split_conjunction_owned(filter)
+}
+
+fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize, bool) {
+    let impossible_state = scanned_files > total_files;
+    (total_files.saturating_sub(scanned_files), impossible_state)
 }
 
 fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
@@ -1648,13 +1654,11 @@ fn should_remove_rewritten_file(
     rel_path: &str,
     table_root: &url::Url,
 ) -> DeltaResult<bool> {
-    // Keep a defensive fallback to relative paths to avoid representation drift.
     if survivors.contains(rel_path) {
         return Ok(true);
     }
 
-    // Next-provider `file_id` values are fully-qualified URLs; canonicalize Add.path against
-    // the snapshot table root before comparing against barrier survivors.
+    // Compare against normalized file IDs.
     let full_id = normalize_path_as_file_id(rel_path, table_root, "merge remove")?;
     Ok(survivors.contains(full_id.as_str()))
 }
@@ -1757,7 +1761,7 @@ mod tests {
     use std::sync::Arc;
     use url::Url;
 
-    use crate::delta_datafusion::{DeltaScanConfigBuilder, FILE_ID_COLUMN_DEFAULT, PATH_COLUMN};
+    use crate::delta_datafusion::{DataFusionMixins, PATH_COLUMN, resolve_file_column_name};
 
     use super::MergeMetrics;
 
@@ -1776,18 +1780,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_early_filter_does_not_row_filter_rewritten_files() {
-        // The MERGE early filter is intended for file skipping (kernel scan), not for row-level
-        // filtering / parquet pushdown. If it is forwarded as scan filters, rewritten files would
-        // lose rows that do not match the early filter.
-
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
 
-        // Source has a single row, making the generalized early filter tight enough that a row
-        // filter would drop other rows in the rewritten file (e.g. B in the same partition file).
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1832,8 +1830,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_metrics_derive_skipped_files_when_scan_skip_metric_missing() {
-        // Next-provider scan metrics currently expose scanned-file counters but not skipped/pruned
-        // counters. MERGE should derive skipped files as (pre-merge total files - scanned files).
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
@@ -1926,6 +1922,20 @@ mod tests {
             || 11,
         );
         assert_eq!(value, 11);
+    }
+
+    #[test]
+    fn test_derive_skipped_file_count_uses_difference_when_scanned_within_total() {
+        let (derived, impossible_state) = super::derive_skipped_file_count(5, 3);
+        assert_eq!(derived, 2);
+        assert!(!impossible_state);
+    }
+
+    #[test]
+    fn test_derive_skipped_file_count_clamps_when_scanned_exceeds_total() {
+        let (derived, impossible_state) = super::derive_skipped_file_count(2, 5);
+        assert_eq!(derived, 0);
+        assert!(impossible_state);
     }
 
     #[test]
@@ -2211,7 +2221,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_merge_with_user_file_id_column_collision() {
+    async fn test_merge_with_user_path_column_namespace_collision() {
         let delta_schema = vec![
             StructField::new(
                 "id".to_string(),
@@ -2229,7 +2239,12 @@ mod tests {
                 true,
             ),
             StructField::new(
-                FILE_ID_COLUMN_DEFAULT.to_string(),
+                PATH_COLUMN.to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                format!("{PATH_COLUMN}_1"),
                 DataType::Primitive(PrimitiveType::String),
                 true,
             ),
@@ -2245,7 +2260,8 @@ mod tests {
             Field::new("id", ArrowDataType::Utf8, false),
             Field::new("value", ArrowDataType::Int32, true),
             Field::new("modified", ArrowDataType::Utf8, true),
-            Field::new(FILE_ID_COLUMN_DEFAULT, ArrowDataType::Utf8, true),
+            Field::new(PATH_COLUMN, ArrowDataType::Utf8, true),
+            Field::new(format!("{PATH_COLUMN}_1"), ArrowDataType::Utf8, true),
         ]));
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -2257,6 +2273,7 @@ mod tests {
                     "2021-02-02",
                 ])),
                 Arc::new(arrow::array::StringArray::from(vec!["alpha", "beta"])),
+                Arc::new(arrow::array::StringArray::from(vec!["alpha-1", "beta-1"])),
             ],
         )
         .unwrap();
@@ -2266,13 +2283,12 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await
             .unwrap();
-        let file_column_name = DeltaScanConfigBuilder::default()
-            .with_file_column(true)
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap()
-            .file_column_name
-            .unwrap();
-        assert_ne!(file_column_name, FILE_ID_COLUMN_DEFAULT);
+        let file_column_name = resolve_file_column_name(
+            table.snapshot().unwrap().snapshot().input_schema().as_ref(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(file_column_name, format!("{PATH_COLUMN}_2"));
 
         let ctx = SessionContext::new();
         let source_batch = RecordBatch::try_new(
@@ -2282,6 +2298,7 @@ mod tests {
                 Arc::new(arrow::array::Int32Array::from(vec![20])),
                 Arc::new(arrow::array::StringArray::from(vec!["2021-03-01"])),
                 Arc::new(arrow::array::StringArray::from(vec!["beta-src"])),
+                Arc::new(arrow::array::StringArray::from(vec!["beta-src-1"])),
             ],
         )
         .unwrap();
@@ -2400,8 +2417,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Target has exactly one file to scan; source has two. If we accidentally read
-        // source scan metrics here, this assertion fails with 2.
         assert_eq!(metrics.num_target_files_scanned, 1);
     }
 
