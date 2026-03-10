@@ -283,7 +283,10 @@ impl LogicalFileView {
     }
 
     /// Converts this file view into an Add action for log operations.
-    #[deprecated(since = "0.31.0", note = "Use Arrow arrays directly instead of converting to Add actions.")]
+    #[deprecated(
+        since = "0.31.0",
+        note = "Use Arrow arrays directly instead of converting to Add actions."
+    )]
     pub fn add_action(&self) -> Add {
         Add {
             path: self.path().to_string(),
