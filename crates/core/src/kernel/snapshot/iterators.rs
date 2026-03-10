@@ -283,6 +283,7 @@ impl LogicalFileView {
     }
 
     /// Converts this file view into an Add action for log operations.
+    #[deprecated(since = "0.31.0", note = "Use Arrow arrays directly instead of converting to Add actions.")]
     pub fn add_action(&self) -> Add {
         Add {
             path: self.path().to_string(),
@@ -300,6 +301,7 @@ impl LogicalFileView {
     }
 
     /// Converts this file view into a Remove action for log operations.
+    #[deprecated(since = "0.31.0", note = "Use Arrow arrays directly instead of converting to Add actions.")]
     pub fn remove_action(&self, data_change: bool) -> Remove {
         Remove {
             // TODO use the raw (still encoded) path here once we reconciled serde ...
