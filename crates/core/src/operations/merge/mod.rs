@@ -1444,12 +1444,7 @@ async fn execute(
         .unwrap()
         .survivors();
 
-    let table_root = snapshot
-        .snapshot()
-        .scan_builder()
-        .build()?
-        .table_root()
-        .clone();
+    let table_root = snapshot.table_configuration().table_root().clone();
 
     for action in snapshot.log_data() {
         let rel_path = action.path();
