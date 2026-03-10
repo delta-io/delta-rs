@@ -97,6 +97,7 @@ source = ["deltalake"]
 
 [dependency-groups]
 dev = [
+    "arro3-io",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",

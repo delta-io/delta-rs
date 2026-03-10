@@ -4,7 +4,13 @@ from typing import TYPE_CHECKING
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 
-from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    PostCommitHookProperties,
+    TableFeatures,
+    write_deltalake,
+)
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
@@ -559,6 +565,32 @@ def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_metadata_with_post_commithook_properties(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+    post_commithook_properties = PostCommitHookProperties(cleanup_expired_logs=False)
+
+    dt.alter.set_table_properties(
+        {"delta.appendOnly": "false"},
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_name(
+        "hook_enabled_table",
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_description(
+        "table description with hook props",
+        post_commithook_properties=post_commithook_properties,
+    )
+
+    metadata = dt.metadata()
+    assert metadata.configuration["delta.appendOnly"] == "false"
+    assert metadata.name == "hook_enabled_table"
+    assert metadata.description == "table description with hook props"
 
 
 def test_set_table_name_overwrite(tmp_path: pathlib.Path, sample_table: Table):

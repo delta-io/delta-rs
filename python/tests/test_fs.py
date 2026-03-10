@@ -177,7 +177,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
     table_path = "abfs://deltars/roundtrip"
 
@@ -200,7 +200,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
     table_path = "abfs://deltars/roundtrip2"
 
@@ -223,7 +223,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table"):
     table_path = "abfs://deltars/roundtrip3"
     write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_sas_creds)
@@ -236,7 +236,7 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table")
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_decoded_sas(
     azurite_sas_creds, sample_data_pyarrow: "pa.Table"
 ):

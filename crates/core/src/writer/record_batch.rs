@@ -32,6 +32,7 @@ use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::MetadataExt as _;
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
@@ -83,6 +84,8 @@ impl RecordBatchWriter {
             |_| HashMap::new(),
             |snapshot| snapshot.metadata().configuration().clone(),
         );
+
+        let schema = normalize_for_delta(&schema);
 
         Ok(Self {
             storage: delta_table.object_store(),
@@ -261,6 +264,17 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         // Set the should_evolve flag for later in case the writer should perform schema evolution
         // on its flush_and_commit
         self.should_evolve = mode == WriteMode::MergeSchema;
+
+        let values = if values.schema() != self.arrow_schema_ref {
+            let normalized = normalize_for_delta(&values.schema());
+            if normalized != values.schema() {
+                crate::kernel::schema::cast::cast_record_batch(&values, normalized, true, false)?
+            } else {
+                values
+            }
+        } else {
+            values
+        };
 
         for result in self.divide_by_partition_values(&values)? {
             let maybe_evolved_schema = self

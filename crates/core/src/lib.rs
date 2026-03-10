@@ -125,21 +125,21 @@ compile_error!("You must enable at least one of the features: `rustls` or `nativ
 /// Creates and loads a DeltaTable from the given URL with current metadata.
 /// Infers the storage backend to use from the scheme in the given table URL.
 ///
-/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+/// Will fail fast if specified `table_url` is a local path but doesn't exist.
 pub async fn open_table(table_url: Url) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_url(table_url)?.load().await?;
+    let table = builder_from_valid_url(table_url)?.load().await?;
     Ok(table)
 }
 
 /// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
 /// `StorageService`.
 ///
-/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+/// Will fail fast if specified `table_url` is a local path but doesn't exist.
 pub async fn open_table_with_storage_options(
     table_url: Url,
     storage_options: HashMap<String, String>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_url(table_url)?
+    let table = builder_from_valid_url(table_url)?
         .with_storage_options(storage_options)
         .load()
         .await?;
@@ -149,12 +149,12 @@ pub async fn open_table_with_storage_options(
 /// Creates a DeltaTable from the given URL and loads it with the metadata from the given version.
 /// Infers the storage backend to use from the scheme in the given table URL.
 ///
-/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+/// Will fail fast if specified `table_url` is a local path but doesn't exist.
 pub async fn open_table_with_version(
     table_url: Url,
     version: i64,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_url(table_url)?
+    let table = builder_from_valid_url(table_url)?
         .with_version(version)
         .load()
         .await?;
@@ -166,12 +166,12 @@ pub async fn open_table_with_version(
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table URL.
 ///
-/// Will fail fast if specified `table_uri` is a local path but doesn't exist.
+/// Will fail fast if specified `table_url` is a local path but doesn't exist.
 pub async fn open_table_with_ds(
     table_url: Url,
     ds: impl AsRef<str>,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_url(table_url)?
+    let table = builder_from_valid_url(table_url)?
         .with_datestring(ds)?
         .load()
         .await?;
@@ -190,6 +190,26 @@ pub fn crate_version() -> &'static str {
         .get()
         .map(|s| s.as_str())
         .unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+/// Creates `DeltaTableBuilder` from verified table url.
+/// Will fail fast if specified `table_url` is a local path but doesn't exist.
+fn builder_from_valid_url(table_url: Url) -> Result<DeltaTableBuilder, DeltaTableError> {
+    if table_url.scheme() == "file" {
+        let p = table_url
+            .to_file_path()
+            .map_err(|_| DeltaTableError::InvalidTableLocation(table_url.as_str().to_string()))?;
+
+        if !p.exists() {
+            let msg = format!(
+                "Local path \"{}\" does not exist or you don't have access!",
+                p.display(),
+            );
+            return Err(DeltaTableError::InvalidTableLocation(msg));
+        }
+    }
+
+    DeltaTableBuilder::from_url(table_url)
 }
 
 #[cfg(test)]

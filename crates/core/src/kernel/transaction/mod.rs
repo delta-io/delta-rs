@@ -614,7 +614,9 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             let mut attempt_number: usize = 1;
 
             // Handle the case where table doesn't exist yet (initial table creation)
-            let read_snapshot: EagerSnapshot = if this.table_data.is_none() {
+            let read_snapshot: EagerSnapshot = if let Some(table_data) = this.table_data {
+                table_data.eager_snapshot().clone()
+            } else {
                 debug!("committing initial table version 0");
                 match this
                     .log_store
@@ -648,8 +650,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     }
                     Err(e) => return Err(e.into()),
                 }
-            } else {
-                this.table_data.unwrap().eager_snapshot().clone()
             };
 
             let mut read_snapshot = read_snapshot;
