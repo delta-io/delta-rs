@@ -266,6 +266,20 @@ fn normalize_field(field: &FieldRef) -> Option<FieldRef> {
         .map(|dt| Arc::new(field.as_ref().clone().with_data_type(dt)))
 }
 
+fn has_nanosecond_timestamp(dt: &DataType) -> bool {
+    match dt {
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => true,
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| has_nanosecond_timestamp(f.data_type())),
+        DataType::List(inner) | DataType::FixedSizeList(inner, _) => {
+            has_nanosecond_timestamp(inner.data_type())
+        }
+        DataType::Map(entries, _) => has_nanosecond_timestamp(entries.data_type()),
+        _ => false,
+    }
+}
+
 pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     let mut changed = false;
     let new_fields: Vec<FieldRef> = schema
@@ -282,6 +296,19 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
         .collect();
 
     if changed {
+        let nanosecond_truncated_fields: Vec<&str> = schema
+            .fields()
+            .iter()
+            .filter(|f| has_nanosecond_timestamp(f.data_type()))
+            .map(|f| f.name().as_str())
+            .collect();
+        if !nanosecond_truncated_fields.is_empty() {
+            tracing::warn!(
+                fields = ?nanosecond_truncated_fields,
+                "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
+            );
+        }
+
         Arc::new(Schema::new_with_metadata(
             new_fields,
             schema.metadata().clone(),
