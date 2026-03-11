@@ -172,7 +172,7 @@ pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
     Url::parse(urlish).map_or_else(
         |_| {
             urlish
-                .split(|c| c == '?' || c == '#')
+                .split(['?', '#'])
                 .next()
                 .unwrap_or(urlish)
                 .to_string()

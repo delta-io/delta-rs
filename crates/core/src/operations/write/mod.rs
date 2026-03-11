@@ -499,8 +499,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         source,
                         &table_schema,
                         &snapshot.schema().get_generated_columns()?,
-                    )?
-                    .into();
+                    )?;
                 }
 
                 let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
@@ -666,10 +665,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     .predicate
                     .map(|p| p.resolve(&session, Arc::new(df_schema)))
                     .transpose()?;
-                let predicate_str = predicate
-                    .as_ref()
-                    .map(|pred| fmt_expr_to_sql(pred))
-                    .transpose()?;
+                let predicate_str = predicate.as_ref().map(fmt_expr_to_sql).transpose()?;
 
                 let config = this
                     .snapshot
