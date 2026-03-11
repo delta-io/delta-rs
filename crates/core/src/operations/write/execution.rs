@@ -1,3 +1,4 @@
+use std::num::NonZeroU64;
 use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::Schema;
@@ -60,6 +61,7 @@ fn channel_size() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU64;
     use std::pin::Pin;
     use std::sync::{
         Arc,
@@ -121,7 +123,7 @@ mod tests {
             schema,
             vec![],
             None,
-            Some(1024),
+            Some(NonZeroU64::new(1024).unwrap()),
             Some(1024),
             DataSkippingNumIndexedCols::NumColumns(32),
             None,
@@ -285,7 +287,7 @@ pub(crate) async fn write_execution_plan_cdc(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -332,7 +334,7 @@ pub(crate) async fn write_execution_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -400,7 +402,7 @@ pub(crate) async fn execute_non_empty_expr(
             filter,
             partition_columns.clone(),
             log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size().get() as usize),
+            Some(snapshot.table_properties().target_file_size()),
             None,
             writer_properties.clone(),
             writer_stats_config.clone(),
@@ -491,7 +493,7 @@ pub(crate) async fn write_execution_plan_v2(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -558,6 +560,7 @@ pub(crate) async fn write_exec_plan(
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
     operation_id: Option<Uuid>,
+    target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     let writer_properties = session
@@ -568,10 +571,6 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let target_file_size = table_config
-        .table_properties()
-        .target_file_size
-        .map(|v| v.get() as usize);
     let partition_columns = table_config.metadata().partition_columns().clone();
 
     if write_as_cdc {
@@ -774,7 +773,7 @@ async fn write_data_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
@@ -866,7 +865,7 @@ async fn write_cdc_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<usize>,
+    target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
