@@ -65,6 +65,41 @@ pub(crate) mod next;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 
+pub(crate) fn resolve_file_column_name(
+    input_schema: &Schema,
+    file_column_name: Option<&str>,
+) -> DeltaResult<String> {
+    let column_names: HashSet<&str> = input_schema
+        .fields()
+        .iter()
+        .map(|field| field.name().as_str())
+        .collect();
+
+    match file_column_name {
+        Some(name) => {
+            if column_names.contains(name) {
+                return Err(DeltaTableError::Generic(format!(
+                    "Unable to add file path column since column with name {name} exists"
+                )));
+            }
+
+            Ok(name.to_owned())
+        }
+        None => {
+            let prefix = PATH_COLUMN;
+            let mut idx = 0;
+            let mut name = prefix.to_owned();
+
+            while column_names.contains(name.as_str()) {
+                idx += 1;
+                name = format!("{prefix}_{idx}");
+            }
+
+            Ok(name)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Used to specify if additional metadata columns are exposed to the user
 pub struct DeltaScanConfigBuilder {
@@ -138,35 +173,10 @@ impl DeltaScanConfigBuilder {
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
     pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
-            let input_schema = snapshot.input_schema();
-            let mut column_names: HashSet<&String> = HashSet::new();
-            for field in input_schema.fields.iter() {
-                column_names.insert(field.name());
-            }
-
-            match &self.file_column_name {
-                Some(name) => {
-                    if column_names.contains(name) {
-                        return Err(DeltaTableError::Generic(format!(
-                            "Unable to add file path column since column with name {name} exists"
-                        )));
-                    }
-
-                    Some(name.to_owned())
-                }
-                None => {
-                    let prefix = PATH_COLUMN;
-                    let mut idx = 0;
-                    let mut name = prefix.to_owned();
-
-                    while column_names.contains(&name) {
-                        idx += 1;
-                        name = format!("{prefix}_{idx}");
-                    }
-
-                    Some(name)
-                }
-            }
+            Some(resolve_file_column_name(
+                snapshot.input_schema().as_ref(),
+                self.file_column_name.as_deref(),
+            )?)
         } else {
             None
         };
@@ -1323,6 +1333,32 @@ mod tests {
         use datafusion::prelude::SessionConfig;
         let config = SessionConfig::new();
         Arc::new(SessionStateBuilder::new().with_config(config).build())
+    }
+
+    #[test]
+    fn test_resolve_file_column_name_avoids_collisions() {
+        let schema = Schema::new(vec![
+            Field::new("id", ArrowDataType::Int64, false),
+            Field::new(PATH_COLUMN, ArrowDataType::Utf8, true),
+            Field::new(format!("{PATH_COLUMN}_1"), ArrowDataType::Utf8, true),
+        ]);
+
+        let resolved = resolve_file_column_name(&schema, None).unwrap();
+        assert_eq!(resolved, format!("{PATH_COLUMN}_2"));
+    }
+
+    #[test]
+    fn test_resolve_file_column_name_rejects_explicit_collision() {
+        let schema = Schema::new(vec![
+            Field::new("id", ArrowDataType::Int64, false),
+            Field::new("file_col", ArrowDataType::Utf8, true),
+        ]);
+
+        let err = resolve_file_column_name(&schema, Some("file_col")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unable to add file path column since column with name file_col exists")
+        );
     }
 
     #[tokio::test]
