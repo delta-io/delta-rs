@@ -245,7 +245,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 .transpose()?;
 
             let operation = DeltaOperation::Delete {
-                predicate: predicate.as_ref().map(|p| fmt_expr_to_sql(p)).transpose()?,
+                predicate: predicate.as_ref().map(fmt_expr_to_sql).transpose()?,
             };
 
             let (actions, metrics) = execute(
@@ -347,9 +347,11 @@ async fn execute(
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let exec_start = Instant::now();
-    let mut metrics = DeleteMetrics::default();
-    metrics.num_removed_files = 0;
-    metrics.num_added_files = 0;
+    let mut metrics = DeleteMetrics {
+        num_removed_files: 0,
+        num_added_files: 0,
+        ..Default::default()
+    };
 
     let scan_start = Instant::now();
 

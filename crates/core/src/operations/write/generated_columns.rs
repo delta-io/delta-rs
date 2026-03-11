@@ -99,7 +99,7 @@ pub fn with_generated_columns(
         projection.push(expr);
     }
 
-    Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
+    LogicalPlanBuilder::new(plan).project(projection)?.build()
 }
 
 /// Add generated column expressions to a dataframe
