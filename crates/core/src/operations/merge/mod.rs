@@ -37,7 +37,9 @@ use arrow_schema::{DataType, Field, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, ExprSchema, ScalarValue, TableReference, plan_err};
+use datafusion::common::{
+    Column, DFSchema, DFSchemaRef, ExprSchema, ScalarValue, TableReference, plan_err,
+};
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
@@ -74,6 +76,7 @@ use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::planner::DeltaPlanner;
+use crate::delta_datafusion::utils::coerce_predicate_literals;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaColumn, DeltaScan, DeltaScanConfigBuilder, DeltaSessionExt,
     DeltaTableProvider, SessionFallbackPolicy, SessionResolveContext, create_session,
@@ -888,13 +891,8 @@ async fn execute(
         )
         .await?
     }
-    .map(|e| {
-        // simplify the expression so we have
-        let props = ExecutionProps::new();
-        let simplify_context = SimplifyContext::new(&props).with_schema(target.schema().clone());
-        let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
-        simplifier.simplify(e).unwrap()
-    });
+    .map(|e| normalize_target_subset_filter(target.schema().clone(), e))
+    .transpose()?;
 
     // Predicate will be used for conflict detection
     let commit_predicate = match target_subset_filter.clone() {
@@ -1544,6 +1542,14 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     .data
 }
 
+fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
+    let expr = coerce_predicate_literals(expr, target_schema.as_ref())?;
+    let props = ExecutionProps::new();
+    let simplify_context = SimplifyContext::new(&props).with_schema(target_schema);
+    let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
+    Ok(simplifier.simplify(expr)?)
+}
+
 impl std::future::IntoFuture for MergeBuilder {
     type Output = DeltaResult<(DeltaTable, MergeMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -1622,10 +1628,10 @@ mod tests {
     use arrow_schema::DataType as ArrowDataType;
     use arrow_schema::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::common::Column;
-    use datafusion::common::TableReference;
+    use datafusion::common::{Column, ScalarValue, TableReference, ToDFSchema};
     use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::col;
+    use datafusion::logical_expr::expr::BinaryExpr;
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
     use datafusion::physical_plan::collect;
@@ -1786,6 +1792,33 @@ mod tests {
         ];
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[test]
+    fn test_normalize_target_subset_filter_coerces_decimal_literals() {
+        let schema = ArrowSchema::new(vec![Field::new(
+            "altitude",
+            ArrowDataType::Decimal128(6, 1),
+            true,
+        )])
+        .to_dfschema()
+        .unwrap();
+
+        let normalized = super::normalize_target_subset_filter(
+            Arc::new(schema),
+            col("altitude").eq(lit(ScalarValue::Decimal128(Some(1505), 4, 1))),
+        )
+        .unwrap();
+
+        match normalized {
+            Expr::BinaryExpr(BinaryExpr { right, .. }) => match right.as_ref() {
+                Expr::Literal(value, _) => {
+                    assert_eq!(value, &ScalarValue::Decimal128(Some(1505), 6, 1));
+                }
+                other => panic!("expected decimal literal, got {other:?}"),
+            },
+            other => panic!("expected binary expr, got {other:?}"),
+        }
     }
 
     #[tokio::test]

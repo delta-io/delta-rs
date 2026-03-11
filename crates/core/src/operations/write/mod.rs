@@ -64,7 +64,7 @@ use crate::delta_datafusion::{
     resolve_session_state, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::schema::cast::merge_arrow_schema;
+use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
     Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
@@ -391,7 +391,8 @@ impl WriteBuilder {
             .input
             .as_ref()
             .ok_or::<DeltaTableError>(WriteError::MissingData.into())?;
-        let schema: StructType = input.schema().as_arrow().try_into_kernel()?;
+        let normalized_arrow = normalize_for_delta(input.schema().inner());
+        let schema: StructType = normalized_arrow.try_into_kernel()?;
 
         match &self.snapshot {
             Some(snapshot) => {
@@ -485,7 +486,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 let table_schema = if let Some(snapshot) = this.snapshot.as_ref() {
                     snapshot.arrow_schema()
                 } else {
-                    source.schema().inner().clone()
+                    normalize_for_delta(source.schema().inner())
                 };
 
                 if let Some(snapshot) = &this.snapshot
@@ -500,7 +501,31 @@ impl std::future::IntoFuture for WriteBuilder {
                     .into();
                 }
 
-                let source_schema: Arc<Schema> = Arc::new(source.schema().as_arrow().clone());
+                let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
+
+                if !Arc::ptr_eq(&source_schema, source.schema().inner()) {
+                    let original_schema = source.schema().inner();
+                    let cast_projection: Vec<Expr> = source_schema
+                        .fields()
+                        .iter()
+                        .zip(original_schema.fields().iter())
+                        .map(|(target, original)| {
+                            if target.data_type() != original.data_type() {
+                                let cast_fn = if this.safe_cast { try_cast } else { cast };
+                                cast_fn(
+                                    Expr::Column(Column::from_name(target.name())),
+                                    target.data_type().clone(),
+                                )
+                                .alias(target.name())
+                            } else {
+                                Expr::Column(Column::from_name(target.name()))
+                            }
+                        })
+                        .collect();
+                    source = LogicalPlanBuilder::new(source)
+                        .project(cast_projection)?
+                        .build()?;
+                }
 
                 // Schema merging code should be aware of columns that can be generated during write
                 // so they might be empty in the batch, but the will exist in the input_schema()
@@ -2686,5 +2711,160 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_date64_normalizes_to_date32() {
+        use arrow_array::Date64Array;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("sales_date", DataType::Date64, true),
+        ]));
+        let millis = 1760918400000i64; // 2025-10-20 in ms since epoch
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Date64Array::from(vec![millis])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let table_schema = table.snapshot().unwrap().schema();
+        let date_field = table_schema.field("sales_date").unwrap();
+        assert_eq!(date_field.data_type(), &crate::kernel::DataType::DATE);
+
+        let batches = get_data(&table).await;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 1);
+        assert_eq!(
+            batches[0]
+                .schema()
+                .field_with_name("sales_date")
+                .unwrap()
+                .data_type(),
+            &DataType::Date32,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_timestamp_ns_normalizes_to_us() {
+        use arrow_array::TimestampNanosecondArray;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+        let nanos = 1760961600_123456789i64;
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(TimestampNanosecondArray::from(vec![nanos]).with_timezone("UTC")),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let batches = get_data(&table).await;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+        let schema = batches[0].schema();
+        let result_field = schema.field_with_name("ts").unwrap();
+        assert_eq!(
+            result_field.data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_large_utf8_normalizes_to_utf8() {
+        use arrow_array::LargeStringArray;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::LargeUtf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(LargeStringArray::from(vec!["hello", "world"])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .await
+            .unwrap();
+
+        let table_schema = table.snapshot().unwrap().schema();
+        assert_eq!(
+            table_schema.field("name").unwrap().data_type(),
+            &crate::kernel::DataType::STRING,
+        );
+
+        let batches = get_data(&table).await;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_append_date64_to_existing_date32_table() {
+        use arrow_array::{Date32Array, Date64Array};
+
+        let schema32 = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("d", DataType::Date32, true),
+        ]));
+        let batch32 = RecordBatch::try_new(
+            schema32,
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Date32Array::from(vec![19650])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch32])
+            .await
+            .unwrap();
+
+        let schema64 = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("d", DataType::Date64, true),
+        ]));
+        let batch64 = RecordBatch::try_new(
+            schema64,
+            vec![
+                Arc::new(Int32Array::from(vec![2])),
+                Arc::new(Date64Array::from(vec![1760918400000i64])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![batch64])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let batches = get_data(&table).await;
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 2);
     }
 }

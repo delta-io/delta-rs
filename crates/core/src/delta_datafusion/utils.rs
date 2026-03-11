@@ -72,11 +72,12 @@ pub(crate) fn maybe_into_expr(
 
 /// Coerce literal types in predicates to match the column types from the schema.
 ///
-/// This function walks the expression tree and for binary comparison expressions
-/// (e.g., `column = 3`), it ensures that literal values are cast to match the
-/// actual column type from the schema. This is necessary because SQL parsers
-/// typically infer literal types independently (e.g., `3` becomes `Int64`),
-/// which may not match the schema's column type (e.g., `Int32`).
+/// This function walks the expression tree and for comparison expressions
+/// (e.g., `column = 3` or `column BETWEEN 1 AND 3`), it ensures that literal
+/// values are cast to match the actual column type from the schema. This is
+/// necessary because SQL parsers and dynamically constructed expressions often
+/// infer literal types independently (e.g., `3` becomes `Int64`), which may not
+/// match the schema's column type (e.g., `Int32`).
 ///
 /// # Arguments
 /// * `expr` - The expression to transform
@@ -129,6 +130,39 @@ pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result
                 };
 
                 Ok(Transformed::yes(new_binary))
+            }
+            Expr::Between(between) => {
+                let expr_type = between.expr.get_type(schema)?;
+                let mut changed = false;
+
+                let low = match between.low.as_ref() {
+                    Expr::Literal(value, _) if value.data_type() != expr_type => {
+                        changed = true;
+                        Box::new(Expr::Literal(value.cast_to(&expr_type)?, None))
+                    }
+                    _ => between.low.clone(),
+                };
+
+                let high = match between.high.as_ref() {
+                    Expr::Literal(value, _) if value.data_type() != expr_type => {
+                        changed = true;
+                        Box::new(Expr::Literal(value.cast_to(&expr_type)?, None))
+                    }
+                    _ => between.high.clone(),
+                };
+
+                if !changed {
+                    return Ok(Transformed::no(e));
+                }
+
+                Ok(Transformed::yes(Expr::Between(
+                    datafusion::logical_expr::Between {
+                        expr: between.expr.clone(),
+                        negated: between.negated,
+                        low,
+                        high,
+                    },
+                )))
             }
             _ => Ok(Transformed::no(e)),
         }
@@ -232,6 +266,43 @@ mod tests {
                 }
                 _ => panic!("Expected BinaryExpr"),
             }
+        }
+    }
+
+    #[test]
+    fn test_coerce_between_decimal_literals() {
+        use arrow_schema::{Field, Schema};
+
+        let schema = Schema::new(vec![Field::new(
+            "decimal_col",
+            ArrowDataType::Decimal128(6, 1),
+            true,
+        )])
+        .to_dfschema()
+        .unwrap();
+
+        let expr = col("decimal_col").between(
+            lit(ScalarValue::Decimal128(Some(1505), 4, 1)),
+            lit(ScalarValue::Decimal128(Some(1505), 4, 1)),
+        );
+        let result = coerce_predicate_literals(expr, &schema).unwrap();
+
+        match result {
+            Expr::Between(between) => {
+                match between.low.as_ref() {
+                    Expr::Literal(val, _) => {
+                        assert_eq!(val, &ScalarValue::Decimal128(Some(1505), 6, 1));
+                    }
+                    _ => panic!("Expected Literal in BETWEEN low bound"),
+                }
+                match between.high.as_ref() {
+                    Expr::Literal(val, _) => {
+                        assert_eq!(val, &ScalarValue::Decimal128(Some(1505), 6, 1));
+                    }
+                    _ => panic!("Expected Literal in BETWEEN high bound"),
+                }
+            }
+            _ => panic!("Expected Between expression, got {:?}", result),
         }
     }
 
