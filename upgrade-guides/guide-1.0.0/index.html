@@ -14,6 +14,8 @@
         <link rel="prev" href="../../how-delta-lake-works/delta-lake-file-skipping/">
       
       
+        <link rel="next" href="../../about/contributing/">
+      
       
       <link rel="icon" href="../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
@@ -348,6 +350,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/contributing/" class="md-tabs__link">
+          
+  
+    
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -408,8 +430,6 @@
       
         
           
-        
-      
         
       
         
@@ -501,26 +521,6 @@
 
               
             
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../delta-lake-best-practices/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Best practices
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -535,6 +535,8 @@
   
     
     
+      
+        
       
         
       
@@ -928,6 +930,26 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../usage/delta-lake-best-practices/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Best practices
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
     
     
       
@@ -946,10 +968,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_14" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_15" >
         
           
-          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -960,8 +982,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_14">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -2215,6 +2237,100 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    About
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            About
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/history/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    History
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2612,11 +2728,11 @@ number for a specific application instead of a dictionary for all applications. 
 for internal optimisations and aligns more with the use case for idempotent writes.</p>
 <p>To store more complex state as part of the delta log, use <code>domainMetadata</code>.</p>
 <h4 id="removed-get_num_index_cols-get_stats_columns-and-check_can_write_timestamp_ntz">removed <code>get_num_index_cols</code>, <code>get_stats_columns</code> and <code>check_can_write_timestamp_ntz</code>.</h4>
-<p>These methods were rxposed for use by the <code>pyarrow</code> engine, which no longer exists.</p>
+<p>These methods were exposed for use by the <code>pyarrow</code> engine, which no longer exists.</p>
 <h4 id="deprecated-files">deprecated <code>files</code></h4>
 <p>The <code>files</code> method has been deprecated and will be removed in a future release. Use <code>file_uris</code> instead.
 The relative paths reported by <code>files</code> cannot properly be interpreted when using features like shallow clones.
-<code>file_uris</code> reposrts absolute paths that can handle a more dynamic path resolution.</p>
+<code>file_uris</code> reports absolute paths that can handle a more dynamic path resolution.</p>
 <h3 id="internal-changes">Internal changes</h3>
 <h4 id="writerproperties-columnproperties-and-bloomfilterproperties-moved-to-deltalakewriterproperties"><code>WriterProperties</code>, <code>ColumnProperties</code> and <code>BloomFilterProperties</code> moved to <code>deltalake.writer.properties</code></h4>
 <p>Can be imported directly with:</p>
@@ -2674,6 +2790,22 @@ The relative paths reported by <code>files</code> cannot properly be interpreted
             </div>
           </a>
         
+        
+          
+          <a href="../../about/contributing/" class="md-footer__link md-footer__link--next" aria-label="Next: Contributing">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Contributing
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11H4Z"/></svg>
+            </div>
+          </a>
         
       </nav>
     

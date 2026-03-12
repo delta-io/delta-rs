@@ -79,7 +79,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#important-terminology" class="md-skip">
+        <a href="#quick-start" class="md-skip">
           Skip to content
         </a>
       
@@ -348,6 +348,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="about/contributing/" class="md-tabs__link">
+          
+  
+    
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -410,8 +430,6 @@
       
         
           
-        
-      
         
       
         
@@ -501,26 +519,6 @@
 
               
             
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="delta-lake-best-practices/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Best practices
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -535,6 +533,8 @@
   
     
     
+      
+        
       
         
       
@@ -928,6 +928,26 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="usage/delta-lake-best-practices/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Best practices
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
     
     
       
@@ -946,10 +966,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_14" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_15" >
         
           
-          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -960,8 +980,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_14">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -1952,6 +1972,100 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    About
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            About
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="about/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="about/history/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    History
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -1977,20 +2091,6 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#important-terminology" class="md-nav__link">
-    Important terminology
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#why-implement-the-delta-lake-transaction-log-protocol-in-rust" class="md-nav__link">
-    Why implement the Delta Lake transaction log protocol in Rust?
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#quick-start" class="md-nav__link">
     Quick start
   </a>
@@ -1998,15 +2098,8 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#contributing" class="md-nav__link">
-    Contributing
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#project-history" class="md-nav__link">
-    Project history
+  <a href="#next-steps" class="md-nav__link">
+    Next steps
   </a>
   
 </li>
@@ -2031,69 +2124,68 @@
 
   <h1>Home</h1>
 
-<p><code>deltalake</code> is an open source library that makes working with tabular datasets easier, more robust and more performant. With deltalake you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files. </p>
-<p><code>deltalake</code> can be used to manage data stored on a local file system or in the cloud. <code>deltalake</code> integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.</p>
-<p><code>deltalake</code> uses a lakehouse framework for managing datasets. With this lakehouse approach you manage your datasets with a <code>DeltaTable</code> object and then <code>deltalake</code> takes care of the underlying files. Within a <code>DeltaTable</code> your data is stored in high performance Parquet files while metadata is stored in a set of JSON files called a transaction log.</p>
-<p><code>deltalake</code> is a Rust-based re-implementation of the DeltaLake protocol originally developed at DataBricks. The <code>deltalake</code> library has APIs in Rust and Python. The <code>deltalake</code> implementation has no dependencies on Java, Spark or DataBricks.</p>
-<h2 id="important-terminology">Important terminology</h2>
-<ul>
-<li><code>deltalake</code> refers to the Rust or Python API of delta-rs</li>
-<li>"Delta Spark" refers to the Scala implementation of the Delta Lake transaction log protocol.  This depends on Spark and Java.</li>
-</ul>
-<h2 id="why-implement-the-delta-lake-transaction-log-protocol-in-rust">Why implement the Delta Lake transaction log protocol in Rust?</h2>
-<p>Delta Spark depends on Java and Spark, which is fine for many use cases, but not all Delta Lake users want to depend on these libraries.  <code>deltalake</code> allows you to manage your dataset using a Delta Lake approach without any Java or Spark dependencies.</p>
-<p>A <code>DeltaTable</code> on disk is simply a directory that stores metadata in JSON files and data in Parquet files.  </p>
+<p><code>deltalake</code> is an open source library that makes working with tabular datasets easier, more robust and more performant. With <code>deltalake</code> you can add, remove or update rows in a dataset as new data arrives. You can time travel back to earlier versions of a dataset. You can optimize dataset storage from small files to large files.</p>
+<p>With <code>deltalake</code> you can manage data stored on a local file system or in the cloud. <code>deltalake</code> integrates with data manipulation libraries such as Pandas, Polars, DuckDB and DataFusion.</p>
+<p><code>deltalake</code> uses a lakehouse framework where you manage your datasets with a <code>DeltaTable</code> object and <code>deltalake</code> takes care of the underlying files.</p>
 <h2 id="quick-start">Quick start</h2>
-<p>You can install <code>deltalake</code> in Python with <code>pip</code>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>deltalake
+<ol>
+<li>
+<p>Install the Python dependencies with <code>pip</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>deltalake<span class="w"> </span>pandas<span class="w"> </span>pyarrow<span class="w"> </span>tabulate
 </span></code></pre></div>
-We create a Pandas <code>DataFrame</code> and write it to a <code>DeltaTable</code>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span><span class="n">write_deltalake</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="p">{</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        <span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;Aadhya&quot;</span><span class="p">,</span> <span class="s2">&quot;Bob&quot;</span><span class="p">,</span> <span class="s2">&quot;Chen&quot;</span><span class="p">],</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>    <span class="p">}</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="p">)</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="p">(</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">write_deltalake</span><span class="p">(</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>        <span class="n">table_or_uri</span><span class="o">=</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">,</span>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>        <span class="n">data</span><span class="o">=</span><span class="n">df</span><span class="p">,</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="p">)</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="p">)</span>
+<ul>
+<li><code>pyarrow</code> and <code>pandas</code> are needed for the DataFrame import</li>
+<li><code>tabulate</code> is needed to print the DataFrame in final the example</li>
+</ul>
+</li>
+<li>
+<p>Import the required dependencies:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span><span class="p">,</span> <span class="n">DeltaTable</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
 </span></code></pre></div>
-We create a <code>DeltaTable</code> object that holds the metadata for the Delta table:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">)</span>
+</li>
+<li>
+<p>Create a Pandas <code>DataFrame</code> and write it to a <code>DeltaTable</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">9</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;aa&quot;</span><span class="p">,</span> <span class="s2">&quot;bb&quot;</span><span class="p">]})</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
 </span></code></pre></div>
-We load the <code>DeltaTable</code> into a Pandas <code>DataFrame</code> with <code>to_pandas</code> on a <code>DeltaTable</code>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">new_df</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-</span></code></pre></div></p>
-<p>Or we can load the data into a Polars <code>DataFrame</code> with <code>pl.read_delta</code>:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">new_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_delta</span><span class="p">(</span><span class="s2">&quot;delta_table_dir&quot;</span><span class="p">)</span>
-</span></code></pre></div></p>
-<p>Or we can load the data with DuckDB:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">duckdb</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">duckdb</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM delta_scan(&#39;./delta_table_dir&#39;)&quot;</span><span class="p">)</span>
-</span></code></pre></div></p>
-<p>Or we can load the data with DataFusion:
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">datafusion</span><span class="w"> </span><span class="kn">import</span> <span class="n">SessionContext</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">ctx</span> <span class="o">=</span> <span class="n">SessionContext</span><span class="p">()</span>
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">ctx</span><span class="o">.</span><span class="n">register_dataset</span><span class="p">(</span><span class="s2">&quot;my_delta_table&quot;</span><span class="p">,</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">())</span>
-</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="n">ctx</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;select * from my_delta_table&quot;</span><span class="p">)</span>
-</span></code></pre></div></p>
-<h2 id="contributing">Contributing</h2>
-<p>The Delta Lake community welcomes contributors from all developers, regardless of your experience or programming background.</p>
-<p>You can write Rust code, Python code, documentation, submit bugs, or give talks to the community.  We welcome all of these contributions.</p>
-<p>Feel free to <a href="https://go.delta.io/slack">join our Slack</a> and message us in the #delta-rs channel any time!</p>
-<p>We value kind communication and building a productive, friendly environment for maximum collaboration and fun.</p>
-<h2 id="project-history">Project history</h2>
-<p>Check out this video by Denny Lee &amp; QP Hou to learn about the genesis of the delta-rs project:</p>
-<iframe width="560" height="315" src="https://www.youtube.com/embed/ZQdEdifcBh8?si=ytGW7FB-kwl6VqsV" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+</li>
+<li>
+<p>Create a DeltaTable object to track metadata for the Delta table:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Overwrite the DataFrame with new data:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s2">&quot;num&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">11</span><span class="p">,</span> <span class="mi">22</span><span class="p">],</span> <span class="s2">&quot;letter&quot;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&quot;dd&quot;</span><span class="p">,</span> <span class="s2">&quot;ee&quot;</span><span class="p">]})</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Easily revert to the original version (version 0) of the table:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">df</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp/some-table&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Confirm the reversion by printing the contents of the table using the Pandas<a href="https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.to_markdown.html">to_markdown()</a> function:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nb">print</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">to_markdown</span><span class="p">())</span>
+</span></code></pre></div>
+</li>
+<li>
+<p>Output shows the original data from step 3:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>|    |   num | letter   |
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>|---:|------:|:---------|
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>|  0 |     8 | aa       |
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>|  1 |     9 | bb       |
+</span></code></pre></div>
+</li>
+</ol>
+<h2 id="next-steps">Next steps</h2>
+<ul>
+<li>Learn about <a href="usage/querying-delta-tables/">Querying Delta Tables</a></li>
+<li>Learn about using <code>deltalake</code> <a href="integrations/delta-lake-polars/">with Polars</a></li>
+<li>Learn about using <code>deltalake</code> <a href="integrations/delta-lake-datafusion/">with DataFusion</a></li>
+</ul>
 
 
 

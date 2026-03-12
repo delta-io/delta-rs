@@ -352,6 +352,26 @@
   
 
       
+        
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../about/contributing/" class="md-tabs__link">
+          
+  
+    
+  
+  About
+
+        </a>
+      </li>
+    
+  
+
+      
     </ul>
   </div>
 </nav>
@@ -412,8 +432,6 @@
       
         
           
-        
-      
         
       
         
@@ -505,26 +523,6 @@
 
               
             
-              
-                
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../delta-lake-best-practices/" class="md-nav__link">
-        
-  
-  <span class="md-ellipsis">
-    Best practices
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -539,6 +537,8 @@
   
     
     
+      
+        
       
         
       
@@ -932,6 +932,26 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../../usage/delta-lake-best-practices/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Best practices
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
     
     
       
@@ -950,10 +970,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_14" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_15" >
         
           
-          <label class="md-nav__link" for="__nav_2_14" id="__nav_2_14_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -964,8 +984,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_14_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_14">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_15">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -2038,6 +2058,100 @@
   
 
     
+      
+      
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    
+      
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  <span class="md-ellipsis">
+    About
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            About
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/contributing/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Contributing
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../about/history/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    History
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
   </ul>
 </nav>
                   </div>
@@ -2270,7 +2384,7 @@
 </span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="s2">&quot;v1&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;v1_sum&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
 </span></code></pre></div>
 <p>This query runs in 8.3 seconds.  It's much faster because Polars is optimized to skip row groups in Parquet files that don't contain data that's relevant for the query.</p>
-<p>Then run the query on newly created Delta table:</p>
+<p>Then run the query on a newly created Delta table:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">pl</span><span class="o">.</span><span class="n">scan_delta</span><span class="p">(</span><span class="s2">&quot;~/data/deltalake/G1_1e9_1e2_0_0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
 </span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;id1&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="s2">&quot;id016&quot;</span>
 </span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">&quot;id1&quot;</span><span class="p">,</span> <span class="s2">&quot;id2&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="s2">&quot;v1&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;v1_sum&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
@@ -2286,7 +2400,7 @@
 <h2 id="why-polars-is-fast-with-delta-lake">Why Polars is fast with Delta Lake</h2>
 <p>Delta tables consist of metadata in a transaction log and data stored in Parquet files.</p>
 <p>When Polars queries a Delta table, it starts by consulting the transaction log to understand the metadata of each file in the Delta table.  This allows for Polars to quickly identify which files should be skipped by the query.</p>
-<p>CSV files don't contain any such metadata, so file skipping isn't an option.  Polars can skip Parquet files based on metadata, but it needs to open up each file and read the metadata, which is slower that grabbing the file-level metadata directly from the transaction log.</p>
+<p>CSV files don't contain any such metadata, so file skipping isn't an option.  Polars can skip Parquet files based on metadata, but it needs to open up each file and read the metadata, which is slower than grabbing the file-level metadata directly from the transaction log.</p>
 <p>Parquet doesn't allow users to easily Z Order the data and colocate similar data in the same row groups.  The Z Order optimizations are only supported in Delta tables.</p>
 <p>Delta Lake offers Polars users with unique performance optimizations.</p>
 <h2 id="other-delta-lake-features-relevant-for-polars-users">Other Delta Lake features relevant for Polars users</h2>
