@@ -318,10 +318,8 @@ mod local {
         // convert to explain plan form
         let display = displayable(plan.as_ref()).indent(true).to_string();
 
-        assert_contains!(
-            &display,
-            "ProjectionExec: expr=[count(Int64(1))@0 as num_events]"
-        );
+        // Exact metadata row counts let DataFusion fold COUNT(*) into a constant result.
+        assert_contains!(&display, "PlaceholderRowExec");
 
         let batches = df.collect().await?;
         let batch = &batches[0];
