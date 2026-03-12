@@ -20,7 +20,7 @@ use arrow_schema::{DataType, FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
-use datafusion::common::{HashMap, internal_datafusion_err};
+use datafusion::common::{HashMap, internal_datafusion_err, stats::Precision};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{
@@ -102,6 +102,15 @@ impl DisplayAs for DeltaScanMetaExec {
 }
 
 impl DeltaScanMetaExec {
+    fn make_properties(scan_plan: &KernelScanPlan, partition_count: usize) -> PlanProperties {
+        PlanProperties::new(
+            EquivalenceProperties::new(scan_plan.output_schema.clone()),
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Incremental,
+            Boundedness::Bounded,
+        )
+    }
+
     pub(super) fn new(
         scan_plan: Arc<KernelScanPlan>,
         input: Vec<VecDeque<(String, usize)>>,
@@ -110,12 +119,7 @@ impl DeltaScanMetaExec {
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let properties = PlanProperties::new(
-            EquivalenceProperties::new(scan_plan.output_schema.clone()),
-            Partitioning::UnknownPartitioning(input.len()),
-            EmissionType::Incremental,
-            Boundedness::Bounded,
-        );
+        let properties = Self::make_properties(scan_plan.as_ref(), input.len());
         Self {
             scan_plan,
             input,
@@ -125,6 +129,50 @@ impl DeltaScanMetaExec {
             file_id_field,
             properties,
         }
+    }
+
+    fn effective_row_count_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {
+        if let Some(selection) = self.selection_vectors.get(file_id) {
+            let (kept_rows, _) = effective_row_count(row_count, selection.value(), file_id)?;
+            Ok(kept_rows)
+        } else {
+            Ok(row_count)
+        }
+    }
+
+    fn exact_num_rows(&self, partition: Option<usize>) -> Result<usize> {
+        match partition {
+            Some(partition) => self.exact_num_rows_for_partition(partition),
+            None => self
+                .input
+                .iter()
+                .enumerate()
+                .try_fold(0usize, |total, (partition, _)| {
+                    let partition_rows = self.exact_num_rows_for_partition(partition)?;
+                    total.checked_add(partition_rows).ok_or_else(|| {
+                        DataFusionError::Execution(
+                            "DeltaScanMetaExec exact row count overflow".to_string(),
+                        )
+                    })
+                }),
+        }
+    }
+
+    fn exact_num_rows_for_partition(&self, partition: usize) -> Result<usize> {
+        let files = self.input.get(partition).ok_or_else(|| {
+            DataFusionError::Plan(format!("DeltaScanMetaExec: invalid partition {partition}"))
+        })?;
+
+        files
+            .iter()
+            .try_fold(0usize, |total, (file_id, row_count)| {
+                let file_rows = self.effective_row_count_for_file(file_id, *row_count)?;
+                total.checked_add(file_rows).ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "DeltaScanMetaExec exact row count overflow".to_string(),
+                    )
+                })
+            })
     }
 }
 
@@ -176,8 +224,10 @@ impl ExecutionPlan for DeltaScanMetaExec {
             .into_iter()
             .map(|chunk| chunk.collect())
             .collect();
+        let properties = Self::make_properties(self.scan_plan.as_ref(), new_input.len());
 
         Ok(Some(Arc::new(Self {
+            properties,
             input: new_input,
             ..self.clone()
         })))
@@ -208,8 +258,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 
     fn statistics(&self) -> Result<Statistics> {
-        // self.input.partition_statistics(None)
-        Ok(Statistics::new_unknown(self.schema().as_ref()))
+        self.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -228,10 +277,12 @@ impl ExecutionPlan for DeltaScanMetaExec {
         None
     }
 
-    fn partition_statistics(&self, _: Option<usize>) -> Result<Statistics> {
-        // TODO: handle statistics conversion properly to leverage parquet plan statistics.
-        // self.input.partition_statistics(partition)
-        Ok(Statistics::new_unknown(self.schema().as_ref()))
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+        Ok(Statistics {
+            num_rows: Precision::Exact(self.exact_num_rows(partition)?),
+            total_byte_size: Precision::Absent,
+            column_statistics: Statistics::unknown_column(self.schema().as_ref()),
+        })
     }
 
     fn gather_filters_for_pushdown(
@@ -373,17 +424,7 @@ fn apply_selection_vector(
     selection: &[bool],
     file_id: &str,
 ) -> Result<(RecordBatch, usize)> {
-    if selection.len() > batch.num_rows() {
-        return Err(internal_datafusion_err!(
-            "Selection vector length ({}) exceeds row count ({}) for file '{}'. \
-             This indicates a bug in deletion vector processing.",
-            selection.len(),
-            batch.num_rows(),
-            file_id
-        ));
-    }
-
-    let n_rows_to_pad = batch.num_rows() - selection.len();
+    let (_, n_rows_to_pad) = effective_row_count(batch.num_rows(), selection, file_id)?;
     // Delta Kernel may emit short keep-masks; missing trailing entries are
     // implicitly `true` (row is kept).
     let filter = BooleanArray::from_iter(
@@ -393,6 +434,26 @@ fn apply_selection_vector(
             .chain(std::iter::repeat_n(true, n_rows_to_pad)),
     );
     Ok((filter_record_batch(&batch, &filter)?, n_rows_to_pad))
+}
+
+fn effective_row_count(
+    row_count: usize,
+    selection: &[bool],
+    file_id: &str,
+) -> Result<(usize, usize)> {
+    if selection.len() > row_count {
+        return Err(internal_datafusion_err!(
+            "Selection vector length ({}) exceeds row count ({}) for file '{}'. \
+             This indicates a bug in deletion vector processing.",
+            selection.len(),
+            row_count,
+            file_id
+        ));
+    }
+
+    let n_rows_to_pad = row_count - selection.len();
+    let kept_rows = selection.iter().filter(|keep| **keep).count() + n_rows_to_pad;
+    Ok((kept_rows, n_rows_to_pad))
 }
 
 impl Stream for DeltaScanMetaStream {
@@ -420,22 +481,262 @@ impl RecordBatchStream for DeltaScanMetaStream {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     use arrow::array::RecordBatch;
-    use arrow_array::RecordBatchOptions;
-    use arrow_schema::{Fields, Schema};
+    use arrow_array::{Int64Array, RecordBatchOptions, StringArray};
+    use arrow_schema::{DataType, Field, Fields, Schema};
     use datafusion::{
+        catalog::TableProvider,
+        common::stats::Precision,
         physical_plan::collect_partitioned,
+        physical_plan::displayable,
         prelude::{col, lit},
     };
+    use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+    use futures::TryStreamExt as _;
 
     use super::*;
     use crate::{
-        assert_batches_sorted_eq,
+        DeltaTable, assert_batches_sorted_eq,
         delta_datafusion::session::create_session,
-        test_utils::{TestResult, open_fs_path},
+        ensure_table_uri,
+        protocol::SaveMode,
+        test_utils::{TestResult, TestTables, open_fs_path},
     };
+
+    const REPRO_PARTITION_COUNT: usize = 11;
+    const REPRO_ROWS_PER_PARTITION: usize = 100;
+    const REPRO_TOTAL_ROWS: usize = REPRO_PARTITION_COUNT * REPRO_ROWS_PER_PARTITION;
+    const TWO_COMMIT_INITIAL_ROWS_PER_PARTITION: usize = 1;
+    const TWO_COMMIT_APPEND_ROWS_PER_PARTITION: usize =
+        REPRO_ROWS_PER_PARTITION - TWO_COMMIT_INITIAL_ROWS_PER_PARTITION;
+
+    fn repro_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("part", DataType::Utf8, false),
+        ]))
+    }
+
+    fn make_partition_batch(partition: usize, row_count: usize) -> RecordBatch {
+        let start = (partition * REPRO_ROWS_PER_PARTITION) as i64;
+        let ids = Int64Array::from_iter_values(start..start + row_count as i64);
+        let part = format!("p{partition:02}");
+        let parts = StringArray::from(vec![part; row_count]);
+        RecordBatch::try_new(repro_schema(), vec![Arc::new(ids), Arc::new(parts)]).unwrap()
+    }
+
+    fn make_all_partitions_batch(start_round: usize, round_count: usize) -> RecordBatch {
+        let rows = (start_round..start_round + round_count).flat_map(|round| {
+            (0..REPRO_PARTITION_COUNT).map(move |partition| {
+                let row_id = round * REPRO_PARTITION_COUNT + partition;
+                (row_id as i64, format!("p{partition:02}"))
+            })
+        });
+        let (ids, parts): (Vec<_>, Vec<_>) = rows.unzip();
+        RecordBatch::try_new(
+            repro_schema(),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(StringArray::from(parts)),
+            ],
+        )
+        .unwrap()
+    }
+
+    async fn create_partitioned_repro_table() -> TestResult<(tempfile::TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir()?;
+        let table_uri = ensure_table_uri(table_dir.path().to_str().unwrap())?;
+        let table_schema: crate::kernel::StructType = repro_schema().try_into_kernel()?;
+
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .create()
+            .with_save_mode(SaveMode::Ignore)
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(vec!["part".to_string()])
+            .await?;
+
+        Ok((table_dir, table))
+    }
+
+    async fn write_single_file_per_partition_repro_table()
+    -> TestResult<(tempfile::TempDir, DeltaTable)> {
+        let (table_dir, mut table) = create_partitioned_repro_table().await?;
+        for partition in 0..REPRO_PARTITION_COUNT {
+            table = table
+                .write(vec![make_partition_batch(
+                    partition,
+                    REPRO_ROWS_PER_PARTITION,
+                )])
+                .with_save_mode(SaveMode::Append)
+                .await?;
+        }
+        Ok((table_dir, table))
+    }
+
+    async fn write_two_commit_two_files_per_partition_repro_table()
+    -> TestResult<(tempfile::TempDir, DeltaTable)> {
+        let (table_dir, table) = create_partitioned_repro_table().await?;
+        let table = table
+            .write(vec![make_all_partitions_batch(
+                0,
+                TWO_COMMIT_INITIAL_ROWS_PER_PARTITION,
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let table = table
+            .write(vec![make_all_partitions_batch(
+                TWO_COMMIT_INITIAL_ROWS_PER_PARTITION,
+                TWO_COMMIT_APPEND_ROWS_PER_PARTITION,
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        Ok((table_dir, table))
+    }
+
+    async fn add_file_diagnostics(table: &DeltaTable) -> TestResult<Vec<(String, Option<usize>)>> {
+        let state = table.snapshot()?;
+        let log_store = table.log_store();
+        Ok(state
+            .snapshot()
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|view| (view.path_raw().to_string(), view.num_records()))
+            .try_collect()
+            .await?)
+    }
+
+    async fn add_file_dv_diagnostics(
+        table: &DeltaTable,
+    ) -> TestResult<Vec<(String, Option<usize>, usize)>> {
+        let state = table.snapshot()?;
+        let log_store = table.log_store();
+        Ok(state
+            .snapshot()
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|view| {
+                (
+                    view.path_raw().to_string(),
+                    view.num_records(),
+                    view.deletion_vector_descriptor()
+                        .map(|dv| dv.cardinality as usize)
+                        .unwrap_or_default(),
+                )
+            })
+            .try_collect()
+            .await?)
+    }
+
+    fn format_add_file_diagnostics(files: &[(String, Option<usize>)]) -> String {
+        files
+            .iter()
+            .map(|(path, num_records)| format!("{path} => numRecords={num_records:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn format_add_file_dv_diagnostics(files: &[(String, Option<usize>, usize)]) -> String {
+        files
+            .iter()
+            .map(|(path, num_records, deleted_rows)| {
+                format!("{path} => numRecords={num_records:?}, deletedRows={deleted_rows}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn active_files_per_partition(files: &[(String, Option<usize>)]) -> BTreeMap<String, usize> {
+        files.iter().fold(BTreeMap::new(), |mut counts, (path, _)| {
+            let partition = path
+                .split('/')
+                .find(|segment| segment.starts_with("part="))
+                .unwrap_or(path)
+                .to_string();
+            *counts.entry(partition).or_default() += 1;
+            counts
+        })
+    }
+
+    fn read_single_i64(batch: &RecordBatch, column_name: &str) -> i64 {
+        batch
+            .column_by_name(column_name)
+            .unwrap_or_else(|| panic!("missing column '{column_name}'"))
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap_or_else(|| panic!("column '{column_name}' was not Int64"))
+            .value(0)
+    }
+
+    async fn assert_meta_only_count_results(
+        provider: Arc<dyn TableProvider>,
+        expected_row_count: usize,
+        diagnostics: &str,
+    ) -> TestResult {
+        let session = Arc::new(create_session().into_inner());
+        let empty_projection = vec![];
+        let scan = provider
+            .scan(&session.state(), Some(&empty_projection), &[], None)
+            .await?;
+        assert!(
+            scan.as_any().downcast_ref::<DeltaScanMetaExec>().is_some(),
+            "expected metadata-only scan\n{diagnostics}"
+        );
+        assert_eq!(
+            scan.partition_statistics(None)?.num_rows,
+            Precision::Exact(expected_row_count),
+            "metadata-only scan reported the wrong row count\n{diagnostics}"
+        );
+
+        session
+            .register_table("delta_table", Arc::clone(&provider))
+            .unwrap();
+
+        let sql_batches = session
+            .sql("SELECT COUNT(*) AS row_count FROM delta_table")
+            .await?
+            .collect()
+            .await?;
+        let sql_count = read_single_i64(&sql_batches[0], "row_count");
+        assert_eq!(
+            sql_count, expected_row_count as i64,
+            "SELECT COUNT(*) returned the wrong row count\n{diagnostics}"
+        );
+
+        let dataframe_count = session
+            .sql("SELECT * FROM delta_table")
+            .await?
+            .count()
+            .await?;
+        assert_eq!(
+            dataframe_count, expected_row_count,
+            "DataFrame.count() returned the wrong row count\n{diagnostics}"
+        );
+
+        Ok(())
+    }
+
+    async fn assert_count_query_uses_placeholder_row_exec(
+        provider: Arc<dyn TableProvider>,
+        diagnostics: &str,
+    ) -> TestResult {
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", provider).unwrap();
+
+        let sql_plan = session
+            .sql("SELECT COUNT(*) AS row_count FROM delta_table")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let sql_plan_str = displayable(sql_plan.as_ref()).indent(true).to_string();
+        assert!(
+            sql_plan_str.contains("PlaceholderRowExec"),
+            "expected COUNT(*) to optimize to PlaceholderRowExec\nPlan:\n{sql_plan_str}\n{diagnostics}"
+        );
+
+        Ok(())
+    }
 
     #[test]
     fn test_apply_selection_vector_short_mask_pads_with_true() {
@@ -667,6 +968,170 @@ mod tests {
         assert_eq!(data[0].num_columns(), 2);
         assert!(data[0].schema().column_with_name("data").is_some());
         assert!(data[0].schema().column_with_name("file_id").is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_only_count_on_partitioned_written_table_counts_rows_not_files() -> TestResult
+    {
+        let (_table_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let add_files = add_file_diagnostics(&table).await?;
+        let add_file_diag = format_add_file_diagnostics(&add_files);
+        let total_num_records: usize = add_files
+            .iter()
+            .map(|(_, rows)| rows.unwrap_or_default())
+            .sum();
+
+        assert_eq!(
+            add_files.len(),
+            REPRO_PARTITION_COUNT,
+            "expected one active Add file per partition\n{add_file_diag}"
+        );
+        assert!(
+            add_files.iter().all(|(_, rows)| rows.is_some()),
+            "expected numRecords stats on every Add file\n{add_file_diag}"
+        );
+        assert_eq!(
+            total_num_records, REPRO_TOTAL_ROWS,
+            "expected Add file numRecords to sum to the written row count\n{add_file_diag}"
+        );
+
+        let provider = table.table_provider().await?;
+        assert_meta_only_count_results(provider, REPRO_TOTAL_ROWS, &add_file_diag).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_only_count_on_two_commit_partitioned_table_uses_placeholder_row_exec()
+    -> TestResult {
+        let (_table_dir, table) = write_two_commit_two_files_per_partition_repro_table().await?;
+        let add_files = add_file_diagnostics(&table).await?;
+        let add_file_diag = format_add_file_diagnostics(&add_files);
+        let total_num_records: usize = add_files
+            .iter()
+            .map(|(_, rows)| rows.unwrap_or_default())
+            .sum();
+        let files_per_partition = active_files_per_partition(&add_files);
+
+        assert_eq!(
+            add_files.len(),
+            REPRO_PARTITION_COUNT * 2,
+            "expected two active Add files per partition across two commits\n{add_file_diag}"
+        );
+        assert!(
+            files_per_partition.values().all(|count| *count == 2),
+            "expected exactly two active files per partition\n{files_per_partition:#?}\n{add_file_diag}"
+        );
+        assert!(
+            add_files.iter().all(|(_, rows)| rows.is_some()),
+            "expected numRecords stats on every Add file\n{add_file_diag}"
+        );
+        assert_eq!(
+            total_num_records, REPRO_TOTAL_ROWS,
+            "expected Add file numRecords to sum to 1100\n{add_file_diag}"
+        );
+
+        let provider = table.table_provider().await?;
+        assert_count_query_uses_placeholder_row_exec(Arc::clone(&provider), &add_file_diag).await?;
+        assert_meta_only_count_results(provider, REPRO_TOTAL_ROWS, &add_file_diag).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_only_count_on_table_with_deletion_vectors_uses_exact_stats() -> TestResult {
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let add_files = add_file_dv_diagnostics(&table).await?;
+        let add_file_diag = format_add_file_dv_diagnostics(&add_files);
+
+        assert!(
+            add_files.iter().all(|(_, rows, _)| rows.is_some()),
+            "expected numRecords stats on every Add file\n{add_file_diag}"
+        );
+        assert!(
+            add_files
+                .iter()
+                .any(|(_, _, deleted_rows)| *deleted_rows > 0),
+            "expected at least one file with deleted rows\n{add_file_diag}"
+        );
+
+        let expected_effective_rows: usize = add_files
+            .iter()
+            .map(|(_, rows, deleted_rows)| {
+                rows.unwrap_or_default()
+                    .checked_sub(*deleted_rows)
+                    .expect("deletion vector cardinality must not exceed numRecords")
+            })
+            .sum();
+
+        let provider = table.table_provider().await?;
+        assert_meta_only_count_results(provider, expected_effective_rows, &add_file_diag).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partition_statistics_reports_exact_rows_per_exec_partition_after_repartition()
+    -> TestResult {
+        let (_table_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let empty_projection = vec![];
+        let scan = provider
+            .scan(&session.state(), Some(&empty_projection), &[], None)
+            .await?;
+        let template = scan
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan");
+
+        let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
+        selection_vectors.insert("f2".to_string(), vec![true, false, true, false]);
+
+        let exec = DeltaScanMetaExec::new(
+            Arc::clone(&template.scan_plan),
+            vec![VecDeque::from([
+                ("f1".to_string(), 10usize),
+                ("f2".to_string(), 4usize),
+                ("f3".to_string(), 6usize),
+                ("f4".to_string(), 2usize),
+            ])],
+            Arc::clone(&template.transforms),
+            selection_vectors,
+            template.file_id_field.clone(),
+            ExecutionPlanMetricsSet::new(),
+        );
+
+        let repartitioned = exec
+            .repartitioned(2, &ConfigOptions::default())?
+            .expect("expected repartitioned metadata scan");
+        assert_eq!(
+            repartitioned
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            2
+        );
+
+        let repartitioned = repartitioned
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected repartitioned DeltaScanMetaExec");
+        assert_eq!(repartitioned.input.len(), 2);
+        assert_eq!(
+            repartitioned.partition_statistics(Some(0))?.num_rows,
+            Precision::Exact(12)
+        );
+        assert_eq!(
+            repartitioned.partition_statistics(Some(1))?.num_rows,
+            Precision::Exact(8)
+        );
+        assert_eq!(
+            repartitioned.partition_statistics(None)?.num_rows,
+            Precision::Exact(20)
+        );
 
         Ok(())
     }
