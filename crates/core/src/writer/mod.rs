@@ -164,7 +164,7 @@ pub(crate) async fn flush_and_commit(
     commit_properties: Option<CommitProperties>,
 ) -> Result<i64, DeltaTableError> {
     let snapshot = table.snapshot()?;
-    let partition_cols = snapshot.metadata().partition_columns().clone();
+    let partition_cols: Vec<String> = snapshot.metadata().partition_columns().into();
     let partition_by = if !partition_cols.is_empty() {
         Some(partition_cols)
     } else {
