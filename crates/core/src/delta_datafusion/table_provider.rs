@@ -400,7 +400,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files = self
                         .snapshot
                         .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
+                        .map_ok(|f| f.to_add())
                         .try_collect::<Vec<_>>()
                         .await?;
                     let files_scanned = files.len();
@@ -425,7 +425,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let file_actions: Vec<_> = self
                         .snapshot
                         .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
+                        .map_ok(|f| f.to_add())
                         .try_collect::<Vec<_>>()
                         .await?;
 
