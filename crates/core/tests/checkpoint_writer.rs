@@ -131,11 +131,29 @@ mod delete_expired_delta_log_in_checkpoint {
     use std::collections::HashMap;
     use std::fs::{FileTimes, OpenOptions};
     use std::ops::Sub;
+    use std::path::Path as FsPath;
     use std::time::{Duration, SystemTime};
 
     use ::object_store::path::Path as ObjectStorePath;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;
+
+    fn set_delta_log_file_last_modified(
+        table_path: &FsPath,
+        version: usize,
+        last_modified_millis: u64,
+        suffix: &str,
+    ) {
+        let path = table_path
+            .join("_delta_log")
+            .join(format!("{version:020}.{suffix}"));
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
+        let times = FileTimes::new()
+            .set_modified(last_modified)
+            .set_accessed(last_modified);
+        file.set_times(times).unwrap();
+    }
 
     #[tokio::test]
     async fn test_delete_expired_logs() -> DeltaResult<()> {
@@ -158,17 +176,6 @@ mod delete_expired_delta_log_in_checkpoint {
             .table_url()
             .to_file_path()
             .expect("Failed toc convert the table's Url to a file path");
-        let set_file_last_modified = |version: usize, last_modified_millis: u64| {
-            let mut path = table_path.clone();
-            path.push("_delta_log");
-            path.push(format!("{version:020}.json"));
-            let file = OpenOptions::new().write(true).open(path).unwrap();
-            let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
-            let times = FileTimes::new()
-                .set_modified(last_modified)
-                .set_accessed(last_modified);
-            file.set_times(times).unwrap();
-        };
 
         // create 2 commits
         let a1 = fs_common::add(0);
@@ -177,9 +184,9 @@ mod delete_expired_delta_log_in_checkpoint {
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
 
         // set last_modified
-        set_file_last_modified(0, 25 * 60 * 1000); // 25 mins ago, should be deleted
-        set_file_last_modified(1, 15 * 60 * 1000); // 15 mins ago, should be deleted
-        set_file_last_modified(2, 5 * 60 * 1000); // 5 mins ago, should be kept as last safe checkpoint
+        set_delta_log_file_last_modified(&table_path, 0, 25 * 60 * 1000, "json"); // 25 mins ago, should be deleted
+        set_delta_log_file_last_modified(&table_path, 1, 15 * 60 * 1000, "json"); // 15 mins ago, should be deleted
+        set_delta_log_file_last_modified(&table_path, 2, 5 * 60 * 1000, "json"); // 5 mins ago, should be kept as last safe checkpoint
 
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
@@ -195,9 +202,9 @@ mod delete_expired_delta_log_in_checkpoint {
         .expect("Failed to create a checkpoint and cleanup");
 
         table
-            .load()
+            .update_state()
             .await
-            .expect("Failed to read the checkpoint back");
+            .expect("Failed to refresh the table state from the new checkpoint");
         assert_eq!(
             table
                 .get_files_by_partitions(&[])
@@ -220,6 +227,74 @@ mod delete_expired_delta_log_in_checkpoint {
             .expect_err("Should not load version 1");
         // log file 2 is kept
         table.load_version(2).await.expect("Cannot load version 2");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_version_same_version_refreshes_checkpoint_base() -> DeltaResult<()> {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let table_location = tmp_dir.path().to_string_lossy().into_owned();
+        let mut table = fs_common::create_table(
+            &table_location,
+            Some(HashMap::from([
+                (
+                    TableProperty::LogRetentionDuration.as_ref().into(),
+                    Some("interval 0 minute".to_string()),
+                ),
+                (
+                    TableProperty::EnableExpiredLogCleanup.as_ref().into(),
+                    Some("true".to_string()),
+                ),
+            ])),
+        )
+        .await;
+
+        let table_path = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed toc convert the table's Url to a file path");
+
+        let a1 = fs_common::add(0);
+        let a2 = fs_common::add(0);
+        let a3 = fs_common::add(0);
+        assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
+        assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
+
+        set_delta_log_file_last_modified(&table_path, 0, 25 * 60 * 1000, "json");
+        set_delta_log_file_last_modified(&table_path, 1, 15 * 60 * 1000, "json");
+        set_delta_log_file_last_modified(&table_path, 2, 5 * 60 * 1000, "json");
+
+        checkpoints::create_checkpoint_from_table_url_and_cleanup(
+            table.table_url().clone(),
+            table.version().expect("Failed to load version() on table"),
+            None,
+            None,
+        )
+        .await
+        .expect("Failed to create a checkpoint and cleanup");
+
+        table
+            .load_version(2)
+            .await
+            .expect("Failed to refresh the current version from the new checkpoint");
+
+        assert_eq!(3, fs_common::commit_add(&mut table, &a3).await);
+        table
+            .load_version(3)
+            .await
+            .expect("Failed to increment from the refreshed checkpoint base");
+        assert_eq!(
+            table
+                .get_files_by_partitions(&[])
+                .await
+                .expect("Failed to get_files_by_partitions()"),
+            vec![
+                ObjectStorePath::from(a3.path.as_ref()),
+                ObjectStorePath::from(a2.path.as_ref()),
+                ObjectStorePath::from(a1.path.as_ref()),
+            ]
+        );
+
         Ok(())
     }
 
@@ -248,17 +323,6 @@ mod delete_expired_delta_log_in_checkpoint {
             .table_url()
             .to_file_path()
             .expect("Failed toc convert the table's Url to a file path");
-        let set_file_last_modified = |version: usize, last_modified_millis: u64, suffix: &str| {
-            let mut path = table_path.clone();
-            path.push("_delta_log");
-            path.push(format!("{version:020}.{suffix}"));
-            let file = OpenOptions::new().write(true).open(path).unwrap();
-            let last_modified = SystemTime::now().sub(Duration::from_millis(last_modified_millis));
-            let times = FileTimes::new()
-                .set_modified(last_modified)
-                .set_accessed(last_modified);
-            file.set_times(times).unwrap();
-        };
 
         // create 4 commits
         let a1 = fs_common::add(0);
@@ -271,11 +335,11 @@ mod delete_expired_delta_log_in_checkpoint {
         assert_eq!(4, fs_common::commit_add(&mut table, &a4).await);
 
         // set last_modified
-        set_file_last_modified(0, 25 * 60 * 1000, "json"); // 25 mins ago, should be deleted
-        set_file_last_modified(1, 20 * 60 * 1000, "json"); // 20 mins ago, last safe checkpoint, should be kept
-        set_file_last_modified(2, 15 * 60 * 1000, "json"); // 15 mins ago, fails retention cutoff, but needed by v3
-        set_file_last_modified(3, 6 * 60 * 1000, "json"); // 6 mins ago, should be kept by retention cutoff
-        set_file_last_modified(4, 5 * 60 * 1000, "json"); // 5 mins ago, should be kept by retention cutoff
+        set_delta_log_file_last_modified(&table_path, 0, 25 * 60 * 1000, "json"); // 25 mins ago, should be deleted
+        set_delta_log_file_last_modified(&table_path, 1, 20 * 60 * 1000, "json"); // 20 mins ago, last safe checkpoint, should be kept
+        set_delta_log_file_last_modified(&table_path, 2, 15 * 60 * 1000, "json"); // 15 mins ago, fails retention cutoff, but needed by v3
+        set_delta_log_file_last_modified(&table_path, 3, 6 * 60 * 1000, "json"); // 6 mins ago, should be kept by retention cutoff
+        set_delta_log_file_last_modified(&table_path, 4, 5 * 60 * 1000, "json"); // 5 mins ago, should be kept by retention cutoff
 
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
@@ -294,7 +358,7 @@ mod delete_expired_delta_log_in_checkpoint {
         .unwrap();
 
         // Update checkpoint time for version 1 to be just after version 1 data
-        set_file_last_modified(1, 20 * 60 * 1000 - 10, "checkpoint.parquet");
+        set_delta_log_file_last_modified(&table_path, 1, 20 * 60 * 1000 - 10, "checkpoint.parquet");
 
         // Checkpoint final version
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
