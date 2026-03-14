@@ -390,11 +390,7 @@ pub(crate) fn add_actions_partition_mem_table(
 }
 
 async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot
-        .log_data()
-        .iter()
-        .map(|f| f.to_add())
-        .collect_vec();
+    let actions = snapshot.log_data().iter().map(|f| f.to_add()).collect_vec();
 
     let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
         return Ok(vec![]);
