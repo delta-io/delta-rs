@@ -213,9 +213,7 @@ impl<'a> TransactionInfo<'a> {
                 })?,
             ))
         } else {
-            Ok(Either::Right(
-                self.read_snapshot.iter().map(|f| f.to_add()),
-            ))
+            Ok(Either::Right(self.read_snapshot.iter().map(|f| f.to_add())))
         }
     }
 
