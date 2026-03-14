@@ -196,15 +196,31 @@ impl DeltaTable {
         self.update_incremental(None).await
     }
 
-    /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
-    /// It assumes that the table is already updated to the current version `self.version`.
+    /// Updates the DeltaTable by incrementally applying newer versions, optionally bounded by
+    /// `max_version`.
+    ///
+    /// This API is forward-only. Use [`DeltaTable::load_version`] to load an older version.
     pub async fn update_incremental(
         &mut self,
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
-        self.state = Some(
-            DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
-        );
+        let Some(state) = self.state.as_mut() else {
+            self.state = Some(
+                DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
+            );
+            return Ok(());
+        };
+
+        let current_version = state.version();
+        if let Some(requested_version) = max_version
+            && requested_version < current_version
+        {
+            return Err(DeltaTableError::generic(format!(
+                "Cannot downgrade via update_incremental from version {current_version} to {requested_version}; use load_version"
+            )));
+        }
+
+        state.update(&self.log_store, max_version).await?;
         Ok(())
     }
 

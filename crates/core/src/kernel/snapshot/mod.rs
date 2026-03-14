@@ -189,6 +189,14 @@ impl Snapshot {
         self.inner.version() as i64
     }
 
+    /// Get the checkpoint version currently backing this snapshot, if any.
+    pub(crate) fn checkpoint_version(&self) -> Option<i64> {
+        self.inner
+            .log_segment()
+            .checkpoint_version
+            .map(|v| v as i64)
+    }
+
     /// Get the table schema of the snapshot
     pub fn schema(&self) -> KernelSchemaRef {
         self.inner.table_configuration().schema()
@@ -618,6 +626,11 @@ impl EagerSnapshot {
     /// Get the table version of the snapshot
     pub fn version(&self) -> i64 {
         self.snapshot.version()
+    }
+
+    /// Get the checkpoint version currently backing this snapshot, if any.
+    pub(crate) fn checkpoint_version(&self) -> Option<i64> {
+        self.snapshot.checkpoint_version()
     }
 
     /// Get the timestamp of the given version

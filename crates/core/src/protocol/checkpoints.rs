@@ -2,6 +2,7 @@
 
 use std::sync::LazyLock;
 
+use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
@@ -9,12 +10,12 @@ use chrono::{TimeZone, Utc};
 use delta_kernel::FileMeta;
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{Error as ObjectStoreError, ObjectStore};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_writer::ParquetObjectWriter;
 use regex::Regex;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::kernel::spawn_blocking_with_span;
@@ -26,6 +27,27 @@ use crate::{DeltaTable, open_table_with_version};
 
 static CHECKPOINT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"_delta_log/(\d{20})\.(checkpoint).*$").unwrap());
+
+/// Try reading the `_last_checkpoint` file.
+///
+/// Missing or invalid hints are treated as absent so callers can safely fall
+/// back to directory listing.
+pub(crate) async fn read_last_checkpoint(
+    storage: &dyn ObjectStore,
+    log_path: &Path,
+) -> DeltaResult<Option<LastCheckpointHint>> {
+    const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
+    let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
+    let maybe_data = storage.get(&file_path).await;
+    let data = match maybe_data {
+        Ok(data) => data.bytes().await?,
+        Err(ObjectStoreError::NotFound { .. }) => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    Ok(serde_json::from_slice(&data)
+        .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
+        .ok())
+}
 
 /// Creates checkpoint for a given table version, table state and object store
 #[tracing::instrument(skip(log_store), fields(operation = "checkpoint", version = version, table_uri = %log_store.root_url()))]
@@ -302,36 +324,10 @@ pub async fn cleanup_expired_logs_for(
 mod tests {
     use super::*;
 
-    use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
-    use object_store::Error;
     use object_store::path::Path;
-    use tracing::warn;
 
     use crate::DeltaResult;
     use crate::writer::test_utils::get_delta_schema;
-
-    /// Try reading the `_last_checkpoint` file.
-    ///
-    /// Note that we typically want to ignore a missing/invalid `_last_checkpoint` file without failing
-    /// the read. Thus, the semantics of this function are to return `None` if the file is not found or
-    /// is invalid JSON. Unexpected/unrecoverable errors are returned as `Err` case and are assumed to
-    /// cause failure.
-    async fn read_last_checkpoint(
-        storage: &dyn ObjectStore,
-        log_path: &Path,
-    ) -> DeltaResult<Option<LastCheckpointHint>> {
-        const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-        let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
-        let maybe_data = storage.get(&file_path).await;
-        let data = match maybe_data {
-            Ok(data) => data.bytes().await?,
-            Err(Error::NotFound { .. }) => return Ok(None),
-            Err(err) => return Err(err.into()),
-        };
-        Ok(serde_json::from_slice(&data)
-            .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
-            .ok())
-    }
 
     #[tokio::test]
     async fn test_create_checkpoint_for() {

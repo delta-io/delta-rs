@@ -1,7 +1,15 @@
-use deltalake_core::{DeltaResult, DeltaTableBuilder};
+use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
+use deltalake_core::table::builder::DeltaTableConfig;
+use deltalake_core::table::state::DeltaTableState;
+use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
+use object_store::path::Path as StorePath;
+use object_store::{
+    MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+};
 use pretty_assertions::assert_eq;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use url::Url;
 
@@ -15,6 +23,167 @@ fn find_git_root() -> PathBuf {
         .output()
         .unwrap();
     PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
+#[derive(Debug)]
+struct InstrumentedStore {
+    inner: Arc<dyn ObjectStore>,
+    recorded_gets: Option<Mutex<Vec<String>>>,
+    delay_gets: bool,
+}
+
+impl std::fmt::Display for InstrumentedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.fmt(f)
+    }
+}
+
+impl InstrumentedStore {
+    fn new_slow(location: Url) -> DeltaResult<Self> {
+        Ok(Self {
+            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
+            recorded_gets: None,
+            delay_gets: true,
+        })
+    }
+
+    fn new_recording(location: Url) -> DeltaResult<Self> {
+        Ok(Self {
+            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
+            recorded_gets: Some(Mutex::new(Vec::new())),
+            delay_gets: false,
+        })
+    }
+
+    fn recorded_gets(&self) -> Vec<String> {
+        self.recorded_gets
+            .as_ref()
+            .expect("recorded_gets not enabled for this store")
+            .lock()
+            .expect("recorded_gets mutex poisoned")
+            .clone()
+    }
+
+    fn clear_recorded_gets(&self) {
+        self.recorded_gets
+            .as_ref()
+            .expect("recorded_gets not enabled for this store")
+            .lock()
+            .expect("recorded_gets mutex poisoned")
+            .clear();
+    }
+
+    fn record_get(&self, location: &StorePath) {
+        if let Some(recorded_gets) = &self.recorded_gets {
+            recorded_gets
+                .lock()
+                .expect("recorded_gets mutex poisoned")
+                .push(location.to_string());
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for InstrumentedStore {
+    async fn put(&self, location: &StorePath, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
+        self.inner.put(location, bytes).await
+    }
+
+    async fn put_opts(
+        &self,
+        location: &StorePath,
+        bytes: PutPayload,
+        options: PutOptions,
+    ) -> ObjectStoreResult<PutResult> {
+        self.inner.put_opts(location, bytes, options).await
+    }
+
+    async fn get(&self, location: &StorePath) -> ObjectStoreResult<GetResult> {
+        self.record_get(location);
+        if self.delay_gets {
+            tokio::time::sleep(tokio::time::Duration::from_secs_f64(0.01)).await;
+        }
+        self.inner.get(location).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &StorePath,
+        options: object_store::GetOptions,
+    ) -> ObjectStoreResult<GetResult> {
+        self.record_get(location);
+        self.inner.get_opts(location, options).await
+    }
+
+    async fn get_range(
+        &self,
+        location: &StorePath,
+        range: std::ops::Range<u64>,
+    ) -> ObjectStoreResult<bytes::Bytes> {
+        self.record_get(location);
+        self.inner.get_range(location, range).await
+    }
+
+    async fn head(&self, location: &StorePath) -> ObjectStoreResult<object_store::ObjectMeta> {
+        self.inner.head(location).await
+    }
+
+    async fn delete(&self, location: &StorePath) -> ObjectStoreResult<()> {
+        self.inner.delete(location).await
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&StorePath>,
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&StorePath>,
+        offset: &StorePath,
+    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&StorePath>,
+    ) -> ObjectStoreResult<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &StorePath, to: &StorePath) -> ObjectStoreResult<()> {
+        self.inner.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(&self, from: &StorePath, to: &StorePath) -> ObjectStoreResult<()> {
+        self.inner.copy_if_not_exists(from, to).await
+    }
+
+    async fn rename_if_not_exists(
+        &self,
+        from: &StorePath,
+        to: &StorePath,
+    ) -> ObjectStoreResult<()> {
+        self.inner.rename_if_not_exists(from, to).await
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &StorePath,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart(location).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &StorePath,
+        options: PutMultipartOptions,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
+    }
 }
 
 #[tokio::test]
@@ -34,7 +203,7 @@ async fn test_log_buffering() {
     let location = Url::from_directory_path(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
-    let store = std::sync::Arc::new(fs_common::SlowStore::new(location.clone()).unwrap());
+    let store = Arc::new(InstrumentedStore::new_slow(location.clone()).unwrap());
 
     let mut seq_version = 0;
     let t = SystemTime::now();
@@ -101,6 +270,19 @@ async fn test_log_buffering_success_explicit_version() {
             .unwrap();
         table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
+        let err = table.update_incremental(Some(0)).await.unwrap_err();
+        assert!(
+            matches!(err, DeltaTableError::Generic(_)),
+            "expected downgrade through update_incremental to fail with an existing error shape: {err}"
+        );
+        assert!(
+            err.to_string()
+                .contains("Cannot downgrade via update_incremental from version 10 to 0"),
+            "expected downgrade error message to direct callers to load_version: {err}"
+        );
+        assert_eq!(table.version(), Some(10));
+        table.load_version(0).await.unwrap();
+        assert_eq!(table.version(), Some(0));
 
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
@@ -146,6 +328,156 @@ async fn test_log_buffering_success_explicit_version() {
         table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
     }
+}
+
+#[tokio::test]
+async fn test_update_incremental_does_not_reread_initial_commit() {
+    let n_commits = 10;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().to_path_buf();
+    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
+    for _ in 0..n_commits {
+        let add = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    let location = Url::from_directory_path(&path).unwrap();
+    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
+    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+    let mut table = DeltaTableBuilder::from_url(location.clone())
+        .unwrap()
+        .with_storage_backend(store.clone(), location)
+        .with_version(0)
+        .load()
+        .await
+        .unwrap();
+
+    store.clear_recorded_gets();
+    table.update_incremental(None).await.unwrap();
+
+    let recorded_gets = store.recorded_gets();
+    assert_eq!(table.version(), Some(n_commits));
+    assert!(
+        recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/00000000000000000001.json")),
+        "expected incremental update to read newer commits: {recorded_gets:?}"
+    );
+    assert!(
+        !recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/00000000000000000000.json")),
+        "update_incremental reread the initial commit instead of reusing loaded state: {recorded_gets:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_update_incremental_skips_last_checkpoint_lookup_when_current_checkpoint_loaded() {
+    let n_commits = 2;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().to_path_buf();
+    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
+    for _ in 0..n_commits {
+        let add = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    let location = Url::from_directory_path(&path).unwrap();
+    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
+    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+
+    deltalake_core::checkpoints::create_checkpoint_from_table_url_and_cleanup(
+        location.clone(),
+        table.version().unwrap(),
+        Some(false),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let mut table = DeltaTableBuilder::from_url(location.clone())
+        .unwrap()
+        .with_storage_backend(store.clone(), location)
+        .load()
+        .await
+        .unwrap();
+
+    store.clear_recorded_gets();
+    table.update_incremental(None).await.unwrap();
+
+    let recorded_gets = store.recorded_gets();
+    assert_eq!(table.version(), Some(n_commits));
+    assert!(
+        !recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
+        "expected no same-version checkpoint lookup when already loaded from the current checkpoint: {recorded_gets:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_delta_table_state_update_refreshes_same_version_checkpoint_base() {
+    let n_commits = 2;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().to_path_buf();
+    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
+    for _ in 0..n_commits {
+        let add = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    let location = Url::from_directory_path(&path).unwrap();
+    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
+    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+    let instrumented_table = DeltaTableBuilder::from_url(location.clone())
+        .unwrap()
+        .with_storage_backend(store.clone(), location.clone())
+        .build()
+        .unwrap();
+    let mut state = DeltaTableState::try_new(
+        instrumented_table.log_store().as_ref(),
+        DeltaTableConfig::default(),
+        Some(n_commits),
+    )
+    .await
+    .unwrap();
+
+    deltalake_core::checkpoints::create_checkpoint_from_table_url_and_cleanup(
+        location,
+        n_commits,
+        Some(false),
+        None,
+    )
+    .await
+    .unwrap();
+
+    store.clear_recorded_gets();
+    state
+        .update(instrumented_table.log_store().as_ref(), Some(n_commits))
+        .await
+        .unwrap();
+
+    let recorded_gets = store.recorded_gets();
+    assert!(
+        recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
+        "expected DeltaTableState::update to consult _last_checkpoint for a same-version refresh: {recorded_gets:?}"
+    );
+
+    store.clear_recorded_gets();
+    state
+        .update(instrumented_table.log_store().as_ref(), Some(n_commits))
+        .await
+        .unwrap();
+
+    let recorded_gets = store.recorded_gets();
+    assert!(
+        !recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
+        "expected DeltaTableState::update to skip _last_checkpoint once refreshed from the current checkpoint: {recorded_gets:?}"
+    );
 }
 
 #[tokio::test]
