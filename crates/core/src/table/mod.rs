@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use futures::future::ready;
 use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{ObjectStore, path::Path};
+use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
