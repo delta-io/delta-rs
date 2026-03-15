@@ -169,3 +169,16 @@ jobs:
           fail_ci_if_error: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  print_doc_coverage:
+    name: Print documentation coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+      - id: coverage
+        uses: bewee/rustdoc-coverage-action@v1
+        working-dir: ./crates/deltalake
+      - run: echo ${{ steps.coverage.outputs.documented }}
