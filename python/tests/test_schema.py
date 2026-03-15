@@ -238,3 +238,33 @@ def test_field_serialization():
     f = Field("fieldname", "binary", metadata={"key": "value"})
     assert f.name == "fieldname"
     assert f.metadata == {"key": "value"}
+
+
+# <https://github.com/delta-io/delta-rs/issues/1947>
+@pytest.mark.pyarrow
+def test_void_type_to_arrow():
+    """Test that void type fields are dropped in Arrow conversion.
+
+    Per the Delta protocol, void data type columns may exist in tables and
+    it is recommended to drop them on reads. Void fields originate from
+    Delta log metadata, so we use from_json() to simulate this.
+    """
+    import pyarrow as pa
+
+    # StructType with void fields should drop them
+    struct_json = '{"type":"struct","fields":[{"name":"a","type":"long","nullable":true,"metadata":{}},{"name":"b","type":"void","nullable":true,"metadata":{}}]}'
+    struct_type = StructType.from_json(struct_json)
+    arrow_struct = struct_type.to_arrow()
+    struct_dt = pa.DataType._import_from_c(arrow_struct.__arrow_c_schema__())
+    assert struct_dt.num_fields == 1
+    assert struct_dt.field(0).name == "a"
+
+    # Schema with no void fields should work as before
+    normal_schema = Schema(
+        [
+            Field("x", "integer", nullable=True),
+            Field("y", "string", nullable=False),
+        ]
+    )
+    normal_arrow = normal_schema.to_arrow()
+    assert len(normal_arrow) == 2

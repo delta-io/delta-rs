@@ -12,13 +12,13 @@ use deltalake::kernel::{
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::types::PyCapsule;
-use pyo3::{IntoPyObjectExt, prelude::*};
-use pyo3_arrow::PyDataType;
-use pyo3_arrow::PyField;
-use pyo3_arrow::PySchema as PyArrow3Schema;
+use pyo3::{prelude::*, IntoPyObjectExt};
 use pyo3_arrow::error::PyArrowResult;
 use pyo3_arrow::export::{Arro3DataType, Arro3Field, Arro3Schema};
 use pyo3_arrow::ffi::to_schema_pycapsule;
+use pyo3_arrow::PyDataType;
+use pyo3_arrow::PyField;
+use pyo3_arrow::PySchema as PyArrow3Schema;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -31,6 +31,24 @@ use crate::utils::warn;
 // See: https://github.com/PyO3/pyo3/issues/1836
 
 // Decimal is separate special case, since it has parameters
+
+fn is_void_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Primitive(p) if p.to_string() == "void")
+}
+
+/// Filter out void fields from a struct type.
+/// Per the Delta protocol: "Existing tables may have void data type columns.
+/// Behavior is undefined for void data type columns but it is recommended
+/// to drop any void data type columns on reads."
+fn filter_void_fields(struct_type: &DeltaStructType) -> PyResult<DeltaStructType> {
+    let fields: Vec<StructField> = struct_type
+        .fields()
+        .filter(|f| !is_void_type(f.data_type()))
+        .cloned()
+        .collect();
+    DeltaStructType::try_new(fields)
+        .map_err(|e| PyException::new_err(format!("Failed to filter void fields: {e}")))
+}
 
 fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
     match schema_type {
@@ -698,7 +716,8 @@ impl StructType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
-        let inner_type = DataType::Struct(Box::new(self.inner_type.clone()));
+        let filtered = filter_void_fields(&self.inner_type)?;
+        let inner_type = DataType::Struct(Box::new(filtered));
         let arrow_type: ArrowDataType = (&inner_type)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
@@ -717,7 +736,8 @@ impl StructType {
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
-        let inner_type = DataType::Struct(Box::new(self.inner_type.clone()));
+        let filtered = filter_void_fields(&self.inner_type)?;
+        let inner_type = DataType::Struct(Box::new(filtered));
         let arrow_type: ArrowDataType = (&inner_type)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
@@ -799,7 +819,8 @@ impl PySchema {
     #[pyo3(signature = (as_large_types = false))]
     fn to_arrow(self_: PyRef<'_, Self>, as_large_types: bool) -> PyResult<Arro3Schema> {
         let super_ = self_.as_ref();
-        let res: ArrowSchema = (&super_.inner_type.clone())
+        let filtered = filter_void_fields(&super_.inner_type)?;
+        let res: ArrowSchema = (&filtered)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
@@ -871,8 +892,8 @@ impl PySchema {
         py: Python<'py>,
     ) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let super_ = self_.as_ref();
-
-        let res: ArrowSchema = (&super_.inner_type.clone())
+        let filtered = filter_void_fields(&super_.inner_type)?;
+        let res: ArrowSchema = (&filtered)
             .try_into_arrow()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
         to_schema_pycapsule(py, res)
