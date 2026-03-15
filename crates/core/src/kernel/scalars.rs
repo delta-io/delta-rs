@@ -76,6 +76,10 @@ impl ScalarExt for Scalar {
             Self::Float(f) => f.to_string(),
             Self::Double(d) => d.to_string(),
             Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+            Self::TimestampNanos(ts) => {
+                let ts = Utc.timestamp_nanos(*ts);
+                ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string()
+            }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
@@ -312,6 +316,10 @@ impl ScalarExt for Scalar {
             Self::Float(f) => Value::Number(serde_json::Number::from_f64(*f as f64).unwrap()),
             Self::Double(d) => Value::Number(serde_json::Number::from_f64(*d).unwrap()),
             Self::Boolean(b) => Value::Bool(*b),
+            Self::TimestampNanos(ts) => {
+                let ts = Utc.timestamp_micros(*ts).single().unwrap();
+                Value::String(ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string())
+            }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 Value::String(ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())

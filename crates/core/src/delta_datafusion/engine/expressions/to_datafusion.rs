@@ -77,6 +77,9 @@ pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
         Scalar::Timestamp(value) => {
             ScalarValue::TimestampMicrosecond(Some(*value), Some("UTC".into()))
         }
+        Scalar::TimestampNanos(value) => {
+            ScalarValue::TimestampNanosecond(Some(*value), Some("UTC".into()))
+        }
         Scalar::TimestampNtz(value) => ScalarValue::TimestampMicrosecond(Some(*value), None),
         Scalar::Date(value) => ScalarValue::Date32(Some(*value)),
         Scalar::Binary(value) => ScalarValue::Binary(Some(value.clone())),
