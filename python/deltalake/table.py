@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import warnings
 from collections.abc import Generator, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -29,7 +28,7 @@ from deltalake._internal import (
     TableFeatures,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
-from deltalake._util import encode_partition_value
+from deltalake._util import deprecate_positional_commit_args, encode_partition_value
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import Schema as DeltaSchema
@@ -200,10 +199,10 @@ class DeltaTable:
         description: str | None = None,
         configuration: Mapping[str, str | None] | None = None,
         storage_options: dict[str, str] | None = None,
-        raise_if_key_not_exists: bool = True,
         *args,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        raise_if_key_not_exists: bool = True,
     ) -> DeltaTable:
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -219,9 +218,9 @@ class DeltaTable:
             description: User-provided description for this table.
             configuration:  A map containing configuration options for the metadata action.
             storage_options: Options passed to the object store crate.
-            raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            raise_if_key_not_exists: Whether to raise an error if the configuration uses keys that are not Delta keys
 
         Returns:
             DeltaTable: created delta table
@@ -242,18 +241,7 @@ class DeltaTable:
             )
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("create", args, commit_properties, post_commithook_properties)
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
@@ -562,11 +550,11 @@ class DeltaTable:
         retention_hours: int | None = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
+        *args,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
         full: bool = False,
         keep_versions: list[int] | None = None,
-        *args,
-        post_commithook_properties: PostCommitHookProperties | None = None,
-        commit_properties: CommitProperties | None = None,
     ) -> list[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table.
@@ -577,26 +565,15 @@ class DeltaTable:
             retention_hours: the retention threshold in hours, if none then the value from `delta.deletedFileRetentionDuration` is used or default of 1 week otherwise.
             dry_run: when activated, list only the files, delete otherwise
             enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `delta.deletedFileRetentionDuration`.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
             full: when set to True, will perform a "full" vacuum and remove all files not referenced the transaction log.
                 when False, it will only vacuum not referenced files since last log checkpoint (or since genesis if no checkpoint exists).
             keep_versions: An optional list of versions to keep. If provided, files from these versions will not be deleted.
-            post_commithook_properties: properties for the post commit hook. If None, default values are used.
-            commit_properties: properties of the transaction commit. If None, default values are used.
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("vacuum", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
@@ -620,8 +597,8 @@ class DeltaTable:
         writer_properties: WriterProperties | None = None,
         error_on_type_mismatch: bool = True,
         *args,
-        post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -632,8 +609,8 @@ class DeltaTable:
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
             error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
-            post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
             the metrics from update
 
@@ -675,18 +652,7 @@ class DeltaTable:
             {'num_added_files': 1, 'num_removed_files': 1, 'num_updated_rows': 1, 'num_copied_rows': 2, 'execution_time_ms': ..., 'scan_time_ms': ...}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("update", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         if updates is None and new_values is not None:
             updates = {}
             for key, value in new_values.items():
@@ -763,8 +729,8 @@ class DeltaTable:
         max_spill_size: int | None = None,
         max_temp_directory_size: int | None = None,
         *args,
-        post_commithook_properties: PostCommitHookProperties | None = None,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> TableMerger:
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
@@ -784,24 +750,13 @@ class DeltaTable:
                 If not specified, uses DataFusion's default.
                 Set this to avoid OOM when merging into large tables with a source table which touches a large number of files.
             max_temp_directory_size: The maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
-            post_commithook_properties: properties for the post commit hook. If None, default values are used.
             commit_properties: properties for the commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             TableMerger: TableMerger Object
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("merge", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
 
         source = RecordBatchReader.from_arrow(source)
         compatible_delta_schema = _convert_arro3_schema_to_delta(source.schema)
@@ -826,7 +781,7 @@ class DeltaTable:
     def restore(
         self,
         target: int | datetime | str,
-        *args,
+        *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
         commit_properties: CommitProperties | None = None,
@@ -843,16 +798,6 @@ class DeltaTable:
         Returns:
             the metrics from restore.
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
         if isinstance(target, datetime):
             metrics = self._table.restore(
                 target.isoformat(),
@@ -1179,18 +1124,7 @@ class DeltaTable:
         Returns:
             the metrics from delete.
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("delete", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         metrics = self._table.delete(
             predicate,
             writer_properties,
@@ -1232,18 +1166,7 @@ class DeltaTable:
             {'dry_run': False, 'files_removed': ['6-0d084325-6885-4847-b008-82c1cf30674c-0.parquet', 5-4fba1d3e-3e20-4de1-933d-a8e13ac59f53-0.parquet']}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("repair", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         metrics = self._table.repair(
             dry_run,
             commit_properties,
@@ -1278,18 +1201,7 @@ class DeltaTable:
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("create_write_transaction", args, commit_properties, post_commithook_properties)
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
@@ -1830,18 +1742,7 @@ class TableAlterer:
             ProtocolVersions(min_reader_version=1, min_writer_version=7, writer_features=['appendOnly'], reader_features=None)
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("add_feature", args, commit_properties, post_commithook_properties)
         if isinstance(feature, TableFeatures):
             feature = [feature]
         self.table._table.add_feature(
@@ -1878,18 +1779,7 @@ class TableAlterer:
             )
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("add_columns", args, commit_properties, post_commithook_properties)
         if isinstance(fields, DeltaField):
             fields = [fields]
 
@@ -1929,18 +1819,7 @@ class TableAlterer:
             {'delta.constraints.value_gt_5': 'value > 5'}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("add_constraint", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         self.table._table.add_constraints(
             constraints,
             commit_properties,
@@ -1983,18 +1862,7 @@ class TableAlterer:
             {}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("drop_constraint", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         self.table._table.drop_constraints(
             name,
             raise_if_not_exists,
@@ -2034,18 +1902,7 @@ class TableAlterer:
             dt.alter.set_table_properties({"delta.enableChangeDataFeed": "true"})
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("set_table_properties", args, commit_properties, post_commithook_properties)
         self.table._table.set_table_properties(
             properties,
             raise_if_not_exists,
@@ -2075,18 +1932,7 @@ class TableAlterer:
             dt.alter.set_table_name("new_table_name")
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("set_table_name", args, commit_properties, post_commithook_properties)
         self.table._table.set_table_name(
             name, commit_properties, post_commithook_properties
         )
@@ -2113,18 +1959,7 @@ class TableAlterer:
             dt.alter.set_table_description("new_table_description")
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("set_table_description", args, commit_properties, post_commithook_properties)
         self.table._table.set_table_description(
             description, commit_properties, post_commithook_properties
         )
@@ -2148,18 +1983,7 @@ class TableAlterer:
         :param post_commithook_properties: properties for the post commit hook. If None, default values are used.
         :return:
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("set_column_metadata", args, commit_properties, post_commithook_properties)
         self.table._table.set_column_metadata(
             column, metadata, commit_properties, post_commithook_properties
         )
@@ -2229,18 +2053,7 @@ class TableOptimizer:
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 1, 'numBatches': 2, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("compact", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 
@@ -2314,18 +2127,7 @@ class TableOptimizer:
             {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
             ```
         """
-        if args:
-            warnings.warn(
-                "Passing commit_properties or post_commithook_properties positionally "
-                "is deprecated and will be removed in a future release. "
-                "Use keyword arguments instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if len(args) >= 1:
-                commit_properties = args[0]
-            if len(args) >= 2:
-                post_commithook_properties = args[1]
+        commit_properties, post_commithook_properties = deprecate_positional_commit_args("z_order", args, commit_properties, post_commithook_properties, legacy_order=("post_commithook_properties", "commit_properties"))
         if isinstance(min_commit_interval, timedelta):
             min_commit_interval = int(min_commit_interval.total_seconds())
 

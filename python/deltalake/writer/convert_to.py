@@ -9,6 +9,7 @@ from typing import (
 
 from deltalake._internal import Schema
 from deltalake._internal import convert_to_deltalake as _convert_to_deltalake
+from deltalake._util import deprecate_positional_commit_args
 from deltalake.writer._utils import try_get_deltatable
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ def convert_to_deltalake(
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
+    *args,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
@@ -50,6 +52,7 @@ def convert_to_deltalake(
         commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
+    commit_properties, post_commithook_properties = deprecate_positional_commit_args("convert_to_deltalake", args, commit_properties, post_commithook_properties)
     if partition_by is not None and partition_strategy is None:
         raise ValueError("Partition strategy has to be provided with partition_by.")
 
