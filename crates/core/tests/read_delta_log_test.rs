@@ -397,6 +397,50 @@ async fn test_update_incremental_does_not_reread_initial_commit() {
 }
 
 #[tokio::test]
+async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant_hint_lookup() {
+    let n_commits = 2;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().to_path_buf();
+    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
+    for _ in 0..n_commits {
+        let add = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    let location = Url::from_directory_path(&path).unwrap();
+    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
+    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+
+    deltalake_core::checkpoints::create_checkpoint_from_table_url_and_cleanup(
+        location.clone(),
+        table.version().unwrap(),
+        Some(false),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let mut table = DeltaTableBuilder::from_url(location.clone())
+        .unwrap()
+        .with_storage_backend(store.clone(), location)
+        .load()
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(n_commits));
+
+    store.clear_recorded_gets();
+    table.update_incremental(None).await.unwrap();
+
+    let recorded_gets = store.recorded_gets();
+    assert!(
+        !recorded_gets
+            .iter()
+            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
+        "same-version update reread _last_checkpoint even though the current snapshot was already checkpoint-backed: {recorded_gets:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_log_buffering_fail() {
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().to_path_buf();
