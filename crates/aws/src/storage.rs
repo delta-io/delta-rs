@@ -58,15 +58,15 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
                 builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
 
-        for (key, value) in options.iter() {
-            if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                builder = builder.with_config(key, value.clone());
-            }
-        }
-
         if let Some(ref cert_config) = config.certificate {
             if let Some(ref path) = cert_config.certificate_path {
                 builder = builder.with_client_options(client_options_from_certificate(path)?);
+            }
+        }
+
+        for (key, value) in options.iter() {
+            if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
+                builder = builder.with_config(key, value.clone());
             }
         }
 
