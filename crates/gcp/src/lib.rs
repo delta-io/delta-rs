@@ -6,7 +6,8 @@ use deltalake_core::logstore::object_store::ObjectStoreScheme;
 use deltalake_core::logstore::object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use deltalake_core::logstore::{LogStore, LogStoreFactory, default_logstore, logstore_factories};
 use deltalake_core::logstore::{
-    ObjectStoreFactory, ObjectStoreRef, StorageConfig, object_store_factories,
+    ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
+    object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::client::SpawnedReqwestConnector;
@@ -49,6 +50,13 @@ impl ObjectStoreFactory for GcpFactory {
             builder =
                 builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
+
+        if let Some(ref cert_config) = config.certificate {
+            if let Some(ref path) = cert_config.certificate_path {
+                builder = builder.with_client_options(client_options_from_certificate(path)?);
+            }
+        }
+
         let config = config::GcpConfigHelper::try_new(config.raw.as_gcp_options())?.build()?;
 
         let (_, path) =
