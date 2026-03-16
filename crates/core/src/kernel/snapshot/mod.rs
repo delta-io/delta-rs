@@ -190,6 +190,8 @@ impl Snapshot {
             config: self.config.clone(),
         });
         if snapshot.version() as u64 == current_version {
+            // `target_version` was `None`, but there were no new commits.
+            // We may still need to pick up a checkpoint written for the current version.
             snapshot
                 .refresh_same_version_checkpoint_if_needed(engine, current_version)
                 .await
@@ -198,6 +200,9 @@ impl Snapshot {
         }
     }
 
+    /// Rebuild a same-version snapshot if a checkpoint showed up after it was loaded.
+    ///
+    /// Version bumps still go through the normal snapshot update path.
     async fn refresh_same_version_checkpoint_if_needed(
         self: Arc<Self>,
         engine: Arc<dyn Engine>,
@@ -565,6 +570,9 @@ struct LastCheckpointVersionHint {
     version: Version,
 }
 
+/// Read `_last_checkpoint` and return the hinted version when present.
+///
+/// Missing, empty, or invalid hint files return `Ok(None)` so callers can fall back to listing.
 async fn read_last_checkpoint_version(
     engine: Arc<dyn Engine>,
     log_root: Url,
