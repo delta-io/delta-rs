@@ -273,16 +273,12 @@ pub(crate) fn files_matching_predicate<'a>(
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
             |(file, keep_file)| {
-                if keep_file {
-                    Some(file.add_action())
-                } else {
-                    None
-                }
+                if keep_file { Some(file.to_add()) } else { None }
             },
         )))
     } else {
         Ok(Either::Right(
-            log_data.into_iter().map(|file| file.add_action()),
+            log_data.into_iter().map(|file| file.to_add()),
         ))
     }
 }
