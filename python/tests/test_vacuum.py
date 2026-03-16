@@ -150,6 +150,34 @@ def test_vacuum_keep_versions():
     }
 
 
+def test_vacuum_keep_versions_from_history_order():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    keep_versions = [commit["version"] for commit in dt.history()]
+
+    tombstones_sorted = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+            keep_versions=sorted(keep_versions),
+        )
+    )
+
+    tombstones_from_history = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+            keep_versions=keep_versions,
+        )
+    )
+
+    assert tombstones_from_history == tombstones_sorted
+
+
 def test_vacuum_lite_mode_no_list_operation(
     tmp_path: pathlib.Path, sample_table: Table
 ):
