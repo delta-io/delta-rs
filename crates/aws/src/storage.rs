@@ -14,7 +14,8 @@ use deltalake_core::logstore::object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
-    ObjectStoreFactory, ObjectStoreRef, StorageConfig, config::str_is_truthy,
+    ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
+    config::str_is_truthy,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::Future;
@@ -60,6 +61,12 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         for (key, value) in options.iter() {
             if let Ok(key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
                 builder = builder.with_config(key, value.clone());
+            }
+        }
+
+        if let Some(ref cert_config) = config.certificate {
+            if let Some(ref path) = cert_config.certificate_path {
+                builder = builder.with_client_options(client_options_from_certificate(path)?);
             }
         }
 

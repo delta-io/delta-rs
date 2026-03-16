@@ -86,7 +86,7 @@ pub use self::factories::{
 pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
-    ObjectStoreRegistry, ObjectStoreRetryExt,
+    ObjectStoreRegistry, ObjectStoreRetryExt, client_options_from_certificate,
 };
 /// Convenience re-export of the object store crate
 pub use ::object_store;
