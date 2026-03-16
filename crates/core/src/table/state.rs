@@ -22,6 +22,7 @@ use crate::kernel::{
     ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
 };
 use crate::logstore::LogStore;
+use crate::protocol::checkpoints::read_last_checkpoint;
 use crate::{DeltaResult, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
@@ -161,10 +162,50 @@ impl DeltaTableState {
         version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         log_store.refresh().await?;
+        let current_version = self.version();
+        let loaded_checkpoint_version = self.snapshot.checkpoint_version();
         self.snapshot
             .update(log_store, version.map(|v| v as u64))
             .await?;
+
+        let refreshed_version = self.version();
+        if refreshed_version == current_version
+            && self
+                .should_reload_for_current_checkpoint(
+                    log_store,
+                    refreshed_version,
+                    loaded_checkpoint_version,
+                )
+                .await?
+        {
+            tracing::trace!(
+                version = refreshed_version,
+                loaded_checkpoint_version = ?loaded_checkpoint_version,
+                "reloading table state to pick up a newer checkpoint at the current version"
+            );
+            let config = self.load_config().clone();
+            *self = Self::try_new(log_store, config, Some(refreshed_version)).await?;
+        }
         Ok(())
+    }
+
+    // This is intentionally narrow: only detect a newer checkpoint for the
+    // already-loaded table version. General checkpoint selection stays in the
+    // snapshot/kernel update path.
+    async fn should_reload_for_current_checkpoint(
+        &self,
+        log_store: &dyn LogStore,
+        current_version: i64,
+        loaded_checkpoint_version: Option<i64>,
+    ) -> Result<bool, DeltaTableError> {
+        if loaded_checkpoint_version == Some(current_version) {
+            return Ok(false);
+        }
+
+        Ok(matches!(
+            read_last_checkpoint(log_store.object_store(None).as_ref(), log_store.log_path()).await?,
+            Some(last_checkpoint) if last_checkpoint.version as i64 == current_version
+        ))
     }
 
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
