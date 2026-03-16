@@ -216,7 +216,7 @@ async fn execute(
         .iter()
         .filter(|a| !latest_state_files_set.contains(&a.path().to_string()))
         .map(|f| {
-            let mut a = f.add_action();
+            let mut a = f.to_add();
             a.data_change = true;
             a
         })

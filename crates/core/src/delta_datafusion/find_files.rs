@@ -111,7 +111,7 @@ pub(crate) async fn find_files(
             let result = FindFiles {
                 candidates: snapshot
                     .file_views(&log_store, None)
-                    .map_ok(|f| f.add_action())
+                    .map_ok(|f| f.to_add())
                     .try_collect()
                     .await?,
                 partition_scan: true,
@@ -272,7 +272,7 @@ async fn find_files_scan(
     let candidate_map: HashMap<_, _> = snapshot
         .file_views(&log_store, None)
         .map_ok(|f| {
-            let add = f.add_action();
+            let add = f.to_add();
             (add.path.clone(), add)
         })
         .try_collect()
@@ -390,11 +390,7 @@ pub(crate) fn add_actions_partition_mem_table(
 }
 
 async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot
-        .log_data()
-        .iter()
-        .map(|f| f.add_action())
-        .collect_vec();
+    let actions = snapshot.log_data().iter().map(|f| f.to_add()).collect_vec();
 
     let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
         return Ok(vec![]);
