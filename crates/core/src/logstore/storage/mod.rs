@@ -117,7 +117,9 @@ pub fn client_options_from_certificate(path: &str) -> DeltaResult<object_store::
             DeltaTableError::Generic(format!("Failed to read certificate file '{path}': {e}"))
         })?;
     let cert = object_store::Certificate::from_pem(&buf).map_err(|e| {
-        DeltaTableError::Generic(format!("Failed to parse PEM certificate from '{path}': {e}"))
+        DeltaTableError::Generic(format!(
+            "Failed to parse PEM certificate from '{path}': {e}"
+        ))
     })?;
     Ok(object_store::ClientOptions::new().with_root_certificate(cert))
 }
@@ -182,10 +184,7 @@ mod tests {
         config
             .try_update_key("certificate_path", "/some/path.pem")
             .unwrap();
-        assert_eq!(
-            config.certificate_path,
-            Some("/some/path.pem".to_string())
-        );
+        assert_eq!(config.certificate_path, Some("/some/path.pem".to_string()));
     }
 
     #[test]
