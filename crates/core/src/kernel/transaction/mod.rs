@@ -300,10 +300,9 @@ impl CommitData {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
-            app_metadata.insert(
-                "clientVersion".to_string(),
-                Value::String(format!("delta-rs.{}", crate_version())),
-            );
+            app_metadata
+                .entry("clientVersion".to_string())
+                .or_insert(Value::String(format!("delta-rs.{}", crate_version())));
             app_metadata.extend(commit_info.info);
             commit_info.info = app_metadata.clone();
             // commit info should be the first action to support in-commit timestamps.
@@ -1007,6 +1006,7 @@ mod tests {
         LogStore, StorageConfig, commit_uri_from_version, default_logstore::DefaultLogStore,
     };
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
+    use serde_json::json;
     use url::Url;
 
     #[test]
@@ -1085,5 +1085,30 @@ mod tests {
     fn test_commit_metrics() {
         let metrics = CommitMetrics { num_retries: 3 };
         assert_eq!(metrics.num_retries, 3);
+    }
+
+    #[test]
+    fn test_commit_data_client_version() {
+        let no_metadata = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+        assert_eq!(
+            *no_metadata.app_metadata.get("clientVersion").unwrap(),
+            json!(format!("delta-rs.{}", crate_version()))
+        );
+
+        let with_metadata = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("clientVersion".to_owned(), json!("test-client.0.0.1"))]),
+            vec![],
+        );
+        assert_eq!(
+            *with_metadata.app_metadata.get("clientVersion").unwrap(),
+            json!("test-client.0.0.1")
+        );
     }
 }
