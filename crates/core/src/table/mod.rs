@@ -215,9 +215,10 @@ impl DeltaTable {
         if let Some(requested_version) = max_version
             && requested_version < current_version
         {
-            return Err(DeltaTableError::generic(format!(
-                "Cannot downgrade via update_incremental from version {current_version} to {requested_version}; use load_version"
-            )));
+            return Err(DeltaTableError::VersionDowngrade {
+                current_version,
+                requested_version,
+            });
         }
 
         state.update(&self.log_store, max_version).await?;
