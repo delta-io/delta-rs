@@ -43,8 +43,13 @@ def deprecate_positional_commit_args(
     mapped = dict(zip(legacy_order, args))
     if "commit_properties" in mapped and commit_properties is not None:
         raise TypeError(f"{method_name}() got multiple values for 'commit_properties'")
-    if "post_commithook_properties" in mapped and post_commithook_properties is not None:
-        raise TypeError(f"{method_name}() got multiple values for 'post_commithook_properties'")
+    if (
+        "post_commithook_properties" in mapped
+        and post_commithook_properties is not None
+    ):
+        raise TypeError(
+            f"{method_name}() got multiple values for 'post_commithook_properties'"
+        )
     return (
         mapped.get("commit_properties", commit_properties),
         mapped.get("post_commithook_properties", post_commithook_properties),

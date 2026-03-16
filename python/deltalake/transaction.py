@@ -79,7 +79,12 @@ def create_table_with_add_actions(
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
-    commit_properties, post_commithook_properties = deprecate_positional_commit_args("create_table_with_add_actions", args, commit_properties, post_commithook_properties)
+    commit_properties, post_commithook_properties = deprecate_positional_commit_args(
+        "create_table_with_add_actions",
+        args,
+        commit_properties,
+        post_commithook_properties,
+    )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
     _create_table_with_add_actions(
