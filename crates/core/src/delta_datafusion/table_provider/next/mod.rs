@@ -357,12 +357,11 @@ impl DeltaScan {
             SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
             SnapshotWrapper::EagerSnapshot(esn) => {
                 if let Ok(files) = esn.files() {
-                    #[allow(clippy::unnecessary_to_owned)]
-                    let iter = Box::new(files.to_vec().into_iter());
+                    let owned: Vec<_> = files.to_vec();
                     scan_plan.scan.scan_metadata_from(
                         engine,
                         esn.snapshot().version() as u64,
-                        iter,
+                        Box::new(owned.into_iter()),
                         None,
                     )
                 } else {
