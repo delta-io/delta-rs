@@ -62,7 +62,7 @@ pub enum DeltaTableError {
 
     /// Error returned when an operation requests an older version than the currently loaded one.
     #[error(
-        "Cannot downgrade from version {current_version} to {requested_version}; use load_version"
+        "Cannot downgrade from version {current_version} to {requested_version}; use DeltaTable.load_version()"
     )]
     VersionDowngrade {
         /// The currently loaded version.
