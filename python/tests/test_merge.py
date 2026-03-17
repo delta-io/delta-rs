@@ -1915,6 +1915,58 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operationParameters"].get("predicate") == predicate
 
 
+def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(
+    tmp_path: pathlib.Path,
+):
+    initial = Table(
+        {
+            "id": Array([1], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["a"], ArrowField("part", type=DataType.string_view(), nullable=True)
+            ),
+        }
+    )
+    write_deltalake(tmp_path, initial, partition_by=["part"])
+
+    dt = DeltaTable(tmp_path)
+    source = Table(
+        {
+            "id": Array([2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["b"], ArrowField("part", type=DataType.string_view(), nullable=True)
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="s.id = t.id",
+        source_alias="s",
+        target_alias="t",
+        merge_schema=True,
+    ).when_not_matched_insert_all().execute()
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    expected = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["a", "b"],
+                ArrowField("part", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    assert result.schema == expected.schema
+    assert result == expected
+
+
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = Table(
