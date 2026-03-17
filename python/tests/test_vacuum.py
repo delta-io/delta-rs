@@ -293,3 +293,14 @@ def test_issue_3745(tmp_path: pathlib.Path):
 
     table = DeltaTable(tmp_path)
     table.vacuum()
+
+
+def test_positional_commit_args_raise_deprecation_warning(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        dt.vacuum(None, True, True, None, commit, True, [0])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import warnings
 from collections.abc import Generator, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -241,11 +242,21 @@ class DeltaTable:
             )
             ```
         """
-        commit_properties, post_commithook_properties = (
-            deprecate_positional_commit_args(
-                "create", args, commit_properties, post_commithook_properties
+        if args:
+            warnings.warn(
+                "Passing commit arguments positionally to create() is deprecated "
+                "and will be removed in a future release. Use keyword arguments instead.",
+                DeprecationWarning,
+                stacklevel=2,
             )
-        )
+            if len(args) > 3:
+                raise TypeError("create() got unexpected positional arguments")
+            commit_properties, post_commithook_properties, raise_if_key_not_exists = (
+                *args,
+                commit_properties,
+                post_commithook_properties,
+                raise_if_key_not_exists,
+            )[:3]
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
@@ -577,15 +588,22 @@ class DeltaTable:
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
-        commit_properties, post_commithook_properties = (
-            deprecate_positional_commit_args(
-                "vacuum",
-                args,
-                commit_properties,
-                post_commithook_properties,
-                legacy_order=("post_commithook_properties", "commit_properties"),
+        if args:
+            warnings.warn(
+                "Passing commit arguments positionally to vacuum() is deprecated "
+                "and will be removed in a future release. Use keyword arguments instead.",
+                DeprecationWarning,
+                stacklevel=2,
             )
-        )
+            if len(args) > 4:
+                raise TypeError("vacuum() got unexpected positional arguments")
+            post_commithook_properties, commit_properties, full, keep_versions = (
+                *args,
+                post_commithook_properties,
+                commit_properties,
+                full,
+                keep_versions,
+            )[:4]
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")

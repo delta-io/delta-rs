@@ -165,3 +165,11 @@ def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):
         DeltaTable(str(nonexistent_path))
 
     assert not nonexistent_path.exists()
+
+
+def test_positional_commit_args_raise_deprecation_warning(tmp_path: pathlib.Path):
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        DeltaTable.create(
+            tmp_path, schema, "error", None, None, None, None, None, commit, None, False
+        )
