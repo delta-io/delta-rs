@@ -253,29 +253,40 @@ impl VacuumBuilder {
         };
 
         let keep_files = match &self.keep_versions {
-            Some(versions) if !versions.is_empty() => {
+            Some(versions) => {
                 let mut sorted_versions = versions.clone();
                 sorted_versions.sort();
-                let mut keep_files: HashSet<String> = HashSet::new();
-                let mut state = DeltaTableState::try_new(
-                    &self.log_store,
-                    DeltaTableConfig::default(),
-                    Some(versions[0]),
-                )
-                .await?;
-                for version in sorted_versions {
-                    state.update(&self.log_store, Some(version)).await?;
-                    let files: Vec<String> = state
-                        .log_data()
-                        .into_iter()
-                        .map(|add| add.object_store_path())
-                        .map(|path| path.to_string())
-                        .collect();
-                    debug!("keep version:{version}\n, {files:#?}");
-                    keep_files.extend(files);
-                }
+                let mut sorted_versions = sorted_versions.into_iter();
+                match sorted_versions.next() {
+                    Some(initial_version) => {
+                        let mut keep_files: HashSet<String> = HashSet::new();
+                        let mut state = DeltaTableState::try_new(
+                            &self.log_store,
+                            DeltaTableConfig::default(),
+                            Some(initial_version),
+                        )
+                        .await?;
+                        let mut record_keep_files = |version: i64, state: &DeltaTableState| {
+                            let files: Vec<String> = state
+                                .log_data()
+                                .into_iter()
+                                .map(|add| add.object_store_path())
+                                .map(|path| path.to_string())
+                                .collect();
+                            debug!("keep version:{version}\n, {files:#?}");
+                            keep_files.extend(files);
+                        };
 
-                keep_files
+                        record_keep_files(initial_version, &state);
+                        for version in sorted_versions {
+                            state.update(&self.log_store, Some(version)).await?;
+                            record_keep_files(version, &state);
+                        }
+
+                        keep_files
+                    }
+                    None => HashSet::new(),
+                }
             }
             _ => HashSet::new(),
         };
@@ -707,6 +718,39 @@ mod tests {
                 result.files_deleted
             )
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_keep_versions_descending_order() -> DeltaResult<()> {
+        let table_loc = "../test/tests/data/simple_table";
+        let table_uri = ensure_table_uri(table_loc).unwrap();
+        let table = open_table(table_uri).await?;
+
+        let (_table, ascending_result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::hours(0))
+                .with_keep_versions(&[0, 1, 2, 3])
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .await?;
+
+        let (_table, descending_result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::hours(0))
+                .with_keep_versions(&[3, 2, 1, 0])
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .await?;
+
+        let mut ascending_files = ascending_result.files_deleted;
+        ascending_files.sort();
+        let mut descending_files = descending_result.files_deleted;
+        descending_files.sort();
+
+        assert_eq!(descending_files, ascending_files);
         Ok(())
     }
 
