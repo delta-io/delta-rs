@@ -971,31 +971,33 @@ async fn execute(
     let mut new_schema = None;
     let mut schema_action = None;
     if merge_schema {
-        let merge_schema = merge_arrow_schema(
-            snapshot.input_schema(),
-            source_schema.inner().clone(),
-            false,
-        )?;
+        let logical_schema = snapshot.input_schema();
+        // Use the table schema here. Scan-time encodings for partition columns should not
+        // affect schema evolution.
+        let logical_target_schema =
+            DFSchema::try_from_qualified_schema(target_name.clone(), logical_schema.as_ref())?;
+        let merge_schema =
+            merge_arrow_schema(logical_schema, source_schema.inner().clone(), false)?;
 
         let mut schema_builder = SchemaBuilder::from(merge_schema.deref());
 
         modify_schema(
             &mut schema_builder,
-            target_schema,
+            &logical_target_schema,
             source_schema,
             &match_operations,
         )?;
 
         modify_schema(
             &mut schema_builder,
-            target_schema,
+            &logical_target_schema,
             source_schema,
             &not_match_source_operations,
         )?;
 
         modify_schema(
             &mut schema_builder,
-            target_schema,
+            &logical_target_schema,
             source_schema,
             &not_match_target_operations,
         )?;
@@ -2157,6 +2159,22 @@ mod tests {
         (table, merge_source(schema))
     }
 
+    async fn assert_latest_commit_has_metadata_action(table: &DeltaTable, expected: bool) {
+        let version = table.version().expect("expected merge commit version");
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(version)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(version, &snapshot_bytes).unwrap();
+        let has_metadata_action = actions
+            .iter()
+            .any(|action| matches!(action, Action::Metadata(_)));
+
+        assert_eq!(has_metadata_action, expected);
+    }
+
     async fn assert_merge(table: DeltaTable, metrics: MergeMetrics) {
         assert_eq!(table.version(), Some(2));
         assert!(table.snapshot().unwrap().log_data().num_files() >= 1);
@@ -2643,20 +2661,78 @@ mod tests {
             after_table.snapshot().unwrap().schema()
         );
 
-        let snapshot_bytes = after_table
-            .log_store
-            .read_commit_entry(2)
-            .await
-            .unwrap()
-            .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
-
-        let schema_actions = actions
-            .iter()
-            .any(|action| matches!(action, Action::Metadata(_)));
-
-        assert!(!schema_actions);
+        assert_latest_commit_has_metadata_action(&after_table, false).await;
         assert_merge(after_table, metrics).await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_with_schema_merge_partitioned_string_view_source() {
+        let schema = get_arrow_schema(&None);
+        let before_table = setup_table(Some(vec!["modified"])).await;
+        let before_table = write_data(before_table, &schema).await;
+
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8View, true),
+        ]));
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&source_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 30])),
+                Arc::new(arrow::array::StringViewArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (after_table, _) = before_table
+            .clone()
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            before_table.snapshot().unwrap().schema(),
+            after_table.snapshot().unwrap().schema()
+        );
+
+        assert_latest_commit_has_metadata_action(&after_table, false).await;
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&after_table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -2718,21 +2794,7 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot_bytes = table
-            .log_store
-            .read_commit_entry(2)
-            .await
-            .unwrap()
-            .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
-
-        let schema_actions = actions
-            .iter()
-            .any(|action| matches!(action, Action::Metadata(_)));
-
-        dbg!(&schema_actions);
-
-        assert!(schema_actions);
+        assert_latest_commit_has_metadata_action(&table, true).await;
         let expected = vec![
             "+----+-------+------------+------------+",
             "| id | value | modified   | nested     |",
@@ -2827,21 +2889,7 @@ mod tests {
             .await
             .unwrap();
 
-        let snapshot_bytes = table
-            .log_store
-            .read_commit_entry(2)
-            .await
-            .unwrap()
-            .expect("failed to get snapshot bytes");
-        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
-
-        let schema_actions = actions
-            .iter()
-            .any(|action| matches!(action, Action::Metadata(_)));
-
-        dbg!(&schema_actions);
-
-        assert!(schema_actions);
+        assert_latest_commit_has_metadata_action(&table, true).await;
         let expected = vec![
             "+----+-------+------------+-----------------------+",
             "| id | value | modified   | nested                |",
