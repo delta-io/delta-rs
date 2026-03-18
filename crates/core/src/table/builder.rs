@@ -12,6 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use super::normalize_table_url;
+use crate::kernel::Version;
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{LogStoreRef, StorageConfig, object_store_factories};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -23,7 +24,7 @@ pub enum DeltaVersion {
     #[default]
     Newest,
     /// specify the version to load
-    Version(i64),
+    Version(Version),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
 }
@@ -129,7 +130,7 @@ impl DeltaTableBuilder {
     }
 
     /// Sets `version` to the builder
-    pub fn with_version(mut self, version: i64) -> Self {
+    pub fn with_version(mut self, version: Version) -> Self {
         self.version = DeltaVersion::Version(version);
         self
     }

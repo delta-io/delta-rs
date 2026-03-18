@@ -125,7 +125,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     // The way we obtain a timestamp for a version will have to change when/if we start using CommitInfo for timestamps
     let meta = table
         .object_store()
-        .head(&commit_uri_from_version(version))
+        .head(&commit_uri_from_version(Some(version)))
         .await?;
     let timestamp = meta.last_modified.timestamp_millis();
     let datetime = DateTime::from_timestamp_millis(timestamp).unwrap();

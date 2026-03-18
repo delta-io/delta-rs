@@ -8,7 +8,9 @@ use crate::DeltaTableError;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
+use crate::kernel::{
+    Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction, Version,
+};
 use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -239,8 +241,8 @@ pub(crate) struct WinningCommitSummary {
 impl WinningCommitSummary {
     pub async fn try_new(
         log_store: &dyn LogStore,
-        read_version: i64,
-        winning_commit_version: i64,
+        read_version: Version,
+        winning_commit_version: Version,
     ) -> DeltaResult<Self> {
         // NOTE using assert, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);

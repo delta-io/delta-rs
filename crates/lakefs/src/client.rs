@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use deltalake_core::DeltaResult;
-use deltalake_core::kernel::transaction::TransactionError;
+use deltalake_core::kernel::{Version, transaction::TransactionError};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -186,7 +186,7 @@ impl LakeFSClient {
         repo: String,
         target_branch: String,
         transaction_branch: String,
-        commit_version: i64,
+        commit_version: Version,
         commit_message: String,
         allow_empty: bool,
     ) -> Result<(), TransactionError> {
