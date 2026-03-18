@@ -23,7 +23,7 @@ def encode_partition_value(val: Any) -> str:
 
 def deprecate_positional_commit_args(
     method_name: str,
-    args: tuple,
+    args: tuple[Any, ...],
     commit_properties: Any = None,
     post_commithook_properties: Any = None,
     legacy_order: tuple[str, ...] = ("commit_properties", "post_commithook_properties"),
