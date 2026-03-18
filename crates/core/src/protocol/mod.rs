@@ -19,7 +19,9 @@ use url::Url;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
+use crate::kernel::{
+    Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures, Version,
+};
 
 pub mod checkpoints;
 pub mod log_compaction;
@@ -343,10 +345,10 @@ pub enum DeltaOperation {
     /// Represents a `Restore` operation
     Restore {
         /// Version to restore
-        version: Option<i64>,
+        version: Option<Version>,
         ///Datetime to restore
         datetime: Option<i64>,
-    }, // TODO: Add more operations
+    },
 
     #[serde(rename_all = "camelCase")]
     /// Represents the start of `Vacuum` operation
