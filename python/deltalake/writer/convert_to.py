@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
+    Any,
     Literal,
 )
 
@@ -28,7 +29,7 @@ def convert_to_deltalake(
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
-    *args,
+    *args: Any,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:

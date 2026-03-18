@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from deltalake import Schema
 from deltalake._internal import Transaction as Transaction
@@ -75,7 +75,7 @@ def create_table_with_add_actions(
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
-    *args,
+    *args: Any,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:

@@ -200,7 +200,7 @@ class DeltaTable:
         description: str | None = None,
         configuration: Mapping[str, str | None] | None = None,
         storage_options: dict[str, str] | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
         raise_if_key_not_exists: bool = True,
@@ -251,12 +251,20 @@ class DeltaTable:
             )
             if len(args) > 3:
                 raise TypeError("create() got unexpected positional arguments")
-            commit_properties, post_commithook_properties, raise_if_key_not_exists = (
-                *args,
-                commit_properties,
-                post_commithook_properties,
-                raise_if_key_not_exists,
-            )[:3]
+            if len(args) >= 1:
+                if commit_properties is not None:
+                    raise TypeError(
+                        "create() got multiple values for 'commit_properties'"
+                    )
+                commit_properties = args[0]
+            if len(args) >= 2:
+                if post_commithook_properties is not None:
+                    raise TypeError(
+                        "create() got multiple values for 'post_commithook_properties'"
+                    )
+                post_commithook_properties = args[1]
+            if len(args) == 3:
+                raise_if_key_not_exists = args[2]
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
@@ -565,7 +573,7 @@ class DeltaTable:
         retention_hours: int | None = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
         full: bool = False,
@@ -597,13 +605,22 @@ class DeltaTable:
             )
             if len(args) > 4:
                 raise TypeError("vacuum() got unexpected positional arguments")
-            post_commithook_properties, commit_properties, full, keep_versions = (
-                *args,
-                post_commithook_properties,
-                commit_properties,
-                full,
-                keep_versions,
-            )[:4]
+            if len(args) >= 1:
+                if post_commithook_properties is not None:
+                    raise TypeError(
+                        "vacuum() got multiple values for 'post_commithook_properties'"
+                    )
+                post_commithook_properties = args[0]
+            if len(args) >= 2:
+                if commit_properties is not None:
+                    raise TypeError(
+                        "vacuum() got multiple values for 'commit_properties'"
+                    )
+                commit_properties = args[1]
+            if len(args) >= 3:
+                full = args[2]
+            if len(args) == 4:
+                keep_versions = args[3]
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
@@ -626,7 +643,7 @@ class DeltaTable:
         predicate: str | None = None,
         writer_properties: WriterProperties | None = None,
         error_on_type_mismatch: bool = True,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
@@ -766,7 +783,7 @@ class DeltaTable:
         streamed_exec: bool = True,
         max_spill_size: int | None = None,
         max_temp_directory_size: int | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> TableMerger:
@@ -1150,7 +1167,7 @@ class DeltaTable:
         self,
         predicate: str | None = None,
         writer_properties: WriterProperties | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
@@ -1190,7 +1207,7 @@ class DeltaTable:
     def repair(
         self,
         dry_run: bool = False,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
@@ -1259,7 +1276,7 @@ class DeltaTable:
         schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
         partition_filters: FilterType | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -1785,7 +1802,7 @@ class TableAlterer:
         self,
         feature: TableFeatures | list[TableFeatures],
         allow_protocol_versions_increase: bool = False,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -1828,7 +1845,7 @@ class TableAlterer:
     def add_columns(
         self,
         fields: DeltaField | list[DeltaField],
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -1869,7 +1886,7 @@ class TableAlterer:
     def add_constraint(
         self,
         constraints: dict[str, str],
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -1915,7 +1932,7 @@ class TableAlterer:
         self,
         name: str,
         raise_if_not_exists: bool = True,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -1967,7 +1984,7 @@ class TableAlterer:
         self,
         properties: dict[str, str],
         raise_if_not_exists: bool = True,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -2013,7 +2030,7 @@ class TableAlterer:
     def set_table_name(
         self,
         name: str,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -2044,7 +2061,7 @@ class TableAlterer:
     def set_table_description(
         self,
         description: str,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -2079,7 +2096,7 @@ class TableAlterer:
         self,
         column: str,
         metadata: dict[str, str],
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
@@ -2122,7 +2139,7 @@ class TableOptimizer:
         max_temp_directory_size: int | None = None,
         min_commit_interval: int | timedelta | None = None,
         writer_properties: WriterProperties | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
@@ -2207,7 +2224,7 @@ class TableOptimizer:
         max_temp_directory_size: int | None = None,
         min_commit_interval: int | timedelta | None = None,
         writer_properties: WriterProperties | None = None,
-        *args,
+        *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
