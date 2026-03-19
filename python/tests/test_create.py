@@ -220,3 +220,38 @@ def test_create_positional_and_keyword_commit_conflict_raises(
             commit,
             commit_properties=commit,
         )
+
+
+def test_create_positional_and_keyword_raise_if_key_not_exists_conflict_raises(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+):
+    import deltalake.table as table_module
+
+    def fake_create(*args):
+        pass
+
+    def fake_init(self, *args, **kwargs):
+        pass
+
+    monkeypatch.setattr(table_module, "_create_deltalake", fake_create)
+    monkeypatch.setattr(DeltaTable, "__init__", fake_init)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(
+        TypeError, match="multiple values for 'raise_if_key_not_exists'"
+    ):
+        DeltaTable.create(
+            tmp_path,
+            schema,
+            "error",
+            None,
+            None,
+            None,
+            None,
+            None,
+            commit,
+            None,
+            False,
+            raise_if_key_not_exists=True,
+        )

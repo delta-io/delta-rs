@@ -357,3 +357,27 @@ def test_vacuum_positional_and_keyword_commit_conflict_raises():
     commit = CommitProperties(custom_metadata={"userName": "John Doe"})
     with pytest.raises(TypeError, match="multiple values for 'commit_properties'"):
         dt.vacuum(None, True, True, None, commit, commit_properties=commit)
+
+
+def test_vacuum_positional_and_keyword_full_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'full'"):
+        dt.vacuum(None, True, True, None, commit, False, full=True)
+
+
+def test_vacuum_positional_and_keyword_keep_versions_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'keep_versions'"):
+        dt.vacuum(None, True, True, None, commit, False, [1], keep_versions=[2])
