@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from deltalake import Schema
 from deltalake._internal import Transaction as Transaction
 from deltalake._internal import (
     create_table_with_add_actions as _create_table_with_add_actions,
 )
+from deltalake._util import deprecate_positional_commit_args
 
 
 @dataclass
@@ -74,9 +75,16 @@ def create_table_with_add_actions(
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
+    *args: Any,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
+    commit_properties, post_commithook_properties = deprecate_positional_commit_args(
+        "create_table_with_add_actions",
+        args,
+        commit_properties,
+        post_commithook_properties,
+    )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
     _create_table_with_add_actions(
