@@ -321,3 +321,63 @@ def test_issue_3745(tmp_path: pathlib.Path):
 
     table = DeltaTable(tmp_path)
     table.vacuum()
+
+
+def test_positional_commit_args_raise_deprecation_warning(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        dt.vacuum(None, True, True, None, commit, True, [0])
+
+
+def test_vacuum_partial_legacy_positional_args_preserve_defaults():
+    captured: dict[str, tuple] = {}
+
+    class StubTable:
+        def vacuum(self, *args):
+            captured["args"] = args
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        dt.vacuum(None, True, True, None, commit)
+
+    assert captured["args"] == (True, None, True, commit, None, False, None)
+
+
+def test_vacuum_positional_and_keyword_commit_conflict_raises():
+    dt = object.__new__(DeltaTable)
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'commit_properties'"):
+        dt.vacuum(None, True, True, None, commit, commit_properties=commit)
+
+
+def test_vacuum_positional_and_keyword_full_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'full'"):
+        dt.vacuum(None, True, True, None, commit, False, full=True)
+
+
+def test_vacuum_positional_and_keyword_keep_versions_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'keep_versions'"):
+        dt.vacuum(None, True, True, None, commit, False, [1], keep_versions=[2])

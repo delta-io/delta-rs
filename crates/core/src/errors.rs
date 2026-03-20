@@ -60,6 +60,17 @@ pub enum DeltaTableError {
     #[error("Invalid table version: {0}")]
     InvalidVersion(i64),
 
+    /// Error returned when an operation requests an older version than the currently loaded one.
+    #[error(
+        "Cannot downgrade from version {current_version} to {requested_version}; use DeltaTable.load_version()"
+    )]
+    VersionDowngrade {
+        /// The currently loaded version.
+        current_version: i64,
+        /// The requested older version.
+        requested_version: i64,
+    },
+
     /// Error returned when the datetime string is invalid for a conversion.
     #[error("Invalid datetime string: {}", .source)]
     InvalidDateTimeString {
