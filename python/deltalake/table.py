@@ -13,6 +13,7 @@ from typing import (
     Literal,
     NamedTuple,
     Union,
+    cast,
 )
 
 from arro3.core import RecordBatchReader, Table
@@ -69,6 +70,21 @@ FilterConjunctionType = list[FilterLiteralType]
 FilterDNFType = list[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = list[tuple[str, str, Union[str, list[str]]]]
+
+
+class _KeywordArgDefault:
+    """Sentinel that preserves the rendered default while tracking omission."""
+
+    def __init__(self, value: Any) -> None:
+        self.value = value
+
+    def __repr__(self) -> str:
+        return repr(self.value)
+
+
+_DEFAULT_TRUE = _KeywordArgDefault(True)
+_DEFAULT_FALSE = _KeywordArgDefault(False)
+_DEFAULT_NONE = _KeywordArgDefault(None)
 
 
 @dataclass(init=False)
@@ -203,7 +219,7 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
-        raise_if_key_not_exists: bool = True,
+        raise_if_key_not_exists: bool = cast(bool, _DEFAULT_TRUE),
     ) -> DeltaTable:
         """`CREATE` or `CREATE_OR_REPLACE` a delta table given a table_uri.
 
@@ -242,6 +258,9 @@ class DeltaTable:
             )
             ```
         """
+        raise_if_key_not_exists_is_default = (
+            cast(Any, raise_if_key_not_exists) is _DEFAULT_TRUE
+        )
         if args:
             warnings.warn(
                 "Passing commit arguments positionally to create() is deprecated "
@@ -264,7 +283,14 @@ class DeltaTable:
                     )
                 post_commithook_properties = args[1]
             if len(args) == 3:
+                if not raise_if_key_not_exists_is_default:
+                    raise TypeError(
+                        "create() got multiple values for 'raise_if_key_not_exists'"
+                    )
                 raise_if_key_not_exists = args[2]
+                raise_if_key_not_exists_is_default = False
+        if raise_if_key_not_exists_is_default:
+            raise_if_key_not_exists = True
         if isinstance(partition_by, str):
             partition_by = [partition_by]
 
@@ -576,8 +602,8 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
-        full: bool = False,
-        keep_versions: list[int] | None = None,
+        full: bool = cast(bool, _DEFAULT_FALSE),
+        keep_versions: list[int] | None = cast(list[int] | None, _DEFAULT_NONE),
     ) -> list[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table.
@@ -596,6 +622,8 @@ class DeltaTable:
         Returns:
             the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
+        full_is_default = cast(Any, full) is _DEFAULT_FALSE
+        keep_versions_is_default = cast(Any, keep_versions) is _DEFAULT_NONE
         if args:
             warnings.warn(
                 "Passing commit arguments positionally to vacuum() is deprecated "
@@ -618,9 +646,19 @@ class DeltaTable:
                     )
                 commit_properties = args[1]
             if len(args) >= 3:
+                if not full_is_default:
+                    raise TypeError("vacuum() got multiple values for 'full'")
                 full = args[2]
+                full_is_default = False
             if len(args) == 4:
+                if not keep_versions_is_default:
+                    raise TypeError("vacuum() got multiple values for 'keep_versions'")
                 keep_versions = args[3]
+                keep_versions_is_default = False
+        if full_is_default:
+            full = False
+        if keep_versions_is_default:
+            keep_versions = None
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
