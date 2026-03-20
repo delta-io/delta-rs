@@ -220,7 +220,7 @@ impl<'a> TransactionInfo<'a> {
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
+        Ok(self.read_snapshot.iter().map(|f| f.to_add()))
     }
 
     /// Whether the whole table was read during the transaction
