@@ -37,7 +37,7 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
 use crate::kernel::{
-    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, resolve_snapshot,
+    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, Version, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -51,7 +51,7 @@ enum RestoreError {
     InvalidRestoreParameter,
 
     #[error("Version to restore {0} should be less then last available version {1}.")]
-    TooLargeRestoreVersion(i64, i64),
+    TooLargeRestoreVersion(Version, Version),
 
     #[error("Find missing file {0} when restore.")]
     MissingDataFile(String),
@@ -83,7 +83,7 @@ pub struct RestoreBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to restore
-    version_to_restore: Option<i64>,
+    version_to_restore: Option<Version>,
     /// Datetime to restore
     datetime_to_restore: Option<DateTime<Utc>>,
     /// Ignore missing files
@@ -120,7 +120,7 @@ impl RestoreBuilder {
     }
 
     /// Set the version to restore
-    pub fn with_version_to_restore(mut self, version: i64) -> Self {
+    pub fn with_version_to_restore(mut self, version: Version) -> Self {
         self.version_to_restore = Some(version);
         self
     }
@@ -161,7 +161,7 @@ impl RestoreBuilder {
 async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    version_to_restore: Option<i64>,
+    version_to_restore: Option<Version>,
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
     protocol_downgrade_allowed: bool,

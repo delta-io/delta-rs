@@ -488,7 +488,7 @@ mod tests {
     use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, TimeUnit};
 
     use super::*;
-    use crate::kernel::{DataType, PrimitiveType};
+    use crate::kernel::{DataType, PrimitiveType, Version};
     use crate::open_table;
     use crate::test_utils::file_paths_from;
 
@@ -582,7 +582,7 @@ mod tests {
         table: DeltaTable,
         // Test data location in the repo
         test_data_from: &str,
-        expected_version: i64,
+        expected_version: Version,
         expected_paths: Vec<String>,
         expected_schema: Vec<StructField>,
         expected_partition_values: &[(String, Scalar)],

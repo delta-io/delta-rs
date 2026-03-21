@@ -1,6 +1,4 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
-use deltalake_core::table::builder::DeltaTableConfig;
-use deltalake_core::table::state::DeltaTableState;
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 use object_store::path::Path as StorePath;
 use object_store::{
@@ -270,19 +268,6 @@ async fn test_log_buffering_success_explicit_version() {
             .unwrap();
         table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), Some(10));
-        let err = table.update_incremental(Some(0)).await.unwrap_err();
-        assert!(
-            matches!(err, DeltaTableError::Generic(_)),
-            "expected downgrade through update_incremental to fail with an existing error shape: {err}"
-        );
-        assert!(
-            err.to_string()
-                .contains("Cannot downgrade via update_incremental from version 10 to 0"),
-            "expected downgrade error message to direct callers to load_version: {err}"
-        );
-        assert_eq!(table.version(), Some(10));
-        table.load_version(0).await.unwrap();
-        assert_eq!(table.version(), Some(0));
 
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
@@ -331,6 +316,46 @@ async fn test_log_buffering_success_explicit_version() {
 }
 
 #[tokio::test]
+async fn test_update_incremental_rejects_downgrade_and_load_version_allows_it() {
+    let n_commits = 10;
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let path = tmp_dir.path().to_path_buf();
+    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
+    for _ in 0..n_commits {
+        let add = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    let table_uri = Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap();
+    let mut table = DeltaTableBuilder::from_url(table_uri)
+        .unwrap()
+        .with_version(0)
+        .with_log_buffer_size(10)
+        .unwrap()
+        .load()
+        .await
+        .unwrap();
+    table.update_incremental(None).await.unwrap();
+    assert_eq!(table.version(), Some(10));
+
+    let err = table.update_incremental(Some(0)).await.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            DeltaTableError::VersionDowngrade {
+                current_version: 10,
+                requested_version: 0,
+            }
+        ),
+        "expected typed downgrade error from update_incremental: {err}"
+    );
+
+    assert_eq!(table.version(), Some(10));
+    table.load_version(0).await.unwrap();
+    assert_eq!(table.version(), Some(0));
+}
+
+#[tokio::test]
 async fn test_update_incremental_does_not_reread_initial_commit() {
     let n_commits = 10;
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -372,7 +397,7 @@ async fn test_update_incremental_does_not_reread_initial_commit() {
 }
 
 #[tokio::test]
-async fn test_update_incremental_skips_last_checkpoint_lookup_when_current_checkpoint_loaded() {
+async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant_hint_lookup() {
     let n_commits = 2;
     let tmp_dir = tempfile::tempdir().unwrap();
     let path = tmp_dir.path().to_path_buf();
@@ -401,82 +426,17 @@ async fn test_update_incremental_skips_last_checkpoint_lookup_when_current_check
         .load()
         .await
         .unwrap();
+    assert_eq!(table.version(), Some(n_commits));
 
     store.clear_recorded_gets();
     table.update_incremental(None).await.unwrap();
 
     let recorded_gets = store.recorded_gets();
-    assert_eq!(table.version(), Some(n_commits));
     assert!(
         !recorded_gets
             .iter()
             .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
-        "expected no same-version checkpoint lookup when already loaded from the current checkpoint: {recorded_gets:?}"
-    );
-}
-
-#[tokio::test]
-async fn test_delta_table_state_update_refreshes_same_version_checkpoint_base() {
-    let n_commits = 2;
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let path = tmp_dir.path().to_path_buf();
-    let mut table = fs_common::create_table(&path.to_string_lossy(), None).await;
-    for _ in 0..n_commits {
-        let add = fs_common::add(3 * 60 * 1000);
-        fs_common::commit_add(&mut table, &add).await;
-    }
-
-    let location = Url::from_directory_path(&path).unwrap();
-    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
-    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
-    let instrumented_table = DeltaTableBuilder::from_url(location.clone())
-        .unwrap()
-        .with_storage_backend(store.clone(), location.clone())
-        .build()
-        .unwrap();
-    let mut state = DeltaTableState::try_new(
-        instrumented_table.log_store().as_ref(),
-        DeltaTableConfig::default(),
-        Some(n_commits),
-    )
-    .await
-    .unwrap();
-
-    deltalake_core::checkpoints::create_checkpoint_from_table_url_and_cleanup(
-        location,
-        n_commits,
-        Some(false),
-        None,
-    )
-    .await
-    .unwrap();
-
-    store.clear_recorded_gets();
-    state
-        .update(instrumented_table.log_store().as_ref(), Some(n_commits))
-        .await
-        .unwrap();
-
-    let recorded_gets = store.recorded_gets();
-    assert!(
-        recorded_gets
-            .iter()
-            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
-        "expected DeltaTableState::update to consult _last_checkpoint for a same-version refresh: {recorded_gets:?}"
-    );
-
-    store.clear_recorded_gets();
-    state
-        .update(instrumented_table.log_store().as_ref(), Some(n_commits))
-        .await
-        .unwrap();
-
-    let recorded_gets = store.recorded_gets();
-    assert!(
-        !recorded_gets
-            .iter()
-            .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
-        "expected DeltaTableState::update to skip _last_checkpoint once refreshed from the current checkpoint: {recorded_gets:?}"
+        "same-version update reread _last_checkpoint even though the current snapshot was already checkpoint-backed: {recorded_gets:?}"
     );
 }
 

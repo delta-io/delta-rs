@@ -1,7 +1,9 @@
 use chrono::Utc;
 use deltalake_core::DeltaTable;
 use deltalake_core::kernel::transaction::CommitBuilder;
-use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
+use deltalake_core::kernel::{
+    Action, Add, DataType, PrimitiveType, StructField, StructType, Version,
+};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use serde_json::Value;
@@ -89,7 +91,7 @@ pub fn add(offset_millis: i64) -> Add {
     }
 }
 
-pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
+pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> Version {
     let operation = DeltaOperation::Write {
         mode: SaveMode::Append,
         partition_by: None,
@@ -102,7 +104,7 @@ pub async fn commit_actions(
     table: &mut DeltaTable,
     actions: Vec<Action>,
     operation: DeltaOperation,
-) -> i64 {
+) -> Version {
     let version = CommitBuilder::default()
         .with_actions(actions)
         .build(

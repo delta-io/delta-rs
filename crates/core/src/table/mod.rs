@@ -17,7 +17,7 @@ use url::Url;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::kernel::{CommitInfo, DataCheck, LogicalFileView};
+use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Version};
 use crate::logstore::{
     LogStoreConfig, LogStoreExt, LogStoreRef, ObjectStoreRef, commit_uri_from_version,
     extract_version_from_filename,
@@ -171,7 +171,7 @@ impl DeltaTable {
     }
 
     /// returns the latest available version of the table
-    pub async fn get_latest_version(&self) -> Result<i64, DeltaTableError> {
+    pub async fn get_latest_version(&self) -> Result<Version, DeltaTableError> {
         self.log_store
             .get_latest_version(self.version().unwrap_or(0))
             .await
@@ -181,7 +181,7 @@ impl DeltaTable {
     ///
     /// This will return the latest version of the table if it has been loaded.
     /// Returns `None` if the table has not been loaded.
-    pub fn version(&self) -> Option<i64> {
+    pub fn version(&self) -> Option<Version> {
         self.state.as_ref().map(|s| s.version())
     }
 
@@ -202,7 +202,7 @@ impl DeltaTable {
     /// This API is forward-only. Use [`DeltaTable::load_version`] to load an older version.
     pub async fn update_incremental(
         &mut self,
-        max_version: Option<i64>,
+        max_version: Option<Version>,
     ) -> Result<(), DeltaTableError> {
         let Some(state) = self.state.as_mut() else {
             self.state = Some(
@@ -215,9 +215,10 @@ impl DeltaTable {
         if let Some(requested_version) = max_version
             && requested_version < current_version
         {
-            return Err(DeltaTableError::generic(format!(
-                "Cannot downgrade via update_incremental from version {current_version} to {requested_version}; use load_version"
-            )));
+            return Err(DeltaTableError::VersionDowngrade {
+                current_version,
+                requested_version,
+            });
         }
 
         state.update(&self.log_store, max_version).await?;
@@ -225,7 +226,7 @@ impl DeltaTable {
     }
 
     /// Loads the DeltaTable state for the given version.
-    pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
+    pub async fn load_version(&mut self, version: Version) -> Result<(), DeltaTableError> {
         if let Some(snapshot) = &self.state
             && snapshot.version() > version
         {
@@ -234,7 +235,10 @@ impl DeltaTable {
         self.update_incremental(Some(version)).await
     }
 
-    pub(crate) async fn get_version_timestamp(&self, version: i64) -> Result<i64, DeltaTableError> {
+    pub(crate) async fn get_version_timestamp(
+        &self,
+        version: Version,
+    ) -> Result<i64, DeltaTableError> {
         match self
             .state
             .as_ref()
@@ -244,7 +248,7 @@ impl DeltaTable {
             None => {
                 let meta = self
                     .object_store()
-                    .head(&commit_uri_from_version(version))
+                    .head(&commit_uri_from_version(Some(version)))
                     .await?;
                 let ts = meta.last_modified.timestamp_millis();
                 Ok(ts)
@@ -372,7 +376,7 @@ impl DeltaTable {
         let mut min_version: i64 = -1;
         let log_store = self.log_store();
         let prefix = log_store.log_path();
-        let offset_path = commit_uri_from_version(min_version);
+        let offset_path = commit_uri_from_version(None);
         let object_store = log_store.object_store(None);
         let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
 
@@ -391,18 +395,23 @@ impl DeltaTable {
             }
             if let Some(log_version) = extract_version_from_filename(obj_meta.location.as_ref()) {
                 if min_version == -1 {
-                    min_version = log_version
+                    min_version = log_version as i64;
                 } else {
-                    min_version = min(min_version, log_version);
+                    min_version = min(min_version, log_version as i64);
                 }
             }
             if min_version == 0 {
                 break;
             }
         }
+        let latest_default_version = if min_version < 0 {
+            0
+        } else {
+            min_version.try_into().unwrap()
+        };
         let mut max_version = match self
             .log_store
-            .get_latest_version(self.version().unwrap_or(min_version))
+            .get_latest_version(self.version().unwrap_or(latest_default_version))
             .await
         {
             Ok(version) => version,
@@ -412,7 +421,7 @@ impl DeltaTable {
                 ));
             }
             Err(e) => return Err(e),
-        };
+        } as i64;
         let mut version = min_version;
         let lowest_table_version = min_version;
         let target_ts = datetime.timestamp_millis();
@@ -421,7 +430,9 @@ impl DeltaTable {
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
-            let pts = self.get_version_timestamp(pivot).await?;
+            let pts: i64 = self
+                .get_version_timestamp(pivot.try_into().unwrap())
+                .await?;
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {
                     break;
@@ -439,8 +450,12 @@ impl DeltaTable {
         if version < lowest_table_version {
             version = lowest_table_version;
         }
+        assert!(
+            version >= 0,
+            "load_with_datetime() came up with a negative version which shouldn't be possible"
+        );
 
-        self.load_version(version).await
+        self.load_version(version.try_into().unwrap()).await
     }
 }
 

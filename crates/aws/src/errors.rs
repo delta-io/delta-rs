@@ -11,6 +11,7 @@ use aws_sdk_dynamodb::{
     },
 };
 use aws_smithy_runtime_api::client::result::ServiceError;
+use deltalake_core::kernel::Version;
 
 macro_rules! impl_from_service_error {
     ($error_type:ty) => {
@@ -69,7 +70,10 @@ pub enum LockClientError {
     },
 
     #[error("Log entry for table '{table_path}' and version '{version}' already exists")]
-    VersionAlreadyExists { table_path: String, version: i64 },
+    VersionAlreadyExists {
+        table_path: String,
+        version: Version,
+    },
 
     #[error("Provisioned table throughput exceeded")]
     ProvisionedThroughputExceeded,
@@ -91,7 +95,10 @@ pub enum LockClientError {
     LockClientRequired,
 
     #[error("Log entry for table '{table_path}' and version '{version}' is already complete")]
-    VersionAlreadyCompleted { table_path: String, version: i64 },
+    VersionAlreadyCompleted {
+        table_path: String,
+        version: Version,
+    },
 }
 
 impl From<GetItemError> for LockClientError {

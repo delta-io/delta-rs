@@ -35,7 +35,7 @@ use tracing::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, TombstoneView, resolve_snapshot};
+use crate::kernel::{EagerSnapshot, TombstoneView, Version, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -101,7 +101,7 @@ pub struct VacuumBuilder {
     /// Validate the retention period is not below the retention period configured in the table
     enforce_retention_duration: bool,
     /// Keep files associated with particular versions
-    keep_versions: Option<Vec<i64>>,
+    keep_versions: Option<Vec<Version>>,
     /// Don't delete the files. Just determine which files can be deleted
     dry_run: bool,
     /// Mode of vacuum that should be run
@@ -177,7 +177,7 @@ impl VacuumBuilder {
 
     /// Specify table versions that we want to keep for time travel.
     /// This will prevent deletion of files required by these versions.
-    pub fn with_keep_versions(mut self, versions: &[i64]) -> Self {
+    pub fn with_keep_versions(mut self, versions: &[Version]) -> Self {
         warn!("Using experimental API VacuumBuilder::with_keep_versions");
         self.keep_versions = Some(versions.to_vec());
         self
@@ -266,7 +266,7 @@ impl VacuumBuilder {
                             Some(initial_version),
                         )
                         .await?;
-                        let mut record_keep_files = |version: i64, state: &DeltaTableState| {
+                        let mut record_keep_files = |version: Version, state: &DeltaTableState| {
                             let files: Vec<String> = state
                                 .log_data()
                                 .into_iter()

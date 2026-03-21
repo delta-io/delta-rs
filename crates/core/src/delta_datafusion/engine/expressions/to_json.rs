@@ -114,7 +114,7 @@ mod tests {
         let df = df.select(vec![to_json().call(vec![col("geometry")]).alias("json")])?;
 
         let results = df.collect().await?;
-        let expected = vec![
+        let expected = [
             r#"+-------------------------------------------+"#,
             r#"| json                                      |"#,
             r#"+-------------------------------------------+"#,
