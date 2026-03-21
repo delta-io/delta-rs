@@ -568,7 +568,7 @@ mod local {
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        let total_byte_size = statistics.total_byte_size.clone();
+        let total_byte_size = statistics.total_byte_size;
         let expected_total_byte_size = (400 + 404 + 396) as usize;
         assert!(
             total_byte_size == Precision::Exact(expected_total_byte_size)

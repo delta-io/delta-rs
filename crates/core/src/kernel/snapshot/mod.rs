@@ -119,7 +119,7 @@ impl Snapshot {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
@@ -132,7 +132,7 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
+        Self::try_new_with_engine(engine, table_root, config, version).await
     }
 
     pub fn scan_builder(&self) -> ScanBuilder {
@@ -147,20 +147,23 @@ impl Snapshot {
     pub async fn update(
         self: Arc<Self>,
         engine: Arc<dyn Engine>,
-        target_version: Option<u64>,
+        target_version: Option<Version>,
     ) -> DeltaResult<Arc<Self>> {
-        let current_version = self.version() as u64;
+        let current_version = self.version();
         if let Some(version) = target_version {
             if version < current_version {
                 return Err(DeltaTableError::VersionDowngrade {
-                    current_version: current_version as i64,
-                    requested_version: version as i64,
+                    current_version,
+                    requested_version: version,
                 });
             }
             if version == current_version {
                 return self
                     .refresh_same_version_checkpoint_if_needed(engine, version)
                     .await;
+            }
+            if version < self.version() {
+                return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
             }
         }
 
@@ -208,7 +211,7 @@ impl Snapshot {
         engine: Arc<dyn Engine>,
         current_version: Version,
     ) -> DeltaResult<Arc<Self>> {
-        if self.checkpoint_version() == Some(current_version as i64) {
+        if self.checkpoint_version() == Some(current_version) {
             return Ok(self);
         }
 
@@ -239,16 +242,13 @@ impl Snapshot {
     }
 
     /// Get the table version of the snapshot
-    pub fn version(&self) -> i64 {
-        self.inner.version() as i64
+    pub fn version(&self) -> Version {
+        self.inner.version()
     }
 
     /// Get the checkpoint version currently backing this snapshot, if any.
-    pub(crate) fn checkpoint_version(&self) -> Option<i64> {
-        self.inner
-            .log_segment()
-            .checkpoint_version
-            .map(|v| v as i64)
+    pub(crate) fn checkpoint_version(&self) -> Option<Version> {
+        self.inner.log_segment().checkpoint_version
     }
 
     /// Get the table schema of the snapshot
@@ -399,15 +399,13 @@ impl Snapshot {
         let store = log_store.root_object_store(None);
 
         let log_root = self.table_root_path()?.child("_delta_log");
-        let start_from = log_root.child(
-            format!(
-                "{:020}",
-                limit
-                    .map(|l| (self.version() - l as i64 + 1).max(0))
-                    .unwrap_or(0)
-            )
-            .as_str(),
-        );
+        let start_from = if let Some(limit) = limit {
+            let v = self.version() as i64;
+            std::cmp::max(v - limit as i64 + 1, 0)
+        } else {
+            0
+        };
+        let start_from = log_root.child(format!("{:020}", start_from).as_str());
 
         let dummy_url = url::Url::parse("memory:///")
             .map_err(|e| DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e)))?;
@@ -533,7 +531,14 @@ impl Snapshot {
             spawn_blocking_with_span(move || inner.get_app_id_version(&app_id, engine.as_ref()))
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
-        Ok(version)
+        if let Some(version) = version {
+            return Ok(Some(version.try_into().map_err(|e| {
+                DeltaTableError::GenericError {
+                    source: Box::new(e),
+                }
+            })?));
+        }
+        Ok(None)
     }
 
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
@@ -621,7 +626,7 @@ pub(crate) async fn resolve_snapshot(
     } else {
         let mut config = DeltaTableConfig::default();
         config.require_files = require_files;
-        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
+        EagerSnapshot::try_new(log_store, config, version).await
     }
 }
 
@@ -630,7 +635,7 @@ impl EagerSnapshot {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
         Self::try_new_with_snapshot(log_store, snapshot.into()).await
@@ -678,7 +683,7 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         target_version: Option<Version>,
     ) -> DeltaResult<()> {
-        let current_version = self.version() as u64;
+        let current_version = self.version();
         let previous_snapshot = self.snapshot.clone();
         let updated_snapshot = previous_snapshot
             .clone()
@@ -711,14 +716,19 @@ impl EagerSnapshot {
     }
 
     /// Get the table version of the snapshot
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.snapshot.version()
     }
 
+    /// Get the checkpoint version currently backing this snapshot, if any.
+    pub(crate) fn checkpoint_version(&self) -> Option<Version> {
+        self.snapshot.checkpoint_version()
+    }
+
     /// Get the timestamp of the given version
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+    pub fn version_timestamp(&self, version: Version) -> Option<i64> {
         for path in &self.snapshot.inner.log_segment().ascending_commit_files {
-            if path.version as i64 == version {
+            if path.version == version {
                 return Some(path.location.last_modified);
             }
         }
@@ -871,7 +881,7 @@ mod tests {
             let store = Arc::new(InMemory::new());
 
             for (idx, commit) in commits.into_iter().enumerate() {
-                let uri = commit_uri_from_version(idx as i64);
+                let uri = commit_uri_from_version(Some(idx as u64));
                 let data = commit.get_bytes()?;
                 store.put(&uri, data.into()).await?;
             }
@@ -940,7 +950,7 @@ mod tests {
         Ok((table_dir, table))
     }
 
-    async fn append_test_add(table: &mut DeltaTable, path: &str) -> DeltaResult<i64> {
+    async fn append_test_add(table: &mut DeltaTable, path: &str) -> DeltaResult<Version> {
         let version = CommitBuilder::default()
             .with_actions(vec![Action::Add(make_test_add(path, &[], 0))])
             .build(
@@ -976,7 +986,7 @@ mod tests {
 
     async fn checkpoint_file_paths(
         log_store: &dyn LogStore,
-        version: i64,
+        version: Version,
     ) -> DeltaResult<Vec<object_store::path::Path>> {
         let checkpoint_prefix = format!("{version:020}.checkpoint", version = version);
         Ok(log_store
@@ -1060,7 +1070,7 @@ mod tests {
                 .files(&log_store, None)
                 .try_collect::<Vec<_>>()
                 .await?;
-            let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+            let num_files = batches.iter().map(|b| b.num_rows() as u64).sum::<u64>();
             assert_eq!(num_files, version);
         }
 

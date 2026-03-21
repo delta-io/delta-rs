@@ -12,7 +12,9 @@ use deltalake_aws::storage::S3StorageOptions;
 use deltalake_aws::{CommitEntry, DynamoDbConfig, DynamoDbLockClient};
 use deltalake_core::ensure_table_uri;
 use deltalake_core::kernel::transaction::CommitBuilder;
-use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
+use deltalake_core::kernel::{
+    Action, Add, DataType, PrimitiveType, StructField, StructType, Version,
+};
 use deltalake_core::logstore::{CommitOrBytes, LogStore, logstore_for};
 use deltalake_core::logstore::{StorageConfig, commit_uri_from_version};
 use deltalake_core::operations::create::CreateBuilder;
@@ -144,7 +146,7 @@ async fn test_create_s3_table() -> TestResult<()> {
 async fn get_missing_item() -> TestResult<()> {
     let _context = IntegrationContext::new(Box::new(S3Integration::default()))?;
     let client = make_client()?;
-    let version = i64::MAX;
+    let version = u64::MAX;
     let result = client
         .get_commit_entry(&format!("s3a://my_delta_table_{}", Uuid::new_v4()), version)
         .await;
@@ -193,7 +195,10 @@ async fn test_repair_commit_entry() -> TestResult<()> {
     let entry = create_incomplete_commit_entry(&table, 2, "unfinished_commit").await?;
     log_store
         .object_store(None)
-        .rename_if_not_exists(&entry.temp_path, &commit_uri_from_version(entry.version))
+        .rename_if_not_exists(
+            &entry.temp_path,
+            &commit_uri_from_version(Some(entry.version)),
+        )
         .await?;
 
     let read_entry = client
@@ -333,8 +338,8 @@ async fn test_abort_commit_entry_fail_to_delete_entry() -> TestResult<()> {
     Ok(())
 }
 
-const WORKERS: i64 = 3;
-const COMMITS: i64 = 15;
+const WORKERS: u64 = 3;
+const COMMITS: u64 = 15;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[serial]
@@ -385,7 +390,7 @@ impl Worker {
         Self { table, name }
     }
 
-    async fn commit_sequence(&mut self, n: i64) -> HashMap<i64, String> {
+    async fn commit_sequence(&mut self, n: Version) -> HashMap<Version, String> {
         let mut result = HashMap::new();
         for seq_no in 0..n {
             let (v, name) = self.commit_file(seq_no).await;
@@ -395,7 +400,7 @@ impl Worker {
         result
     }
 
-    async fn commit_file(&mut self, seq_no: i64) -> (i64, String) {
+    async fn commit_file(&mut self, seq_no: Version) -> (Version, String) {
         let name = format!("{}-{seq_no}", self.name);
         let metadata = Some(HashMap::from([
             ("worker".to_owned(), Value::String(self.name.clone())),
@@ -410,7 +415,7 @@ impl Worker {
 
 async fn create_incomplete_commit_entry(
     table: &DeltaTable,
-    version: i64,
+    version: Version,
     tag: &str,
 ) -> TestResult<CommitEntry> {
     let actions = vec![add_action(tag)];
@@ -489,7 +494,7 @@ async fn append_to_table(
     name: &str,
     table: &DeltaTable,
     metadata: Option<HashMap<String, Value>>,
-) -> TestResult<i64> {
+) -> TestResult<Version> {
     let operation = DeltaOperation::Write {
         mode: SaveMode::Append,
         partition_by: None,
@@ -508,7 +513,10 @@ async fn append_to_table(
 /// Check dynamodb lock state for consistency. The latest entry must be complete, match the expected
 /// version and expiration time is around 24h in the future. Commits should cover a consecutive range
 /// of versions, with monotonically non-decreasing expiration timestamps.
-async fn validate_lock_table_state(table: &DeltaTable, expected_version: i64) -> TestResult<()> {
+async fn validate_lock_table_state(
+    table: &DeltaTable,
+    expected_version: Version,
+) -> TestResult<()> {
     let client = make_client()?;
     let lock_entry = client
         .get_latest_entry(&table.table_url().as_str())

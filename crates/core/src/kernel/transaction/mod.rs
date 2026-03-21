@@ -92,7 +92,7 @@ use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
+use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction, Version};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
@@ -150,7 +150,7 @@ pub struct Metrics {
 pub enum TransactionError {
     /// Version already exists
     #[error("Tried committing existing table version: {0}")]
-    VersionAlreadyExists(i64),
+    VersionAlreadyExists(Version),
 
     /// Error returned when reading the delta log object failed.
     #[error("Error serializing commit log to json: {json_err}")]
@@ -639,7 +639,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         // Load the current table state and continue with the retry loop.
                         debug!("version 0 already exists, loading table state for retry");
                         attempt_number = 2;
-                        let latest_version = this.log_store.get_latest_version(0).await?;
+                        let latest_version: Version = this.log_store.get_latest_version(0).await?;
                         EagerSnapshot::try_new(
                             this.log_store.as_ref(),
                             Default::default(),
@@ -736,10 +736,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         );
                         // Update snapshot to latest version after successful conflict check
                         read_snapshot
-                            .update(&this.log_store, Some(latest_version as u64))
+                            .update(&this.log_store, Some(latest_version))
                             .await?;
                     }
-                    let version: i64 = latest_version + 1;
+                    let version: Version = latest_version + 1;
                     Span::current().record("target_version", version);
 
                     match this
@@ -750,7 +750,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         Ok(()) => {
                             info!(
                                 version = version,
-                                num_retries = attempt_number as u64 - 1,
+                                num_retries = attempt_number - 1,
                                 "transaction committed successfully"
                             );
                             return Ok(PostCommit {
@@ -768,7 +768,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 table_data: Some(Box::new(read_snapshot)),
                                 custom_execute_handler: this.post_commit_hook_handler,
                                 metrics: CommitMetrics {
-                                    num_retries: attempt_number as u64 - 1,
+                                    num_retries: (attempt_number - 1) as u64,
                                 },
                             });
                         }
@@ -811,7 +811,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 /// Represents items for the post commit hook
 pub struct PostCommit {
     /// The winning version number of the commit
-    pub version: i64,
+    pub version: Version,
     /// The data that was committed to the log store
     pub data: CommitData,
     create_checkpoint: bool,
@@ -829,9 +829,7 @@ impl PostCommit {
             let post_commit_operation_id = Uuid::new_v4();
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
-                snapshot
-                    .update(&self.log_store, Some(self.version as u64))
-                    .await?;
+                snapshot.update(&self.log_store, Some(self.version)).await?;
             }
 
             let mut state = DeltaTableState { snapshot };
@@ -921,7 +919,7 @@ impl PostCommit {
         &self,
         table_state: &DeltaTableState,
         log_store: &LogStoreRef,
-        version: i64,
+        version: Version,
         operation_id: Uuid,
     ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
@@ -931,9 +929,9 @@ impl PostCommit {
             return Ok(false);
         }
 
-        let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
-        if ((version + 1) % checkpoint_interval) == 0 {
-            create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
+        let checkpoint_interval = table_state.config().checkpoint_interval().get();
+        if (version + 1).is_multiple_of(checkpoint_interval) {
+            create_checkpoint_for(version, log_store.as_ref(), Some(operation_id)).await?;
             Ok(true)
         } else {
             Ok(false)
@@ -947,7 +945,7 @@ pub struct FinalizedCommit {
     pub snapshot: DeltaTableState,
 
     /// Version of the finalized commit
-    pub version: i64,
+    pub version: Version,
 
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
@@ -968,7 +966,7 @@ impl FinalizedCommit {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.version
     }
 }
@@ -1002,20 +1000,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::logstore::{
-        LogStore, StorageConfig, commit_uri_from_version, default_logstore::DefaultLogStore,
-    };
+    use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
     use object_store::{ObjectStore, PutPayload, memory::InMemory};
     use serde_json::json;
     use url::Url;
-
-    #[test]
-    fn test_commit_uri_from_version() {
-        let version = commit_uri_from_version(0);
-        assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
-        let version = commit_uri_from_version(123);
-        assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
-    }
 
     #[tokio::test]
     async fn test_try_commit_transaction() {

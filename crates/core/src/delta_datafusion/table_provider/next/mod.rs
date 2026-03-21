@@ -360,7 +360,7 @@ impl DeltaScan {
                     let owned: Vec<_> = files.to_vec();
                     scan_plan.scan.scan_metadata_from(
                         engine,
-                        esn.snapshot().version() as u64,
+                        esn.snapshot().version(),
                         Box::new(owned.into_iter()),
                         None,
                     )
