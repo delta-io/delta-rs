@@ -78,6 +78,7 @@ type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTa
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
+    projection: Option<&Vec<usize>>,
     scan_plan: KernelScanPlan,
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
@@ -109,18 +110,43 @@ pub(super) async fn execution_plan(
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
+            let retain_file_ids = if let Some(proj) = projection {
+                let file_id_idx = config.file_column_name.as_ref().map(|_| {
+                    config
+                        .table_schema(scan_plan.table_configuration())
+                        .unwrap()
+                        .fields()
+                        .len()
+                });
+                proj.iter().any(|&idx| Some(idx) == file_id_idx)
+            } else {
+                config.retain_file_id()
+            };
+
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
-                config.retain_file_id().then_some(file_id_field),
+                retain_file_ids.then_some(file_id_field),
                 metrics,
             );
             return Ok(Arc::new(exec) as _);
         }
     }
 
+    let retain_file_id = if let Some(proj) = projection {
+        let file_id_idx = config.file_column_name.as_ref().map(|_| {
+            config
+                .table_schema(scan_plan.table_configuration())
+                .unwrap()
+                .fields()
+                .len()
+        });
+        proj.iter().any(|&idx| Some(idx) == file_id_idx)
+    } else {
+        config.retain_file_id()
+    };
     get_data_scan_plan(
         session,
         scan_plan,
@@ -130,7 +156,7 @@ pub(super) async fn execution_plan(
         metrics,
         limit,
         file_id_field,
-        config.retain_file_id(),
+        retain_file_id,
     )
     .await
 }
@@ -567,6 +593,7 @@ fn finalize_transformed_batch(
             columns,
         )?)
     } else {
+        println!("FINAL BATCH SCHEMA LEN: {}", result.schema().fields().len());
         Ok(result)
     }
 }

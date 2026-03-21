@@ -144,8 +144,13 @@ impl DeltaScanExec {
         retain_file_ids: bool,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
+        let output_schema = if retain_file_ids {
+            scan_plan.output_schema.clone()
+        } else {
+            scan_plan.result_schema.clone()
+        };
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(scan_plan.output_schema.clone()),
+            EquivalenceProperties::new(output_schema),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
@@ -502,7 +507,11 @@ impl Stream for DeltaScanStream {
 
 impl RecordBatchStream for DeltaScanStream {
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.scan_plan.output_schema)
+        if self.return_file_ids {
+            Arc::clone(&self.scan_plan.output_schema)
+        } else {
+            Arc::clone(&self.scan_plan.result_schema)
+        }
     }
 }
 

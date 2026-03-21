@@ -204,20 +204,70 @@ async fn test_delta_scan_config_file_column_projection() -> TestResult {
     ctx.register_table("test_table", Arc::new(provider))
         .unwrap();
 
-    let df = ctx.sql("SELECT number FROM test_table").await.unwrap();
+    let df = ctx
+        .sql("SELECT * EXCEPT (_file) FROM test_table ORDER BY date")
+        .await
+        .unwrap();
     let batches = df.collect().await.unwrap();
 
+    let all_fields = batches[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect::<Vec<_>>();
     assert_eq!(
         batches[0].schema().fields().len(),
-        1,
-        "Expected exactly 1 field after projection, but got: {:?}",
-        batches[0]
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| f.name())
-            .collect::<Vec<_>>()
+        4,
+        "Expected exactly 4 fields after projection, but got: {:?}",
+        all_fields
     );
+    assert!(
+        !all_fields.contains(&"_file".to_string()),
+        "The output must not contain _file column"
+    );
+
+    // Reproduce downstream aggregation bug where a subquery selects _file and aggregates over it
+    let df_agg = ctx
+        .sql("SELECT date, substr(_file, 0, 9) as _file, count FROM (SELECT date, _file, count(1) as count FROM test_table GROUP BY date, _file)")
+        .await
+        .unwrap();
+    let batches_agg = df_agg.collect().await.unwrap();
+
+    let agg_fields = batches_agg[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        batches_agg[0].schema().fields().len(),
+        3,
+        "Expected exactly 3 fields after aggregation projection, but got: {:?}",
+        agg_fields
+    );
+    assert!(
+        agg_fields.contains(&"_file".to_string()),
+        "The output must contain _file column"
+    );
+
+    // Reproduce downstream bug where file_id_idx was calculated incorrectly in execution_plan
+    let df_fail = ctx.sql("SELECT data, _file FROM test_table").await.unwrap();
+    let batches_fail = df_fail.collect().await.unwrap();
+
+    let fail_fields = batches_fail[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        batches_fail[0].schema().fields().len(),
+        2,
+        "Expected exactly 2 fields after projection, but got: {:?}",
+        fail_fields
+    );
+    assert!(fail_fields.contains(&"_file".to_string()));
 
     Ok(())
 }
