@@ -96,7 +96,7 @@ def write_deltalake(
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
-        storage_options: options passed to the native delta filesystem.
+        storage_options: Options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate.'
         target_file_size: Override for target file size for data files written to the delta table. If not passed, it's taken from `delta.targetFileSize`.
         writer_properties: Pass writer properties to the Rust parquet writer.

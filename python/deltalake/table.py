@@ -100,7 +100,7 @@ class Metadata:
     @property
     def created_time(self) -> int:
         """
-        Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.
+        Return The time when this metadata instance was created, in milliseconds since the Unix epoch of the DeltaTable.
         """
         return self._metadata.created_time
 
@@ -279,7 +279,10 @@ class DeltaTable:
         partition_filters: list[tuple[str, str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         """
-        Returns the partitions as a list of dicts. Example: `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
+        Returns the partitions as a list of dicts.
+
+        Example:
+          `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
 
         Args:
             partition_filters: The partition filters that will be used for getting the matched partitions, defaults to `None` (no filtering).
@@ -310,14 +313,17 @@ class DeltaTable:
         Returns:
             list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
 
-        Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+        Predicates are expressed in disjunctive normal form (DNF), like `[("x", "=", "a"), ...]`.
         DNF allows arbitrary boolean logical combinations of single partition predicates.
         The innermost tuples each describe a single partition predicate. The list of inner
         predicates is interpreted as a conjunction (AND), forming a more selective and
-        multiple partition predicates. Each tuple has format: (key, op, value) and compares
-        the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If
-        the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-        The supported type for value is str. Use empty string `''` for Null partition value.
+        multiple partition predicates.
+
+        Each tuple has format: `(key, op, value)` and compares the key with the value.
+
+        The supported op are: `=`, `!=`, `in`, and `not in`. If the op is `in` or `not in`,
+        the value must be a collection such as a list, a set or a tuple.
+        The supported type for value is `str`. Use empty string `''` for Null partition value.
 
         Example:
             ```
@@ -779,7 +785,7 @@ class DeltaTable:
         commit_properties: CommitProperties | None = None,
     ) -> dict[str, Any]:
         """
-        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+        Restores table to a given version or datetime.
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -831,9 +837,9 @@ class DeltaTable:
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
 
         Example:
-            ``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
+            ``deltalake`` will work with any storage compliant with [pyarrow.fs.FileSystem][pyarrow.fs.FileSystem], however the root of the filesystem has
             to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
-            a :class:`pyarrow.fs.SubTreeFileSystem`.
+            a [pyarrow.fs.SubTreeFileSystem][pyarrow.fs.SubTreeFileSystem].
             ```
             import pyarrow.fs as fs
             from deltalake import DeltaTable
@@ -1534,7 +1540,7 @@ class TableMerger:
             TableMerger: TableMerger Object
 
         Example:
-            ** Insert all columns **
+            **Insert all columns**
 
             ```python
             from deltalake import DeltaTable, write_deltalake
@@ -1948,11 +1954,11 @@ class TableAlterer:
 
         If the column name doesn't exist in the schema - an error is raised.
 
-        :param column: name of the column to update metadata for.
-        :param metadata: the metadata to be added or modified on the column.
-        :param commit_properties: properties of the transaction commit. If None, default values are used.
-        :param post_commithook_properties: properties for the post commit hook. If None, default values are used.
-        :return:
+        Args:
+            column: name of the column to update metadata for.
+            metadata: the metadata to be added or modified on the column.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
         """
         self.table._table.set_column_metadata(
             column, metadata, commit_properties, post_commithook_properties
@@ -1960,7 +1966,7 @@ class TableAlterer:
 
 
 class TableOptimizer:
-    """API for various table optimization commands."""
+    """API for table optimization commands."""
 
     def __init__(self, table: DeltaTable) -> None:
         self.table = table
