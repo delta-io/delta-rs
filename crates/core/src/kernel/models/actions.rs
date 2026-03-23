@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::TableProperty;
 use crate::kernel::{DeltaResult, error::Error};
-use crate::kernel::{StructType, StructTypeExt};
+use crate::kernel::{StructType, StructTypeExt, Version};
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
@@ -994,7 +994,7 @@ pub struct CommitInfo {
 
     /// Version of the table when the operation was started
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
+    pub read_version: Option<Version>,
 
     /// The isolation level of the commit
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -9,7 +9,7 @@ use deltalake_core::table::normalize_table_url;
 use deltalake_core::{
     DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
-use deltalake_core::{DeltaTableError, logstore::*};
+use deltalake_core::{DeltaTableError, kernel::Version, logstore::*};
 use object_store::{Error as ObjectStoreError, ObjectStore, PutOptions};
 use tracing::debug;
 use url::Url;
@@ -240,7 +240,7 @@ impl LogStore for LakeFSLogStore {
         "LakeFSLogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
         read_commit_entry(
             &self.prefixed_registry.get_store(self.config.location())?,
             version,
@@ -255,7 +255,7 @@ impl LogStore for LakeFSLogStore {
     /// with retry logic.
     async fn write_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -271,7 +271,7 @@ impl LogStore for LakeFSLogStore {
                 // Put commit
                 store
                     .put_opts(
-                        &commit_uri_from_version(version),
+                        &commit_uri_from_version(Some(version)),
                         log_bytes.into(),
                         put_options().clone(),
                     )
@@ -319,7 +319,7 @@ impl LogStore for LakeFSLogStore {
                     Ok(_) => Ok(()),
                     Err(TransactionError::VersionAlreadyExists(version)) => {
                         store
-                            .delete(&commit_uri_from_version(version))
+                            .delete(&commit_uri_from_version(Some(version)))
                             .await
                             .map_err(TransactionError::from)?;
                         return Err(TransactionError::VersionAlreadyExists(version));
@@ -334,7 +334,7 @@ impl LogStore for LakeFSLogStore {
 
     async fn abort_commit_entry(
         &self,
-        _version: i64,
+        _version: Version,
         commit_or_bytes: CommitOrBytes,
         operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -353,7 +353,7 @@ impl LogStore for LakeFSLogStore {
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
         get_latest_version(self, current_version).await
     }
 

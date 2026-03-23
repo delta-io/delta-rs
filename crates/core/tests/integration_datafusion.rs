@@ -318,10 +318,8 @@ mod local {
         // convert to explain plan form
         let display = displayable(plan.as_ref()).indent(true).to_string();
 
-        assert_contains!(
-            &display,
-            "ProjectionExec: expr=[count(Int64(1))@0 as num_events]"
-        );
+        // Exact metadata row counts let DataFusion fold COUNT(*) into a constant result.
+        assert_contains!(&display, "PlaceholderRowExec");
 
         let batches = df.collect().await?;
         let batch = &batches[0];
@@ -570,7 +568,7 @@ mod local {
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        let total_byte_size = statistics.total_byte_size.clone();
+        let total_byte_size = statistics.total_byte_size;
         let expected_total_byte_size = (400 + 404 + 396) as usize;
         assert!(
             total_byte_size == Precision::Exact(expected_total_byte_size)

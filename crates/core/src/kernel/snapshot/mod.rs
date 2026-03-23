@@ -119,7 +119,7 @@ impl Snapshot {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
@@ -132,7 +132,7 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, config, version.map(|v| v as u64)).await
+        Self::try_new_with_engine(engine, table_root, config, version).await
     }
 
     pub fn scan_builder(&self) -> ScanBuilder {
@@ -147,24 +147,34 @@ impl Snapshot {
     pub async fn update(
         self: Arc<Self>,
         engine: Arc<dyn Engine>,
-        target_version: Option<u64>,
+        target_version: Option<Version>,
     ) -> DeltaResult<Arc<Self>> {
+        let current_version = self.version();
         if let Some(version) = target_version {
-            if version == self.version() as u64 {
-                return Ok(self);
+            if version < current_version {
+                return Err(DeltaTableError::VersionDowngrade {
+                    current_version,
+                    requested_version: version,
+                });
             }
-            if version < self.version() as u64 {
+            if version == current_version {
+                return self
+                    .refresh_same_version_checkpoint_if_needed(engine, version)
+                    .await;
+            }
+            if version < self.version() {
                 return Err(DeltaTableError::Generic("Cannot downgrade snapshot".into()));
             }
         }
 
         let current = self.inner.clone();
+        let task_engine = engine.clone();
         let snapshot = spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_from(current);
             if let Some(version) = target_version {
                 builder = builder.at_version(version);
             }
-            builder.build(engine.as_ref())
+            builder.build(task_engine.as_ref())
         })
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
@@ -177,16 +187,68 @@ impl Snapshot {
                 .try_into_arrow()?,
         );
 
-        Ok(Arc::new(Self {
+        let snapshot = Arc::new(Self {
             inner: snapshot,
             schema,
             config: self.config.clone(),
-        }))
+        });
+        if snapshot.version() as u64 == current_version {
+            // `target_version` was `None`, but there were no new commits.
+            // We may still need to pick up a checkpoint written for the current version.
+            snapshot
+                .refresh_same_version_checkpoint_if_needed(engine, current_version)
+                .await
+        } else {
+            Ok(snapshot)
+        }
+    }
+
+    /// Rebuild a same-version snapshot if a checkpoint showed up after it was loaded.
+    ///
+    /// Version bumps still go through the normal snapshot update path.
+    async fn refresh_same_version_checkpoint_if_needed(
+        self: Arc<Self>,
+        engine: Arc<dyn Engine>,
+        current_version: Version,
+    ) -> DeltaResult<Arc<Self>> {
+        if self.checkpoint_version() == Some(current_version) {
+            return Ok(self);
+        }
+
+        let mut table_root = self.inner.table_root().clone();
+        if !table_root.path().ends_with('/') {
+            table_root.set_path(&format!("{}/", table_root.path()));
+        }
+        let log_root = table_root
+            .join("_delta_log/")
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+        let checkpoint_version = read_last_checkpoint_version(engine.clone(), log_root).await?;
+        if checkpoint_version != Some(current_version) {
+            return Ok(self);
+        }
+
+        tracing::trace!(
+            version = current_version,
+            "rebuilding snapshot to adopt a newly available checkpoint at the current version"
+        );
+        Snapshot::try_new_with_engine(
+            engine,
+            table_root,
+            self.config.clone(),
+            Some(current_version),
+        )
+        .await
+        .map(Arc::new)
     }
 
     /// Get the table version of the snapshot
-    pub fn version(&self) -> i64 {
-        self.inner.version() as i64
+    pub fn version(&self) -> Version {
+        self.inner.version()
+    }
+
+    /// Get the checkpoint version currently backing this snapshot, if any.
+    pub(crate) fn checkpoint_version(&self) -> Option<Version> {
+        self.inner.log_segment().checkpoint_version
     }
 
     /// Get the table schema of the snapshot
@@ -337,15 +399,13 @@ impl Snapshot {
         let store = log_store.root_object_store(None);
 
         let log_root = self.table_root_path()?.child("_delta_log");
-        let start_from = log_root.child(
-            format!(
-                "{:020}",
-                limit
-                    .map(|l| (self.version() - l as i64 + 1).max(0))
-                    .unwrap_or(0)
-            )
-            .as_str(),
-        );
+        let start_from = if let Some(limit) = limit {
+            let v = self.version() as i64;
+            std::cmp::max(v - limit as i64 + 1, 0)
+        } else {
+            0
+        };
+        let start_from = log_root.child(format!("{:020}", start_from).as_str());
 
         let dummy_url = url::Url::parse("memory:///")
             .map_err(|e| DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e)))?;
@@ -471,7 +531,14 @@ impl Snapshot {
             spawn_blocking_with_span(move || inner.get_app_id_version(&app_id, engine.as_ref()))
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
-        Ok(version)
+        if let Some(version) = version {
+            return Ok(Some(version.try_into().map_err(|e| {
+                DeltaTableError::GenericError {
+                    source: Box::new(e),
+                }
+            })?));
+        }
+        Ok(None)
     }
 
     /// Fetch the [domainMetadata] for a specific domain in this snapshot.
@@ -503,6 +570,40 @@ pub struct EagerSnapshot {
     files: Vec<RecordBatch>,
 }
 
+#[derive(::serde::Deserialize)]
+struct LastCheckpointVersionHint {
+    version: Version,
+}
+
+/// Read `_last_checkpoint` and return the hinted version when present.
+///
+/// Missing, empty, or invalid hint files return `Ok(None)` so callers can fall back to listing.
+async fn read_last_checkpoint_version(
+    engine: Arc<dyn Engine>,
+    log_root: Url,
+) -> DeltaResult<Option<Version>> {
+    spawn_blocking_with_span(move || {
+        let storage = engine.storage_handler();
+        let checkpoint_path = log_root
+            .join("_last_checkpoint")
+            .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+        match storage.read_files(vec![(checkpoint_path, None)])?.next() {
+            Some(Ok(data)) => Ok(serde_json::from_slice::<LastCheckpointVersionHint>(&data)
+                .inspect_err(|e| tracing::warn!("invalid _last_checkpoint JSON: {e}"))
+                .ok()
+                .map(|hint| hint.version)),
+            Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
+            Some(Err(err)) => Err(err.into()),
+            None => {
+                tracing::warn!("empty _last_checkpoint file");
+                Ok(None)
+            }
+        }
+    })
+    .await
+    .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+}
+
 pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
     maybe_snapshot: Option<EagerSnapshot>,
@@ -523,11 +624,9 @@ pub(crate) async fn resolve_snapshot(
             Ok(snapshot)
         }
     } else {
-        let config = DeltaTableConfig {
-            require_files,
-            ..Default::default()
-        };
-        EagerSnapshot::try_new(log_store, config, version.map(|v| v as i64)).await
+        let mut config = DeltaTableConfig::default();
+        config.require_files = require_files;
+        EagerSnapshot::try_new(log_store, config, version).await
     }
 }
 
@@ -536,7 +635,7 @@ impl EagerSnapshot {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
         Self::try_new_with_snapshot(log_store, snapshot.into()).await
@@ -584,16 +683,17 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         target_version: Option<Version>,
     ) -> DeltaResult<()> {
-        let current_version = self.version() as u64;
-        if Some(current_version) == target_version {
-            return Ok(());
-        }
-
-        self.snapshot = self
-            .snapshot
+        let current_version = self.version();
+        let previous_snapshot = self.snapshot.clone();
+        let updated_snapshot = previous_snapshot
             .clone()
             .update(log_store.engine(None), target_version)
             .await?;
+        if Arc::ptr_eq(&updated_snapshot, &previous_snapshot) {
+            return Ok(());
+        }
+
+        self.snapshot = updated_snapshot;
 
         self.files = self
             .snapshot
@@ -616,14 +716,19 @@ impl EagerSnapshot {
     }
 
     /// Get the table version of the snapshot
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.snapshot.version()
     }
 
+    /// Get the checkpoint version currently backing this snapshot, if any.
+    pub(crate) fn checkpoint_version(&self) -> Option<Version> {
+        self.snapshot.checkpoint_version()
+    }
+
     /// Get the timestamp of the given version
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+    pub fn version_timestamp(&self, version: Version) -> Option<i64> {
         for path in &self.snapshot.inner.log_segment().ascending_commit_files {
-            if path.version as i64 == version {
+            if path.version == version {
                 return Some(path.location.last_modified);
             }
         }
@@ -748,16 +853,23 @@ pub(crate) fn partitions_schema(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use futures::TryStreamExt;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     // use super::log_segment::tests::{concurrent_checkpoint};
     // use super::replay::tests::test_log_replay;
     use super::*;
     use crate::{
+        DeltaTable, checkpoints,
         kernel::transaction::CommitData,
-        test_utils::{TestResult, TestTables, assert_batches_sorted_eq},
+        kernel::transaction::{CommitBuilder, TableReference},
+        kernel::{Action, DataType, PrimitiveType, StructField, StructType},
+        protocol::{DeltaOperation, SaveMode},
+        test_utils::{TestResult, TestTables, assert_batches_sorted_eq, make_test_add},
     };
 
     impl Snapshot {
@@ -769,7 +881,7 @@ mod tests {
             let store = Arc::new(InMemory::new());
 
             for (idx, commit) in commits.into_iter().enumerate() {
-                let uri = commit_uri_from_version(idx as i64);
+                let uri = commit_uri_from_version(Some(idx as u64));
                 let data = commit.get_bytes()?;
                 store.put(&uri, data.into()).await?;
             }
@@ -816,6 +928,79 @@ mod tests {
                 files,
             })
         }
+    }
+
+    async fn checkpoint_rebase_table() -> DeltaResult<(TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let mut table = DeltaTable::new_in_memory()
+            .create()
+            .with_location(table_dir.path().to_str().unwrap())
+            .with_columns(
+                [StructField::new(
+                    "id",
+                    DataType::Primitive(PrimitiveType::Integer),
+                    true,
+                )]
+                .into_iter(),
+            )
+            .await?;
+
+        append_test_add(&mut table, "part-00000.snappy.parquet").await?;
+        append_test_add(&mut table, "part-00001.snappy.parquet").await?;
+        Ok((table_dir, table))
+    }
+
+    async fn append_test_add(table: &mut DeltaTable, path: &str) -> DeltaResult<Version> {
+        let version = CommitBuilder::default()
+            .with_actions(vec![Action::Add(make_test_add(path, &[], 0))])
+            .build(
+                table
+                    .state
+                    .as_ref()
+                    .map(|state| state as &dyn TableReference),
+                table.log_store(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?
+            .version();
+        table.update_state().await?;
+        Ok(version)
+    }
+
+    async fn eager_file_paths(
+        snapshot: &EagerSnapshot,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Vec<String>> {
+        Ok(snapshot
+            .file_views(log_store, None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|file| file.path().to_string())
+            .collect())
+    }
+
+    async fn checkpoint_file_paths(
+        log_store: &dyn LogStore,
+        version: Version,
+    ) -> DeltaResult<Vec<object_store::path::Path>> {
+        let checkpoint_prefix = format!("{version:020}.checkpoint", version = version);
+        Ok(log_store
+            .object_store(None)
+            .list(Some(log_store.log_path()))
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|meta| meta.location)
+            .filter(|path| {
+                path.filename()
+                    .is_some_and(|file_name| file_name.starts_with(&checkpoint_prefix))
+            })
+            .collect())
     }
 
     #[tokio::test]
@@ -885,7 +1070,7 @@ mod tests {
                 .files(&log_store, None)
                 .try_collect::<Vec<_>>()
                 .await?;
-            let num_files = batches.iter().map(|b| b.num_rows() as i64).sum::<i64>();
+            let num_files = batches.iter().map(|b| b.num_rows() as u64).sum::<u64>();
             assert_eq!(num_files, version);
         }
 
@@ -914,6 +1099,154 @@ mod tests {
             assert_eq!(batches.len(), version as usize);
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult {
+        let (_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let snapshot =
+            Snapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        assert_eq!(snapshot.version(), version);
+        assert_eq!(snapshot.checkpoint_version(), None);
+
+        checkpoints::create_checkpoint(&table, None).await?;
+
+        let updated = Arc::new(snapshot)
+            .update(log_store.engine(None), Some(version as u64))
+            .await?;
+        assert_eq!(updated.version(), version);
+        assert_eq!(updated.checkpoint_version(), Some(version));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
+        let (_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        assert_eq!(snapshot.version(), version);
+        assert_eq!(snapshot.checkpoint_version(), None);
+
+        checkpoints::create_checkpoint(&table, None).await?;
+
+        let updated = Arc::new(snapshot)
+            .update(log_store.engine(None), None)
+            .await?;
+        assert_eq!(updated.version(), version);
+        assert_eq!(updated.checkpoint_version(), Some(version));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult
+    {
+        let (_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let mut snapshot =
+            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
+        assert_eq!(snapshot.snapshot.checkpoint_version(), None);
+
+        checkpoints::create_checkpoint(&table, None).await?;
+
+        snapshot
+            .update(log_store.as_ref(), Some(version as u64))
+            .await?;
+        assert_eq!(snapshot.version(), version);
+        assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
+        assert_eq!(
+            eager_file_paths(&snapshot, log_store.as_ref()).await?,
+            expected_paths
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
+        let (_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let mut snapshot =
+            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
+        assert_eq!(snapshot.snapshot.checkpoint_version(), None);
+
+        checkpoints::create_checkpoint(&table, None).await?;
+
+        snapshot.update(log_store.as_ref(), None).await?;
+        assert_eq!(snapshot.version(), version);
+        assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
+        assert_eq!(
+            eager_file_paths(&snapshot, log_store.as_ref()).await?,
+            expected_paths
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_same_version_checkpoint_refresh_is_idempotent() -> TestResult {
+        let (_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let mut snapshot =
+            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+
+        checkpoints::create_checkpoint(&table, None).await?;
+        snapshot
+            .update(log_store.as_ref(), Some(version as u64))
+            .await?;
+        assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
+
+        let prior_snapshot = snapshot.snapshot.clone();
+        let prior_files_ptr = snapshot.files.as_ptr();
+        let prior_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
+
+        snapshot
+            .update(log_store.as_ref(), Some(version as u64))
+            .await?;
+
+        assert!(Arc::ptr_eq(&snapshot.snapshot, &prior_snapshot));
+        assert_eq!(snapshot.files.as_ptr(), prior_files_ptr);
+        assert_eq!(
+            eager_file_paths(&snapshot, log_store.as_ref()).await?,
+            prior_paths
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_update_same_version_surfaces_invalid_current_checkpoint_hint()
+    -> TestResult {
+        let (_table_dir, table) = checkpoint_rebase_table().await?;
+        let version = table.version().unwrap();
+        let log_store = table.log_store();
+        let snapshot =
+            Snapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+
+        checkpoints::create_checkpoint(&table, None).await?;
+        let checkpoint_paths = checkpoint_file_paths(log_store.as_ref(), version).await?;
+        assert!(!checkpoint_paths.is_empty());
+        for checkpoint_path in checkpoint_paths {
+            log_store
+                .object_store(None)
+                .delete(&checkpoint_path)
+                .await?;
+        }
+
+        let err = Arc::new(snapshot)
+            .update(log_store.engine(None), Some(version as u64))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Had a _last_checkpoint hint but didn't find any checkpoints"),
+            "expected same-version checkpoint refresh to surface the kernel checkpoint error: {err}"
+        );
         Ok(())
     }
 }

@@ -38,7 +38,6 @@ use datafusion::{
     prelude::Expr,
     scalar::ScalarValue,
 };
-use delta_kernel::Version;
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use object_store::ObjectMeta;
@@ -53,7 +52,7 @@ use crate::delta_datafusion::{
     to_correct_scalar_value,
 };
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Add, EagerSnapshot, Snapshot};
+use crate::kernel::{Add, EagerSnapshot, Snapshot, Version};
 use crate::logstore::LogStore;
 use crate::logstore::LogStoreExt as _;
 use crate::protocol::SaveMode;
@@ -400,7 +399,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let files = self
                         .snapshot
                         .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
+                        .map_ok(|f| f.to_add())
                         .try_collect::<Vec<_>>()
                         .await?;
                     let files_scanned = files.len();
@@ -425,7 +424,7 @@ impl<'a> DeltaScanBuilder<'a> {
                     let file_actions: Vec<_> = self
                         .snapshot
                         .file_views(&self.log_store, None)
-                        .map_ok(|f| f.add_action())
+                        .map_ok(|f| f.to_add())
                         .try_collect::<Vec<_>>()
                         .await?;
 
@@ -714,13 +713,9 @@ impl TableProviderBuilder {
             None => {
                 if let Some(log_store) = log_store.as_ref() {
                     SnapshotWrapper::Snapshot(
-                        Snapshot::try_new(
-                            log_store,
-                            Default::default(),
-                            table_version.map(|v| v as i64),
-                        )
-                        .await?
-                        .into(),
+                        Snapshot::try_new(log_store, Default::default(), table_version)
+                            .await?
+                            .into(),
                     )
                 } else {
                     return Err(DataFusionError::Plan(

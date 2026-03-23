@@ -11,7 +11,7 @@ use ::object_store::RetryConfig;
 use object_store::{ObjectStore, path::Path, prefix::PrefixStore};
 use std::collections::HashMap;
 
-use super::storage::LimitConfig;
+use super::storage::{CertificateConfig, LimitConfig};
 use super::{IORuntime, storage::runtime::RuntimeConfig};
 use crate::{DeltaResult, DeltaTableError};
 
@@ -103,6 +103,11 @@ pub struct StorageConfig {
     /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
 
+    /// Certificate configuration.
+    ///
+    /// Configuration for custom TLS root certificates.
+    pub certificate: Option<CertificateConfig>,
+
     /// Properties that are not recognized by the storage configuration.
     ///
     /// These properties are ignored by the storage configuration and can be used for custom purposes.
@@ -165,6 +170,9 @@ where
         let result = ParseResult::<LimitConfig>::from_iter(result.unparsed);
         config.limit = (!result.is_default).then_some(result.config);
 
+        let result = ParseResult::<CertificateConfig>::from_iter(result.unparsed);
+        config.certificate = (!result.is_default).then_some(result.config);
+
         let remainder = result.unparsed;
 
         #[cfg(feature = "cloud")]
@@ -216,6 +224,10 @@ impl StorageConfig {
         let result = ParseResult::<LimitConfig>::from_iter(remainder);
         result.raise_errors()?;
         props.limit = (!result.is_default).then_some(result.config);
+
+        let result = ParseResult::<CertificateConfig>::from_iter(result.unparsed);
+        result.raise_errors()?;
+        props.certificate = (!result.is_default).then_some(result.config);
         let remainder = result.unparsed;
 
         #[cfg(feature = "cloud")]
@@ -236,14 +248,12 @@ impl StorageConfig {
     }
 }
 
-pub(super) fn try_parse_impl<T: std::fmt::Debug, K, V, I>(
-    options: I,
-) -> DeltaResult<(T, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
-    T: TryUpdateKey,
+    T: TryUpdateKey + std::fmt::Debug,
 {
     let result = ParseResult::from_iter(options);
     result.raise_errors()?;

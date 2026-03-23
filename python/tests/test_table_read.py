@@ -1,6 +1,5 @@
 import multiprocessing
 import os
-import tempfile
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -1000,10 +999,10 @@ def test_partitions_filtering_partitioned_table():
 
 
 @pytest.mark.pyarrow
-def test_partitions_date_partitioned_table():
+def test_partitions_date_partitioned_table(tmp_path: Path):
     import pyarrow as pa
 
-    table_path = tempfile.gettempdir() + "/date_partition_table"
+    table_path = tmp_path / "date_partition_table"
     date_partitions = [
         date(2024, 8, 1),
         date(2024, 8, 2),

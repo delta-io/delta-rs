@@ -152,7 +152,7 @@ pub async fn open_table_with_storage_options(
 /// Will fail fast if specified `table_url` is a local path but doesn't exist.
 pub async fn open_table_with_version(
     table_url: Url,
-    version: i64,
+    version: crate::kernel::Version,
 ) -> Result<DeltaTable, DeltaTableError> {
     let table = builder_from_valid_url(table_url)?
         .with_version(version)

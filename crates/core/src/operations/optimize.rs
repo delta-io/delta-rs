@@ -55,7 +55,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{Action, Add, PartitionsExt, Remove, scalars::ScalarExt};
+use crate::kernel::{Action, Add, PartitionsExt, Remove, Version, scalars::ScalarExt};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::protocol::DeltaOperation;
@@ -484,7 +484,7 @@ pub struct MergePlan {
     /// Parameters passed down to merge tasks
     task_parameters: Arc<MergeTaskParameters>,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
-    read_table_version: i64,
+    read_table_version: Version,
 }
 
 /// Parameters passed to individual merge tasks
@@ -986,7 +986,7 @@ async fn build_compaction_plan(
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, vec![]))
             .1
-            .push(file.add_action());
+            .push(file.to_add());
     }
 
     for (_, file) in partition_files.values_mut() {
@@ -1102,7 +1102,7 @@ async fn build_zorder_plan(
             .entry(partition_values.hive_partition_path())
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
-            .add(file.add_action());
+            .add(file.to_add());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
