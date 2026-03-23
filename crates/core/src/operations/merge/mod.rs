@@ -863,6 +863,7 @@ async fn execute(
         DeltaScanNext::builder()
             .with_eager_snapshot(snapshot.clone())
             .with_log_store(log_store.clone())
+            .with_session(state.clone().into())
             .with_file_column(file_column.as_str())
             .await?,
     );
@@ -871,6 +872,7 @@ async fn execute(
 
     let source_schema = source.schema();
     let target_schema = target.schema();
+    let target_arrow_schema = Arc::new(target_schema.as_arrow().clone());
 
     let join_schema_df = build_join_schema(source_schema, target_schema, &JoinType::Full)?;
 
@@ -921,6 +923,7 @@ async fn execute(
         let mut builder = DeltaScanNext::builder()
             .with_eager_snapshot(snapshot.clone())
             .with_log_store(log_store.clone())
+            .with_session(state.clone().into())
             .with_file_column(file_column.as_str());
 
         if !file_skipping_predicates.is_empty() {
@@ -1151,7 +1154,13 @@ async fn execute(
             None => TableReference::none(),
         };
         let name = delta_field.name();
-        let mut cast_type: DataType = delta_field.data_type().try_into_arrow()?;
+        let kernel_arrow_type = delta_field.data_type().try_into_arrow()?;
+        let mut cast_type: DataType = target_arrow_schema
+            .field_with_name(name)
+            .ok()
+            .filter(|f| !matches!(f.data_type(), DataType::Dictionary(_, _)))
+            .map(|f| f.data_type().clone())
+            .unwrap_or(kernel_arrow_type);
 
         // Receive the correct column reference given that some columns are only in source table
         let column = if let Some(field) = snapshot.schema().field(name) {
@@ -1166,7 +1175,7 @@ async fn execute(
         } else {
             null_target_column = Some(cast(
                 lit(ScalarValue::Null).alias(name),
-                delta_field.data_type().try_into_arrow()?,
+                cast_type.clone(),
             ));
             Column::new(source_qualifier.clone(), name)
         };

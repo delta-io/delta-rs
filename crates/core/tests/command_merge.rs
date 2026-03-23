@@ -6,7 +6,7 @@ use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_expr::{Expr, col, lit};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{SessionConfig, SessionContext};
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
@@ -235,4 +235,228 @@ async fn test_merge_concurrent_with_overlapping_files() {
     if let DeltaTableError::Transaction { source } = result.unwrap_err() {
         assert!(matches!(source, TransactionError::CommitConflict(_)));
     }
+}
+
+/// Verify that the merge write projection preserves the physical Arrow types
+/// produced by the target scan.
+///
+/// When `schema_force_view_types` is enabled (the default), the scan produces
+/// `Utf8View`/`BinaryView` columns. The write projection must not cast these
+/// back to `Utf8`/`Binary` (which would re-introduce Arrow's 2 GB offset limit).
+///
+/// When disabled, the legacy `Utf8`/`Binary` types must be preserved.
+#[tokio::test]
+async fn test_merge_respects_schema_force_view_types() -> DeltaResult<()> {
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, true),
+        Field::new("content", DataType::Utf8, true),
+        Field::new("payload", DataType::Binary, true),
+    ]));
+
+    let delta_schema = StructType::try_new(vec![
+        StructField::new("id", DeltaDataType::Primitive(PrimitiveType::String), true),
+        StructField::new(
+            "content",
+            DeltaDataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+        StructField::new(
+            "payload",
+            DeltaDataType::Primitive(PrimitiveType::Binary),
+            true,
+        ),
+    ])
+    .unwrap();
+
+    let initial_batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+            Arc::new(arrow::array::StringArray::from(vec!["hello", "world"])),
+            Arc::new(arrow::array::BinaryArray::from(vec![
+                b"bin1".as_ref(),
+                b"bin2".as_ref(),
+            ])),
+        ],
+    )
+    .unwrap();
+
+    let source_batch = RecordBatch::try_new(
+        Arc::clone(&arrow_schema),
+        vec![
+            Arc::new(arrow::array::StringArray::from(vec!["B", "C"])),
+            Arc::new(arrow::array::StringArray::from(vec!["updated", "new"])),
+            Arc::new(arrow::array::BinaryArray::from(vec![
+                b"bin2_new".as_ref(),
+                b"bin3".as_ref(),
+            ])),
+        ],
+    )
+    .unwrap();
+
+    // -- view types ENABLED (default) -----------------------------------------
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![initial_batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let source = ctx.read_batch(source_batch.clone()).unwrap();
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("content", col("source.content"))
+                    .update("payload", col("source.payload"))
+            })?
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("content", col("source.content"))
+                    .set("payload", col("source.payload"))
+            })?
+            .await?;
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_output_rows, 3);
+
+        // Read back and assert the physical Arrow types are Utf8View / BinaryView.
+        let read_ctx = SessionContext::new();
+        table.update_datafusion_session(&read_ctx.state()).unwrap();
+        let provider = table.table_provider().await.unwrap();
+        read_ctx.register_table("t", provider).unwrap();
+        let batches = read_ctx
+            .sql("SELECT * FROM t ORDER BY id")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert!(!batches.is_empty());
+        let schema = batches[0].schema();
+        assert_eq!(
+            schema.field_with_name("id").unwrap().data_type(),
+            &DataType::Utf8View,
+            "expected Utf8View for 'id' when view types enabled"
+        );
+        assert_eq!(
+            schema.field_with_name("content").unwrap().data_type(),
+            &DataType::Utf8View,
+            "expected Utf8View for 'content' when view types enabled"
+        );
+        assert_eq!(
+            schema.field_with_name("payload").unwrap().data_type(),
+            &DataType::BinaryView,
+            "expected BinaryView for 'payload' when view types enabled"
+        );
+    }
+
+    // -- view types DISABLED --------------------------------------------------
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![initial_batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let source = ctx.read_batch(source_batch.clone()).unwrap();
+
+        // Create a session with schema_force_view_types disabled
+        let config: SessionConfig =
+            deltalake_core::delta_datafusion::DeltaSessionConfig::default().into();
+        let config = config.set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let runtime_env = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .build_arc()
+            .unwrap();
+        let state = datafusion::execution::SessionStateBuilder::new()
+            .with_default_features()
+            .with_config(config)
+            .with_runtime_env(runtime_env)
+            .build();
+        let session = Arc::new(state);
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_session_state(session)
+            .when_matched_update(|update| {
+                update
+                    .update("content", col("source.content"))
+                    .update("payload", col("source.payload"))
+            })?
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("content", col("source.content"))
+                    .set("payload", col("source.payload"))
+            })?
+            .await?;
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_output_rows, 3);
+
+        // Read back with view types disabled and assert legacy Utf8 / Binary.
+        let read_config = SessionConfig::default().set_bool(
+            "datafusion.execution.parquet.schema_force_view_types",
+            false,
+        );
+        let read_ctx = SessionContext::new_with_config(read_config);
+        table.update_datafusion_session(&read_ctx.state()).unwrap();
+        let provider = table
+            .table_provider()
+            .with_session(Arc::new(read_ctx.state()))
+            .await
+            .unwrap();
+        read_ctx.register_table("t", provider).unwrap();
+        let batches = read_ctx
+            .sql("SELECT * FROM t ORDER BY id")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert!(!batches.is_empty());
+        let schema = batches[0].schema();
+        assert_eq!(
+            schema.field_with_name("id").unwrap().data_type(),
+            &DataType::Utf8,
+            "expected Utf8 for 'id' when view types disabled"
+        );
+        assert_eq!(
+            schema.field_with_name("content").unwrap().data_type(),
+            &DataType::Utf8,
+            "expected Utf8 for 'content' when view types disabled"
+        );
+        assert_eq!(
+            schema.field_with_name("payload").unwrap().data_type(),
+            &DataType::Binary,
+            "expected Binary for 'payload' when view types disabled"
+        );
+    }
+
+    Ok(())
 }
