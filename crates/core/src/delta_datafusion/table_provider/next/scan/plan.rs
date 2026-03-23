@@ -235,6 +235,9 @@ impl DeltaScanConfig {
     /// such as dictionary encoding of partition columns or
     /// view types.
     pub(crate) fn table_schema(&self, table_config: &TableConfiguration) -> Result<SchemaRef> {
+        if let Some(schema) = &self.schema {
+            return Ok(schema.clone());
+        }
         let table_schema: Schema = table_config.schema().as_ref().try_into_arrow()?;
         self.physical_arrow_schema(table_config, &table_schema)
     }

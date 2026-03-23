@@ -1162,7 +1162,7 @@ impl ExecutionPlan for DeltaScan {
 /// The logical schema for a Deltatable is different from the protocol level schema since partition
 /// columns must appear at the end of the schema. This is to align with how partition are handled
 /// at the physical level
-fn df_logical_schema(
+pub(crate) fn df_logical_schema(
     snapshot: &EagerSnapshot,
     file_column_name: &Option<String>,
     schema: Option<SchemaRef>,

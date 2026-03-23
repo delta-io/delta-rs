@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
-use arrow_schema::Schema;
+use arrow_schema::{Schema, SchemaRef};
 use datafusion::catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion::common::{Result, Statistics};
 use datafusion::datasource::TableType;
@@ -11,7 +11,7 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_plan::ExecutionPlan;
 use url::Url;
 use crate::delta_datafusion::{DataFusionMixins, DeltaScanBuilder, DeltaScanConfigBuilder};
-use crate::delta_datafusion::table_provider::get_pushdown_filters;
+use crate::delta_datafusion::table_provider::{df_logical_schema, get_pushdown_filters};
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError};
 use crate::logstore::LogStoreRef;
 use crate::table::state::DeltaTableState;
@@ -38,6 +38,8 @@ pub struct DeltaTableOldProvider {
     pub config: DeltaTableConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
+    /// Optional schema override for scanning
+    pub(crate) schema: Option<SchemaRef>,
 }
 
 impl DeltaTableOldProvider {
@@ -47,6 +49,10 @@ impl DeltaTableOldProvider {
     pub fn log_store(&self) -> LogStoreRef {
         self.log_store.clone()
     }
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
 }
 
 impl From<DeltaTable> for DeltaTableOldProvider {
@@ -54,7 +60,8 @@ impl From<DeltaTable> for DeltaTableOldProvider {
         Self {
             state: value.state.clone(),
             config: value.config.clone(),
-            log_store: value.log_store.clone()
+            log_store: value.log_store.clone(),
+            schema: None,
         }
     }
 }
@@ -66,7 +73,15 @@ impl TableProvider for DeltaTableOldProvider {
     }
 
     fn schema(&self) -> Arc<Schema> {
-        self.snapshot().unwrap().snapshot().read_schema()
+        match &self.schema {
+            Some(s) => df_logical_schema(
+                self.snapshot().unwrap().snapshot(),
+                &None,
+                Some(s.clone()),
+            )
+            .unwrap_or_else(|_| s.clone()),
+            None => self.snapshot().unwrap().snapshot().read_schema(),
+        }
     }
 
     fn table_type(&self) -> TableType {
@@ -101,7 +116,7 @@ impl TableProvider for DeltaTableOldProvider {
             file_column_name: None,
             wrap_partition_values: None,
             enable_parquet_pushdown: true,
-            schema: None,
+            schema: self.schema.clone(),
         };
 
         let config = config
