@@ -19,7 +19,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{DataType, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{HashMap, HashSet, exec_err, plan_err};
+use datafusion::common::{HashMap, HashSet, plan_err};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
@@ -31,6 +31,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{Expression, Predicate, PredicateRef};
 use itertools::Itertools;
+use tracing::debug;
 
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::{
@@ -92,10 +93,14 @@ impl KernelScanPlan {
         // if some dedicated file skipping predicate is supplied,
         // we do not push the scan filters into the kernel scan.
         let scan_predicate = if let Some(sp) = skipping_predicate {
-            let (Some(pred), _) = process_filters(&sp, table_config, config)? else {
-                return exec_err!("Failed to convert file skipping perdicate to kernel.");
-            };
-            Some(pred)
+            let (scan_predicate, _) = process_filters(&sp, table_config, config)?;
+            if scan_predicate.is_none() {
+                debug!(
+                    predicate = ?sp,
+                    "Dropping dedicated file-skipping predicate because no kernel terms survived conversion"
+                );
+            }
+            scan_predicate
         } else {
             kernel_predicate
         };
@@ -395,7 +400,8 @@ fn process_filters(
     } else {
         conjunction(parquet.iter().flatten().map(|ex| (*ex).clone()))
     };
-    let kernel = (!kernel.is_empty()).then(|| Predicate::and_from(kernel.into_iter().flatten()));
+    let kernel_terms = kernel.into_iter().flatten().collect_vec();
+    let kernel = (!kernel_terms.is_empty()).then(|| Predicate::and_from(kernel_terms));
     Ok((kernel.map(Arc::new), parquet))
 }
 
@@ -818,6 +824,29 @@ mod tests {
             supports_filters_pushdown(&[&file_id_only], table_config, &scan_config),
             vec![TableProviderFilterPushDown::Unsupported]
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dedicated_skipping_predicate_with_no_survivors_falls_back_to_full_scan()
+    -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/delta-0.8.0-partitioned");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+        let scan_plan = KernelScanPlan::try_new(
+            snapshot,
+            None,
+            &[],
+            &DeltaScanConfig::default(),
+            Some(vec![
+                col("year").in_list(vec![lit(ScalarValue::Utf8(None))], false),
+            ]),
+        )?;
+
+        assert!(scan_plan.scan.physical_predicate().is_none());
+        assert!(scan_plan.parquet_predicate.is_none());
 
         Ok(())
     }
