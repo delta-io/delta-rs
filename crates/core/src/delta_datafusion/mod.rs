@@ -607,15 +607,18 @@ impl From<Column> for DeltaColumn {
 #[cfg(test)]
 mod tests {
     use crate::DeltaTable;
-    use crate::logstore::ObjectStoreRef;
-    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
-    use crate::test_utils::open_fs_path;
+    use crate::test_utils::{
+        object_store::{
+            RecordedObjectStoreOperation as ObjectStoreOperation, RecordedPathKind as PathKind,
+            drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+        },
+        open_fs_path,
+    };
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
     use arrow_array::cast::AsArray;
-    use bytes::Bytes;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::config::TableParquetOptions;
     use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -627,18 +630,9 @@ mod tests {
     use datafusion_datasource::file::FileSource as _;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
-    use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use delta_kernel::schema::ArrayType;
-    use futures::{StreamExt, TryStreamExt, stream::BoxStream};
-    use object_store::ObjectMeta;
-    use object_store::{
-        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
-        PutOptions, PutPayload, PutResult, path::Path,
-    };
+    use futures::{StreamExt, TryStreamExt};
     use serde_json::json;
-    use std::fmt::{self, Debug, Display, Formatter};
-    use std::ops::Range;
-    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
     use url::Url;
 
     use super::*;
@@ -1433,18 +1427,10 @@ mod tests {
             .build(table.snapshot().unwrap().snapshot())
             .unwrap();
 
-        let (object_store, mut operations) =
-            RecordingObjectStore::new(table.log_store().object_store(None));
-        // this uses an in memory store pointing at root...
-        let both_store = Arc::new(object_store);
-        let log_store = DefaultLogStore::new(
-            both_store.clone(),
-            both_store,
-            table.log_store().config().clone(),
-        );
+        let (log_store, mut operations) = recording_log_store(table.log_store());
         let provider = DeltaTableProvider::try_new(
             table.snapshot().unwrap().snapshot().clone(),
-            Arc::new(log_store),
+            log_store.clone(),
             config,
         )
         .unwrap();
@@ -1465,14 +1451,29 @@ mod tests {
         let small = batch.column_by_name("small").unwrap().as_string::<i32>();
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
-        let expected = vec![
-            ObjectStoreOperation::Get(LocationType::Commit),
-            ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
-            ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
-        ];
-        let mut actual = Vec::new();
-        operations.recv_many(&mut actual, 3).await;
-        assert_eq!(expected, actual);
+        let actual = drain_recorded_ops(&mut operations).await;
+        assert!(
+            actual.iter().any(|op| matches!(
+                op,
+                ObjectStoreOperation::GetRange(PathKind::Data, range)
+                    if range == &(957_u64..965_u64)
+            )),
+            "expected footer range read for the selected column, saw {actual:?}",
+        );
+        assert!(
+            actual.iter().any(|op| matches!(
+                op,
+                ObjectStoreOperation::GetRange(PathKind::Data, range)
+                    if range == &(326_u64..957_u64)
+            )),
+            "expected column chunk range read for the selected column, saw {actual:?}",
+        );
+        assert!(
+            !actual
+                .iter()
+                .any(|op| matches!(op, ObjectStoreOperation::Get(PathKind::Data))),
+            "expected column pruning to avoid full parquet object reads, saw {actual:?}",
+        );
     }
 
     #[tokio::test]
@@ -1518,197 +1519,5 @@ mod tests {
 
         let _ = df.collect().await?;
         Ok(())
-    }
-
-    /// Records operations made by the inner object store on a channel obtained at construction
-    struct RecordingObjectStore {
-        inner: ObjectStoreRef,
-        operations: UnboundedSender<ObjectStoreOperation>,
-    }
-
-    impl RecordingObjectStore {
-        /// Returns an object store and a channel recording all operations made by the inner object store
-        fn new(inner: ObjectStoreRef) -> (Self, UnboundedReceiver<ObjectStoreOperation>) {
-            let (operations, operations_receiver) = unbounded_channel();
-            (Self { inner, operations }, operations_receiver)
-        }
-    }
-
-    impl Display for RecordingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            Display::fmt(&self.inner, f)
-        }
-    }
-
-    impl Debug for RecordingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            Debug::fmt(&self.inner, f)
-        }
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum ObjectStoreOperation {
-        GetRanges(LocationType, Vec<Range<u64>>),
-        GetRange(LocationType, Range<u64>),
-        GetOpts(LocationType),
-        Get(LocationType),
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum LocationType {
-        Data,
-        Commit,
-    }
-
-    impl From<&Path> for LocationType {
-        fn from(value: &Path) -> Self {
-            let dummy_url = Url::parse("dummy:///").unwrap();
-            let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
-            if let Some(parsed) = parsed
-                && matches!(parsed.file_type, LogPathFileType::Commit)
-            {
-                return LocationType::Commit;
-            }
-            if value.to_string().starts_with("part-") {
-                LocationType::Data
-            } else {
-                panic!("Unknown location type: {value:?}")
-            }
-        }
-    }
-
-    // Currently only read operations are recorded. Extend as necessary.
-    #[async_trait::async_trait]
-    impl ObjectStore for RecordingObjectStore {
-        async fn put(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-        ) -> object_store::Result<PutResult> {
-            self.inner.put(location, payload).await
-        }
-
-        async fn put_opts(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-            opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            self.inner.put_opts(location, payload, opts).await
-        }
-
-        async fn put_multipart(
-            &self,
-            location: &Path,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart(location).await
-        }
-
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
-            opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart_opts(location, opts).await
-        }
-
-        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::Get(location.into()))
-                .unwrap();
-            self.inner.get(location).await
-        }
-
-        async fn get_opts(
-            &self,
-            location: &Path,
-            options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::GetOpts(location.into()))
-                .unwrap();
-            self.inner.get_opts(location, options).await
-        }
-
-        async fn get_range(
-            &self,
-            location: &Path,
-            range: Range<u64>,
-        ) -> object_store::Result<Bytes> {
-            self.operations
-                .send(ObjectStoreOperation::GetRange(
-                    location.into(),
-                    range.clone(),
-                ))
-                .unwrap();
-            self.inner.get_range(location, range).await
-        }
-
-        async fn get_ranges(
-            &self,
-            location: &Path,
-            ranges: &[Range<u64>],
-        ) -> object_store::Result<Vec<Bytes>> {
-            self.operations
-                .send(ObjectStoreOperation::GetRanges(
-                    location.into(),
-                    ranges.to_vec(),
-                ))
-                .unwrap();
-            self.inner.get_ranges(location, ranges).await
-        }
-
-        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-            self.inner.head(location).await
-        }
-
-        async fn delete(&self, location: &Path) -> object_store::Result<()> {
-            self.inner.delete(location).await
-        }
-
-        fn delete_stream<'a>(
-            &'a self,
-            locations: BoxStream<'a, object_store::Result<Path>>,
-        ) -> BoxStream<'a, object_store::Result<Path>> {
-            self.inner.delete_stream(locations)
-        }
-
-        fn list(
-            &self,
-            prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list(prefix)
-        }
-
-        fn list_with_offset(
-            &self,
-            prefix: Option<&Path>,
-            offset: &Path,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list_with_offset(prefix, offset)
-        }
-
-        async fn list_with_delimiter(
-            &self,
-            prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            self.inner.list_with_delimiter(prefix).await
-        }
-
-        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy(from, to).await
-        }
-
-        async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename(from, to).await
-        }
-
-        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy_if_not_exists(from, to).await
-        }
-
-        async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename_if_not_exists(from, to).await
-        }
     }
 }

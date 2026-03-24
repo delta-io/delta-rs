@@ -499,12 +499,43 @@ pub fn normalize_table_url(url: &Url) -> Url {
 
 #[cfg(test)]
 mod tests {
+    use arrow_ipc::writer::FileWriter;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
+
+    fn legacy_eager_snapshot_payload(snapshot: &crate::kernel::EagerSnapshot) -> serde_json::Value {
+        let mut snapshot_value = serde_json::to_value(snapshot.snapshot()).unwrap();
+        let snapshot_fields = snapshot_value
+            .as_array_mut()
+            .expect("snapshot serde should use a sequence");
+        snapshot_fields.pop();
+
+        let materialized_files = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("expected materialized files for legacy eager snapshot payload");
+        let bytes = if materialized_files.batches.is_empty() {
+            Vec::new()
+        } else {
+            let mut buffer = vec![];
+            let mut writer =
+                FileWriter::try_new(&mut buffer, materialized_files.batches[0].schema().as_ref())
+                    .unwrap();
+            for batch in materialized_files.batches.iter() {
+                writer.write(batch).unwrap();
+            }
+            writer.finish().unwrap();
+            drop(writer);
+            buffer
+        };
+
+        json!([snapshot_value, bytes])
+    }
 
     #[test]
     fn test_normalize_table_url() {
@@ -540,6 +571,44 @@ mod tests {
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
         drop(tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn table_round_trip_preserves_legacy_eager_snapshot_payload() {
+        let (dt, tmp_dir) = create_test_table().await;
+        let mut value = serde_json::to_value(&dt).unwrap();
+        let table_fields = value.as_array_mut().unwrap();
+        let state = table_fields[0].as_object_mut().unwrap();
+        state.insert(
+            "snapshot".to_string(),
+            legacy_eager_snapshot_payload(dt.state.as_ref().unwrap().snapshot()),
+        );
+
+        let actual: DeltaTable = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            actual.snapshot().unwrap().log_data().num_files(),
+            dt.snapshot().unwrap().log_data().num_files()
+        );
+        drop(tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn table_without_files_does_not_panic_on_log_data() {
+        let (dt, _tmp_dir) = create_test_table().await;
+        let url = dt.table_url().clone();
+
+        let table = DeltaTableBuilder::from_url(url)
+            .unwrap()
+            .without_files()
+            .load()
+            .await
+            .unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            table.snapshot().unwrap().log_data().num_files()
+        }));
+
+        assert!(result.is_ok());
     }
 
     async fn create_test_table() -> (DeltaTable, TempDir) {
