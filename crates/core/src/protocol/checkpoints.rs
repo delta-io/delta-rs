@@ -10,9 +10,6 @@ use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStore;
-use object_store::path::Path;
-use parquet::arrow::AsyncArrowWriter;
-use parquet::arrow::async_writer::ParquetObjectWriter;
 use regex::Regex;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -45,7 +42,7 @@ pub(crate) async fn create_checkpoint_for(
             .build(task_engine.as_ref())
     })
     .await
-    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+   .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
 <<<<<<< HEAD
     let cp_writer = snapshot.checkpoint()?;
