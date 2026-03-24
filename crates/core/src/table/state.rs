@@ -20,6 +20,7 @@ use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
     ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
+    Version,
 };
 use crate::logstore::LogStore;
 use crate::{DeltaResult, DeltaTableError};
@@ -40,7 +41,7 @@ impl DeltaTableState {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         log_store.refresh().await?;
         // TODO: pass through predictae
@@ -49,7 +50,7 @@ impl DeltaTableState {
     }
 
     /// Return table version
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.snapshot.version()
     }
 
@@ -81,7 +82,7 @@ impl DeltaTableState {
     /// Get the timestamp when a version commit was created.
     /// This is the timestamp of the commit file.
     /// If the commit file is not present, None is returned.
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+    pub fn version_timestamp(&self, version: Version) -> Option<i64> {
         self.snapshot.version_timestamp(version)
     }
 
@@ -158,12 +159,10 @@ impl DeltaTableState {
     pub async fn update(
         &mut self,
         log_store: &dyn LogStore,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> Result<(), DeltaTableError> {
         log_store.refresh().await?;
-        self.snapshot
-            .update(log_store, version.map(|v| v as u64))
-            .await?;
+        self.snapshot.update(log_store, version).await?;
         Ok(())
     }
 

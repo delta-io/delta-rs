@@ -359,7 +359,7 @@ impl DeltaScan {
                 if let Ok(files) = esn.files() {
                     scan_plan.scan.scan_metadata_from(
                         engine,
-                        esn.snapshot().version() as u64,
+                        esn.snapshot().version(),
                         Box::new(files.to_vec().into_iter()),
                         None,
                     )

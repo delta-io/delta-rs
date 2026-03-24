@@ -2,6 +2,7 @@
 use chrono::{DateTime, Utc};
 use object_store::Error as ObjectStoreError;
 
+use crate::kernel::Version;
 use crate::kernel::transaction::{CommitBuilderError, TransactionError};
 
 /// A result returned by delta-rs
@@ -46,7 +47,7 @@ pub enum DeltaTableError {
         /// invalid log entry content.
         line: String,
         /// corresponding table version for the log file.
-        version: i64,
+        version: Version,
     },
 
     /// Error returned when the log contains invalid stats JSON.
@@ -58,7 +59,7 @@ pub enum DeltaTableError {
 
     /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
-    InvalidVersion(i64),
+    InvalidVersion(Version),
 
     /// Error returned when an operation requests an older version than the currently loaded one.
     #[error(
@@ -66,9 +67,9 @@ pub enum DeltaTableError {
     )]
     VersionDowngrade {
         /// The currently loaded version.
-        current_version: i64,
+        current_version: Version,
         /// The requested older version.
-        requested_version: i64,
+        requested_version: Version,
     },
 
     /// Error returned when the datetime string is invalid for a conversion.
@@ -140,11 +141,11 @@ pub enum DeltaTableError {
 
     /// Error returned when transaction is failed to be committed because given version already exists.
     #[error("Delta transaction failed, version {0} already exists.")]
-    VersionAlreadyExists(i64),
+    VersionAlreadyExists(Version),
 
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
-    VersionMismatch(i64, i64),
+    VersionMismatch(Version, Version),
 
     /// A Feature is missing to perform operation
     #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
@@ -193,13 +194,17 @@ pub enum DeltaTableError {
     NotInitializedWithFiles(String),
 
     #[error("Change Data not enabled for version: {version}, Start: {start}, End: {end}")]
-    ChangeDataNotRecorded { version: i64, start: i64, end: i64 },
+    ChangeDataNotRecorded {
+        version: Version,
+        start: Version,
+        end: Version,
+    },
 
     #[error("Reading a table version: {version} that does not have change data enabled")]
-    ChangeDataNotEnabled { version: i64 },
+    ChangeDataNotEnabled { version: Version },
 
     #[error("Invalid version. Start version {start} is greater than end version {end}")]
-    ChangeDataInvalidVersionRange { start: i64, end: i64 },
+    ChangeDataInvalidVersionRange { start: Version, end: Version },
 
     #[error("End timestamp {ending_timestamp} is greater than latest commit timestamp")]
     ChangeDataTimestampGreaterThanCommit { ending_timestamp: DateTime<Utc> },
