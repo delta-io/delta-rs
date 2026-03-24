@@ -293,8 +293,16 @@ impl VacuumBuilder {
 
         let mut file_count = 0;
 
-        let expired_tombstones =
-            get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?;
+        let tombstone_retention_timestamp = now_millis - retention_period.num_milliseconds();
+        let (expired_tombstones, tombstone_path_sets) = if self.mode == VacuumMode::Full {
+            collect_full_mode_tombstones(snapshot, tombstone_retention_timestamp, &self.log_store)
+                .await?
+        } else {
+            (
+                get_stale_files(snapshot, retention_period, now_millis, &self.log_store).await?,
+                TombstonePathSets::default(),
+            )
+        };
         let valid_files: HashSet<_> = snapshot
             .file_views(self.log_store.as_ref(), None)
             .map_ok(|f| f.object_store_path())
@@ -322,40 +330,58 @@ impl VacuumBuilder {
             let list_span = info_span!("list_files", operation = "vacuum");
             let mut all_files = list_span.in_scope(|| object_store.list(None));
 
-            let already_queued: HashSet<Path> = files_to_delete.iter().cloned().collect();
-
             while let Some(obj_meta) = all_files.next().await {
                 // TODO should we allow NotFound here in case we have a temporary commit file in the list
                 let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-                // If the file is not an expired tombstone
-                if !already_queued.contains(&obj_meta.location)
-                    && ok_to_delete(
-                        &obj_meta.location,
-                        &valid_files,
-                        &keep_files,
-                        partition_columns,
-                    )?
+                if tombstone_path_sets
+                    .expired_tombstone_paths
+                    .contains(&obj_meta.location)
                 {
-                    // For files without tombstones (uncommitted or orphaned files),
-                    // check their physical age to protect recently written files from deletion.
-                    // This prevents race conditions where a concurrent writer's uncommitted files
-                    // could be deleted before the transaction is committed.
-                    let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
-                    if file_age_millis < retention_period.num_milliseconds() {
-                        debug!(
-                            "The file {:?} is not in the log but too recent , protecting from vacuum",
-                            &obj_meta.location,
-                        );
-                        continue;
-                    }
                     debug!(
-                        "The file {:?} was not referenced in a log file, but VacuumMode::Full means it *will be vacuumed*",
-                        &obj_meta.location
+                        "The file {:?} is already queued as an expired tombstone",
+                        &obj_meta.location,
                     );
-                    files_to_delete.push(obj_meta.location);
-                    file_sizes.push(obj_meta.size as i64);
-                    file_count += 1;
+                    continue;
                 }
+
+                if !ok_to_delete(
+                    &obj_meta.location,
+                    &valid_files,
+                    &keep_files,
+                    partition_columns,
+                )? {
+                    continue;
+                }
+
+                if tombstone_path_sets
+                    .all_tombstone_paths
+                    .contains(&obj_meta.location)
+                {
+                    debug!(
+                        "The file {:?} has a recent tombstone, keeping it until tombstone retention expires",
+                        &obj_meta.location,
+                    );
+                    continue;
+                }
+
+                // At this point the path is untracked by the Delta log, so full mode falls back
+                // to physical object age to protect recent concurrent-writer output.
+                let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
+                if file_age_millis < retention_period.num_milliseconds() {
+                    debug!(
+                        "The file {:?} is an untracked recent file, protecting it from vacuum",
+                        &obj_meta.location,
+                    );
+                    continue;
+                }
+
+                debug!(
+                    "The file {:?} is an untracked stale orphan and will be vacuumed in full mode",
+                    &obj_meta.location
+                );
+                files_to_delete.push(obj_meta.location);
+                file_sizes.push(obj_meta.size as i64);
+                file_count += 1;
             }
         }
         info!(
@@ -525,6 +551,21 @@ impl VacuumPlan {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TombstonePathSets {
+    expired_tombstone_paths: HashSet<Path>,
+    all_tombstone_paths: HashSet<Path>,
+}
+
+impl TombstonePathSets {
+    fn record(&mut self, path: Path, is_expired: bool) {
+        if is_expired {
+            self.expired_tombstone_paths.insert(path.clone());
+        }
+        self.all_tombstone_paths.insert(path);
+    }
+}
+
 /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
 /// Names of the form partitionCol=[value] are partition directories, and should be
 /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
@@ -555,6 +596,29 @@ fn ok_to_delete(
     )
 }
 
+async fn collect_full_mode_tombstones(
+    snapshot: &EagerSnapshot,
+    tombstone_retention_timestamp: i64,
+    store: &dyn LogStore,
+) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
+    snapshot
+        .snapshot()
+        .tombstones(store)
+        .try_fold(
+            (Vec::new(), TombstonePathSets::default()),
+            |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
+                let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
+                let path = Path::from(tombstone.path().to_string());
+                tombstone_path_sets.record(path, is_expired);
+                if is_expired {
+                    expired_tombstones.push(tombstone);
+                }
+                ready(Ok((expired_tombstones, tombstone_path_sets)))
+            },
+        )
+        .await
+}
+
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 async fn get_stale_files(
     snapshot: &EagerSnapshot,
@@ -567,22 +631,37 @@ async fn get_stale_files(
         .snapshot()
         .tombstones(store)
         .try_filter(|tombstone| {
-            // if the file has a creation time before the `tombstone_retention_timestamp`
-            // then it's considered as a stale file
-            ready(tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp)
+            ready(is_tombstone_expired(
+                tombstone,
+                tombstone_retention_timestamp,
+            ))
         })
         .try_collect::<Vec<_>>()
         .await
 }
 
+fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp: i64) -> bool {
+    tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp
+}
+
 #[cfg(test)]
 mod tests {
     use object_store::{PutPayload, local::LocalFileSystem, memory::InMemory};
+    use serde_json::json;
 
     use super::*;
+    use crate::kernel::Action;
+    use crate::kernel::transaction::CommitBuilder;
+    use crate::protocol::SaveMode;
+    use crate::writer::test_utils::create_initialized_table;
+    use crate::writer::{DeltaWriter, JsonWriter};
     use crate::{ensure_table_uri, open_table};
     use std::path::Path;
-    use std::{io::Read, time::SystemTime};
+    use std::{
+        fs::{FileTimes, OpenOptions},
+        io::Read,
+        time::{Duration as StdDuration, SystemTime, UNIX_EPOCH},
+    };
     use url::Url;
 
     #[tokio::test]
@@ -904,6 +983,120 @@ mod tests {
         fn current_timestamp_millis(&self) -> i64 {
             self.timestamp_millis
         }
+    }
+
+    fn set_last_modified(path: &Path, last_modified: SystemTime) {
+        let file = OpenOptions::new().write(true).open(path).unwrap();
+        let times = FileTimes::new()
+            .set_accessed(last_modified)
+            .set_modified(last_modified);
+        file.set_times(times).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_full_recent_tombstones_are_not_treated_as_orphans() -> DeltaResult<()> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let table_path = temp_dir.path().to_str().unwrap();
+        let mut table = create_initialized_table(table_path, &[]).await;
+        let current_time = SystemTime::now();
+        let current_time_millis =
+            current_time.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+        let stale_time = current_time - StdDuration::from_secs(10);
+        let recent_time = current_time - StdDuration::from_secs(1);
+        let original_data = json!({
+            "id": "A",
+            "value": 1,
+            "modified": "2021-02-01"
+        });
+        let replacement_data = json!({
+            "id": "B",
+            "value": 2,
+            "modified": "2021-02-02"
+        });
+
+        let mut writer = JsonWriter::for_table(&table)?;
+        writer.write(vec![original_data]).await?;
+        writer.flush_and_commit(&mut table).await?;
+
+        let tombstoned_paths: Vec<_> = table
+            .snapshot()?
+            .log_data()
+            .into_iter()
+            .map(|add| add.object_store_path().to_string())
+            .collect();
+        assert_eq!(tombstoned_paths.len(), 1);
+        let recent_tombstone_path = tombstoned_paths[0].clone();
+        set_last_modified(&temp_dir.path().join(&recent_tombstone_path), stale_time);
+
+        let stale_orphan_path = "orphan-old.parquet";
+        std::fs::write(temp_dir.path().join(stale_orphan_path), b"stale orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(stale_orphan_path), stale_time);
+
+        let remove_actions = table
+            .snapshot()?
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .map_ok(|file| {
+                let mut remove = file.remove_action(true);
+                remove.deletion_timestamp = Some(current_time_millis);
+                Action::Remove(remove)
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut overwrite_writer = JsonWriter::for_table(&table)?;
+        overwrite_writer.write(vec![replacement_data]).await?;
+        let add_actions = overwrite_writer.flush().await?.into_iter().map(Action::Add);
+        let mut actions = remove_actions;
+        actions.extend(add_actions);
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Overwrite,
+            partition_by: None,
+            predicate: None,
+        };
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(table.snapshot()?),
+                table.log_store().clone(),
+                operation,
+            )
+            .await?;
+        table.update_state().await?;
+
+        let recent_orphan_path = "orphan-recent.parquet";
+        std::fs::write(temp_dir.path().join(recent_orphan_path), b"recent orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(recent_orphan_path), recent_time);
+
+        let (_table, result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::seconds(5))
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .with_clock(Arc::new(MockClock::new(current_time_millis)))
+                .await?;
+
+        assert!(
+            !result.files_deleted.contains(&recent_tombstone_path),
+            "recent tombstone was treated like an orphan: {:?}",
+            result.files_deleted
+        );
+        assert!(
+            result
+                .files_deleted
+                .contains(&stale_orphan_path.to_string()),
+            "stale orphan should still be vacuum eligible: {:?}",
+            result.files_deleted
+        );
+        assert!(
+            !result
+                .files_deleted
+                .contains(&recent_orphan_path.to_string()),
+            "recent orphan should still be protected: {:?}",
+            result.files_deleted
+        );
+
+        Ok(())
     }
 
     /// Test that recently written uncommitted files are protected from deletion in Full mode

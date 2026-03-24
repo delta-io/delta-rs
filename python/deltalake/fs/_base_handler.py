@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 class BaseDeltaStorageHandler:
     """
-    BaseDeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.
+    BaseDeltaStorageHandler is a implementations of a PyArrow FileSystemHandler.
     """
 
     def __init__(

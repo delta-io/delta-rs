@@ -1,5 +1,7 @@
 import os
 import pathlib
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import pytest
 from arro3.core import Table
@@ -300,6 +302,34 @@ def test_vacuum_lite_mode_no_list_operation_partitioned(
     assert stray_relative in full_tombstones, (
         "Full mode should discover the stray file via a storage list operation"
     )
+
+
+@pytest.mark.pyarrow
+def test_vacuum_full_keeps_recent_tombstones_readable_for_time_travel(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+    dt = DeltaTable(tmp_path)
+    original_file_uris = dt.file_uris()
+    assert original_file_uris
+
+    old_ts = (datetime.now() - timedelta(days=10)).timestamp()
+    backdated_path = pathlib.Path(urlparse(original_file_uris[0]).path)
+    os.utime(backdated_path, (old_ts, old_ts))
+
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+
+    dt = DeltaTable(tmp_path)
+    version_before_optimize = dt.version()
+
+    optimize_metrics = dt.optimize.compact(min_commit_interval=timedelta(minutes=10))
+    assert optimize_metrics["numFilesRemoved"] > 0
+    assert dt.version() > version_before_optimize
+    dt.vacuum(dry_run=False, full=True)
+
+    time_travel = DeltaTable(tmp_path, version=version_before_optimize)
+    assert time_travel.to_pyarrow_table().num_rows == sample_table.num_rows * 3
 
 
 # https://github.com/delta-io/delta-rs/issues/3745
