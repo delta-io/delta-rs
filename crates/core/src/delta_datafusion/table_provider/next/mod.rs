@@ -357,10 +357,11 @@ impl DeltaScan {
             SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
             SnapshotWrapper::EagerSnapshot(esn) => {
                 if let Ok(files) = esn.files() {
+                    let owned: Vec<_> = files.to_vec();
                     scan_plan.scan.scan_metadata_from(
                         engine,
                         esn.snapshot().version(),
-                        Box::new(files.to_vec().into_iter()),
+                        Box::new(owned.into_iter()),
                         None,
                     )
                 } else {

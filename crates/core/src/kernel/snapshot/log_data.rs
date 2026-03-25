@@ -99,7 +99,8 @@ impl IntoIterator for LogDataHandler<'_> {
     type IntoIter = Box<dyn Iterator<Item = Self::Item>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Box::new(self.data.to_vec().into_iter().flat_map(|batch| {
+        let owned = self.data.to_vec();
+        Box::new(owned.into_iter().flat_map(|batch| {
             (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))
         }))
     }
