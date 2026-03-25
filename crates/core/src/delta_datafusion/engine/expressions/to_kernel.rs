@@ -25,7 +25,7 @@ pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
 
 fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
     let transformed = expr.clone().transform_up(|expr| match expr {
-        Expr::InList(in_list) => Ok(match lower_in_list_expr(&in_list) {
+        Expr::InList(in_list) => Ok(match rewrite_in_list_expr_for_kernel(&in_list) {
             Some(lowered) => Transformed::yes(lowered),
             None => Transformed::no(Expr::InList(in_list)),
         }),
@@ -35,7 +35,13 @@ fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
     Ok(transformed.data)
 }
 
-fn lower_in_list_expr(in_list: &InList) -> Option<Expr> {
+/// Rewrites supported `IN` / `NOT IN` expressions into conjunctions or
+/// disjunctions that can be converted into Delta kernel predicates.
+///
+/// Returns `None` when any list item cannot be rewritten without changing the
+/// meaning of the predicate. In that case callers should leave the original
+/// `Expr::InList` unchanged and let downstream conversion decide how to handle it.
+fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
     if in_list.list.is_empty() {
         return Some(Expr::Literal(
             ScalarValue::Boolean(Some(in_list.negated)),
@@ -399,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn test_in_list_lowers_to_or_of_equalities() {
+    fn test_in_list_rewrites_to_or_of_equalities() {
         let expr = col("part").in_list(vec![lit("a"), lit("c")], false);
         let delta_predicate = to_delta_predicate(&expr).unwrap();
 
@@ -415,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn test_not_in_list_lowers_to_and_of_inequalities() {
+    fn test_not_in_list_rewrites_to_and_of_inequalities() {
         let expr = col("part").in_list(vec![lit("a"), lit("c")], true);
         let delta_predicate = to_delta_predicate(&expr).unwrap();
 
@@ -431,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_in_list_lowers_to_boolean_constant() {
+    fn test_empty_in_list_rewrites_to_boolean_constant() {
         let expr = col("part").in_list(Vec::<Expr>::new(), false);
         assert_eq!(
             to_delta_predicate(&expr).unwrap(),
@@ -446,15 +452,17 @@ mod tests {
     }
 
     #[test]
-    fn test_in_list_with_null_or_non_literal_items_falls_back_conservatively() {
-        let expressions = [
-            col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], false),
-            col("part").in_list(vec![lit("a"), col("other")], false),
-        ];
+    fn test_normalize_delta_predicate_expr_leaves_non_literal_in_list_unchanged() {
+        let expr = col("part").in_list(vec![lit("a"), col("other")], false);
 
-        for expr in expressions {
-            assert!(to_delta_predicate(&expr).is_err());
-        }
+        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+    }
+
+    #[test]
+    fn test_normalize_delta_predicate_expr_leaves_not_in_list_with_null_unchanged() {
+        let expr = col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], true);
+
+        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
     }
 
     #[test]
