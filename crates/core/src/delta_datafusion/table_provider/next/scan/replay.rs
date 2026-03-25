@@ -533,16 +533,14 @@ fn apply_file_selection(
     // Kernel allows a shorter selection vector; missing entries are implicitly true.
     selection_vector.resize(batch.num_rows(), true);
 
-    for idx in 0..batch.num_rows() {
-        if !selection_vector[idx] {
-            continue;
+    for (idx, select) in selection_vector.iter_mut().enumerate() {
+        if *select {
+            let file_url = parse_path(
+                table_root,
+                LogicalFileView::new(batch.clone(), idx).path_raw(),
+            )?;
+            *select = file_selection.contains(file_url.as_str());
         }
-
-        let file_url = parse_path(
-            table_root,
-            LogicalFileView::new(batch.clone(), idx).path_raw(),
-        )?;
-        selection_vector[idx] = file_selection.contains(file_url.as_str());
     }
 
     scan_data.scan_files =
