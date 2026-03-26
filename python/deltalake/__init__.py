@@ -5,11 +5,13 @@ from deltalake._internal import (
     TableFeatures,
     Transaction,
     __version__,
-    register_mount_handlers as _register_mount_handlers,
     rust_core_version,
 )
 from deltalake._internal import (
     init_tracing as _init_tracing,
+)
+from deltalake._internal import (
+    register_mount_handlers as _register_mount_handlers,
 )
 from deltalake._internal import (
     shutdown_tracing as _shutdown_tracing,
@@ -81,8 +83,8 @@ def init_tracing(endpoint: Optional[str] = None) -> None:
 def register_mount_handlers() -> None:
     """
     In order to work with DBFS files system (dbfs://) you need
-    to enable it explicitly by calling this function. 
-    This is required because DBFS file system support is not 
+    to enable it explicitly by calling this function.
+    This is required because DBFS file system support is not
     loaded automatically
     """
     _register_mount_handlers()
