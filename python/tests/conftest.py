@@ -51,9 +51,16 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
         sleep(spacing)
 
 
+def _s3_bucket_name(worker_id: str) -> str:
+    if worker_id == "master":
+        return "deltars"
+    return f"deltars-{worker_id}"
+
+
 @pytest.fixture(scope="session")
-def s3_localstack_creds():
+def s3_localstack_creds(worker_id: str):
     endpoint_url = "http://localhost:4566"
+    bucket_name = _s3_bucket_name(worker_id)
 
     config = dict(
         AWS_REGION="us-east-1",
@@ -71,7 +78,7 @@ def s3_localstack_creds():
             "s3api",
             "create-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -81,7 +88,7 @@ def s3_localstack_creds():
             "sync",
             "--quiet",
             "../crates/test/tests/data/simple_table",
-            "s3://deltars/simple",
+            f"s3://{bucket_name}/simple",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -104,7 +111,7 @@ def s3_localstack_creds():
             "rm",
             "--quiet",
             "--recursive",
-            "s3://deltars",
+            f"s3://{bucket_name}",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -113,7 +120,7 @@ def s3_localstack_creds():
             "s3api",
             "delete-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -128,6 +135,21 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
     monkeypatch.setenv("AWS_ALLOW_HTTP", "TRUE")
     for key, value in s3_localstack_creds.items():
         monkeypatch.setenv(key, value)
+
+
+@pytest.fixture(scope="session")
+def s3_localstack_bucket_name(worker_id: str):
+    return _s3_bucket_name(worker_id)
+
+
+@pytest.fixture()
+def s3_localstack_bucket_root_uri(s3_localstack, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}"
+
+
+@pytest.fixture()
+def s3_localstack_simple_table_uri(s3_localstack_bucket_root_uri):
+    return f"{s3_localstack_bucket_root_uri}/simple"
 
 
 @pytest.fixture(scope="session")
