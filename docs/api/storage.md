@@ -9,3 +9,5 @@ search:
 The delta filesystem handler for the pyarrow engine writer.
 
 ::: deltalake.fs.DeltaStorageHandler
+
+::: deltalake.register_mount_handlers

@@ -2992,6 +2992,12 @@ fn convert_to_deltalake(
     })
 }
 
+#[pyfunction]
+fn register_mount_handlers() -> PyResult<()> {
+    deltalake_mount::register_handlers(None);
+    Ok(())
+}
+
 #[pymodule]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -3000,7 +3006,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake::azure::register_handlers(None);
     deltalake::gcp::register_handlers(None);
     deltalake::hdfs::register_handlers(None);
-    deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
     deltalake::unity_catalog::register_handlers(None);
 
@@ -3022,6 +3027,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(register_mount_handlers, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<PyMergeBuilder>()?;
     m.add_class::<PyQueryBuilder>()?;
