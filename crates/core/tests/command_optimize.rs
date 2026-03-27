@@ -13,7 +13,7 @@ use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::ObjectStoreRef;
 use deltalake_core::operations::optimize::{
-    MetricDetails, Metrics, OptimizeType, create_merge_plan,
+    MetricDetails, Metrics, OptimizeType, PlannerStrategy, create_merge_plan,
 };
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
@@ -166,6 +166,83 @@ fn generate_constant_batch<T: Into<String>>(
     )?)
 }
 
+fn ordered_range_batch(
+    start: i32,
+    len: usize,
+    partition: &str,
+) -> Result<RecordBatch, Box<dyn Error>> {
+    let x_values = (start..start + len as i32).collect::<Vec<_>>();
+    let y_values = x_values.iter().map(|value| value * 10).collect::<Vec<_>>();
+    let partitions = vec![partition.to_string(); len];
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("x", ArrowDataType::Int32, false),
+            Field::new("y", ArrowDataType::Int32, false),
+            Field::new("date", ArrowDataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(Int32Array::from(x_values)),
+            Arc::new(Int32Array::from(y_values)),
+            Arc::new(StringArray::from(partitions)),
+        ],
+    )?)
+}
+
+async fn active_file_ranges(table: &DeltaTable) -> Result<Vec<(i32, i32, i64)>, Box<dyn Error>> {
+    let files = table
+        .get_active_add_actions_by_partitions(&[])
+        .try_collect::<Vec<_>>()
+        .await?;
+    let object_store = table.object_store();
+    let mut ranges = Vec::with_capacity(files.len());
+
+    for file in files {
+        let path = match Path::parse(file.path().as_ref()) {
+            Ok(path) => path,
+            Err(_) => Path::from(file.path().as_ref()),
+        };
+        let size = object_store.head(&path).await?.size as i64;
+        let batch = read_parquet_file(&path, object_store.clone()).await?;
+        let x_values = batch
+            .column_by_name("x")
+            .ok_or_else(|| std::io::Error::other("missing x column"))?
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| std::io::Error::other("x column is not Int32"))?;
+        let min = x_values
+            .iter()
+            .flatten()
+            .min()
+            .ok_or_else(|| std::io::Error::other("empty parquet file"))?;
+        let max = x_values
+            .iter()
+            .flatten()
+            .max()
+            .ok_or_else(|| std::io::Error::other("empty parquet file"))?;
+        ranges.push((min, max, size));
+    }
+
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+
+    Ok(ranges)
+}
+
+fn overlapping_bytes(ranges: &[(i32, i32, i64)], lower_bound: i32) -> i64 {
+    ranges
+        .iter()
+        .filter(|(_, max, _)| *max >= lower_bound)
+        .map(|(_, _, size)| *size)
+        .sum()
+}
+
+fn overlap_is_suffix_like(ranges: &[(i32, i32, i64)], lower_bound: i32) -> bool {
+    ranges
+        .iter()
+        .map(|(_, max, _)| *max >= lower_bound)
+        .skip_while(|overlaps| !*overlaps)
+        .all(|overlaps| overlaps)
+}
 #[tokio::test]
 async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     let context = setup_test(false).await?;
@@ -578,12 +655,71 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
         total_considered_files: 1,
         total_files_skipped: 1,
         preserve_insertion_order: true,
+        planner_strategy: PlannerStrategy::PreserveLocality,
+        preserved_stable_order: true,
+        max_bin_span_files: 0,
         files_added: expected_metric_details.clone(),
         files_removed: expected_metric_details,
     };
 
     assert_eq!(expected, metrics);
     assert_eq!(version, dt.version());
+    Ok(())
+}
+
+#[test]
+fn test_legacy_optimize_metrics_deserialize_with_unknown_planner_strategy()
+-> Result<(), Box<dyn Error>> {
+    let legacy_metrics = json!({
+        "numFilesAdded": 1,
+        "numFilesRemoved": 2,
+        "filesAdded": "{\"avg\":10.0,\"max\":10,\"min\":10,\"totalFiles\":1,\"totalSize\":10}",
+        "filesRemoved": "{\"avg\":5.0,\"max\":8,\"min\":2,\"totalFiles\":2,\"totalSize\":10}",
+        "partitionsOptimized": 1,
+        "numBatches": 3,
+        "totalConsideredFiles": 2,
+        "totalFilesSkipped": 0,
+        "preserveInsertionOrder": true
+    });
+
+    let metrics = serde_json::from_value::<Metrics>(legacy_metrics)?;
+
+    assert_eq!(metrics.planner_strategy, PlannerStrategy::UnknownLegacy);
+    assert!(metrics.preserve_insertion_order);
+    assert!(!metrics.preserved_stable_order);
+    assert_eq!(metrics.max_bin_span_files, 0);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_rejects_target_size_larger_than_i64_max() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 3)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 2), (2, 3)], "1970-01-02")?,
+    )
+    .await?;
+
+    let err = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(i64::MAX as u64 + 1).unwrap())
+        .await
+        .unwrap_err();
+
+    assert!(err.to_string().contains("optimize target_size"), "{err:?}");
+    assert!(err.to_string().contains("i64::MAX"), "{err:?}");
+
     Ok(())
 }
 
@@ -717,6 +853,229 @@ async fn test_compact_rewrite_is_unbounded_and_idempotent() -> Result<(), Box<dy
 }
 
 #[tokio::test]
+async fn test_compact_does_not_merge_across_skipped_large_file_gap() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let writer_properties = WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+        .build();
+    let mut writer = RecordBatchWriter::for_table(&dt)?.with_writer_properties(writer_properties);
+    let partition = "2022-05-22";
+
+    write(
+        &mut writer,
+        &mut dt,
+        ordered_range_batch(0, 200, partition)?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        ordered_range_batch(1_000, 10_000, partition)?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        ordered_range_batch(20_000, 200, partition)?,
+    )
+    .await?;
+
+    let before_ranges = active_file_ranges(&dt).await?;
+    let small_total_size = u64::try_from(before_ranges[0].2 + before_ranges[2].2)?;
+    let large_file_size = u64::try_from(before_ranges[1].2)?;
+    let target_size = NonZeroU64::new(small_total_size + 1).unwrap();
+
+    assert!(large_file_size > target_size.get(), "{before_ranges:?}");
+
+    let (dt, metrics) = dt.optimize().with_target_size(target_size).await?;
+    let after_ranges = active_file_ranges(&dt).await?;
+
+    assert_eq!(metrics.num_files_added, 0);
+    assert_eq!(metrics.num_files_removed, 0);
+    assert_eq!(after_ranges, before_ranges);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_preserves_tail_locality_after_small_recent_appends()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let partition = "2022-05-22";
+    let old_rows = 5_000;
+    let recent_rows = 1_250;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for batch_idx in 0..6 {
+        write(
+            &mut writer,
+            &mut dt,
+            ordered_range_batch(batch_idx * old_rows, old_rows as usize, partition)?,
+        )
+        .await?;
+    }
+
+    let base_ranges = active_file_ranges(&dt).await?;
+    let base_size = base_ranges[0].2 as u64;
+    let target_size = NonZeroU64::new(base_size * 2 + (base_size / 2)).unwrap();
+
+    let (optimized, _) = dt.optimize().with_target_size(target_size).await?;
+    dt = optimized;
+
+    let recent_start = 6 * old_rows;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+    for batch_idx in 0..2 {
+        write(
+            &mut writer,
+            &mut dt,
+            ordered_range_batch(
+                recent_start + (batch_idx * recent_rows),
+                recent_rows as usize,
+                partition,
+            )?,
+        )
+        .await?;
+    }
+
+    let (dt, _) = dt.optimize().with_target_size(target_size).await?;
+    let ranges = active_file_ranges(&dt).await?;
+    let overlap_bytes = overlapping_bytes(&ranges, recent_start);
+    let tail_bytes: i64 = ranges.iter().rev().take(2).map(|(_, _, size)| *size).sum();
+
+    assert!(overlap_is_suffix_like(&ranges, recent_start), "{ranges:?}");
+    assert!(overlap_bytes <= tail_bytes, "{ranges:?}");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_tail_overlap_is_suffix_like_after_repeated_compaction()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let partition = "2022-05-22";
+    let old_rows = 5_000;
+    let recent_rows = 1_250;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for batch_idx in 0..8 {
+        write(
+            &mut writer,
+            &mut dt,
+            ordered_range_batch(batch_idx * old_rows, old_rows as usize, partition)?,
+        )
+        .await?;
+    }
+
+    let base_ranges = active_file_ranges(&dt).await?;
+    let base_size = base_ranges[0].2 as u64;
+    let target_size = NonZeroU64::new(base_size * 2 + (base_size / 2)).unwrap();
+
+    let (optimized, _) = dt.optimize().with_target_size(target_size).await?;
+    dt = optimized;
+
+    let mut next_start = 8 * old_rows;
+    let mut last_recent_start = next_start;
+    for _ in 0..3 {
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+        last_recent_start = next_start;
+        for batch_idx in 0..2 {
+            write(
+                &mut writer,
+                &mut dt,
+                ordered_range_batch(
+                    next_start + (batch_idx * recent_rows),
+                    recent_rows as usize,
+                    partition,
+                )?,
+            )
+            .await?;
+        }
+        next_start += 2 * recent_rows;
+        let (optimized, _) = dt.optimize().with_target_size(target_size).await?;
+        dt = optimized;
+    }
+
+    let ranges = active_file_ranges(&dt).await?;
+    let overlap_bytes = overlapping_bytes(&ranges, last_recent_start);
+    let overlapping_files = ranges
+        .iter()
+        .filter(|(_, max, _)| *max >= last_recent_start)
+        .count();
+    let max_file_bytes = ranges
+        .iter()
+        .map(|(_, _, size)| *size)
+        .max()
+        .unwrap_or_default();
+
+    assert!(overlapping_files <= 1, "{ranges:?}");
+    assert!(overlap_bytes <= max_file_bytes, "{ranges:?}");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_equal_sized_appends_remain_stable() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let partition = "2022-05-22";
+    let base_rows = 5_000;
+    let append_rows = 1_250;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for batch_idx in 0..6 {
+        write(
+            &mut writer,
+            &mut dt,
+            ordered_range_batch(batch_idx * base_rows, base_rows as usize, partition)?,
+        )
+        .await?;
+    }
+
+    let base_ranges = active_file_ranges(&dt).await?;
+    let base_size = base_ranges[0].2 as u64;
+    let target_size = NonZeroU64::new(base_size * 2 + (base_size / 2)).unwrap();
+
+    let (optimized, _) = dt.optimize().with_target_size(target_size).await?;
+    dt = optimized;
+
+    let recent_start = 6 * base_rows;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+    for batch_idx in 0..4 {
+        write(
+            &mut writer,
+            &mut dt,
+            ordered_range_batch(
+                recent_start + (batch_idx * append_rows),
+                append_rows as usize,
+                partition,
+            )?,
+        )
+        .await?;
+    }
+
+    let (dt, _) = dt.optimize().with_target_size(target_size).await?;
+    let ranges = active_file_ranges(&dt).await?;
+    let mut sorted_ranges = ranges.clone();
+    sorted_ranges.sort_by_key(|(min, _, _)| *min);
+
+    assert!(
+        sorted_ranges
+            .windows(2)
+            .all(|window| window[0].1 < window[1].0),
+        "{ranges:?}"
+    );
+    assert!(
+        overlap_is_suffix_like(&sorted_ranges, recent_start),
+        "{ranges:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 /// Validate operation data and metadata was written
 async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let context = setup_test(true).await?;
@@ -758,6 +1117,78 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
     assert_eq!(parameters["predicate"], "[\"date = '2022-05-22'\"]");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_metrics_expose_planner_strategy() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 3)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 2), (2, 3)], "1970-01-02")?,
+    )
+    .await?;
+
+    let (dt, metrics) = dt.optimize().await?;
+    let metrics_json = serde_json::to_value(&metrics)?;
+
+    assert_eq!(metrics_json["plannerStrategy"], json!("preserveLocality"));
+    assert_eq!(metrics_json["preservedStableOrder"], json!(true));
+    assert_eq!(metrics_json["preserveInsertionOrder"], json!(true));
+    assert_eq!(metrics_json["maxBinSpanFiles"], json!(2));
+    assert!(metrics_json.get("maxInputDisplacement").is_none());
+
+    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let last_commit = &commit_info[0];
+    assert_eq!(
+        last_commit.info["operationMetrics"]["plannerStrategy"],
+        json!("preserveLocality")
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_zorder_metrics_do_not_claim_stable_order() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 3)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 2), (2, 3)], "1970-01-02")?,
+    )
+    .await?;
+
+    let (_, metrics) = dt
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["x".to_string()]))
+        .await?;
+    let metrics_json = serde_json::to_value(&metrics)?;
+
+    assert_eq!(metrics_json["plannerStrategy"], json!("zOrder"));
+    assert_eq!(metrics_json["preservedStableOrder"], json!(false));
+    assert_eq!(metrics_json["preserveInsertionOrder"], json!(false));
+    assert_eq!(metrics_json["maxBinSpanFiles"], json!(2));
+    assert!(metrics_json.get("maxInputDisplacement").is_none());
 
     Ok(())
 }

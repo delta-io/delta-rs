@@ -2188,19 +2188,21 @@ class TableOptimizer:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """
-        Compacts small files to reduce the total number of files in the table.
+        Compacts small files to reduce read overhead.
 
         This operation is idempotent; if run twice on the same table (assuming it has
         not been updated) it will do nothing the second time.
 
-        If this operation happens concurrently with any operations other than append,
-        it will fail.
+        Compaction keeps file order within each partition.
+
+        The target size is approximate.
+
+        If this operation runs with any operation other than append, it fails.
 
         Args:
-            partition_filters: the partition filters that will be used for getting the matched files
-            target_size: desired file size after bin-packing files, in bytes. If not
-                            provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-                            If that value isn't set, will use default value of 100MB.
+            partition_filters: partition filters used to match files
+            target_size: approximate target file size in bytes.
+                            If not provided, this uses ``delta.targetFileSize`` or 100MB.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
@@ -2214,7 +2216,7 @@ class TableOptimizer:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            the metrics from optimize
+            optimize metrics
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -2229,7 +2231,7 @@ class TableOptimizer:
             dt = DeltaTable("tmp")
             time_delta = timedelta(minutes=10)
             dt.optimize.compact(min_commit_interval=time_delta)
-            {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 1, 'numBatches': 2, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+            {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 1, 'numBatches': 2, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'plannerStrategy': 'preserveLocality', 'preservedStableOrder': True, 'preserveInsertionOrder': True, 'maxBinSpanFiles': 2}
             ```
         """
         commit_properties, post_commithook_properties = (
@@ -2276,13 +2278,13 @@ class TableOptimizer:
         Reorders the data using a Z-order curve to improve data skipping.
 
         This also performs compaction, so the same parameters as compact() apply.
+        Z order rewrites file order.
 
         Args:
             columns: the columns to use for Z-ordering. There must be at least one column.
-            partition_filters: the partition filters that will be used for getting the matched files
-            target_size: desired file size after bin-packing files, in bytes. If not
-                            provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-                            If that value isn't set, will use default value of 100MB.
+            partition_filters: partition filters used to match files
+            target_size: approximate target file size in bytes.
+                            If not provided, this uses ``delta.targetFileSize`` or 100MB.
             max_concurrent_tasks: the maximum number of concurrent tasks to use for
                                     file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
                                     faster, but will also use more memory.
@@ -2296,7 +2298,7 @@ class TableOptimizer:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            the metrics from optimize
+            optimize metrics
 
         Example:
             Use a timedelta object to specify the seconds, minutes or hours of the interval.
@@ -2311,7 +2313,7 @@ class TableOptimizer:
             dt = DeltaTable("tmp")
             time_delta = timedelta(minutes=10)
             dt.optimize.z_order(["x"], min_commit_interval=time_delta)
-            {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+            {'numFilesAdded': 1, 'numFilesRemoved': 2, 'filesAdded': ..., 'filesRemoved': ..., 'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 2, 'totalFilesSkipped': 0, 'plannerStrategy': 'zOrder', 'preservedStableOrder': False, 'preserveInsertionOrder': False, 'maxBinSpanFiles': 2}
             ```
         """
         commit_properties, post_commithook_properties = (

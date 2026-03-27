@@ -364,7 +364,7 @@ impl Snapshot {
     ///
     /// ## Returns
     ///
-    /// A stream of [`LogicalFileView`] objects.
+    /// A stream of [`LogicalFileView`] objects, newest first.
     pub fn file_views(
         &self,
         log_store: &dyn LogStore,
@@ -786,7 +786,7 @@ impl EagerSnapshot {
     ///
     /// ## Returns
     ///
-    /// A stream of [`LogicalFileView`] objects.
+    /// A stream of [`LogicalFileView`] objects, newest first.
     pub fn file_views(
         &self,
         log_store: &dyn LogStore,
@@ -1098,6 +1098,31 @@ mod tests {
             let batches: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_file_views_return_newest_files_first() -> TestResult {
+        let (_dir, mut table) = checkpoint_rebase_table().await?;
+
+        append_test_add(&mut table, "part-00002.snappy.parquet").await?;
+        let version = table.version().unwrap();
+        checkpoints::create_checkpoint(&table, None).await?;
+
+        let snapshot =
+            EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        assert_eq!(snapshot.version(), version);
+
+        let paths = eager_file_paths(&snapshot, table.log_store().as_ref()).await?;
+        assert_eq!(
+            paths,
+            vec![
+                "part-00002.snappy.parquet",
+                "part-00001.snappy.parquet",
+                "part-00000.snappy.parquet",
+            ]
+        );
 
         Ok(())
     }

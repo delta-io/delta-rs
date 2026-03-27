@@ -84,6 +84,21 @@ async fn upload_parquet_file(
     Ok((path, file_size, metadata))
 }
 
+fn sort_completed_writes_by_path<T>(results: &mut [(Path, usize, T)]) {
+    results.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+}
+
+fn default_writer_properties(include_created_by: bool) -> WriterProperties {
+    let builder = WriterProperties::builder().set_compression(Compression::SNAPPY);
+    if include_created_by {
+        builder
+            .set_created_by(format!("delta-rs version {}", crate_version()))
+            .build()
+    } else {
+        builder.build()
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
     #[error("Unexpected Arrow schema: got: {schema}, expected: {expected_schema}")]
@@ -153,11 +168,8 @@ impl WriterConfig {
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> Self {
-        let writer_properties = writer_properties.unwrap_or_else(|| {
-            WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build()
-        });
+        let writer_properties =
+            writer_properties.unwrap_or_else(|| default_writer_properties(false));
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Self {
@@ -322,12 +334,8 @@ impl PartitionWriterConfig {
     ) -> DeltaResult<Self> {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
-        let writer_properties = writer_properties.unwrap_or_else(|| {
-            WriterProperties::builder()
-                .set_created_by(format!("delta-rs version {}", crate_version()))
-                .set_compression(Compression::SNAPPY)
-                .build()
-        });
+        let writer_properties =
+            writer_properties.unwrap_or_else(|| default_writer_properties(true));
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
@@ -514,6 +522,8 @@ impl PartitionWriter {
                 }
             }
         }
+
+        sort_completed_writes_by_path(&mut results);
 
         let adds = results
             .into_iter()
@@ -715,6 +725,30 @@ mod tests {
 
         let adds = writer.close().await.unwrap();
         assert_eq!(adds.len(), 1);
+    }
+
+    #[test]
+    fn test_sort_completed_writes_by_path() {
+        let mut results = vec![
+            (Path::from("part-00002.parquet"), 3, 2_u8),
+            (Path::from("part-00000.parquet"), 1, 0_u8),
+            (Path::from("part-00001.parquet"), 2, 1_u8),
+        ];
+
+        sort_completed_writes_by_path(&mut results);
+
+        let ordered_paths = results
+            .iter()
+            .map(|(path, _, _)| path.as_ref())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ordered_paths,
+            vec![
+                "part-00000.parquet",
+                "part-00001.parquet",
+                "part-00002.parquet"
+            ]
+        );
     }
 
     #[tokio::test]
