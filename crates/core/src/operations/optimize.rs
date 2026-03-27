@@ -64,9 +64,22 @@ use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version, to_kernel_predicate};
 
+/// Planner used by optimize.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlannerStrategy {
+    /// Older metrics with no planner field.
+    #[default]
+    UnknownLegacy,
+    /// Compact planner.
+    PreserveLocality,
+    /// Z order planner.
+    ZOrder,
+}
+
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "MetricsSerde")]
 pub struct Metrics {
     /// Number of optimized files added
     pub num_files_added: u64,
@@ -92,8 +105,62 @@ pub struct Metrics {
     pub total_considered_files: usize,
     /// How many files were considered for optimization but were skipped
     pub total_files_skipped: usize,
-    /// The order of records from source files is preserved
+    /// Compatibility field for `preserved_stable_order`
     pub preserve_insertion_order: bool,
+    /// Planner used for this run
+    pub planner_strategy: PlannerStrategy,
+    /// True when file order is kept within a partition
+    pub preserved_stable_order: bool,
+    /// Largest count of adjacent input files in one bin
+    pub max_bin_span_files: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MetricsSerde {
+    num_files_added: u64,
+    num_files_removed: u64,
+    #[serde(deserialize_with = "deserialize_metric_details")]
+    files_added: MetricDetails,
+    #[serde(deserialize_with = "deserialize_metric_details")]
+    files_removed: MetricDetails,
+    partitions_optimized: u64,
+    num_batches: u64,
+    total_considered_files: usize,
+    total_files_skipped: usize,
+    #[serde(default)]
+    preserve_insertion_order: Option<bool>,
+    #[serde(default)]
+    planner_strategy: PlannerStrategy,
+    #[serde(default)]
+    preserved_stable_order: Option<bool>,
+    #[serde(default)]
+    max_bin_span_files: usize,
+}
+
+impl From<MetricsSerde> for Metrics {
+    fn from(value: MetricsSerde) -> Self {
+        let preserve_insertion_order = value
+            .preserve_insertion_order
+            .or(value.preserved_stable_order)
+            .unwrap_or(false);
+        let preserved_stable_order = value.preserved_stable_order.unwrap_or(false);
+
+        Self {
+            num_files_added: value.num_files_added,
+            num_files_removed: value.num_files_removed,
+            files_added: value.files_added,
+            files_removed: value.files_removed,
+            partitions_optimized: value.partitions_optimized,
+            num_batches: value.num_batches,
+            total_considered_files: value.total_considered_files,
+            total_files_skipped: value.total_files_skipped,
+            preserve_insertion_order,
+            planner_strategy: value.planner_strategy,
+            preserved_stable_order,
+            max_bin_span_files: value.max_bin_span_files,
+        }
+    }
 }
 
 // Custom serialization function that serializes metric details as a string
@@ -172,6 +239,13 @@ impl Metrics {
         self.files_removed.add(&partial.files_removed);
         self.num_batches += partial.num_batches;
     }
+
+    fn apply_planner_stats(&mut self, planner_stats: &PlannerStats) {
+        self.planner_strategy = planner_stats.planner_strategy;
+        self.preserved_stable_order = planner_stats.preserved_stable_order;
+        self.preserve_insertion_order = planner_stats.preserved_stable_order;
+        self.max_bin_span_files = planner_stats.max_bin_span_files;
+    }
 }
 
 impl Default for MetricDetails {
@@ -212,8 +286,6 @@ pub struct OptimizeBuilder<'a> {
     writer_properties: Option<WriterProperties>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
-    /// Whether to preserve insertion order within files (default false)
-    preserve_insertion_order: bool,
     /// Maximum number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
     /// Optimize type
@@ -244,7 +316,6 @@ impl<'a> OptimizeBuilder<'a> {
             target_size: None,
             writer_properties: None,
             commit_properties: CommitProperties::default(),
-            preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
             optimize_type: OptimizeType::Compact,
             min_commit_interval: None,
@@ -284,9 +355,12 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Whether to preserve insertion order within files
-    pub fn with_preserve_insertion_order(mut self, preserve_insertion_order: bool) -> Self {
-        self.preserve_insertion_order = preserve_insertion_order;
+    /// Deprecated. This setting has no effect.
+    #[deprecated(
+        since = "0.32.0",
+        note = "compact always keeps partition file order, and z order does not; this setting has no effect"
+    )]
+    pub fn with_preserve_insertion_order(self, _preserve_insertion_order: bool) -> Self {
         self
     }
 
@@ -402,12 +476,25 @@ struct OptimizeInput {
     predicate: Option<String>,
 }
 
-impl From<OptimizeInput> for DeltaOperation {
-    fn from(opt_input: OptimizeInput) -> Self {
-        DeltaOperation::Optimize {
-            target_size: opt_input.target_size.get() as i64,
+const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
+
+fn optimize_target_size_to_i64(target_size: NonZeroU64) -> Result<i64, DeltaTableError> {
+    i64::try_from(target_size.get()).map_err(|_| {
+        DeltaTableError::Generic(format!(
+            "optimize target_size {} exceeds i64::MAX ({MAX_OPTIMIZE_TARGET_SIZE})",
+            target_size.get()
+        ))
+    })
+}
+
+impl TryFrom<OptimizeInput> for DeltaOperation {
+    type Error = DeltaTableError;
+
+    fn try_from(opt_input: OptimizeInput) -> Result<Self, Self::Error> {
+        Ok(DeltaOperation::Optimize {
+            target_size: optimize_target_size_to_i64(opt_input.target_size)?,
             predicate: opt_input.predicate,
-        }
+        })
     }
 }
 
@@ -455,10 +542,10 @@ fn create_remove(
 /// together and/or sorted together.
 #[derive(Debug)]
 enum OptimizeOperations {
-    /// Plan to compact files into pre-determined bins
+    /// Plan to compact files into bins
     ///
-    /// Bins are determined by the bin-packing algorithm to reach an optimal size.
-    /// Files that are large enough already are skipped. Bins of size 1 are dropped.
+    /// Bins keep partition file order, stop at ordinal gaps, and stop at
+    /// skipped large files. Bins of size 1 are dropped.
     Compact(HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)>),
     /// Plan to Z-order each partition
     ZOrder(
@@ -481,10 +568,41 @@ pub struct MergePlan {
     operations: OptimizeOperations,
     /// Metrics collected during operation
     metrics: Metrics,
+    /// Planner metadata copied into buffered and total metrics
+    planner_stats: PlannerStats,
     /// Parameters passed down to merge tasks
     task_parameters: Arc<MergeTaskParameters>,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: Version,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PlannerStats {
+    planner_strategy: PlannerStrategy,
+    preserved_stable_order: bool,
+    max_bin_span_files: usize,
+}
+
+impl PlannerStats {
+    fn preserve_locality() -> Self {
+        Self {
+            planner_strategy: PlannerStrategy::PreserveLocality,
+            preserved_stable_order: true,
+            max_bin_span_files: 0,
+        }
+    }
+
+    fn z_order(max_bin_span_files: usize) -> Self {
+        Self {
+            planner_strategy: PlannerStrategy::ZOrder,
+            preserved_stable_order: false,
+            max_bin_span_files,
+        }
+    }
+
+    fn absorb(&mut self, other: &PlannerStats) {
+        self.max_bin_span_files = self.max_bin_span_files.max(other.max_bin_span_files);
+    }
 }
 
 /// Parameters passed to individual merge tasks
@@ -656,7 +774,7 @@ impl MergePlan {
         info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
 
-        let stream = match operations {
+        let mut stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
                 .flat_map(|(_, (partition, bins))| {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
@@ -696,6 +814,7 @@ impl MergePlan {
                     ));
                     util::flatten_join_error(rewrite_result)
                 })
+                .buffered(max_concurrent_tasks)
                 .boxed(),
             OptimizeOperations::ZOrder(zorder_columns, bins, state) => {
                 debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
@@ -741,11 +860,10 @@ impl MergePlan {
                         ));
                         util::flatten_join_error(rewrite_result)
                     })
+                    .buffer_unordered(max_concurrent_tasks)
                     .boxed()
             }
         };
-
-        let mut stream = stream.buffer_unordered(max_concurrent_tasks);
 
         let mut table =
             DeltaTable::new_with_state(log_store.clone(), DeltaTableState::new(snapshot.clone()));
@@ -755,7 +873,8 @@ impl MergePlan {
         let mut actions = vec![];
 
         // Each time we commit, we'll reset buffered_metrics to orig_metrics.
-        let orig_metrics = std::mem::take(&mut self.metrics);
+        let mut orig_metrics = std::mem::take(&mut self.metrics);
+        orig_metrics.apply_planner_stats(&self.planner_stats);
         let mut buffered_metrics = orig_metrics.clone();
         let mut total_metrics = orig_metrics.clone();
 
@@ -783,7 +902,6 @@ impl MergePlan {
                 let actions = std::mem::take(&mut actions);
                 last_commit = now;
 
-                buffered_metrics.preserve_insertion_order = true;
                 let mut properties = CommitProperties::default();
                 properties.app_metadata = commit_properties.app_metadata.clone();
                 properties
@@ -809,7 +927,7 @@ impl MergePlan {
                     .build(
                         Some(&snapshot),
                         log_store.clone(),
-                        self.task_parameters.input_parameters.clone().into(),
+                        self.task_parameters.input_parameters.clone().try_into()?,
                     )
                     .await?;
                 snapshot = commit.snapshot().snapshot;
@@ -821,7 +939,6 @@ impl MergePlan {
             }
         }
 
-        total_metrics.preserve_insertion_order = true;
         if total_metrics.num_files_added == 0 {
             total_metrics.files_added.min = 0;
         }
@@ -847,9 +964,10 @@ pub async fn create_merge_plan(
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
+    let _ = optimize_target_size_to_i64(target_size)?;
     let partitions_keys = snapshot.metadata().partition_columns();
 
-    let (operations, metrics) = match optimize_type {
+    let (operations, metrics, planner_stats) = match optimize_type {
         OptimizeType::Compact => {
             info!("building compaction plan");
             build_compaction_plan(log_store, snapshot, filters, target_size).await?
@@ -886,6 +1004,7 @@ pub async fn create_merge_plan(
     Ok(MergePlan {
         operations,
         metrics,
+        planner_stats,
         task_parameters: Arc::new(MergeTaskParameters {
             file_schema,
             writer_properties,
@@ -920,8 +1039,18 @@ impl MergeBin {
         self.size_bytes
     }
 
+    fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
     fn len(&self) -> usize {
         self.files.len()
+    }
+
+    fn from_file(add: Add) -> Self {
+        let mut bin = Self::new();
+        bin.add(add);
+        bin
     }
 
     fn add(&mut self, add: Add) {
@@ -943,15 +1072,87 @@ impl IntoIterator for MergeBin {
     }
 }
 
+#[derive(Debug, Clone)]
+struct OrderedFileCandidate {
+    add: Add,
+    stable_ordinal: usize,
+    size_bytes: u64,
+}
+
+fn plan_compaction_bins_in_stable_order(
+    files: Vec<OrderedFileCandidate>,
+    target_size: u64,
+) -> (Vec<MergeBin>, PlannerStats) {
+    let mut bins = Vec::new();
+    let mut current = MergeBin::new();
+    let mut current_first_ordinal = None;
+    let mut current_last_ordinal = None;
+    let mut planner_stats = PlannerStats::preserve_locality();
+
+    for file in files {
+        if current.is_empty() {
+            current = MergeBin::from_file(file.add);
+            current_first_ordinal = Some(file.stable_ordinal);
+            current_last_ordinal = Some(file.stable_ordinal);
+            continue;
+        }
+
+        let extends_contiguous_span = current_last_ordinal
+            .map(|last| file.stable_ordinal == last + 1)
+            .unwrap_or(false);
+        if !extends_contiguous_span {
+            if let (Some(first), Some(last)) = (current_first_ordinal, current_last_ordinal) {
+                planner_stats.max_bin_span_files =
+                    planner_stats.max_bin_span_files.max(last - first + 1);
+            }
+
+            bins.push(current);
+            current = MergeBin::from_file(file.add);
+            current_first_ordinal = Some(file.stable_ordinal);
+            current_last_ordinal = Some(file.stable_ordinal);
+            continue;
+        }
+
+        if current.total_file_size() + file.size_bytes <= target_size {
+            current.add(file.add);
+            current_last_ordinal = Some(file.stable_ordinal);
+            continue;
+        }
+
+        if let (Some(first), Some(last)) = (current_first_ordinal, current_last_ordinal) {
+            planner_stats.max_bin_span_files =
+                planner_stats.max_bin_span_files.max(last - first + 1);
+        }
+
+        bins.push(current);
+        current = MergeBin::from_file(file.add);
+        current_first_ordinal = Some(file.stable_ordinal);
+        current_last_ordinal = Some(file.stable_ordinal);
+    }
+
+    if !current.is_empty() {
+        if let (Some(first), Some(last)) = (current_first_ordinal, current_last_ordinal) {
+            planner_stats.max_bin_span_files =
+                planner_stats.max_bin_span_files.max(last - first + 1);
+        }
+        bins.push(current);
+    }
+
+    (bins, planner_stats)
+}
+
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
     snapshot: &EagerSnapshot,
     filters: &[PartitionFilter],
     target_size: NonZeroU64,
-) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     let mut metrics = Metrics::default();
-
-    let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, Vec<Add>)> = HashMap::new();
+    let mut planner_stats = PlannerStats::preserve_locality();
+    let mut partition_files: HashMap<
+        String,
+        (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>),
+    > = HashMap::new();
 
     let predicate = if filters.is_empty() {
         None
@@ -962,15 +1163,13 @@ async fn build_compaction_plan(
         )?))
     };
 
+    // `file_views` returns active files with the newest first.
+    // We use that order within each partition when building compact bins.
     let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&file)?;
-        if object_meta.size > target_size.get() {
-            metrics.total_files_skipped += 1;
-            continue;
-        }
         let partition_values = file
             .partition_values()
             .map(|v| {
@@ -981,36 +1180,30 @@ async fn build_compaction_plan(
                     .collect::<IndexMap<_, _>>()
             })
             .unwrap_or_default();
+        let partition_path = partition_values.hive_partition_path();
+        let entry = partition_files
+            .entry(partition_path)
+            .or_insert_with(|| (partition_values, 0, vec![]));
+        let stable_ordinal = entry.1;
+        entry.1 += 1;
 
-        partition_files
-            .entry(partition_values.hive_partition_path())
-            .or_insert_with(|| (partition_values, vec![]))
-            .1
-            .push(file.to_add());
-    }
+        if object_meta.size > target_size.get() {
+            metrics.total_files_skipped += 1;
+            continue;
+        }
 
-    for (_, file) in partition_files.values_mut() {
-        // Sort files by size: largest to smallest
-        file.sort_by(|a, b| b.size.cmp(&a.size));
+        entry.2.push(OrderedFileCandidate {
+            add: file.to_add(),
+            stable_ordinal,
+            size_bytes: object_meta.size,
+        });
     }
 
     let mut operations: HashMap<String, (IndexMap<String, Scalar>, Vec<MergeBin>)> = HashMap::new();
-    for (part, (partition, files)) in partition_files {
-        let mut merge_bins = vec![MergeBin::new()];
-
-        'files: for file in files {
-            for bin in merge_bins.iter_mut() {
-                if bin.total_file_size() + file.size as u64 <= target_size.get() {
-                    bin.add(file);
-                    // Move to next file
-                    continue 'files;
-                }
-            }
-            // Didn't find a bin to add to, so create a new one
-            let mut new_bin = MergeBin::new();
-            new_bin.add(file);
-            merge_bins.push(new_bin);
-        }
+    for (part, (partition, _, files)) in partition_files {
+        let (merge_bins, partition_stats) =
+            plan_compaction_bins_in_stable_order(files, target_size.get());
+        planner_stats.absorb(&partition_stats);
 
         operations.insert(part, (partition, merge_bins));
     }
@@ -1024,13 +1217,24 @@ async fn build_compaction_plan(
             } else {
                 true
             }
-        })
+        });
+        planner_stats.max_bin_span_files = planner_stats
+            .max_bin_span_files
+            .max(bins.iter().map(MergeBin::len).max().unwrap_or(0));
     }
     operations.retain(|_, (_, files)| !files.is_empty());
 
     metrics.partitions_optimized = operations.len() as u64;
 
-    Ok((OptimizeOperations::Compact(operations), metrics))
+    if operations.is_empty() {
+        planner_stats.max_bin_span_files = 0;
+    }
+
+    Ok((
+        OptimizeOperations::Compact(operations),
+        metrics,
+        planner_stats,
+    ))
 }
 
 async fn build_zorder_plan(
@@ -1040,7 +1244,7 @@ async fn build_zorder_plan(
     partition_keys: &[String],
     filters: &[PartitionFilter],
     session: SessionState,
-) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
             "Z-order requires at least one column".to_string(),
@@ -1106,8 +1310,129 @@ async fn build_zorder_plan(
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
 
+    let max_bin_span_files = partition_files
+        .values()
+        .map(|(_, bin)| bin.len())
+        .max()
+        .unwrap_or(0);
     let operation = OptimizeOperations::ZOrder(zorder_columns, partition_files, Box::new(session));
-    Ok((operation, metrics))
+    Ok((
+        operation,
+        metrics,
+        PlannerStats::z_order(max_bin_span_files),
+    ))
+}
+
+#[cfg(test)]
+mod compact_planner_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn candidate(stable_ordinal: usize, size_bytes: u64) -> OrderedFileCandidate {
+        OrderedFileCandidate {
+            add: Add {
+                path: format!("part-{stable_ordinal}.parquet"),
+                partition_values: HashMap::new(),
+                size: size_bytes as i64,
+                modification_time: stable_ordinal as i64,
+                data_change: false,
+                stats: None,
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+            },
+            stable_ordinal,
+            size_bytes,
+        }
+    }
+
+    fn ordinals(bin: &MergeBin) -> Vec<usize> {
+        bin.iter()
+            .map(|add| add.modification_time as usize)
+            .collect::<Vec<_>>()
+    }
+
+    #[test]
+    fn test_ordered_compact_bins_are_contiguous() {
+        let (bins, stats) = plan_compaction_bins_in_stable_order(
+            vec![
+                candidate(0, 6),
+                candidate(1, 3),
+                candidate(2, 6),
+                candidate(3, 3),
+            ],
+            10,
+        );
+
+        let planned_ordinals = bins.iter().map(ordinals).collect::<Vec<_>>();
+
+        assert_eq!(planned_ordinals, vec![vec![0, 1], vec![2, 3]]);
+        assert_eq!(stats.max_bin_span_files, 2);
+    }
+
+    #[test]
+    fn test_ordered_compact_bins_do_not_merge_non_adjacent_files() {
+        let (bins, _) = plan_compaction_bins_in_stable_order(
+            vec![
+                candidate(0, 8),
+                candidate(1, 8),
+                candidate(2, 2),
+                candidate(3, 2),
+            ],
+            10,
+        );
+
+        let planned_ordinals = bins.iter().map(ordinals).collect::<Vec<_>>();
+
+        assert_eq!(planned_ordinals, vec![vec![0], vec![1, 2], vec![3]]);
+        assert!(
+            planned_ordinals
+                .iter()
+                .all(|bin| { bin.windows(2).all(|window| window[1] == window[0] + 1) })
+        );
+    }
+
+    #[test]
+    fn test_ordered_compact_bins_respect_ordinal_gaps() {
+        let (bins, stats) =
+            plan_compaction_bins_in_stable_order(vec![candidate(0, 3), candidate(2, 3)], 10);
+
+        let planned_ordinals = bins.iter().map(ordinals).collect::<Vec<_>>();
+
+        assert_eq!(planned_ordinals, vec![vec![0], vec![2]]);
+        assert_eq!(stats.max_bin_span_files, 1);
+    }
+
+    #[test]
+    fn test_ordered_compact_bins_track_span_and_displacement() {
+        let (_, stats) = plan_compaction_bins_in_stable_order(
+            vec![
+                candidate(0, 3),
+                candidate(1, 3),
+                candidate(2, 3),
+                candidate(3, 9),
+            ],
+            10,
+        );
+
+        assert_eq!(stats.planner_strategy, PlannerStrategy::PreserveLocality);
+        assert!(stats.preserved_stable_order);
+        assert_eq!(stats.max_bin_span_files, 3);
+    }
+
+    #[test]
+    fn test_optimize_input_target_size_must_fit_i64() {
+        let input = OptimizeInput {
+            target_size: std::num::NonZeroU64::new(i64::MAX as u64 + 1).unwrap(),
+            predicate: None,
+        };
+
+        let err = crate::protocol::DeltaOperation::try_from(input).unwrap_err();
+        assert!(err.to_string().contains("optimize target_size"));
+        assert!(err.to_string().contains("i64::MAX"));
+    }
 }
 
 pub(super) mod util {
