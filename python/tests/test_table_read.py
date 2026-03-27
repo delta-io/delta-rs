@@ -778,7 +778,7 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=5, method="thread")
-def test_read_multiple_tables_from_s3(s3_localstack_simple_table_uri):
+def test_read_multiple_tables_from_s3(s3_localstack, s3_localstack_simple_table_uri):
     """Should be able to create multiple cloud storage based DeltaTable instances
     without blocking on async crates/test function calls.
     """
@@ -794,7 +794,9 @@ def test_read_multiple_tables_from_s3(s3_localstack_simple_table_uri):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
-def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack_simple_table_uri):
+def test_read_multiple_tables_from_s3_multi_threaded(
+    s3_localstack, s3_localstack_simple_table_uri
+):
     thread_count = 10
     b = Barrier(thread_count, timeout=5)
     expected_file_uris = [

@@ -143,13 +143,13 @@ def s3_localstack_bucket_name(worker_id: str):
 
 
 @pytest.fixture()
-def s3_localstack_bucket_root_uri(s3_localstack, s3_localstack_bucket_name):
+def s3_localstack_bucket_root_uri(s3_localstack_creds, s3_localstack_bucket_name):
     return f"s3://{s3_localstack_bucket_name}"
 
 
 @pytest.fixture()
-def s3_localstack_simple_table_uri(s3_localstack_bucket_root_uri):
-    return f"{s3_localstack_bucket_root_uri}/simple"
+def s3_localstack_simple_table_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}/simple"
 
 
 @pytest.fixture(scope="session")

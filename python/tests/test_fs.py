@@ -33,7 +33,7 @@ SIMPLE_TABLE_FILES = [
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_files(s3_localstack_simple_table_uri):
+def test_read_files(s3_localstack, s3_localstack_simple_table_uri):
     table_path = s3_localstack_simple_table_uri
     handler = DeltaStorageHandler(table_path)
     dt = DeltaTable(table_path)
@@ -51,7 +51,7 @@ def test_read_files(s3_localstack_simple_table_uri):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_file_info(s3_localstack_simple_table_uri):
+def test_read_file_info(s3_localstack, s3_localstack_simple_table_uri):
     table_path = s3_localstack_simple_table_uri
     handler = DeltaStorageHandler(table_path)
     meta = handler.get_file_info(
@@ -94,7 +94,7 @@ def test_s3_authenticated_read_write(
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_simple_table_from_remote(s3_localstack_simple_table_uri):
+def test_read_simple_table_from_remote(s3_localstack, s3_localstack_simple_table_uri):
     table_path = f"{s3_localstack_simple_table_uri}/"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
@@ -110,7 +110,10 @@ def test_read_simple_table_from_remote(s3_localstack_simple_table_uri):
     reason="Temporarily disabled until we can resolve https://github.com/delta-io/delta-rs/pull/2120#issuecomment-1912367573"
 )
 def test_roundtrip_s3_env(
-    s3_localstack_bucket_root_uri, sample_data_pyarrow: "pa.Table", monkeypatch
+    s3_localstack,
+    s3_localstack_bucket_root_uri,
+    sample_data_pyarrow: "pa.Table",
+    monkeypatch,
 ):
     table_path = f"{s3_localstack_bucket_root_uri}/roundtrip"
 
