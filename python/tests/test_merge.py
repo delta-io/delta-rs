@@ -2341,6 +2341,96 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
     assert metrics["num_target_files_skipped_during_scan"] == 3
 
 
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_isin_string_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
+    date_parts = [
+        "2025-01-01",
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-04",
+        "2025-01-05",
+    ]
+    data = Table(
+        {
+            "id": Array(
+                [str(x) for x in range(len(date_parts))],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                date_parts,
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(len(date_parts))),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append", partition_by="date_part")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["1", "3"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                ["2025-01-02", "2025-01-04"],
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    metrics = (
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id and t.date_part in ('2025-01-02', '2025-01-04')",
+            source_alias="s",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    expected = Table(
+        {
+            "id": Array(
+                ["0", "1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                date_parts,
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 10, 2, 20, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, date_part, sold from tbl order by id asc")
+        .read_all()
+    )
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+    assert metrics["num_target_files_scanned"] == 2
+    assert metrics["num_target_files_skipped_during_scan"] == 3
+
+
 @pytest.mark.pyarrow
 @pytest.mark.parametrize("streaming", (True, False))
 def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
