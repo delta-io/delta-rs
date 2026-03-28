@@ -868,8 +868,8 @@ pub struct Remove {
     #[serde(with = "serde_path")]
     pub path: String,
 
-    /// When `false` the logical file must already be present in the table or the records
-    /// in the added file must be contained in one or more remove actions in the same version.
+    /// When `false` the records in the removed file must be contained
+    /// in one or more add file actions in the same version
     pub data_change: bool,
 
     /// The time this logical file was created, as milliseconds since the epoch.
