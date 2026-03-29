@@ -159,6 +159,23 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
     fields.any(|f| _check_type(f.data_type()))
 }
 
+/// checks if table contains variant in any field including nested fields.
+pub fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fn _check_type(dtype: &DataType) -> bool {
+        match dtype {
+            DataType::Variant(_) => true,
+            DataType::Array(inner) => _check_type(inner.element_type()),
+            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+            DataType::Map(inner) => {
+                _check_type(inner.key_type()) || _check_type(inner.value_type())
+            }
+            _ => false,
+        }
+    }
+
+    fields.any(|f| _check_type(f.data_type()))
+}
+
 /// Extension trait for delta-kernel Protocol action.
 ///
 /// Allows us to extend the Protocol struct with additional methods
@@ -407,9 +424,14 @@ impl ProtocolInner {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+        let contains_variant = self.contains_variant(schema.fields());
 
         if contains_timestamp_ntz {
             self = self.enable_timestamp_ntz()
+        }
+
+        if contains_variant {
+            self = self.enable_variant_type()
         }
 
         if !generated_cols.is_empty() {
@@ -558,10 +580,22 @@ impl ProtocolInner {
         contains_timestampntz(fields)
     }
 
+    /// checks if table contains variant in any field including nested fields.
+    fn contains_variant<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_variant(fields)
+    }
+
     /// Enable timestamp_ntz in the protocol
     fn enable_timestamp_ntz(mut self) -> Self {
         self = self.append_reader_features([TableFeature::TimestampWithoutTimezone]);
         self = self.append_writer_features([TableFeature::TimestampWithoutTimezone]);
+        self
+    }
+
+    /// Enable variantType in the protocol
+    fn enable_variant_type(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::VariantType]);
+        self = self.append_writer_features([TableFeature::VariantType]);
         self
     }
 
@@ -616,6 +650,12 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
+    /// Preview shredded variant support
+    VariantShreddingPreview,
     MaterializePartitionColumns,
 }
 
@@ -637,6 +677,9 @@ impl FromStr for TableFeatures {
             "rowTracking" => Ok(TableFeatures::RowTracking),
             "domainMetadata" => Ok(TableFeatures::DomainMetadata),
             "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            "variantType" => Ok(TableFeatures::VariantType),
+            "variantType-preview" => Ok(TableFeatures::VariantTypePreview),
+            "variantShredding-preview" => Ok(TableFeatures::VariantShreddingPreview),
             "materializePartitionColumns" => Ok(TableFeatures::MaterializePartitionColumns),
             _ => Err(()),
         }
@@ -659,6 +702,9 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::RowTracking => "rowTracking",
             TableFeatures::DomainMetadata => "domainMetadata",
             TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+            TableFeatures::VariantType => "variantType",
+            TableFeatures::VariantTypePreview => "variantType-preview",
+            TableFeatures::VariantShreddingPreview => "variantShredding-preview",
             TableFeatures::MaterializePartitionColumns => "materializePartitionColumns",
         }
     }
