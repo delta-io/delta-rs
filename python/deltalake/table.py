@@ -58,10 +58,18 @@ if TYPE_CHECKING:
 
 MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
 NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
-SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
+SUPPORTED_WRITER_FEATURES = {
+    "appendOnly",
+    "invariants",
+    "timestampNtz",
+    "variantType",
+    "variantType-preview",
+}
+
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = 2
-SUPPORTED_READER_FEATURES = {"timestampNtz"}
+SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
+
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 if _NANOSECOND_TIMESTAMPS:
     SUPPORTED_WRITER_FEATURES.add("timestampNanos")
