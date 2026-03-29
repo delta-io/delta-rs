@@ -1231,6 +1231,21 @@ def test_deletion_vectors_without_files_raises():
         dt.deletion_vectors()
 
 
+@pytest.mark.pyarrow
+def test_read_variant_fixture():
+    table_path = "../crates/test/tests/data/spark-variant-checkpoint"
+    dt = DeltaTable(table_path)
+
+    schema = dt.schema()
+    assert schema.fields[1].name == "v"
+    assert schema.fields[1].type.type == "variant"
+    assert dt.protocol().reader_features == ["variantType-preview"]
+
+    table = dt.to_pyarrow_dataset().to_table()
+    assert table.num_rows == 102
+    assert table.column("id").to_pylist()[:3] == [0, 1, 2]
+
+
 def test_read_deletion_vectors():
     table_path = "../crates/test/tests/data/table-with-dv-small"
     dt = DeltaTable(table_path)

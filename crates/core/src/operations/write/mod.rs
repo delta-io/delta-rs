@@ -423,6 +423,7 @@ impl WriteBuilder {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
                     #[cfg(feature = "nanosecond-timestamps")]
                     PROTOCOL.check_can_write_timestamp_nanos(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_variant(snapshot, &schema)?;
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {

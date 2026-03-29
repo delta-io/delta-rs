@@ -96,6 +96,7 @@ ctor = "0"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
+parquet = { workspace = true, features = ["variant_experimental"] }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }

@@ -445,6 +445,7 @@ mod tests {
     use super::*;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
+    use delta_kernel::table_features::TableFeature;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -554,6 +555,35 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(String::from("true"), append)
+    }
+
+    #[tokio::test]
+    async fn test_create_table_auto_enables_variant_type() {
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::INTEGER, true),
+            StructField::new("v", DataType::unshredded_variant(), true),
+        ])
+        .unwrap();
+
+        let table = CreateBuilder::new()
+            .with_location("memory:///")
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+
+        let protocol = table.snapshot().unwrap().protocol();
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(
+            protocol
+                .reader_features()
+                .is_some_and(|features| features.contains(&TableFeature::VariantType))
+        );
+        assert!(
+            protocol
+                .writer_features()
+                .is_some_and(|features| features.contains(&TableFeature::VariantType))
+        );
     }
 
     #[cfg(feature = "datafusion")]

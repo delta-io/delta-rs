@@ -384,6 +384,10 @@ impl TableProviderBuilder {
             }
         };
 
+        PROTOCOL
+            .can_read_from_protocol(snapshot.snapshot().protocol())
+            .map_err(|err| DataFusionError::Plan(err.to_string()))?;
+
         if let Some(log_store) = log_store.as_ref() {
             let snapshot_root_identity = next::canonical_table_root_identity(
                 snapshot.snapshot().scan_builder().build()?.table_root(),
