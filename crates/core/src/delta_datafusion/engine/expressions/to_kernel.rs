@@ -1,4 +1,7 @@
+use datafusion::common::tree_node::{Transformed, TreeNode as _};
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err, plan_err};
+use datafusion::logical_expr::expr::InList;
+use datafusion::logical_expr::utils::{conjunction, disjunction};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use delta_kernel::expressions::{
     BinaryExpression, BinaryExpressionOp, BinaryPredicate, BinaryPredicateOp, ColumnName,
@@ -14,9 +17,59 @@ use crate::kernel::scalars::ScalarExt;
 /// If the expression converts to a Delta predicate, returns it directly.
 /// Otherwise, wraps the expression as a boolean expression predicate.
 pub(crate) fn to_delta_predicate(expr: &Expr) -> Result<Predicate> {
-    match to_delta_expression(expr)? {
+    match to_delta_expression(&normalize_delta_predicate_expr(expr)?)? {
         Expression::Predicate(pred) => Ok(pred.as_ref().clone()),
         expr => Ok(Predicate::BooleanExpression(expr)),
+    }
+}
+
+fn normalize_delta_predicate_expr(expr: &Expr) -> Result<Expr> {
+    let transformed = expr.clone().transform_up(|expr| match expr {
+        Expr::InList(in_list) => Ok(match rewrite_in_list_expr_for_kernel(&in_list) {
+            Some(lowered) => Transformed::yes(lowered),
+            None => Transformed::no(Expr::InList(in_list)),
+        }),
+        other => Ok(Transformed::no(other)),
+    })?;
+
+    Ok(transformed.data)
+}
+
+/// Rewrites supported `IN` / `NOT IN` expressions into conjunctions or
+/// disjunctions that can be converted into Delta kernel predicates.
+///
+/// Returns `None` when any list item cannot be rewritten without changing the
+/// meaning of the predicate. In that case callers should leave the original
+/// `Expr::InList` unchanged and let downstream conversion decide how to handle it.
+fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
+    if in_list.list.is_empty() {
+        return Some(Expr::Literal(
+            ScalarValue::Boolean(Some(in_list.negated)),
+            None,
+        ));
+    }
+
+    let list = in_list
+        .list
+        .iter()
+        .map(|item| match item {
+            Expr::Literal(value, _) if !value.is_null() => Some(item.clone()),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    let lowered_terms = list.into_iter().map(|item| {
+        if in_list.negated {
+            in_list.expr.as_ref().clone().not_eq(item)
+        } else {
+            in_list.expr.as_ref().clone().eq(item)
+        }
+    });
+
+    if in_list.negated {
+        conjunction(lowered_terms)
+    } else {
+        disjunction(lowered_terms)
     }
 }
 
@@ -305,6 +358,40 @@ mod tests {
         }
     }
 
+    fn assert_string_equality_predicate(
+        predicate: &Predicate,
+        expected_column: &str,
+        expected: &str,
+    ) {
+        match predicate {
+            Predicate::Binary(binary) => {
+                assert_eq!(binary.op, BinaryPredicateOp::Equal);
+                match binary.left.as_ref() {
+                    Expression::Column(name) => assert_eq!(name.to_string(), expected_column),
+                    other => panic!("Expected column expression, got {:?}", other),
+                }
+                match binary.right.as_ref() {
+                    Expression::Literal(Scalar::String(value)) => assert_eq!(value, expected),
+                    other => panic!("Expected string literal, got {:?}", other),
+                }
+            }
+            other => panic!("Expected binary predicate, got {:?}", other),
+        }
+    }
+
+    fn assert_string_inequality_predicate(
+        predicate: &Predicate,
+        expected_column: &str,
+        expected: &str,
+    ) {
+        match predicate {
+            Predicate::Not(inner) => {
+                assert_string_equality_predicate(inner.as_ref(), expected_column, expected)
+            }
+            other => panic!("Expected NOT predicate, got {:?}", other),
+        }
+    }
+
     #[test]
     fn test_simple_and() {
         let expr = col("a").eq(lit(1)).and(col("b").eq(lit(2)));
@@ -315,6 +402,67 @@ mod tests {
     fn test_simple_or() {
         let expr = col("a").eq(lit(1)).or(col("b").eq(lit(2)));
         assert_junction_expr(&expr, JunctionPredicateOp::Or, 2);
+    }
+
+    #[test]
+    fn test_in_list_rewrites_to_or_of_equalities() {
+        let expr = col("part").in_list(vec![lit("a"), lit("c")], false);
+        let delta_predicate = to_delta_predicate(&expr).unwrap();
+
+        match delta_predicate {
+            Predicate::Junction(junction) => {
+                assert_eq!(junction.op, JunctionPredicateOp::Or);
+                assert_eq!(junction.preds.len(), 2);
+                assert_string_equality_predicate(&junction.preds[0], "part", "a");
+                assert_string_equality_predicate(&junction.preds[1], "part", "c");
+            }
+            other => panic!("Expected OR junction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_not_in_list_rewrites_to_and_of_inequalities() {
+        let expr = col("part").in_list(vec![lit("a"), lit("c")], true);
+        let delta_predicate = to_delta_predicate(&expr).unwrap();
+
+        match delta_predicate {
+            Predicate::Junction(junction) => {
+                assert_eq!(junction.op, JunctionPredicateOp::And);
+                assert_eq!(junction.preds.len(), 2);
+                assert_string_inequality_predicate(&junction.preds[0], "part", "a");
+                assert_string_inequality_predicate(&junction.preds[1], "part", "c");
+            }
+            other => panic!("Expected AND junction, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_empty_in_list_rewrites_to_boolean_constant() {
+        let expr = col("part").in_list(Vec::<Expr>::new(), false);
+        assert_eq!(
+            to_delta_predicate(&expr).unwrap(),
+            Predicate::BooleanExpression(Expression::Literal(Scalar::Boolean(false)))
+        );
+
+        let negated = col("part").in_list(Vec::<Expr>::new(), true);
+        assert_eq!(
+            to_delta_predicate(&negated).unwrap(),
+            Predicate::BooleanExpression(Expression::Literal(Scalar::Boolean(true)))
+        );
+    }
+
+    #[test]
+    fn test_normalize_delta_predicate_expr_leaves_non_literal_in_list_unchanged() {
+        let expr = col("part").in_list(vec![lit("a"), col("other")], false);
+
+        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
+    }
+
+    #[test]
+    fn test_normalize_delta_predicate_expr_leaves_not_in_list_with_null_unchanged() {
+        let expr = col("part").in_list(vec![lit("a"), lit(ScalarValue::Utf8(None))], true);
+
+        assert_eq!(normalize_delta_predicate_expr(&expr).unwrap(), expr);
     }
 
     #[test]
