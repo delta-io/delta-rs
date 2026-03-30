@@ -13,7 +13,8 @@ jobs:
     name: Validate git tag
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v5
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: compare git tag with cargo metadata
         run: |
           PUSHED_TAG=${GITHUB_REF##*/}
@@ -32,14 +33,11 @@ jobs:
         target: [x86_64-apple-darwin, aarch64-apple-darwin]
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@v1
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -52,18 +50,16 @@ jobs:
     name: PyPI release on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
-      - uses: actions/setup-python@v4
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.10'
 
       - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@v1
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -76,14 +72,11 @@ jobs:
     name: PyPI release on Linux (x86_64-manylinux-2_17)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Publish manylinux to pypi x86_64 (without sdist)
-        uses: messense/maturin-action@v1
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -98,14 +91,11 @@ jobs:
     name: PyPI release on Linux (aarch64-manylinux-2_28)
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Publish manylinux to pypi aarch64 (without sdist)
-        uses: messense/maturin-action@v1
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -120,14 +110,11 @@ jobs:
     name: PyPI release on Linux (x86_64-musl)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          cache-targets: false
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Publish musl to pypi x86_64 (with sdist)
-        uses: messense/maturin-action@v1
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -150,7 +137,8 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - name: Trigger the docs release event
-        uses: peter-evans/repository-dispatch@v2
+        # <https://github.com/peter-evans/repository-dispatch/releases/tag/v4.0.1>
+        uses: peter-evans/repository-dispatch@28959ce8df70de7be546dd1250a005dd32156697
         with:
           event-type: release-docs
           client-payload: >
