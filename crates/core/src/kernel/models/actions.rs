@@ -861,18 +861,18 @@ pub struct Add {
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
-    /// that should be added to the table. The path is a URI as specified by
+    /// that should be removed from the table. The path is a URI as specified by
     /// [RFC 2396 URI Generic Syntax], which needs to be decoded to get the data file path.
     ///
     /// [RFC 2396 URI Generic Syntax]: https://www.ietf.org/rfc/rfc2396.txt
     #[serde(with = "serde_path")]
     pub path: String,
 
-    /// When `false` the logical file must already be present in the table or the records
-    /// in the added file must be contained in one or more remove actions in the same version.
+    /// When `false` the records in the removed file must be contained
+    /// in one or more add file actions in the same version
     pub data_change: bool,
 
-    /// The time this logical file was created, as milliseconds since the epoch.
+    /// The time the deletion occurred, represented as milliseconds since the epoch
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_timestamp: Option<i64>,
 
@@ -892,7 +892,7 @@ pub struct Remove {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 
-    /// Information about deletion vector (DV) associated with this add action
+    /// Information about deletion vector (DV) associated with this remove action
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_vector: Option<DeletionVectorDescriptor>,
 
