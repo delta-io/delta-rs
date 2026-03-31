@@ -251,7 +251,10 @@ Here’s the output of the command:
  'numBatches': 1,
  'totalConsideredFiles': 100,
  'totalFilesSkipped': 0,
- 'preserveInsertionOrder': True}
+ 'plannerStrategy': 'preserveLocality',
+ 'preservedStableOrder': True,
+ 'preserveInsertionOrder': True,
+ 'maxBinSpanFiles': 20}
 ```
 
 The optimize operation has added 5 new files and marked 100 existing files for removal
@@ -368,7 +371,10 @@ To optimize a single partition, you can pass in a `partition_filters` argument s
  'numBatches': 1,
  'totalConsideredFiles': 21,
  'totalFilesSkipped': 0,
- 'preserveInsertionOrder': True}
+ 'plannerStrategy': 'preserveLocality',
+ 'preservedStableOrder': True,
+ 'preserveInsertionOrder': True,
+ 'maxBinSpanFiles': 21}
 ```
 
 This optimize operation tombstones 21 small data files and adds one file with all the existing
