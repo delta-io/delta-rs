@@ -42,6 +42,7 @@ use serde_json::Deserializer;
 use url::Url;
 
 use super::{Action, CommitInfo, Metadata, Protocol};
+use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
@@ -570,11 +571,6 @@ pub struct EagerSnapshot {
     files: Vec<RecordBatch>,
 }
 
-#[derive(::serde::Deserialize)]
-struct LastCheckpointVersionHint {
-    version: Version,
-}
-
 /// Read `_last_checkpoint` and return the hinted version when present.
 ///
 /// Missing, empty, or invalid hint files return `Ok(None)` so callers can fall back to listing.
@@ -588,10 +584,7 @@ async fn read_last_checkpoint_version(
             .join("_last_checkpoint")
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
         match storage.read_files(vec![(checkpoint_path, None)])?.next() {
-            Some(Ok(data)) => Ok(serde_json::from_slice::<LastCheckpointVersionHint>(&data)
-                .inspect_err(|e| tracing::warn!("invalid _last_checkpoint JSON: {e}"))
-                .ok()
-                .map(|hint| hint.version)),
+            Some(Ok(data)) => Ok(parse_last_checkpoint_hint(&data).map(|hint| hint.version)),
             Some(Err(delta_kernel::Error::FileNotFound(_))) => Ok(None),
             Some(Err(err)) => Err(err.into()),
             None => {
