@@ -15,10 +15,10 @@ from deltalake import DeltaTable
 dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 dt.version()
 3
-dt.files()
-['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
- 'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
- 'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+dt.file_uris()
+['s3://bucket/table/part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
+ 's3://bucket/table/part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
+ 's3://bucket/table/part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 ```
 
 See the [user guide](https://delta-io.github.io/delta-rs/usage/installation/) for more examples.
@@ -35,7 +35,7 @@ poetry add deltalake
 ```
 
 NOTE: official binary wheels are linked against openssl statically for remote
-objection store communication. Please file Github issue to request for critical
+object store communication. Please file a Github issue to request a critical
 openssl upgrade.
 
 ## Tracing and Observability
@@ -72,14 +72,15 @@ unreleased features. Or maybe you want to tweak the optimization of the Rust cod
 
 To compile the package, you will need the Rust compiler and [maturin](https://github.com/PyO3/maturin):
 
-````sh
+```sh
 curl https://sh.rustup.rs -sSf | sh -s
+```
 
 Then you can build wheels for your own platform like so:
 
 ```sh
 uvx maturin build --release --out wheels
-````
+```
 
 Note:
 

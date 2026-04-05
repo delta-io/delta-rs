@@ -1,4 +1,5 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
+use std::io::Read;
 use std::sync::{Arc, LazyLock};
 
 use dashmap::DashMap;
@@ -7,6 +8,7 @@ use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
 use url::Url;
 
+use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
 pub use retry_ext::ObjectStoreRetryExt;
@@ -40,7 +42,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 #[derive(Clone)]
 pub struct DefaultObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
+    object_stores: DashMap<Url, Arc<dyn ObjectStore>>,
 }
 
 impl Default for DefaultObjectStoreRegistry {
@@ -51,7 +53,7 @@ impl Default for DefaultObjectStoreRegistry {
 
 impl DefaultObjectStoreRegistry {
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        let object_stores: DashMap<Url, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
     }
 }
@@ -77,12 +79,12 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        self.object_stores.insert(url.to_string(), store)
+        self.object_stores.insert(normalize_table_url(url), store)
     }
 
     fn get_store(&self, url: &Url) -> DeltaResult<Arc<dyn ObjectStore>> {
         self.object_stores
-            .get(&url.to_string())
+            .get(&normalize_table_url(url))
             .map(|o| Arc::clone(o.value()))
             .ok_or_else(|| {
                 DeltaTableError::generic(format!("No suitable object store found for '{url}'."))
@@ -94,6 +96,32 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 pub struct LimitConfig {
     #[delta(alias = "concurrency_limit", env = "OBJECT_STORE_CONCURRENCY_LIMIT")]
     pub max_concurrency: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, DeltaConfig)]
+pub struct CertificateConfig {
+    /// Path to a PEM-encoded root certificate file for TLS connections.
+    #[delta(env = "SSL_CERT_FILE")]
+    pub certificate_path: Option<String>,
+}
+
+/// Read a PEM certificate file and build [`object_store::ClientOptions`] with it.
+pub fn client_options_from_certificate(path: &str) -> DeltaResult<object_store::ClientOptions> {
+    let mut buf = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| {
+            DeltaTableError::Generic(format!("Failed to open certificate file '{path}': {e}"))
+        })?
+        .read_to_end(&mut buf)
+        .map_err(|e| {
+            DeltaTableError::Generic(format!("Failed to read certificate file '{path}': {e}"))
+        })?;
+    let cert = object_store::Certificate::from_pem(&buf).map_err(|e| {
+        DeltaTableError::Generic(format!(
+            "Failed to parse PEM certificate from '{path}': {e}"
+        ))
+    })?;
+    Ok(object_store::ClientOptions::new().with_root_certificate(cert))
 }
 
 #[cfg(test)]
@@ -138,8 +166,43 @@ mod tests {
         // try get non-existent key
         let url = Url::parse("not-registered://host").unwrap();
         let err = registry.get_store(&url).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("No suitable object store found for 'not-registered://host'."));
+        assert!(
+            err.to_string()
+                .contains("No suitable object store found for 'not-registered://host'.")
+        );
+    }
+
+    #[test]
+    fn test_certificate_config_default() {
+        let config = CertificateConfig::default();
+        assert!(config.certificate_path.is_none());
+    }
+
+    #[test]
+    fn test_certificate_config_parse_key() {
+        let mut config = CertificateConfig::default();
+        config
+            .try_update_key("certificate_path", "/some/path.pem")
+            .unwrap();
+        assert_eq!(config.certificate_path, Some("/some/path.pem".to_string()));
+    }
+
+    #[test]
+    fn test_client_options_from_certificate_nonexistent_path() {
+        let result = client_options_from_certificate("/nonexistent/path/cert.pem");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to open certificate file"));
+    }
+
+    #[rstest]
+    fn test_certificate_config_env() {
+        let _env = with_env(vec![("SSL_CERT_FILE", "/env/path.pem")]);
+
+        let mut config = CertificateConfig::default();
+        assert!(config.certificate_path.is_none());
+
+        config.load_from_environment().unwrap();
+        assert_eq!(config.certificate_path, Some("/env/path.pem".to_string()));
     }
 }

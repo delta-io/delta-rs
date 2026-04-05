@@ -1,4 +1,8 @@
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use delta_kernel::{
+    table_configuration::TableConfiguration, table_properties::DataSkippingNumIndexedCols,
+};
+
+use crate::table::config::TablePropertiesExt as _;
 
 /// Configuration for the writer on how to collect stats
 #[derive(Clone)]
@@ -18,6 +22,17 @@ impl WriterStatsConfig {
         Self {
             num_indexed_cols,
             stats_columns,
+        }
+    }
+
+    pub fn from_config(config: &TableConfiguration) -> Self {
+        Self {
+            num_indexed_cols: config.table_properties().num_indexed_cols(),
+            stats_columns: config
+                .table_properties()
+                .data_skipping_stats_columns
+                .as_ref()
+                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
         }
     }
 }

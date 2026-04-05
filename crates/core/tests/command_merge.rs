@@ -5,20 +5,20 @@ use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use datafusion::common::Column;
 use datafusion::dataframe::DataFrame;
-use datafusion::logical_expr::{col, lit, Expr};
+use datafusion::logical_expr::{Expr, col, lit};
 use datafusion::prelude::SessionContext;
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
 use deltalake_core::operations::merge::MergeMetrics;
 use deltalake_core::protocol::SaveMode;
-use deltalake_core::{open_table, DeltaOps, DeltaResult, DeltaTable, DeltaTableError};
+use deltalake_core::{DeltaResult, DeltaTable, DeltaTableError, open_table};
 use std::sync::Arc;
 use url::Url;
 
 async fn create_table(table_uri: &str, partition: Option<Vec<&str>>) -> DeltaTable {
     let table_schema = get_delta_schema();
     let table_url = url::Url::from_directory_path(table_uri).unwrap();
-    let ops = DeltaOps::try_from_uri(table_url).await.unwrap();
+    let ops = DeltaTable::try_from_url(table_url).await.unwrap();
     let table = ops
         .create()
         .with_columns(table_schema.fields().cloned())
@@ -75,7 +75,7 @@ async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable 
     )
     .unwrap();
     // write some data
-    DeltaOps(table)
+    table
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Append)
         .await
@@ -119,7 +119,7 @@ async fn merge(
     df: DataFrame,
     predicate: Expr,
 ) -> DeltaResult<(DeltaTable, MergeMetrics)> {
-    DeltaOps(table)
+    table
         .merge(df, predicate)
         .with_source_alias("source")
         .with_target_alias("target")

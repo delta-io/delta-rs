@@ -197,7 +197,7 @@ async fn run_merge_with_params(
 
 async fn run_merge_case(case: &MergeTestCase, parquet_dir: &Path) -> anyhow::Result<()> {
     let tmp_dir = tempfile::tempdir()?;
-    let (source, table) = prepare_source_and_table(&case.params, &tmp_dir, &parquet_dir).await?;
+    let (source, table) = prepare_source_and_table(&case.params, &tmp_dir, parquet_dir).await?;
 
     let start = Instant::now();
     let (_table, metrics) = case.execute(source, table).await?;

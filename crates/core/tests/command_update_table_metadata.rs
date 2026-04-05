@@ -1,8 +1,7 @@
-use deltalake_core::kernel::transaction::CommitProperties;
+use deltalake_core::DeltaTable;
 use deltalake_core::kernel::StructType;
-
+use deltalake_core::kernel::transaction::CommitProperties;
 use deltalake_core::operations::update_table_metadata::TableMetadataUpdate;
-use deltalake_core::operations::DeltaOps;
 use serde_json::json;
 
 /// Basic schema for testing
@@ -19,7 +18,7 @@ pub fn get_test_schema() -> StructType {
 
 #[tokio::test]
 async fn test_update_table_name_valid() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -30,7 +29,7 @@ async fn test_update_table_name_valid() {
         name: Some(name.to_string()),
         description: None,
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -43,7 +42,7 @@ async fn test_update_table_name_valid() {
 
 #[tokio::test]
 async fn test_update_table_description_valid() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -54,7 +53,7 @@ async fn test_update_table_description_valid() {
         name: None,
         description: Some(description.to_string()),
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -67,7 +66,7 @@ async fn test_update_table_description_valid() {
 
 #[tokio::test]
 async fn test_update_table_name_character_limit_valid() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -78,7 +77,7 @@ async fn test_update_table_name_character_limit_valid() {
         name: Some(name_255_chars.clone()),
         description: None,
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -91,7 +90,7 @@ async fn test_update_table_name_character_limit_valid() {
 
 #[tokio::test]
 async fn test_update_table_name_character_limit_exceeded() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -102,10 +101,7 @@ async fn test_update_table_name_character_limit_exceeded() {
         name: Some(name_256_chars),
         description: None,
     };
-    let result = DeltaOps(table)
-        .update_table_metadata()
-        .with_update(update)
-        .await;
+    let result = table.update_table_metadata().with_update(update).await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
@@ -114,7 +110,7 @@ async fn test_update_table_name_character_limit_exceeded() {
 
 #[tokio::test]
 async fn test_update_table_description_character_limit_valid() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -125,7 +121,7 @@ async fn test_update_table_description_character_limit_valid() {
         name: None,
         description: Some(description_4000_chars.clone()),
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -138,7 +134,7 @@ async fn test_update_table_description_character_limit_valid() {
 
 #[tokio::test]
 async fn test_update_table_description_character_limit_exceeded() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -149,10 +145,7 @@ async fn test_update_table_description_character_limit_exceeded() {
         name: None,
         description: Some(description_4001_chars),
     };
-    let result = DeltaOps(table)
-        .update_table_metadata()
-        .with_update(update)
-        .await;
+    let result = table.update_table_metadata().with_update(update).await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
@@ -161,7 +154,7 @@ async fn test_update_table_description_character_limit_exceeded() {
 
 #[tokio::test]
 async fn test_update_existing_table_name() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -172,7 +165,7 @@ async fn test_update_existing_table_name() {
         name: Some(initial_name.to_string()),
         description: None,
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -189,7 +182,7 @@ async fn test_update_existing_table_name() {
         name: Some(new_name.to_string()),
         description: None,
     };
-    let final_table = DeltaOps(updated_table)
+    let final_table = updated_table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -204,7 +197,7 @@ async fn test_update_existing_table_name() {
 
 #[tokio::test]
 async fn test_update_existing_table_description() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -215,7 +208,7 @@ async fn test_update_existing_table_description() {
         name: None,
         description: Some(initial_description.to_string()),
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -237,7 +230,7 @@ async fn test_update_existing_table_description() {
         name: None,
         description: Some(new_description.to_string()),
     };
-    let final_table = DeltaOps(updated_table)
+    let final_table = updated_table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -257,7 +250,7 @@ async fn test_update_existing_table_description() {
 
 #[tokio::test]
 async fn test_empty_table_name() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -267,10 +260,7 @@ async fn test_empty_table_name() {
         name: Some("".to_string()),
         description: None,
     };
-    let result = DeltaOps(table)
-        .update_table_metadata()
-        .with_update(update)
-        .await;
+    let result = table.update_table_metadata().with_update(update).await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
@@ -279,7 +269,7 @@ async fn test_empty_table_name() {
 
 #[tokio::test]
 async fn test_empty_table_description() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -289,7 +279,7 @@ async fn test_empty_table_description() {
         name: None,
         description: Some("".to_string()),
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .await
@@ -302,13 +292,13 @@ async fn test_empty_table_description() {
 
 #[tokio::test]
 async fn test_no_update_specified() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
         .unwrap();
 
-    let result = DeltaOps(table).update_table_metadata().await;
+    let result = table.update_table_metadata().await;
 
     assert!(result.is_err());
     let error_message = result.unwrap_err().to_string();
@@ -317,7 +307,7 @@ async fn test_no_update_specified() {
 
 #[tokio::test]
 async fn test_with_commit_properties() {
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -333,7 +323,7 @@ async fn test_with_commit_properties() {
         name: Some(name.to_string()),
         description: None,
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .with_commit_properties(commit_properties)
@@ -348,9 +338,9 @@ async fn test_with_commit_properties() {
 #[tokio::test]
 async fn test_with_custom_execute_handler() {
     use async_trait::async_trait;
+    use deltalake_core::DeltaResult;
     use deltalake_core::logstore::LogStoreRef;
     use deltalake_core::operations::CustomExecuteHandler;
-    use deltalake_core::DeltaResult;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -400,7 +390,7 @@ async fn test_with_custom_execute_handler() {
         }
     }
 
-    let table = DeltaOps::new_in_memory()
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(get_test_schema().fields().cloned())
         .await
@@ -416,7 +406,7 @@ async fn test_with_custom_execute_handler() {
         name: Some(name.to_string()),
         description: None,
     };
-    let updated_table = DeltaOps(table)
+    let updated_table = table
         .update_table_metadata()
         .with_update(update)
         .with_custom_execute_handler(handler.clone())
@@ -427,10 +417,14 @@ async fn test_with_custom_execute_handler() {
     assert_eq!(metadata.name().unwrap(), name);
     assert_eq!(updated_table.version(), Some(1));
 
-    assert!(handler
-        .pre_execute_called
-        .load(std::sync::atomic::Ordering::SeqCst));
-    assert!(handler
-        .post_execute_called
-        .load(std::sync::atomic::Ordering::SeqCst));
+    assert!(
+        handler
+            .pre_execute_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
+    assert!(
+        handler
+            .post_execute_called
+            .load(std::sync::atomic::Ordering::SeqCst)
+    );
 }

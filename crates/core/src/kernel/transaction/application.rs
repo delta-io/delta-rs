@@ -2,8 +2,10 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        checkpoints, ensure_table_uri, kernel::transaction::CommitProperties, kernel::Transaction,
-        protocol::SaveMode, writer::test_utils::get_record_batch, DeltaOps, DeltaTableBuilder,
+        DeltaTable, DeltaTableBuilder, checkpoints, ensure_table_uri,
+        kernel::{Transaction, transaction::CommitProperties},
+        protocol::SaveMode,
+        writer::test_utils::get_record_batch,
     };
 
     #[tokio::test]
@@ -18,7 +20,7 @@ mod tests {
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps::try_from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+        let table = DeltaTable::try_from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
             .await
             .unwrap()
             .write(vec![batch.clone()])
@@ -54,7 +56,7 @@ mod tests {
         // Test Txn Id can be read from existing table
 
         let mut table2 =
-            DeltaTableBuilder::from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+            DeltaTableBuilder::from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
                 .unwrap()
                 .load()
                 .await
@@ -77,7 +79,7 @@ mod tests {
 
         // Write new data to the table and check that `update` functions work
 
-        let table = DeltaOps::from(table)
+        let table = table
             .write(vec![get_record_batch(None, false)])
             .with_commit_properties(
                 CommitProperties::default()
@@ -122,7 +124,7 @@ mod tests {
         // Create a checkpoint and then load
         checkpoints::create_checkpoint(&table, None).await.unwrap();
         let table3 =
-            DeltaTableBuilder::from_uri(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
+            DeltaTableBuilder::from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
                 .unwrap()
                 .load()
                 .await

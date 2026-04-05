@@ -5,8 +5,8 @@
 use delta_kernel::engine::arrow_expression::ArrowEvaluationHandler;
 use std::sync::{Arc, LazyLock};
 use tokio::task::JoinHandle;
-use tracing::dispatcher;
 use tracing::Span;
+use tracing::dispatcher;
 
 pub mod arrow;
 pub mod error;
@@ -17,6 +17,7 @@ mod snapshot;
 pub mod transaction;
 
 pub use arrow::engine_ext::StructDataExt;
+pub use delta_kernel::Version;
 pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;

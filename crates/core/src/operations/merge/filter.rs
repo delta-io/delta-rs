@@ -8,7 +8,7 @@ use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{lit, Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator};
+use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
 use datafusion::physical_plan::ExecutionPlan;
 use either::{Left, Right};
 use futures::TryStreamExt as _;
@@ -30,7 +30,7 @@ impl ReferenceTableCheck {
 }
 
 fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
-    let res = match expr {
+    match expr {
         Expr::Alias(alias) => references_table(&alias.expr, table),
         Expr::Column(col) => col
             .relation
@@ -56,8 +56,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
         Expr::IsNull(inner) => references_table(inner, table),
         Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
-    };
-    res
+    }
 }
 
 fn construct_placeholder(
@@ -71,7 +70,7 @@ fn construct_placeholder(
         let placeholder_name = format!("{column_name}_{}", placeholders.len());
         let placeholder = Expr::Placeholder(Placeholder {
             id: placeholder_name.clone(),
-            data_type: None,
+            field: None,
         });
 
         let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
@@ -99,12 +98,12 @@ fn construct_placeholder(
                 let name_min = format!("{column_name}_{}_min", placeholders.len());
                 let placeholder_min = Expr::Placeholder(Placeholder {
                     id: name_min.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let name_max = format!("{column_name}_{}_max", placeholders.len());
                 let placeholder_max = Expr::Placeholder(Placeholder {
                     id: name_max.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let (source_expr, target_expr) = if source_left {
                     (*binary.left, *binary.right)
@@ -303,7 +302,7 @@ pub(crate) fn generalize_filter(
 
                     let placeholder = Expr::Placeholder(Placeholder {
                         id: placeholder_name.clone(),
-                        data_type: None,
+                        field: None,
                     });
 
                     placeholders.push(PredicatePlaceholder {

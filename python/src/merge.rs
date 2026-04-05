@@ -2,11 +2,12 @@ use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::MemTable;
 use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
-use deltalake::datafusion::prelude::SessionContext;
+use deltalake::delta_datafusion::create_session;
+use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
-use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::CustomExecuteHandler;
+use deltalake::operations::merge::MergeBuilder;
 use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
 use parking_lot::RwLock;
 use pyo3::prelude::*;
@@ -18,10 +19,10 @@ use std::sync::Arc;
 use crate::datafusion::LazyTableProvider;
 use crate::error::PythonError;
 use crate::utils::rt;
-use crate::writer::{maybe_lazy_cast_reader, ArrowStreamBatchGenerator};
+use crate::writer::{ArrowStreamBatchGenerator, maybe_lazy_cast_reader};
 use crate::{
-    maybe_create_commit_properties, set_writer_properties, PyCommitProperties,
-    PyPostCommitHookProperties, PyWriterProperties,
+    PyCommitProperties, PyPostCommitHookProperties, PyWriterProperties,
+    maybe_create_commit_properties, set_writer_properties,
 };
 
 #[pyclass(module = "deltalake._internal")]
@@ -49,12 +50,14 @@ impl PyMergeBuilder {
         merge_schema: bool,
         safe_cast: bool,
         streamed_exec: bool,
+        max_spill_size: Option<usize>,
+        max_temp_directory_size: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
         custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
-        let ctx = SessionContext::new();
+        let ctx = create_session().into_inner();
 
         let source = source
             .into_reader()
@@ -82,6 +85,12 @@ impl PyMergeBuilder {
         let mut cmd = MergeBuilder::new(log_store, Some(snapshot), predicate, source_df)
             .with_safe_cast(safe_cast)
             .with_streaming(streamed_exec);
+
+        if max_spill_size.is_some() || max_temp_directory_size.is_some() {
+            let session =
+                create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
+            cmd = cmd.with_session_state(Arc::new(session));
+        }
 
         if let Some(src_alias) = &source_alias {
             cmd = cmd.with_source_alias(src_alias);

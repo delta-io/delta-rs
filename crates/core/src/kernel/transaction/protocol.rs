@@ -1,73 +1,77 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
 use crate::kernel::{
-    contains_timestampntz, Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema,
+    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 
-static READER_V2: LazyLock<HashSet<ReaderFeature>> =
-    LazyLock::new(|| HashSet::from_iter([ReaderFeature::ColumnMapping]));
+use tracing::log::*;
+
+static READER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
+static READER_V3: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::DeletionVectors]));
 #[cfg(feature = "datafusion")]
-static WRITER_V2: LazyLock<HashSet<WriterFeature>> =
-    LazyLock::new(|| HashSet::from_iter([WriterFeature::AppendOnly, WriterFeature::Invariants]));
+static WRITER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
 // Invariants cannot work in the default builds where datafusion is not present currently, this
 // feature configuration ensures that the writer doesn't pretend otherwise
 #[cfg(not(feature = "datafusion"))]
-static WRITER_V2: LazyLock<HashSet<WriterFeature>> =
-    LazyLock::new(|| HashSet::from_iter([WriterFeature::AppendOnly]));
-static WRITER_V3: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V2: LazyLock<HashSet<TableFeature>> =
+    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly]));
+static WRITER_V3: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
     ])
 });
-static WRITER_V4: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V4: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
     ])
 });
-static WRITER_V5: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V5: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
-        WriterFeature::ColumnMapping,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
+        TableFeature::ColumnMapping,
     ])
 });
-static WRITER_V6: LazyLock<HashSet<WriterFeature>> = LazyLock::new(|| {
+static WRITER_V6: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
     HashSet::from_iter([
-        WriterFeature::AppendOnly,
-        WriterFeature::Invariants,
-        WriterFeature::CheckConstraints,
-        WriterFeature::ChangeDataFeed,
-        WriterFeature::GeneratedColumns,
-        WriterFeature::ColumnMapping,
-        WriterFeature::IdentityColumns,
+        TableFeature::AppendOnly,
+        TableFeature::Invariants,
+        TableFeature::CheckConstraints,
+        TableFeature::ChangeDataFeed,
+        TableFeature::GeneratedColumns,
+        TableFeature::ColumnMapping,
+        TableFeature::IdentityColumns,
     ])
 });
 
 pub struct ProtocolChecker {
-    reader_features: HashSet<ReaderFeature>,
-    writer_features: HashSet<WriterFeature>,
+    reader_features: HashSet<TableFeature>,
+    writer_features: HashSet<TableFeature>,
 }
 
 impl ProtocolChecker {
     /// Create a new protocol checker.
     pub fn new(
-        reader_features: HashSet<ReaderFeature>,
-        writer_features: HashSet<WriterFeature>,
+        reader_features: HashSet<TableFeature>,
+        writer_features: HashSet<TableFeature>,
     ) -> Self {
         Self {
             reader_features,
@@ -97,24 +101,25 @@ impl ProtocolChecker {
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampntz");
         let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&[WriterFeature]> =
+        let required_features: Option<&[TableFeature]> =
             match snapshot.protocol().min_writer_version() {
                 0..=6 => None,
                 _ => snapshot.protocol().writer_features(),
             };
 
         if let Some(table_features) = required_features {
-            if !table_features.contains(&WriterFeature::TimestampWithoutTimezone)
+            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
                 && contains_timestampntz
             {
-                return Err(TransactionError::WriterFeaturesRequired(
-                    WriterFeature::TimestampWithoutTimezone,
+                return Err(TransactionError::TableFeaturesRequired(
+                    TableFeature::TimestampWithoutTimezone,
                 ));
             }
         } else if contains_timestampntz {
-            return Err(TransactionError::WriterFeaturesRequired(
-                WriterFeature::TimestampWithoutTimezone,
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::TimestampWithoutTimezone,
             ));
         }
         Ok(())
@@ -126,16 +131,23 @@ impl ProtocolChecker {
     }
 
     pub fn can_read_from_protocol(&self, protocol: &Protocol) -> Result<(), TransactionError> {
-        let required_features: Option<HashSet<ReaderFeature>> = match protocol.min_reader_version()
-        {
+        trace!(
+            "validating that min reader version {} can be read",
+            protocol.min_reader_version()
+        );
+
+        let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
+            3 => Some(READER_V3.clone()),
             _ => protocol.reader_features_set(),
         };
+        trace!("my reader features: {:?}", self.reader_features);
+        trace!("desired reader features: {required_features:?}");
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.reader_features).peekable();
             if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedReaderFeatures(
+                return Err(TransactionError::UnsupportedTableFeatures(
                     diff.cloned().collect(),
                 ));
             }
@@ -149,7 +161,7 @@ impl ProtocolChecker {
         self.can_read_from(snapshot)?;
         let min_writer_version = snapshot.protocol().min_writer_version();
 
-        let required_features: Option<HashSet<WriterFeature>> = match min_writer_version {
+        let required_features: Option<HashSet<TableFeature>> = match min_writer_version {
             0 | 1 => None,
             2 => Some(WRITER_V2.clone()),
             3 => Some(WRITER_V3.clone()),
@@ -159,10 +171,13 @@ impl ProtocolChecker {
             _ => snapshot.protocol().writer_features_set(),
         };
 
+        trace!("my writer features: {:?}", self.writer_features);
+        trace!("required writer features: {required_features:?}");
+
         if let Some(features) = required_features {
             let mut diff = features.difference(&self.writer_features).peekable();
             if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedWriterFeatures(
+                return Err(TransactionError::UnsupportedTableFeatures(
                     diff.cloned().collect(),
                 ));
             }
@@ -187,10 +202,10 @@ impl ProtocolChecker {
             snapshot
                 .protocol()
                 .writer_features()
-                .ok_or(TransactionError::WriterFeaturesRequired(
-                    WriterFeature::AppendOnly,
+                .ok_or(TransactionError::TableFeaturesRequired(
+                    TableFeature::AppendOnly,
                 ))?
-                .contains(&WriterFeature::AppendOnly)
+                .contains(&TableFeature::AppendOnly)
                 && snapshot.config().append_only()
         };
         if append_only_enabled {
@@ -220,21 +235,23 @@ impl ProtocolChecker {
 /// resulting version support is determined by the supported table feature set.
 pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
-    reader_features.insert(ReaderFeature::TimestampWithoutTimezone);
-    // reader_features.insert(ReaderFeature::ColumnMapping);
+    reader_features.insert(TableFeature::TimestampWithoutTimezone);
+    reader_features.insert(TableFeature::DeletionVectors);
+    // reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
-    writer_features.insert(WriterFeature::AppendOnly);
-    writer_features.insert(WriterFeature::TimestampWithoutTimezone);
+    writer_features.insert(TableFeature::AppendOnly);
+    writer_features.insert(TableFeature::TimestampWithoutTimezone);
     #[cfg(feature = "datafusion")]
     {
-        writer_features.insert(WriterFeature::ChangeDataFeed);
-        writer_features.insert(WriterFeature::Invariants);
-        writer_features.insert(WriterFeature::CheckConstraints);
-        writer_features.insert(WriterFeature::GeneratedColumns);
+        writer_features.insert(TableFeature::ChangeDataFeed);
+        writer_features.insert(TableFeature::Invariants);
+        writer_features.insert(TableFeature::CheckConstraints);
+        writer_features.insert(TableFeature::GeneratedColumns);
     }
-    // writer_features.insert(WriterFeature::ColumnMapping);
-    // writer_features.insert(WriterFeature::IdentityColumns);
+    writer_features.insert(TableFeature::DeletionVectors);
+    // writer_features.insert(TableFeature::ColumnMapping);
+    // writer_features.insert(TableFeature::IdentityColumns);
 
     ProtocolChecker::new(reader_features, writer_features)
 });
@@ -244,12 +261,12 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
     use crate::kernel::{Action, Add, Metadata, PrimitiveType, ProtocolInner, Remove};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
-    use crate::TableProperty;
 
     fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
         ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
@@ -296,13 +313,19 @@ mod tests {
         ];
         let neutral_op = DeltaOperation::Update { predicate: None };
 
-        let create_actions = |writer: i32, append: &str, feat: Vec<WriterFeature>| {
+        let create_actions = |writer: i32, append: &str, feat: Vec<TableFeature>| {
             vec![
                 Action::Protocol(
                     ProtocolInner {
                         min_reader_version: 1,
                         min_writer_version: writer,
-                        writer_features: Some(feat.into_iter().collect()),
+                        writer_features: if writer == 7 {
+                            Some(feat.into_iter().collect())
+                        } else if feat.is_empty() {
+                            None
+                        } else {
+                            Some(feat.into_iter().collect())
+                        },
                         ..Default::default()
                     }
                     .as_kernel(),
@@ -320,80 +343,116 @@ mod tests {
         let actions = create_actions(1, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(2, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_err());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_err()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(2, "false", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
-        let actions = create_actions(7, "true", vec![WriterFeature::AppendOnly]);
+        let actions = create_actions(7, "true", vec![TableFeature::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_err());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_err()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
-        let actions = create_actions(7, "false", vec![WriterFeature::AppendOnly]);
+        let actions = create_actions(7, "false", vec![TableFeature::AppendOnly]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
 
         let actions = create_actions(7, "true", vec![]);
         let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
         let eager = snapshot.snapshot();
-        assert!(checker
-            .can_commit(eager, &append_actions, &append_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &change_actions, &change_op)
-            .is_ok());
-        assert!(checker
-            .can_commit(eager, &neutral_actions, &neutral_op)
-            .is_ok());
+        assert!(
+            checker
+                .can_commit(eager, &append_actions, &append_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &change_actions, &change_op)
+                .is_ok()
+        );
+        assert!(
+            checker
+                .can_commit(eager, &neutral_actions, &neutral_op)
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -587,7 +646,7 @@ mod tests {
         let actions = vec![
             Action::Protocol(
                 ProtocolInner::new(2, 4)
-                    .append_writer_features(vec![WriterFeature::ChangeDataFeed])
+                    .append_writer_features(vec![TableFeature::ChangeDataFeed])
                     .as_kernel(),
             ),
             metadata_action(None).into(),
@@ -606,7 +665,7 @@ mod tests {
         let actions = vec![
             Action::Protocol(
                 ProtocolInner::new(2, 4)
-                    .append_writer_features([WriterFeature::GeneratedColumns])
+                    .append_writer_features([TableFeature::GeneratedColumns])
                     .as_kernel(),
             ),
             metadata_action(None).into(),
@@ -621,7 +680,7 @@ mod tests {
         let checker_5 = ProtocolChecker::new(Default::default(), WRITER_V4.clone());
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
 
-        let table: crate::DeltaTable = crate::DeltaOps::new_in_memory()
+        let table = crate::DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",

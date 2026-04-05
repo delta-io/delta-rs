@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use deltalake_core::logstore::DeltaIOStorageBackend;
 use deltalake_core::logstore::{
-    config::str_is_truthy, default_logstore, logstore_factories, object_store_factories, LogStore,
-    LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    config::str_is_truthy, default_logstore, logstore_factories, object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
-use object_store::local::LocalFileSystem;
 use object_store::DynObjectStore;
+use object_store::local::LocalFileSystem;
 use url::Url;
 
 mod config;
@@ -63,16 +63,13 @@ impl ObjectStoreFactory for MountFactory {
                 Ok((store, Path::from("/")))
             }
             "file" => {
-                if allow_unsafe_rename {
-                    let store =
-                        Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef;
-                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
-                    Ok((store, prefix))
+                let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
+                let store = if allow_unsafe_rename {
+                    Arc::new(file::MountFileStorageBackend::try_new()?) as ObjectStoreRef
                 } else {
-                    let store = Arc::new(LocalFileSystem::new()) as ObjectStoreRef;
-                    let prefix = Path::from_filesystem_path(url.to_file_path().unwrap())?;
-                    Ok((store, prefix))
-                }
+                    Arc::new(LocalFileSystem::new()) as ObjectStoreRef
+                };
+                Ok((store, prefix))
             }
             _ => Err(DeltaTableError::InvalidTableLocation(url.clone().into())),
         }?;

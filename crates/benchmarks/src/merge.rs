@@ -9,7 +9,7 @@ use deltalake_core::datafusion::{
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::kernel::{StructField, StructType};
 use deltalake_core::operations::merge::{InsertBuilder, MergeBuilder, MergeMetrics, UpdateBuilder};
-use deltalake_core::{arrow, DeltaOps, DeltaResult, DeltaTable, DeltaTableError};
+use deltalake_core::{arrow, DeltaResult, DeltaTable, DeltaTableError};
 use tempfile::TempDir;
 use url::Url;
 
@@ -370,7 +370,7 @@ fn apply_update_projection(builder: UpdateBuilder) -> UpdateBuilder {
 }
 
 pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
-    DeltaOps(table)
+    table
         .merge(
             source,
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
@@ -382,7 +382,7 @@ pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder
 }
 
 pub fn merge_insert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
-    DeltaOps(table)
+    table
         .merge(
             source,
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
@@ -396,7 +396,7 @@ fn merge_multiple_insert(
     source: DataFrame,
     table: DeltaTable,
 ) -> Result<MergeBuilder, DeltaTableError> {
-    DeltaOps(table)
+    table
         .merge(
             source,
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
@@ -410,7 +410,7 @@ fn merge_multiple_insert(
 }
 
 pub fn merge_delete(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder, DeltaTableError> {
-    DeltaOps(table)
+    table
         .merge(
             source,
             "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
@@ -443,13 +443,13 @@ pub async fn prepare_source_and_table(
 
     let batches = parquet_df.collect().await?;
     let fields: Vec<StructField> = delta_schema.fields().cloned().collect();
-    let table = DeltaOps::try_from_uri(temp_table_url)
+    let table = DeltaTable::try_from_url(temp_table_url)
         .await?
         .create()
         .with_columns(fields)
         .await?;
 
-    let table = DeltaOps(table).write(batches).await?;
+    let table = table.write(batches).await?;
 
     let source = ctx
         .read_parquet(&parquet_path, ParquetReadOptions::default())

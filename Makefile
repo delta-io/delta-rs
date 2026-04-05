@@ -6,7 +6,7 @@
 
 .DEFAULT_GOAL := help
 DAT_VERSION := 0.0.3
-DEFAULT_FEATURES := "azure,datafusion,s3,gcs,glue,hdfs"
+DEFAULT_FEATURES := "integration_test,azure,datafusion,s3,gcs,glue,hdfs"
 
 ## begin dat related
 ####################
@@ -31,15 +31,23 @@ dat/v$(DAT_VERSION): dat  ## Download DAT test files into ./dat
 .PHONY: coverage
 coverage: setup-dat ## Run Rust tests with code-coverage
 	cargo llvm-cov --features $(DEFAULT_FEATURES) --workspace \
-		--codecov \
-		--output-path codecov.json \
-		-- --skip read_table_version_hdfs --skip test_read_tables_lakefs
+		--lcov \
+		--output-path target/lcov.info \
+		-- \
+		--skip read_table_version_hdfs \
+		--skip test_read_tables_hdfs \
+		--skip test_read_tables_lakefs
+	genhtml -o target/coverage \
+		-q \
+		-t "delta-rs coverage" \
+		--header-title "delta-rs coverage report" \
+		target/lcov.info
 
 .PHONY: check
 check: ## Run basic cargo formatting and other checks (no tests)
 	cargo fmt -- --check
-
-
+	cargo clippy --features azure,datafusion,s3,gcs,glue,hdfs --tests
+	$(MAKE) -C python $@
 
 .PHONY: clean
 clean: ## Remove temporary and downloaded artifacts

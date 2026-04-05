@@ -81,18 +81,18 @@ use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
-use object_store::path::Path;
 use object_store::Error as ObjectStoreError;
+use object_store::path::Path;
 use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction};
+use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction, Version};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
@@ -100,7 +100,7 @@ use crate::protocol::DeltaOperation;
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::{crate_version, DeltaResult};
+use crate::{DeltaResult, crate_version};
 
 pub use self::conflict_checker::CommitConflictError;
 pub use self::protocol::INSTANCE as PROTOCOL;
@@ -150,7 +150,7 @@ pub struct Metrics {
 pub enum TransactionError {
     /// Version already exists
     #[error("Tried committing existing table version: {0}")]
-    VersionAlreadyExists(i64),
+    VersionAlreadyExists(Version),
 
     /// Error returned when reading the delta log object failed.
     #[error("Error serializing commit log to json: {json_err}")]
@@ -181,21 +181,13 @@ pub enum TransactionError {
     )]
     DeltaTableAppendOnly,
 
-    /// Error returned when unsupported reader features are required
-    #[error("Unsupported reader features required: {0:?}")]
-    UnsupportedReaderFeatures(Vec<ReaderFeature>),
+    /// Error returned when unsupported table features are required
+    #[error("Unsupported table features required: {0:?}")]
+    UnsupportedTableFeatures(Vec<TableFeature>),
 
-    /// Error returned when unsupported writer features are required
-    #[error("Unsupported writer features required: {0:?}")]
-    UnsupportedWriterFeatures(Vec<WriterFeature>),
-
-    /// Error returned when writer features are required but not specified
-    #[error("Writer features must be specified for writerversion >= 7, please specify: {0:?}")]
-    WriterFeaturesRequired(WriterFeature),
-
-    /// Error returned when reader features are required but not specified
-    #[error("Reader features must be specified for reader version >= 3, please specify: {0:?}")]
-    ReaderFeaturesRequired(ReaderFeature),
+    /// Error returned when table features are required but not specified
+    #[error("Table features must be specified, please specify: {0:?}")]
+    TableFeaturesRequired(TableFeature),
 
     /// The transaction failed to commit due to an error in an implementation-specific layer.
     /// Currently used by DynamoDb-backed S3 log store when database operations fail.
@@ -308,13 +300,13 @@ impl CommitData {
         if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
-            app_metadata.insert(
-                "clientVersion".to_string(),
-                Value::String(format!("delta-rs.{}", crate_version())),
-            );
+            app_metadata
+                .entry("clientVersion".to_string())
+                .or_insert(Value::String(format!("delta-rs.{}", crate_version())));
             app_metadata.extend(commit_info.info);
             commit_info.info = app_metadata.clone();
-            actions.push(Action::CommitInfo(commit_info))
+            // commit info should be the first action to support in-commit timestamps.
+            actions.insert(0, Action::CommitInfo(commit_info));
         }
 
         for txn in &app_transactions {
@@ -618,25 +610,48 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
         Box::pin(async move {
             let commit_or_bytes = this.commit_or_bytes;
 
-            if this.table_data.is_none() {
-                debug!("committing initial table version 0");
-                this.log_store
-                    .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
-                    .await?;
-                return Ok(PostCommit {
-                    version: 0,
-                    data: this.data,
-                    create_checkpoint: false,
-                    cleanup_expired_logs: None,
-                    log_store: this.log_store,
-                    table_data: None,
-                    custom_execute_handler: this.post_commit_hook_handler,
-                    metrics: CommitMetrics { num_retries: 0 },
-                });
-            }
+            let mut attempt_number: usize = 1;
 
-            // unwrap() is safe here due to the above check
-            let mut read_snapshot = this.table_data.unwrap().eager_snapshot().clone();
+            // Handle the case where table doesn't exist yet (initial table creation)
+            let read_snapshot: EagerSnapshot = if let Some(table_data) = this.table_data {
+                table_data.eager_snapshot().clone()
+            } else {
+                debug!("committing initial table version 0");
+                match this
+                    .log_store
+                    .write_commit_entry(0, commit_or_bytes.clone(), this.operation_id)
+                    .await
+                {
+                    Ok(_) => {
+                        return Ok(PostCommit {
+                            version: 0,
+                            data: this.data,
+                            create_checkpoint: false,
+                            cleanup_expired_logs: None,
+                            log_store: this.log_store,
+                            table_data: None,
+                            custom_execute_handler: this.post_commit_hook_handler,
+                            metrics: CommitMetrics { num_retries: 0 },
+                        });
+                    }
+                    Err(TransactionError::VersionAlreadyExists(0)) => {
+                        // Table was created by another writer since the `this.table_data.is_none()` check.
+                        // Load the current table state and continue with the retry loop.
+                        debug!("version 0 already exists, loading table state for retry");
+                        attempt_number = 2;
+                        let latest_version: Version = this.log_store.get_latest_version(0).await?;
+                        EagerSnapshot::try_new(
+                            this.log_store.as_ref(),
+                            Default::default(),
+                            Some(latest_version),
+                        )
+                        .await?
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            };
+
+            let mut read_snapshot = read_snapshot;
 
             let commit_span = info_span!(
                 "commit_with_retries",
@@ -648,7 +663,6 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
             );
 
             async move {
-                let mut attempt_number = 1;
                 let total_retries = this.max_retries + 1;
                 while attempt_number <= total_retries {
                     Span::current().record("attempt", attempt_number);
@@ -722,10 +736,10 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         );
                         // Update snapshot to latest version after successful conflict check
                         read_snapshot
-                            .update(&this.log_store, Some(latest_version as u64))
+                            .update(&this.log_store, Some(latest_version))
                             .await?;
                     }
-                    let version: i64 = latest_version + 1;
+                    let version: Version = latest_version + 1;
                     Span::current().record("target_version", version);
 
                     match this
@@ -736,7 +750,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         Ok(()) => {
                             info!(
                                 version = version,
-                                num_retries = attempt_number as u64 - 1,
+                                num_retries = attempt_number - 1,
                                 "transaction committed successfully"
                             );
                             return Ok(PostCommit {
@@ -754,7 +768,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 table_data: Some(Box::new(read_snapshot)),
                                 custom_execute_handler: this.post_commit_hook_handler,
                                 metrics: CommitMetrics {
-                                    num_retries: attempt_number as u64 - 1,
+                                    num_retries: (attempt_number - 1) as u64,
                                 },
                             });
                         }
@@ -797,7 +811,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
 /// Represents items for the post commit hook
 pub struct PostCommit {
     /// The winning version number of the commit
-    pub version: i64,
+    pub version: Version,
     /// The data that was committed to the log store
     pub data: CommitData,
     create_checkpoint: bool,
@@ -815,9 +829,7 @@ impl PostCommit {
             let post_commit_operation_id = Uuid::new_v4();
             let mut snapshot = table.eager_snapshot().clone();
             if self.version != snapshot.version() {
-                snapshot
-                    .update(&self.log_store, Some(self.version as u64))
-                    .await?;
+                snapshot.update(&self.log_store, Some(self.version)).await?;
             }
 
             let mut state = DeltaTableState { snapshot };
@@ -907,17 +919,19 @@ impl PostCommit {
         &self,
         table_state: &DeltaTableState,
         log_store: &LogStoreRef,
-        version: i64,
+        version: Version,
         operation_id: Uuid,
     ) -> DeltaResult<bool> {
         if !table_state.load_config().require_files {
-            warn!("Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files.");
+            warn!(
+                "Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files."
+            );
             return Ok(false);
         }
 
-        let checkpoint_interval = table_state.config().checkpoint_interval().get() as i64;
-        if ((version + 1) % checkpoint_interval) == 0 {
-            create_checkpoint_for(version as u64, log_store.as_ref(), Some(operation_id)).await?;
+        let checkpoint_interval = table_state.config().checkpoint_interval().get();
+        if (version + 1).is_multiple_of(checkpoint_interval) {
+            create_checkpoint_for(version, log_store.as_ref(), Some(operation_id)).await?;
             Ok(true)
         } else {
             Ok(false)
@@ -931,7 +945,7 @@ pub struct FinalizedCommit {
     pub snapshot: DeltaTableState,
 
     /// Version of the finalized commit
-    pub version: i64,
+    pub version: Version,
 
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
@@ -952,7 +966,7 @@ impl FinalizedCommit {
         self.snapshot.clone()
     }
     /// Version of the finalized commit
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.version
     }
 }
@@ -986,17 +1000,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::logstore::{commit_uri_from_version, default_logstore::DefaultLogStore, LogStore};
-    use object_store::{memory::InMemory, ObjectStore, PutPayload};
+    use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
+    use object_store::{ObjectStore, PutPayload, memory::InMemory};
+    use serde_json::json;
     use url::Url;
-
-    #[test]
-    fn test_commit_uri_from_version() {
-        let version = commit_uri_from_version(0);
-        assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
-        let version = commit_uri_from_version(123);
-        assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
-    }
 
     #[tokio::test]
     async fn test_try_commit_transaction() {
@@ -1005,10 +1012,7 @@ mod tests {
         let log_store = DefaultLogStore::new(
             store.clone(),
             store.clone(),
-            crate::logstore::LogStoreConfig {
-                location: url,
-                options: Default::default(),
-            },
+            crate::logstore::LogStoreConfig::new(&url, StorageConfig::default()),
         );
         let version_path = Path::from("_delta_log/00000000000000000000.json");
         store.put(&version_path, PutPayload::new()).await.unwrap();
@@ -1069,5 +1073,30 @@ mod tests {
     fn test_commit_metrics() {
         let metrics = CommitMetrics { num_retries: 3 };
         assert_eq!(metrics.num_retries, 3);
+    }
+
+    #[test]
+    fn test_commit_data_client_version() {
+        let no_metadata = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        );
+        assert_eq!(
+            *no_metadata.app_metadata.get("clientVersion").unwrap(),
+            json!(format!("delta-rs.{}", crate_version()))
+        );
+
+        let with_metadata = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("clientVersion".to_owned(), json!("test-client.0.0.1"))]),
+            vec![],
+        );
+        assert_eq!(
+            *with_metadata.app_metadata.get("clientVersion").unwrap(),
+            json!("test-client.0.0.1")
+        );
     }
 }

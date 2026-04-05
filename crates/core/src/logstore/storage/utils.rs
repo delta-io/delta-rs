@@ -1,8 +1,9 @@
 //! Utility functions for working across Delta tables
 
+use crate::kernel::Version;
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
@@ -12,12 +13,22 @@ use crate::kernel::Add;
 /// ```rust
 /// # use deltalake_core::logstore::*;
 /// use object_store::path::Path;
-/// let uri = commit_uri_from_version(1);
+/// let uri = commit_uri_from_version(Some(1));
 /// assert_eq!(uri, Path::from("_delta_log/00000000000000000001.json"));
 /// ```
-pub fn commit_uri_from_version(version: i64) -> Path {
-    let version = format!("{version:020}.json");
-    super::DELTA_LOG_PATH.child(version.as_str())
+pub fn commit_uri_from_version(version: Option<Version>) -> Path {
+    if let Some(version) = version {
+        let version = format!("{version:020}.json");
+        super::DELTA_LOG_PATH.child(version.as_str())
+    } else {
+        /*
+         * Currently there are some situations where we're relying on negative versions for silly
+         * reasons like in load_with_datetime(). Handling the `None` case preserves this behavior
+         */
+        let version = -1;
+        let version = format!("{version:020}.json");
+        super::DELTA_LOG_PATH.child(version.as_str())
+    }
 }
 
 impl TryFrom<Add> for ObjectMeta {
@@ -53,6 +64,16 @@ impl TryFrom<&Add> for ObjectMeta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_commit_uri_from_version() {
+        let version = commit_uri_from_version(Some(0));
+        assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
+        let version = commit_uri_from_version(Some(123));
+        assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"));
+        let version = commit_uri_from_version(None);
+        assert_eq!(version, Path::from("_delta_log/-0000000000000000001.json"));
+    }
 
     #[test]
     fn test_object_meta_from_add_action() {

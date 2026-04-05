@@ -12,13 +12,13 @@ use deltalake::kernel::{
 };
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::types::PyCapsule;
-use pyo3::{prelude::*, IntoPyObjectExt};
-use pyo3_arrow::error::PyArrowResult;
-use pyo3_arrow::export::{Arro3DataType, Arro3Field, Arro3Schema};
-use pyo3_arrow::ffi::to_schema_pycapsule;
+use pyo3::{IntoPyObjectExt, prelude::*};
 use pyo3_arrow::PyDataType;
 use pyo3_arrow::PyField;
 use pyo3_arrow::PySchema as PyArrow3Schema;
+use pyo3_arrow::error::PyArrowResult;
+use pyo3_arrow::export::{Arro3DataType, Arro3Field, Arro3Schema};
+use pyo3_arrow::ffi::to_schema_pycapsule;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -740,16 +740,20 @@ pub fn schema_to_pyobject(
 
 /// A Delta Lake schema
 ///
-/// Create using a list of :class:`Field`:
+/// Create using a list of [deltalake.Field][deltalake.Field]:
 ///
-/// >>> Schema([Field("x", "integer"), Field("y", "string")])
+/// ```python
+/// Schema([Field("x", "integer"), Field("y", "string")])
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+/// ```
 ///
-/// Or create from a PyArrow schema:
+/// Or create from a [pyarrow.Schema][pyarrow.Schema]:
 ///
-/// >>> from arro3.core import DateType, Schema as ArrowSchema
-/// >>> Schema.from_pyarrow(ArrowSchema({"x": DateType.int32(), "y": DateType.string()}))
+/// ```py
+/// from arro3.core import DateType, Schema as ArrowSchema
+/// Schema.from_pyarrow(ArrowSchema({"x": DateType.int32(), "y": DateType.string()}))
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+/// ```
 #[pyclass(extends = StructType, name = "Schema", module = "deltalake._internal")]
 pub struct PySchema;
 

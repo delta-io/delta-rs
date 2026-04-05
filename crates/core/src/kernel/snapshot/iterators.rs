@@ -12,15 +12,17 @@ use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
+#[cfg(feature = "datafusion")]
+pub(crate) use self::scan_row::parse_stats_column_with_schema;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
-pub(crate) use self::scan_row::{scan_row_in_eval, ScanRowOutStream};
+pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
 pub use self::tombstones::TombstoneView;
 
 mod scan_row;
@@ -111,6 +113,16 @@ impl LogicalFileView {
         )
         .unwrap();
         percent_decode_str(raw).decode_utf8_lossy()
+    }
+
+    /// Returns the raw file path as stored in the log, without URL decoding.
+    pub(crate) fn path_raw(&self) -> &str {
+        get_string_value(
+            self.files
+                .column(*FIELD_INDICES.get(FIELD_NAME_PATH).unwrap()),
+            self.index,
+        )
+        .unwrap()
     }
 
     /// An object store [`Path`] to the file.
@@ -210,7 +222,7 @@ impl LogicalFileView {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NUM_RECORDS))
             .and_then(|col| col.as_primitive_opt::<Int64Type>())
-            .map(|a| a.value(self.index) as usize)
+            .and_then(|a| a.is_valid(self.index).then(|| a.value(self.index) as usize))
     }
 
     /// Returns null counts for all columns in this file as structured data.
@@ -270,8 +282,8 @@ impl LogicalFileView {
             .flatten()
     }
 
-    /// Converts this file view into an Add action for log operations.
-    pub(crate) fn add_action(&self) -> Add {
+    /// Internal API
+    pub(crate) fn to_add(&self) -> Add {
         Add {
             path: self.path().to_string(),
             partition_values: self.partition_values_map(),
@@ -285,6 +297,15 @@ impl LogicalFileView {
             default_row_commit_version: None,
             clustering_provider: None,
         }
+    }
+
+    /// Converts this file view into an Add action for log operations.
+    #[deprecated(
+        since = "0.31.0",
+        note = "Use Arrow arrays directly instead of converting to Add actions."
+    )]
+    pub fn add_action(&self) -> Add {
+        self.to_add()
     }
 
     /// Converts this file view into a Remove action for log operations.
@@ -489,7 +510,7 @@ mod tests {
         assert!(datetime.timestamp_millis() > 0);
 
         // Test action conversions
-        let add_action = view.add_action();
+        let add_action = view.to_add();
         assert_eq!(add_action.path, view.path());
         assert_eq!(add_action.size, view.size());
         assert!(add_action.data_change);

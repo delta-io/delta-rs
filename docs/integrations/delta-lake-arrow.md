@@ -105,4 +105,4 @@ Delta tables can easily be exposed as Arrow tables/datasets.
 
 Therefore any query engine that can read an Arrow table/dataset can also read a Delta table.
 
-Arrow datasets allow for more predicates to be pushed down to the query engine, so they can perform better performance than Arrow tables.
+Arrow datasets allow for more predicates to be pushed down to the query engine, so they can achieve better performance than Arrow tables.

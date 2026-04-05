@@ -166,10 +166,10 @@ pub(crate) fn find_metric_node(
     parent: &Arc<dyn ExecutionPlan>,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate the physical MetricCountExec Node after the planner converts the logical node
-    if let Some(metric) = parent.as_any().downcast_ref::<MetricObserverExec>() {
-        if metric.id().eq(id) {
-            return Some(parent.to_owned());
-        }
+    if let Some(metric) = parent.as_any().downcast_ref::<MetricObserverExec>()
+        && metric.id().eq(id)
+    {
+        return Some(parent.to_owned());
     }
 
     for child in &parent.children() {

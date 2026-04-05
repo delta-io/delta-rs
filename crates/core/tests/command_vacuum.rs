@@ -1,10 +1,9 @@
 use chrono::Duration;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
-use deltalake_core::operations::DeltaOps;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -72,7 +71,7 @@ async fn test_non_partitioned_table() {
 
     let res = {
         clock.tick(Duration::days(8));
-        let (_, metrics) = DeltaOps(table)
+        let (_, metrics) = table
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
             .await
@@ -124,7 +123,7 @@ async fn test_partitioned_table() {
 
     let res = {
         clock.tick(Duration::days(8));
-        let (_, metrics) = DeltaOps(table)
+        let (_, metrics) = table
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
             .await
@@ -189,7 +188,7 @@ async fn test_partitions_included() {
 
     let res = {
         clock.tick(Duration::days(8));
-        let (_, metrics) = DeltaOps(table)
+        let (_, metrics) = table
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
             .await
@@ -260,7 +259,7 @@ async fn test_non_managed_files() {
 
     let (table, res) = {
         clock.tick(Duration::hours(1));
-        DeltaOps(table)
+        table
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
             .await
@@ -275,7 +274,7 @@ async fn test_non_managed_files() {
     // Validate unmanaged files are deleted after the retention period
     let res = {
         clock.tick(Duration::hours(1));
-        let (_, metrics) = DeltaOps(table)
+        let (_, metrics) = table
             .vacuum()
             .with_clock(Arc::new(clock.clone()))
             .await

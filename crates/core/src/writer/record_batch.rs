@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use arrow_array::{new_null_array, Array, ArrayRef, RecordBatch, UInt32Array};
+use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array, new_null_array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
@@ -17,7 +17,7 @@ use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use tracing::log::*;
@@ -25,19 +25,20 @@ use uuid::Uuid;
 
 use super::stats::create_add;
 use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    ShareableBuffer,
+    ShareableBuffer, arrow_schema_without_partitions, next_data_path,
+    record_batch_without_partitions,
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use crate::DeltaTable;
 use crate::errors::DeltaTableError;
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
-use crate::kernel::MetadataExt as _;
-use crate::kernel::{scalars::ScalarExt, Action, Add, PartitionsExt};
+use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
+use crate::kernel::{MetadataExt as _, Version};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::DeltaTable;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -69,7 +70,7 @@ impl RecordBatchWriter {
     ) -> Result<Self, DeltaTableError> {
         let table_url = url::Url::parse(table_uri.as_ref())
             .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-        let delta_table = DeltaTableBuilder::from_uri(table_url)?
+        let delta_table = DeltaTableBuilder::from_url(table_url)?
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         // Initialize writer properties for the underlying arrow writer
@@ -83,6 +84,8 @@ impl RecordBatchWriter {
             |_| HashMap::new(),
             |snapshot| snapshot.metadata().configuration().clone(),
         );
+
+        let schema = normalize_for_delta(&schema);
 
         Ok(Self {
             storage: delta_table.object_store(),
@@ -262,6 +265,17 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         // on its flush_and_commit
         self.should_evolve = mode == WriteMode::MergeSchema;
 
+        let values = if values.schema() != self.arrow_schema_ref {
+            let normalized = normalize_for_delta(&values.schema());
+            if normalized != values.schema() {
+                crate::kernel::schema::cast::cast_record_batch(&values, normalized, true, false)?
+            } else {
+                values
+            }
+        } else {
+            values
+        };
+
         for result in self.divide_by_partition_values(&values)? {
             let maybe_evolved_schema = self
                 .write_partition(result.record_batch, &result.partition_values, mode)
@@ -301,7 +315,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
+    async fn flush_and_commit(
+        &mut self,
+        table: &mut DeltaTable,
+    ) -> Result<Version, DeltaTableError> {
         use crate::kernel::StructType;
         let mut adds: Vec<Action> = self.flush().await?.drain(..).map(Action::Add).collect();
 
@@ -530,11 +547,10 @@ mod tests {
     use arrow::json::ReaderBuilder;
     use arrow_schema::Schema as ArrowSchema;
     use delta_kernel::schema::StructType;
-    use std::path::Path;
 
+    use crate::DeltaResult;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
-    use crate::{DeltaOps, DeltaResult};
 
     use super::*;
 
@@ -613,7 +629,7 @@ mod tests {
         let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
-        let table = DeltaOps(table)
+        let table = table
             .create()
             .with_partition_columns(partition_cols.to_vec())
             .with_columns(delta_schema.fields().cloned())
@@ -674,7 +690,7 @@ mod tests {
         let delta_schema: StructType =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(vec!["modified"])
@@ -763,8 +779,10 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        let table_uri = table.table_uri();
-        let table_dir = Path::new(&table_uri);
+        let table_dir = table
+            .table_url()
+            .to_file_path()
+            .expect("Failed to turn table URL back into file path");
         for key in expected_keys {
             let partition_dir = table_dir.join(key);
             assert!(partition_dir.exists())
@@ -817,7 +835,7 @@ mod tests {
 
         use arrow_array::{Int32Array, RecordBatch, StringArray};
         use arrow_schema::{DataType, Field};
-        use futures::TryStreamExt;
+
         use itertools::Itertools;
 
         #[tokio::test]
@@ -1173,7 +1191,7 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(add_actions.len(), 1);
-            let expected_stats ="{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
+            let expected_stats = "{\"numRecords\":11,\"minValues\":{\"value\":1,\"id\":\"A\"},\"maxValues\":{\"id\":\"B\",\"value\":11},\"nullCount\":{\"id\":0,\"value\":0}}";
             assert_eq!(
                 expected_stats.parse::<serde_json::Value>().unwrap(),
                 add_actions

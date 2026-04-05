@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use deltalake_core::Path;
-use deltalake_core::{errors::DeltaTableError, DeltaOps};
+use deltalake_core::errors::DeltaTableError;
 use deltalake_test::utils::*;
 use futures::TryStreamExt as _;
 use serial_test::serial;
@@ -27,15 +27,13 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     let active = table.snapshot()?.log_data().num_files();
 
     // Validate a Dry run does not mutate the table log and identifies orphaned add actions
-    let op = DeltaOps::from(table);
-    let (table, metrics) = op.filesystem_check().with_dry_run(true).await?;
+    let (table, metrics) = table.filesystem_check().with_dry_run(true).await?;
     assert_eq!(version, table.snapshot()?.version());
     assert_eq!(active, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     // Validate a run updates the table version with proper remove actions
-    let op = DeltaOps::from(table);
-    let (table, metrics) = op.filesystem_check().await?;
+    let (table, metrics) = table.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
     assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
@@ -50,8 +48,7 @@ async fn test_filesystem_check(context: &IntegrationContext) -> TestResult {
     assert!(remove.data_change());
 
     // An additional run should return an empty list of orphaned actions
-    let op = DeltaOps::from(table);
-    let (table, metrics) = op.filesystem_check().await?;
+    let (table, metrics) = table.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
     assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert!(metrics.files_removed.is_empty());
@@ -82,8 +79,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
     let active = table.snapshot()?.log_data().num_files();
 
     // Validate a run updates the table version with proper remove actions
-    let op = DeltaOps::from(table);
-    let (table, metrics) = op.filesystem_check().await?;
+    let (table, metrics) = table.filesystem_check().await?;
     assert_eq!(version + 1, table.snapshot()?.version());
     assert_eq!(active - 1, table.snapshot()?.log_data().num_files());
     assert_eq!(vec![file.to_string()], metrics.files_removed);
@@ -118,8 +114,7 @@ async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
         .load()
         .await?;
 
-    let op = DeltaOps::from(table);
-    let res = op.filesystem_check().with_dry_run(false).await;
+    let res = table.filesystem_check().with_dry_run(false).await;
 
     // TODO check more specific error
     assert!(matches!(res, Err(DeltaTableError::Transaction { .. })));

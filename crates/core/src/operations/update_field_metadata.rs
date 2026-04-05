@@ -8,11 +8,11 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
+use crate::kernel::{EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 /// Update a field's metadata in a schema. If the key does not exists, the entry is inserted.
@@ -86,7 +86,8 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;

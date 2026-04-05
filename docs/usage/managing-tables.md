@@ -26,7 +26,8 @@ Use `DeltaTable.vacuum` to perform the vacuum operation. Note that to prevent ac
     ```
 === "Rust"
     ```rust
-    let mut table = open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
+    let mut table = open_table(delta_path).await?;
     let (table, vacuum_metrics) = DeltaOps(table).vacuum().with_dry_run(true).await?;
     println!("Files deleted: {:?}", vacuum_metrics.files_deleted);
 
@@ -52,6 +53,7 @@ See the section [Small file compaction](./optimize/small-file-compaction-with-op
 
 === "Rust"
     ```rust
-    let mut table = open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("./data/simple_table").unwrap();
+    let mut table = open_table(delta_path).await?;
     let (table, metrics) = DeltaOps(table).optimize().with_type(OptimizeType::Compact).await?;
     ```

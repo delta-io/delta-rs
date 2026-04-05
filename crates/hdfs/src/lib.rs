@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, LogStore, LogStoreFactory, StorageConfig,
+    LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
 };
-use deltalake_core::logstore::{object_store_factories, ObjectStoreFactory, ObjectStoreRef};
+use deltalake_core::logstore::{ObjectStoreFactory, ObjectStoreRef, object_store_factories};
 use deltalake_core::{DeltaResult, Path};
 use hdfs_native_object_store::HdfsObjectStoreBuilder;
 use url::Url;

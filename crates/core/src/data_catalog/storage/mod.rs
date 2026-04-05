@@ -13,7 +13,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
-use crate::logstore::{store_for, StorageConfig};
+use crate::logstore::{StorageConfig, store_for};
 use crate::open_table_with_storage_options;
 use crate::table::builder::ensure_table_uri;
 
@@ -117,12 +117,12 @@ impl SchemaProvider for ListingSchemaProvider {
         let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
             return Ok(None);
         };
-        let provider = open_table_with_storage_options(
+        let table = open_table_with_storage_options(
             ensure_table_uri(location)?,
             self.storage_options.raw.clone(),
         )
         .await?;
-        Ok(Some(Arc::new(provider) as Arc<dyn TableProvider>))
+        Ok(Some(table.table_provider().await?))
     }
 
     fn register_table(

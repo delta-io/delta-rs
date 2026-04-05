@@ -1,13 +1,51 @@
 mod factories;
 
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) mod datafusion;
+#[cfg(test)]
+pub(crate) mod object_store;
+
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
 use url::Url;
 
 pub use self::factories::*;
+#[cfg(test)]
+use crate::DeltaTable;
+#[cfg(test)]
+use crate::kernel::LogicalFileView;
+#[cfg(test)]
+use crate::logstore::LogStoreRef;
+#[cfg(test)]
+use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTableBuilder};
+#[cfg(test)]
+use futures::TryStreamExt;
 
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
+
+#[cfg(test)]
+pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
+    let url =
+        url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
+    DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
+
+/// Internal test helper function to return the raw paths from every file view in the snapshot.
+#[cfg(test)]
+pub(crate) async fn file_paths_from(
+    state: &DeltaTableState,
+    log_store: &LogStoreRef,
+) -> DeltaResult<Vec<String>> {
+    Ok(state
+        .snapshot()
+        .file_views(log_store, None)
+        .try_collect::<Vec<LogicalFileView>>()
+        .await?
+        .iter()
+        .map(|lfv| lfv.path().to_string())
+        .collect())
+}
 
 /// Reference tables from the test data folder
 pub enum TestTables {
@@ -71,7 +109,7 @@ impl TestTables {
                 self.as_path().to_string_lossy().into_owned(),
             )
         })?;
-        DeltaTableBuilder::from_uri(url).map(|b| b.with_allow_http(true))
+        DeltaTableBuilder::from_url(url).map(|b| b.with_allow_http(true))
     }
 }
 
@@ -96,7 +134,9 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
 
     // Set all the new environment variables
     for (key, value) in vars {
-        std::env::set_var(key, value);
+        unsafe {
+            std::env::set_var(key, value);
+        }
     }
 
     // Create a cleanup struct that will restore original values when dropped
@@ -106,8 +146,8 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
         fn drop(&mut self) {
             for (key, maybe_value) in self.0.iter() {
                 match maybe_value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
+                    Some(value) => unsafe { std::env::set_var(key, value) },
+                    None => unsafe { std::env::remove_var(key) },
                 }
             }
         }
@@ -148,6 +188,58 @@ macro_rules! assert_batches_sorted_eq {
 }
 
 pub use assert_batches_sorted_eq;
+
+/// Build a single add action fixture with default metadata values for tests.
+#[cfg(test)]
+pub(crate) fn make_test_add(
+    path: impl Into<String>,
+    partitions: &[(&str, &str)],
+    modification_time: i64,
+) -> crate::kernel::Add {
+    use crate::kernel::Add;
+
+    Add {
+        path: path.into(),
+        partition_values: partitions
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), Some((*v).to_string())))
+            .collect(),
+        size: 0,
+        modification_time,
+        data_change: true,
+        stats: None,
+        tags: None,
+        deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        clustering_provider: None,
+    }
+}
+
+/// Build add actions for a large partitioned fixture with alternating partition values.
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) fn multibatch_add_actions_for_partition(
+    action_count: usize,
+    partition_column: &str,
+    even_value: &str,
+    odd_value: &str,
+) -> Vec<crate::kernel::Action> {
+    use chrono::Utc;
+
+    use crate::kernel::Action;
+
+    let now_ms = Utc::now().timestamp_millis();
+    (0..action_count)
+        .map(|idx| {
+            let partition_value = if idx % 2 == 0 { even_value } else { odd_value };
+            Action::Add(make_test_add(
+                format!("{partition_column}={partition_value}/file-{idx:05}.parquet"),
+                &[(partition_column, partition_value)],
+                now_ms,
+            ))
+        })
+        .collect::<Vec<_>>()
+}
 
 #[cfg(test)]
 mod tests {

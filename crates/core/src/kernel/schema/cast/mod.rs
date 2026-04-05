@@ -2,11 +2,13 @@
 //!
 use arrow_array::cast::AsArray;
 use arrow_array::{
-    new_null_array, Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray,
-    OffsetSizeTrait, RecordBatch, RecordBatchOptions, StructArray,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, MapArray, OffsetSizeTrait, RecordBatch,
+    RecordBatchOptions, StructArray, new_null_array,
 };
-use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef as ArrowSchemaRef};
+use arrow_cast::{CastOptions, cast_with_options};
+use arrow_schema::{
+    ArrowError, DataType, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
+};
 use std::sync::Arc;
 
 mod merge_schema;
@@ -216,6 +218,106 @@ pub fn cast_record_batch(
     )?)
 }
 
+/// Normalizes an Arrow schema for Delta compatibility.
+///
+/// Delta protocol supports a subset of Arrow types. This function converts
+/// unsupported Arrow types to their Delta-compatible equivalents:
+///
+/// - `Date64` -> `Date32` (day precision)
+/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone)
+///
+/// Recursively normalizes nested types (Struct, List, Map, etc.).
+fn normalize_datatype(dt: &DataType) -> Option<DataType> {
+    match dt {
+        DataType::Date64 => Some(DataType::Date32),
+        DataType::Timestamp(TimeUnit::Second, tz)
+        | DataType::Timestamp(TimeUnit::Millisecond, tz)
+        | DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+        }
+        DataType::Struct(fields) => {
+            let mut changed = false;
+            let new_fields: Vec<FieldRef> = fields
+                .iter()
+                .map(|f| {
+                    if let Some(normalized) = normalize_field(f) {
+                        changed = true;
+                        normalized
+                    } else {
+                        Arc::clone(f)
+                    }
+                })
+                .collect();
+            changed.then(|| DataType::Struct(new_fields.into()))
+        }
+        DataType::List(inner) => normalize_field(inner).map(DataType::List),
+        DataType::FixedSizeList(inner, size) => {
+            normalize_field(inner).map(|normalized| DataType::FixedSizeList(normalized, *size))
+        }
+        DataType::Map(entries, sorted) => {
+            normalize_field(entries).map(|normalized| DataType::Map(normalized, *sorted))
+        }
+        _ => None,
+    }
+}
+
+fn normalize_field(field: &FieldRef) -> Option<FieldRef> {
+    normalize_datatype(field.data_type())
+        .map(|dt| Arc::new(field.as_ref().clone().with_data_type(dt)))
+}
+
+fn has_nanosecond_timestamp(dt: &DataType) -> bool {
+    match dt {
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => true,
+        DataType::Struct(fields) => fields
+            .iter()
+            .any(|f| has_nanosecond_timestamp(f.data_type())),
+        DataType::List(inner) | DataType::FixedSizeList(inner, _) => {
+            has_nanosecond_timestamp(inner.data_type())
+        }
+        DataType::Map(entries, _) => has_nanosecond_timestamp(entries.data_type()),
+        _ => false,
+    }
+}
+
+pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
+    let mut changed = false;
+    let new_fields: Vec<FieldRef> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            if let Some(nf) = normalize_field(f) {
+                changed = true;
+                nf
+            } else {
+                Arc::clone(f)
+            }
+        })
+        .collect();
+
+    if changed {
+        let nanosecond_truncated_fields: Vec<&str> = schema
+            .fields()
+            .iter()
+            .filter(|f| has_nanosecond_timestamp(f.data_type()))
+            .map(|f| f.name().as_str())
+            .collect();
+        if !nanosecond_truncated_fields.is_empty() {
+            tracing::warn!(
+                fields = ?nanosecond_truncated_fields,
+                "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
+            );
+        }
+
+        Arc::new(Schema::new_with_metadata(
+            new_fields,
+            schema.metadata().clone(),
+        ))
+    } else {
+        Arc::clone(schema)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -224,14 +326,16 @@ mod tests {
 
     use arrow::array::types::Int32Type;
     use arrow::array::{
-        new_empty_array, new_null_array, Array, ArrayData, ArrayRef, AsArray, Int32Array,
-        ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
+        Array, ArrayData, ArrayRef, AsArray, Int32Array, ListArray, PrimitiveArray, RecordBatch,
+        StringArray, StructArray, new_empty_array, new_null_array,
     };
     use arrow::buffer::{Buffer, NullBuffer};
     use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
     use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-    use delta_kernel::schema::MetadataValue;
+    use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
     use itertools::Itertools;
+
+    use super::normalize_for_delta;
 
     use super::merge_schema::{merge_arrow_schema, merge_delta_struct};
     use super::{cast_record_batch, is_cast_required};
@@ -264,21 +368,15 @@ mod tests {
     fn test_merge_delta_schema_with_meta() {
         let mut left_meta = HashMap::new();
         left_meta.insert("a".to_string(), "a1".to_string());
-        let left_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
-            "f",
-            DeltaDataType::STRING,
-            false,
-        )
-        .with_metadata(left_meta)])
+        let left_schema = DeltaStructType::try_new(vec![
+            DeltaStructField::new("f", DeltaDataType::STRING, false).with_metadata(left_meta),
+        ])
         .unwrap();
         let mut right_meta = HashMap::new();
         right_meta.insert("b".to_string(), "b2".to_string());
-        let right_schema = DeltaStructType::try_new(vec![DeltaStructField::new(
-            "f",
-            DeltaDataType::STRING,
-            true,
-        )
-        .with_metadata(right_meta)])
+        let right_schema = DeltaStructType::try_new(vec![
+            DeltaStructField::new("f", DeltaDataType::STRING, true).with_metadata(right_meta),
+        ])
         .unwrap();
 
         let result = merge_delta_struct(&left_schema, &right_schema).unwrap();
@@ -290,6 +388,71 @@ mod tests {
         expected_meta.insert("a".to_string(), MetadataValue::String("a1".to_string()));
         expected_meta.insert("b".to_string(), MetadataValue::String("b2".to_string()));
         assert_eq!(fields[0].metadata(), &expected_meta);
+    }
+
+    #[test]
+    fn test_merge_arrow_schema_preserves_table_field_metadata_when_batch_missing() {
+        let mut left_meta = HashMap::new();
+        left_meta.insert(
+            ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+            "id + value".to_string(),
+        );
+
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("computed", DataType::Int32, false).with_metadata(left_meta),
+        ]));
+
+        // Incoming batch/schema omits field metadata; table metadata must remain intact.
+        let right_schema = Arc::new(Schema::new(vec![Field::new(
+            "computed",
+            DataType::Int32,
+            false,
+        )]));
+
+        let merged = merge_arrow_schema(left_schema, right_schema, true).unwrap();
+        let computed = merged.field_with_name("computed").unwrap();
+        assert_eq!(
+            computed
+                .metadata()
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+                .map(|v| v.as_str()),
+            Some("id + value")
+        );
+    }
+
+    #[test]
+    fn test_merge_arrow_schema_ignores_batch_generation_expression_conflicts() {
+        let mut left_meta = HashMap::new();
+        left_meta.insert(
+            ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+            "id + value".to_string(),
+        );
+
+        let mut right_meta = HashMap::new();
+        right_meta.insert(
+            ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+            "id * 10".to_string(),
+        );
+
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("computed", DataType::Int32, false).with_metadata(left_meta),
+        ]));
+
+        // Batch metadata may include `delta.generationExpression`, but the table's
+        // generation expression is authoritative and should not be overridden.
+        let right_schema = Arc::new(Schema::new(vec![
+            Field::new("computed", DataType::Int32, false).with_metadata(right_meta),
+        ]));
+
+        let merged = merge_arrow_schema(left_schema, right_schema, true).unwrap();
+        let computed = merged.field_with_name("computed").unwrap();
+        assert_eq!(
+            computed
+                .metadata()
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+                .map(|v| v.as_str()),
+            Some("id + value")
+        );
     }
 
     #[test]
@@ -706,5 +869,94 @@ mod tests {
             map_column.values().deref().as_string::<i32>(),
             new_empty_array(&DataType::Utf8).deref().as_string()
         );
+    }
+
+    #[test]
+    fn test_normalize_for_delta_timestamp_to_us() {
+        use arrow_schema::TimeUnit;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "ts_ns",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("ts_sec", DataType::Timestamp(TimeUnit::Second, None), true),
+            Field::new(
+                "ts_ms",
+                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                true,
+            ),
+            Field::new("id", DataType::Int32, false),
+        ]));
+
+        let result = normalize_for_delta(&schema);
+
+        assert_eq!(
+            result.field(0).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(
+            result.field(1).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+        assert_eq!(
+            result.field(2).data_type(),
+            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        );
+        assert_eq!(result.field(3).data_type(), &DataType::Int32);
+    }
+
+    #[test]
+    fn test_normalize_for_delta_timestamp_us_unchanged() {
+        use arrow_schema::TimeUnit;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ts_utc",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        )]));
+
+        let result = normalize_for_delta(&schema);
+
+        assert!(Arc::ptr_eq(&result, &schema));
+    }
+
+    #[test]
+    fn test_normalize_for_delta_nested_struct_with_mixed_types() {
+        use arrow_schema::TimeUnit;
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "outer",
+            DataType::Struct(Fields::from(vec![
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                    true,
+                ),
+                Field::new(
+                    "dates",
+                    DataType::List(Arc::new(Field::new("item", DataType::Date64, true))),
+                    true,
+                ),
+            ])),
+            true,
+        )]));
+
+        let result = normalize_for_delta(&schema);
+
+        if let DataType::Struct(fields) = result.field(0).data_type() {
+            assert_eq!(
+                fields[0].data_type(),
+                &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            );
+            if let DataType::List(inner) = fields[1].data_type() {
+                assert_eq!(inner.data_type(), &DataType::Date32);
+            } else {
+                panic!("Expected List type for dates field");
+            }
+        } else {
+            panic!("Expected Struct type");
+        }
     }
 }

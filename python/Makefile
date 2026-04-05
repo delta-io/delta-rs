@@ -21,7 +21,7 @@ build-release: setup ## Build Python wheel for release (uses python-release prof
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs (default: PROFILE=dev, override with PROFILE=ci|python-release)
 	$(info --- Develop with Python binding with profile: $(PROFILE) ---)
-	uvx --from 'maturin[zig]' maturin develop --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --uv --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -35,7 +35,7 @@ install: build ## Install Python binding of delta-rs
 develop-pyspark:
 	uv sync --all-extras --group pyspark --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --uv --extras=pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
@@ -44,6 +44,9 @@ format: ## Format the code
 	$(info --- Python format ---)
 	uv run --no-sync ruff check . --fix
 	uv run --no-sync ruff format .
+
+.PHONY: check
+check: check-rust check-python ## Run all checks for formatting, etc.
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust

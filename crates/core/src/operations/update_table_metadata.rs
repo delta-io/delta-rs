@@ -6,11 +6,11 @@ use futures::future::BoxFuture;
 use validator::Validate;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
-use crate::DeltaTable;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Validate)]
@@ -104,7 +104,8 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;

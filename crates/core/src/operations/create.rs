@@ -5,22 +5,23 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use delta_kernel::schema::MetadataValue;
+use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use tracing::log::*;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference, PROTOCOL};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
-    new_metadata, Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField,
-    StructType,
+    Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
+use crate::table::normalize_table_url;
 use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
@@ -261,15 +262,15 @@ impl CreateBuilder {
 
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
-                ensure_table_uri(log_store.root_uri())?.as_str().to_string(),
+                normalize_table_url(log_store.root_url()),
                 DeltaTable::new(log_store, Default::default()),
             )
         } else {
             let storage_url =
                 ensure_table_uri(self.location.clone().ok_or(CreateError::MissingLocation)?)?;
             (
-                storage_url.as_str().to_string(),
-                DeltaTableBuilder::from_uri(storage_url)?
+                storage_url.clone(),
+                DeltaTableBuilder::from_url(storage_url)?
                     .with_storage_options(self.storage_options.clone().unwrap_or_default())
                     .build()?,
             )
@@ -365,9 +366,11 @@ impl std::future::IntoFuture for CreateBuilder {
                         table.load().await?;
                         let remove_actions = table
                             .snapshot()?
-                            .log_data()
-                            .into_iter()
-                            .map(|p| p.remove_action(true).into());
+                            .snapshot()
+                            .file_views(&table.log_store(), None)
+                            .map_ok(|p| p.remove_action(true).into())
+                            .try_collect::<Vec<_>>()
+                            .await?;
                         actions.extend(remove_actions);
                         Some(table.snapshot()?)
                     }
@@ -402,7 +405,6 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::DeltaOps;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
     use tempfile::TempDir;
@@ -411,7 +413,7 @@ mod tests {
     async fn test_create() {
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(SaveMode::Ignore)
@@ -433,7 +435,7 @@ mod tests {
         let table_url = url::Url::from_directory_path(table_path)
             .map_err(|_| DeltaTableError::InvalidTableLocation(relative_path.clone()))
             .unwrap();
-        let table = DeltaOps::try_from_uri(table_url)
+        let table = DeltaTable::try_from_url(table_url)
             .await
             .unwrap()
             .create()
@@ -567,7 +569,7 @@ mod tests {
         async fn test_create_or_replace_existing_table() {
             let batch = get_record_batch(None, false);
             let schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .write(vec![batch.clone()])
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
@@ -576,7 +578,7 @@ mod tests {
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
-            let mut table = DeltaOps(table)
+            let mut table = table
                 .create()
                 .with_columns(schema.fields().cloned())
                 .with_save_mode(SaveMode::Overwrite)
@@ -593,7 +595,7 @@ mod tests {
         async fn test_create_or_replace_existing_table_partitioned() {
             let batch = get_record_batch(None, false);
             let schema = get_delta_schema();
-            let table = DeltaOps::new_in_memory()
+            let table = DeltaTable::new_in_memory()
                 .write(vec![batch.clone()])
                 .with_save_mode(SaveMode::ErrorIfExists)
                 .await
@@ -602,7 +604,7 @@ mod tests {
             assert_eq!(state.version(), 0);
             assert_eq!(state.log_data().num_files(), 1);
 
-            let mut table = DeltaOps(table)
+            let mut table = table
                 .create()
                 .with_columns(schema.fields().cloned())
                 .with_save_mode(SaveMode::Overwrite)

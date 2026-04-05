@@ -20,6 +20,20 @@ if TYPE_CHECKING:
     from minio import Minio
 
 
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if os.environ.get("DELTALAKE_RUN_DATAFUSION_TESTS") == "1":
+        return
+
+    skip = pytest.mark.skip(
+        reason="DataFusion Python integration tests require matching datafusion wheels; disabled by default."
+    )
+    for item in items:
+        if "datafusion" in item.keywords:
+            item.add_marker(skip)
+
+
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
     spacing = 2
     start = time.monotonic()
@@ -37,9 +51,16 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
         sleep(spacing)
 
 
+def _s3_bucket_name(worker_id: str) -> str:
+    if worker_id == "master":
+        return "deltars"
+    return f"deltars-{worker_id}"
+
+
 @pytest.fixture(scope="session")
-def s3_localstack_creds():
+def s3_localstack_creds(worker_id: str):
     endpoint_url = "http://localhost:4566"
+    bucket_name = _s3_bucket_name(worker_id)
 
     config = dict(
         AWS_REGION="us-east-1",
@@ -57,7 +78,7 @@ def s3_localstack_creds():
             "s3api",
             "create-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -67,7 +88,7 @@ def s3_localstack_creds():
             "sync",
             "--quiet",
             "../crates/test/tests/data/simple_table",
-            "s3://deltars/simple",
+            f"s3://{bucket_name}/simple",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -90,7 +111,7 @@ def s3_localstack_creds():
             "rm",
             "--quiet",
             "--recursive",
-            "s3://deltars",
+            f"s3://{bucket_name}",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -99,7 +120,7 @@ def s3_localstack_creds():
             "s3api",
             "delete-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -117,9 +138,26 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
 
 
 @pytest.fixture(scope="session")
+def s3_localstack_bucket_name(worker_id: str):
+    return _s3_bucket_name(worker_id)
+
+
+@pytest.fixture()
+def s3_localstack_bucket_root_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}"
+
+
+@pytest.fixture()
+def s3_localstack_simple_table_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}/simple"
+
+
+@pytest.fixture(scope="session")
 def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
+    import azure.core
+
     account_name = "devstoreaccount1"
     config = dict(
         AZURE_STORAGE_ACCOUNT_NAME=account_name,
@@ -140,14 +178,21 @@ def azurite_creds():
     )
     env["AZURE_STORAGE_CONNECTION_STRING"] = conn_str
     wait_till_host_is_available(config["AZURE_STORAGE_ENDPOINT"])
+    container = None
     try:
         blob_client = blob.BlobServiceClient.from_connection_string(conn_str=conn_str)
+        print(blob_client)
         container = blob_client.create_container(
             name=config["AZURE_STORAGE_CONTAINER_NAME"]
         )
+        print(f"Container provisioned: {container}")
+        yield config
+    except azure.core.exceptions.ResourceExistsError:
+        # The container is already created, meh
         yield config
     finally:
-        container.delete_container()
+        if container:
+            container.delete_container()
 
 
 @pytest.fixture()
@@ -234,7 +279,7 @@ def sample_table() -> Table:
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                Field("id", type=DataType.string(), nullable=True),
+                Field("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)
@@ -261,7 +306,7 @@ def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
     return Table.from_pydict(
         {
-            "1id": Array(["1", "2", "3", "4", "5"], DataType.string()),
+            "1id": Array(["1", "2", "3", "4", "5"], DataType.string_view()),
             "price": Array(list(range(nrows)), DataType.int64()),
             "sold items": Array(list(range(nrows)), DataType.int32()),
             "deleted": Array(
@@ -271,7 +316,7 @@ def sample_table_with_spaces_numbers() -> Table:
         },
         schema=Schema(
             fields=[
-                Field("1id", type=DataType.string(), nullable=True),
+                Field("1id", type=DataType.string_view(), nullable=True),
                 Field("price", type=DataType.int64(), nullable=True),
                 Field("sold items", type=DataType.int32(), nullable=True),
                 Field("deleted", type=DataType.bool(), nullable=True),

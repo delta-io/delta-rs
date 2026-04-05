@@ -1,7 +1,11 @@
+use azure_storage_blobs::prelude::*;
 use chrono::Utc;
 use deltalake_azure::register_handlers;
 use deltalake_test::utils::*;
+use rand::RngCore;
+use std::path::PathBuf;
 use std::process::ExitStatus;
+use tokio::runtime::Handle;
 
 /// Kinds of storage integration
 #[derive(Clone, Debug)]
@@ -14,25 +18,43 @@ pub enum MsftIntegration {
 impl Default for MsftIntegration {
     fn default() -> Self {
         register_handlers(None);
-        Self::Azure(format!("test-delta-table-{}", Utc::now().timestamp()))
+        let task_id = format!("{}", rand::thread_rng().next_u64());
+        Self::Azure(format!("delta-table-{}-{task_id}", Utc::now().timestamp()))
     }
 }
 
 impl StorageIntegration for MsftIntegration {
     fn prepare_env(&self) {
-        match self {
-            Self::Azure(_) => az_cli::prepare_env(),
-            Self::Onelake => onelake_cli::prepare_env(),
-            Self::OnelakeAbfs => onelake_cli::prepare_env(),
-        }
+        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "1");
+        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "devstoreaccount1");
+        set_env_if_not_set(
+            "AZURE_STORAGE_ACCOUNT_KEY",
+            "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+        );
+        set_env_if_not_set(
+            "AZURE_STORAGE_CONNECTION_STRING",
+            "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;",
+        );
     }
 
     fn create_bucket(&self) -> std::io::Result<ExitStatus> {
-        match self {
-            Self::Azure(_) => az_cli::create_container(self.bucket_name()),
-            Self::Onelake => Ok(ExitStatus::default()),
-            Self::OnelakeAbfs => Ok(ExitStatus::default()),
-        }
+        let name = self.bucket_name();
+        let container_client = ClientBuilder::emulator().container_client(name.clone());
+
+        let handle = Handle::current();
+        tokio::task::block_in_place(move || {
+            handle.block_on(async {
+                if !container_client.exists().await.unwrap() {
+                    container_client
+                        .create()
+                        .await
+                        .expect("Failed to make the container");
+                } else {
+                    println!("Container {name} already exists at start of test!");
+                }
+            })
+        });
+        Ok(ExitStatus::default())
     }
 
     fn bucket_name(&self) -> String {
@@ -60,96 +82,74 @@ impl StorageIntegration for MsftIntegration {
     }
 
     fn copy_directory(&self, source: &str, destination: &str) -> std::io::Result<ExitStatus> {
-        let destination = format!("{}/{destination}", self.bucket_name());
-        az_cli::copy_directory(source, destination)
+        let name = self.bucket_name();
+        println!("copy from {source} to {name}/{destination}");
+        let container_client = ClientBuilder::emulator().container_client(name.clone());
+
+        async fn upload_folder(
+            source: PathBuf,
+            to: &str,
+            client: &ContainerClient,
+        ) -> std::io::Result<()> {
+            for entry in std::fs::read_dir(source).expect("Failed to read dir") {
+                let entry = entry?;
+                let file_type = entry.file_type()?;
+                let destination = format!(
+                    "{to}/{}",
+                    entry
+                        .file_name()
+                        .into_string()
+                        .expect("Failed to turn file_name into a string")
+                );
+
+                if file_type.is_dir() {
+                    println!("uploading folder {destination}");
+                    Box::pin(upload_folder(entry.path(), &destination, client))
+                        .await
+                        .expect("Failed to upload directory");
+                } else if file_type.is_file() {
+                    let blob_client = client.blob_client(&destination);
+                    println!("putting entry: {:?} into {destination}", entry.file_name());
+                    let body = std::fs::read(entry.path()).expect("Failed to read file");
+                    let r = blob_client
+                        .put_block_blob(body)
+                        .await
+                        .expect("Failed to upload file");
+                    println!("upload result: {r:?}");
+                }
+            }
+            Ok(())
+        }
+
+        let handle = Handle::current();
+        tokio::task::block_in_place(move || {
+            handle.block_on(async {
+                upload_folder(source.into(), destination, &container_client)
+                    .await
+                    .expect("Failed to upload root");
+            })
+        });
+        Ok(ExitStatus::default())
     }
 }
 
 impl Drop for MsftIntegration {
     fn drop(&mut self) {
-        az_cli::delete_container(self.bucket_name()).expect("Failed to drop bucket");
-    }
-}
+        let name = self.bucket_name();
+        let container_client = ClientBuilder::emulator().container_client(name.clone());
 
-//cli for onelake
-mod onelake_cli {
-    use super::set_env_if_not_set;
-    /// prepare_env
-    pub fn prepare_env() {
-        let token = "jwt-token";
-        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "0");
-        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "daily-onelake");
-        set_env_if_not_set(
-            "AZURE_STORAGE_CONTAINER_NAME",
-            "86bc63cf-5086-42e0-b16d-6bc580d1dc87",
-        );
-        set_env_if_not_set("AZURE_STORAGE_TOKEN", token);
-    }
-}
-
-/// small wrapper around az cli
-mod az_cli {
-    use super::set_env_if_not_set;
-    use std::process::{Command, ExitStatus};
-
-    /// Create a new bucket
-    pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args([
-                "storage",
-                "container",
-                "create",
-                "-n",
-                container_name.as_ref(),
-            ])
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
-    }
-
-    /// delete bucket
-    pub fn delete_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args([
-                "storage",
-                "container",
-                "delete",
-                "-n",
-                container_name.as_ref(),
-            ])
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
-    }
-
-    /// copy directory
-    pub fn copy_directory(
-        source: impl AsRef<str>,
-        destination: impl AsRef<str>,
-    ) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args([
-                "storage",
-                "blob",
-                "upload-batch",
-                "-s",
-                source.as_ref(),
-                "-d",
-                destination.as_ref(),
-            ])
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
-    }
-
-    /// prepare_env
-    pub fn prepare_env() {
-        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "1");
-        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "devstoreaccount1");
-        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
-        set_env_if_not_set(
-            "AZURE_STORAGE_CONNECTION_STRING",
-            "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
-        );
+        let handle = Handle::current();
+        tokio::task::block_in_place(move || {
+            handle.block_on(async {
+                if container_client.exists().await.unwrap() {
+                    container_client
+                        .delete()
+                        .await
+                        .expect("Failed to delete the container");
+                } else {
+                    println!("Container named {name} doesn't exist, so nothing to delete");
+                }
+            })
+        });
     }
 }

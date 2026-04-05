@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
-use dashmap::{mapref::one::Ref, DashMap};
+use dashmap::{DashMap, mapref::one::Ref};
 use datafusion::execution::{
-    object_store::{ObjectStoreRegistry, ObjectStoreUrl},
     TaskContext,
+    object_store::{ObjectStoreRegistry, ObjectStoreUrl},
 };
 use delta_kernel::engine::parse_json as arrow_parse_json;
 use delta_kernel::{
+    EngineData, FileDataReadResultIterator, FileMeta, FilteredEngineData, JsonHandler,
+    ParquetHandler, PredicateRef,
     engine::default::{
         executor::tokio::{TokioBackgroundExecutor, TokioMultiThreadExecutor},
         json::DefaultJsonHandler,
@@ -14,12 +16,11 @@ use delta_kernel::{
     },
     error::DeltaResult as KernelResult,
     schema::SchemaRef,
-    EngineData, FileDataReadResultIterator, FileMeta, JsonHandler, ParquetHandler, PredicateRef,
 };
 use itertools::Itertools;
 use tokio::runtime::{Handle, RuntimeFlavor};
 
-use super::storage::{group_by_store, AsObjectStoreUrl};
+use super::storage::{AsObjectStoreUrl, group_by_store};
 
 #[derive(Clone)]
 pub struct DataFusionFileFormatHandler {
@@ -127,6 +128,18 @@ impl ParquetHandler for DataFusionFileFormatHandler {
                 .flatten(),
         ))
     }
+
+    fn write_parquet_file(
+        &self,
+        _location: url::Url,
+        _data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send>,
+    ) -> KernelResult<()> {
+        todo!("write parquet file")
+    }
+
+    fn read_parquet_footer(&self, _file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
+        todo!("read parquet footer")
+    }
 }
 
 impl JsonHandler for DataFusionFileFormatHandler {
@@ -167,7 +180,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
     fn write_json_file(
         &self,
         path: &url::Url,
-        data: Box<dyn Iterator<Item = KernelResult<Box<dyn EngineData>>> + Send + '_>,
+        data: Box<dyn Iterator<Item = KernelResult<FilteredEngineData>> + Send + '_>,
         overwrite: bool,
     ) -> KernelResult<()> {
         self.get_or_create_json(path.as_object_store_url())?

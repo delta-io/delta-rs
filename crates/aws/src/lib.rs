@@ -16,6 +16,7 @@ use aws_config::SdkConfig;
 pub use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_sdk_dynamodb::error::SdkError;
 use aws_sdk_dynamodb::{
+    Client,
     operation::{
         create_table::CreateTableError, delete_item::DeleteItemError, get_item::GetItemError,
         put_item::PutItemError, query::QueryError, update_item::UpdateItemError,
@@ -24,12 +25,12 @@ use aws_sdk_dynamodb::{
         AttributeDefinition, AttributeValue, BillingMode, KeySchemaElement, KeyType,
         ScalarAttributeType,
     },
-    Client,
 };
+use deltalake_core::kernel::Version;
 use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
-    ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreRef, StorageConfig, default_logstore, logstore_factories,
+    object_store_factories,
 };
 use deltalake_core::{DeltaResult, Path};
 use errors::{DynamoDbConfigError, LockClientError};
@@ -69,8 +70,12 @@ impl LogStoreFactory for S3LogStoreFactory {
             ]
             .contains(&key.as_str())
         }) {
-            debug!("S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required");
-            warn!("Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put.");
+            debug!(
+                "S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required"
+            );
+            warn!(
+                "Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put."
+            );
             return Ok(logstore::default_s3_logstore(
                 prefixed_store,
                 root_store,
@@ -81,7 +86,9 @@ impl LogStoreFactory for S3LogStoreFactory {
 
         let s3_options = S3StorageOptions::from_map(&s3_options)?;
         if s3_options.locking_provider.as_deref() == Some("dynamodb") {
-            debug!("S3LogStoreFactory has been asked to create a LogStore with the dynamodb locking provider");
+            debug!(
+                "S3LogStoreFactory has been asked to create a LogStore with the dynamodb locking provider"
+            );
             return Ok(Arc::new(logstore::S3DynamoDbLogStore::try_new(
                 location.clone(),
                 options,
@@ -115,7 +122,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
 /// - table_path: String - tracked in the log store implementation
-/// - file_name: String - commit version.json (part of primary key), stored as i64 in this struct
+/// - file_name: String - commit version.json (part of primary key), stored as u64 in this struct
 /// - temp_path: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
 /// - expire_time: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
@@ -123,7 +130,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
 #[builder(doc)]
 pub struct CommitEntry {
     /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`)
-    pub version: i64,
+    pub version: Version,
     /// Path to temp file for this commit, relative to the `_delta_log` directory
     #[builder(setter(into))]
     pub temp_path: Path,
@@ -143,6 +150,15 @@ pub struct DynamoDbLockClient {
     dynamodb_client: Client,
     /// Configuration of the lock client
     config: DynamoDbConfig,
+}
+
+#[cfg(test)]
+impl Default for DynamoDbLockClient {
+    fn default() -> Self {
+        let sdk_config = aws_config::SdkConfig::builder().build();
+        Self::try_new(&sdk_config, None, None, None, None, None, None, None, None)
+            .expect("Failed to create a default DynamoDbLockClient for testing purpose")
+    }
 }
 
 impl std::fmt::Debug for DynamoDbLockClient {
@@ -317,24 +333,11 @@ impl DynamoDbLockClient {
         &self.config
     }
 
-    fn get_primary_key(&self, version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
-        HashMap::from([
-            (
-                constants::ATTR_TABLE_PATH.to_owned(),
-                string_attr(table_path),
-            ),
-            (
-                constants::ATTR_FILE_NAME.to_owned(),
-                string_attr(format!("{version:020}.json")),
-            ),
-        ])
-    }
-
     /// Read a log entry from DynamoDb.
     pub async fn get_commit_entry(
         &self,
         table_path: &str,
-        version: i64,
+        version: Version,
     ) -> Result<Option<CommitEntry>, LockClientError> {
         let item = self
             .retry(
@@ -343,7 +346,7 @@ impl DynamoDbLockClient {
                         .get_item()
                         .consistent_read(true)
                         .table_name(&self.config.lock_table_name)
-                        .set_key(Some(self.get_primary_key(version, table_path)))
+                        .set_key(Some(get_primary_key(version, table_path)))
                         .send()
                         .await
                 },
@@ -422,7 +425,7 @@ impl DynamoDbLockClient {
     pub async fn get_latest_entries(
         &self,
         table_path: &str,
-        limit: i64,
+        limit: u64,
     ) -> Result<Vec<CommitEntry>, LockClientError> {
         let query_result = self
             .retry(
@@ -436,7 +439,9 @@ impl DynamoDbLockClient {
                         .key_condition_expression(format!("{} = :tn", constants::ATTR_TABLE_PATH))
                         .set_expression_attribute_values(Some(HashMap::from([(
                             ":tn".into(),
-                            string_attr(table_path),
+                            // NOTE: the lack of trailing slashes is a load-bearing implementation
+                            // detail between the Delta/Spark and delta-rs S3DynamoDbLogStore
+                            string_attr(table_path.trim_end_matches('/')),
                         )])))
                         .send()
                         .await
@@ -467,7 +472,7 @@ impl DynamoDbLockClient {
     /// Update existing log entry
     pub async fn update_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         table_path: &str,
     ) -> Result<UpdateLogEntryResult, LockClientError> {
         let seconds_since_epoch = (SystemTime::now()
@@ -482,7 +487,7 @@ impl DynamoDbLockClient {
                         .dynamodb_client
                         .update_item()
                         .table_name(self.get_lock_table_name())
-                        .set_key(Some(self.get_primary_key(version, table_path)))
+                        .set_key(Some(get_primary_key(version, table_path)))
                         .update_expression("SET complete = :c, expireTime = :e".to_owned())
                         .set_expression_attribute_values(Some(HashMap::from([
                             (":c".to_owned(), string_attr("true")),
@@ -520,7 +525,7 @@ impl DynamoDbLockClient {
     /// Delete existing log entry if it is not already complete
     pub async fn delete_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         table_path: &str,
     ) -> Result<(), LockClientError> {
         self.retry(
@@ -529,7 +534,7 @@ impl DynamoDbLockClient {
                     .dynamodb_client
                     .delete_item()
                     .table_name(self.get_lock_table_name())
-                    .set_key(Some(self.get_primary_key(version, table_path)))
+                    .set_key(Some(get_primary_key(version, table_path)))
                     .set_expression_attribute_values(Some(HashMap::from([(
                         ":f".into(),
                         string_attr("false"),
@@ -625,21 +630,32 @@ fn epoch_to_system_time(s: u64) -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(s)
 }
 
+/// Return the primary key as a [HashMap] for looking up log entries in the DynamoDb table
+///
+/// The `table_path` needs to be sent into DynamoDB without a trailing slash for the [Url] since
+/// that is a load-bearing part of the contract with Delta/Spark's implementation.
+fn get_primary_key(version: Version, table_path: &str) -> HashMap<String, AttributeValue> {
+    HashMap::from([
+        (
+            constants::ATTR_TABLE_PATH.to_owned(),
+            string_attr(table_path.trim_end_matches('/')),
+        ),
+        (
+            constants::ATTR_FILE_NAME.to_owned(),
+            string_attr(format!("{version:020}.json")),
+        ),
+    ])
+}
+
 fn create_value_map(
     commit_entry: &CommitEntry,
     table_path: &str,
 ) -> HashMap<String, AttributeValue> {
     // cut off `_delta_log` part: temp_path in DynamoDb is relative to `_delta_log` not table root.
     let temp_path = Path::from_iter(commit_entry.temp_path.parts().skip(1));
-    let mut value_map = HashMap::from([
-        (
-            constants::ATTR_TABLE_PATH.to_owned(),
-            string_attr(table_path),
-        ),
-        (
-            constants::ATTR_FILE_NAME.to_owned(),
-            string_attr(format!("{:020}.json", commit_entry.version)),
-        ),
+    let mut value_map = get_primary_key(commit_entry.version, table_path);
+
+    value_map.extend(HashMap::from([
         (constants::ATTR_TEMP_PATH.to_owned(), string_attr(temp_path)),
         (
             constants::ATTR_COMPLETE.to_owned(),
@@ -649,7 +665,7 @@ fn create_value_map(
                 "false"
             }),
         ),
-    ]);
+    ]));
     commit_entry.expire_time.as_ref().map(|t| {
         value_map.insert(
             constants::ATTR_EXPIRE_TIME.to_owned(),
@@ -746,7 +762,7 @@ static DELTA_LOG_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
 
 /// Extract version from a file name in the delta log
-fn extract_version_from_filename(name: &str) -> Option<i64> {
+fn extract_version_from_filename(name: &str) -> Option<Version> {
     DELTA_LOG_REGEX
         .captures(name)
         .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())
@@ -757,6 +773,8 @@ mod tests {
     use super::*;
     use aws_sdk_sts::config::ProvideCredentials;
 
+    use pretty_assertions::assert_eq;
+
     use object_store::memory::InMemory;
     use serial_test::serial;
 
@@ -764,6 +782,27 @@ mod tests {
         let item_data: HashMap<String, AttributeValue> = create_value_map(c, "some_table");
         let c_parsed = CommitEntry::try_from(&item_data)?;
         assert_eq!(c, &c_parsed);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_primary_key() -> DeltaResult<()> {
+        let version = 0;
+        let expected = HashMap::from([
+            (
+                constants::ATTR_TABLE_PATH.to_owned(),
+                // NOTE: the lack of a trailing slash is important for compatibility with the
+                // Delta/Spark S3DynamoDbLogStore
+                string_attr("s3://bucket/table"),
+            ),
+            (
+                constants::ATTR_FILE_NAME.to_owned(),
+                string_attr(format!("{version:020}.json")),
+            ),
+        ]);
+
+        assert_eq!(expected, get_primary_key(version, "s3://bucket/table"));
+        assert_eq!(expected, get_primary_key(version, "s3://bucket/table/"));
         Ok(())
     }
 

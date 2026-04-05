@@ -2,13 +2,11 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use std::path::Path;
-use std::sync::Arc;
 
 use deltalake_core::datafusion::prelude::{ParquetReadOptions, SessionContext};
-use deltalake_core::delta_datafusion::{DeltaScanConfigBuilder, DeltaTableProvider};
 use deltalake_core::kernel::engine::arrow_conversion::TryIntoKernel;
 use deltalake_core::kernel::{StructField, StructType};
-use deltalake_core::{DeltaOps, DeltaResult};
+use deltalake_core::{DeltaResult, DeltaTable};
 use tempfile::TempDir;
 use tokio::fs::create_dir;
 use url::Url;
@@ -71,19 +69,14 @@ pub async fn register_tpcds_tables(
 
         let batches = parquet_df.collect().await?;
         let fields: Vec<StructField> = delta_schema.fields().cloned().collect();
-        let table = DeltaOps::try_from_uri(temp_table_url)
+        let table = DeltaTable::try_from_url(temp_table_url)
             .await?
             .create()
             .with_columns(fields)
             .await?;
 
-        let table = DeltaOps(table).write(batches).await?;
-
-        let snapshot = table.snapshot()?.snapshot().clone();
-        let config = DeltaScanConfigBuilder::new().build(&snapshot)?;
-        let provider = DeltaTableProvider::try_new(snapshot, table.log_store(), config)?;
-
-        ctx.register_table(*table_name, Arc::new(provider))?;
+        let table = table.write(batches).await?;
+        ctx.register_table(*table_name, table.table_provider().await?)?;
     }
 
     Ok(ctx)

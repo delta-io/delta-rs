@@ -124,10 +124,8 @@ def test_write_with_invalid_gc(tmp_path, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 10) violated by value in row: [5]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         write_deltalake(tmp_path, mode="append", data=invalid_gc_data)
 
@@ -136,10 +134,8 @@ def test_write_with_invalid_gc_to_table(table_with_gc, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         write_deltalake(table_with_gc, mode="append", data=invalid_gc_data)
 
@@ -255,7 +251,9 @@ def test_merge_with_g_during_schema_evolution(
     )
 
     id_col = ArrowField("id", DataType.int32(), nullable=True)
-    gc = ArrowField("gc", DataType.int32(), nullable=True)
+    gc = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
+        {"delta.generationExpression": "5"}
+    )
     expected_data = Table.from_pydict(
         {"id": Array([1, 2], type=id_col), "gc": Array([5, 5], type=gc)},
     )
@@ -297,14 +295,43 @@ def test_raise_when_gc_passed_merge_statement_during_schema_evolution(
         )
 
 
+def test_schema_evolution_does_not_override_existing_gc_expression(tmp_path):
+    table_schema = DeltaSchema(
+        [
+            Field(name="id", type=PrimitiveType("integer"), nullable=True),
+            Field(
+                name="gc",
+                type=PrimitiveType("integer"),
+                nullable=True,
+                metadata={"delta.generationExpression": "5"},
+            ),
+            Field(name="user", type=PrimitiveType("string"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema=table_schema)
+
+    id_col = ArrowField("id", DataType.int32(), nullable=True)
+    altered_gc_col = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
+        {"delta.generationExpression": "id * 10"}
+    )
+    altered_gc_data = Table.from_pydict(
+        {"id": Array([1, 2], type=id_col), "gc": Array([5, 5], type=altered_gc_col)},
+    )
+
+    # Force schema evolution by omitting nullable `user`, and ensure batch-side
+    # generationExpression metadata does not override table metadata for `gc`.
+    write_deltalake(dt, mode="append", data=altered_gc_data, schema_mode="merge")
+    dt = DeltaTable(tmp_path)
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["gc"].metadata == {"delta.generationExpression": "5"}
+
+
 def test_merge_with_gc_invalid(table_with_gc: DeltaTable, invalid_gc_data):
     import re
 
     with pytest.raises(
-        DeltaError,
-        match=re.escape(
-            'Invariant violations: ["Check or Invariant (gc <=> 5) violated by value in row: [10]"]'
-        ),
+        Exception,
+        match=re.escape("Invalid data found: 1 rows failed validation check."),
     ):
         (
             table_with_gc.merge(

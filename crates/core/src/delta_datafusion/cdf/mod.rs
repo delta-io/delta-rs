@@ -5,8 +5,8 @@ use std::sync::LazyLock;
 use arrow_schema::{DataType, Field, TimeUnit};
 
 pub(crate) use self::scan_utils::*;
-use crate::kernel::{Add, AddCDCFile, Remove};
 use crate::DeltaResult;
+use crate::kernel::{Add, AddCDCFile, Remove, Version};
 
 pub mod scan;
 mod scan_utils;
@@ -20,7 +20,7 @@ pub const COMMIT_TIMESTAMP_COL: &str = "_commit_timestamp";
 
 pub(crate) static CDC_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| {
     vec![
-        Field::new(COMMIT_VERSION_COL, DataType::Int64, true),
+        Field::new(COMMIT_VERSION_COL, DataType::UInt64, true),
         Field::new(
             COMMIT_TIMESTAMP_COL,
             DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -31,7 +31,7 @@ pub(crate) static CDC_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
 pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| {
     vec![
         Field::new(CHANGE_TYPE_COL, DataType::Utf8, true),
-        Field::new(COMMIT_VERSION_COL, DataType::Int64, true),
+        Field::new(COMMIT_VERSION_COL, DataType::UInt64, true),
         Field::new(
             COMMIT_TIMESTAMP_COL,
             DataType::Timestamp(TimeUnit::Millisecond, None),
@@ -42,13 +42,13 @@ pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
 
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {
-    version: i64,
+    version: Version,
     timestamp: i64,
     actions: Vec<F>,
 }
 
 impl<F: FileAction> CdcDataSpec<F> {
-    pub fn new(version: i64, timestamp: i64, actions: Vec<F>) -> Self {
+    pub fn new(version: Version, timestamp: i64, actions: Vec<F>) -> Self {
         Self {
             version,
             timestamp,

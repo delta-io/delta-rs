@@ -4,16 +4,16 @@ use arrow::array::AsArray as _;
 use arrow::datatypes::{Int32Type, Int64Type};
 use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use itertools::Itertools;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde_json::json;
 
-use super::{get_parquet_bytes, DataFactory, FileStats};
+use super::{DataFactory, FileStats, get_parquet_bytes};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
+use crate::kernel::{ProtocolInner, partitions_schema};
 
 pub struct ActionFactory;
 
@@ -108,8 +108,8 @@ impl ActionFactory {
     pub fn protocol(
         max_reader: Option<i32>,
         max_writer: Option<i32>,
-        reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
-        writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
+        reader_features: Option<impl IntoIterator<Item = TableFeature>>,
+        writer_features: Option<impl IntoIterator<Item = TableFeature>>,
     ) -> Protocol {
         ProtocolInner {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),

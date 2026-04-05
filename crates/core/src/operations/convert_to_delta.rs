@@ -5,14 +5,11 @@ use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
-use arrow_schema::{
-    ArrowError, DataType as ArrowDataType, Field as ArrowField, Fields, Schema as ArrowSchema,
-    TimeUnit,
-};
+use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::schema::StructType;
-use futures::future::{self, BoxFuture};
 use futures::TryStreamExt;
+use futures::future::{self, BoxFuture};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -22,63 +19,20 @@ use tracing::debug;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::CommitProperties;
 use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
-    kernel::{scalars::ScalarExt, Add, DataType, StructField},
+    DeltaResult, DeltaTable, DeltaTableError, NULL_PARTITION_VALUE_DATA_PATH, ObjectStoreError,
+    kernel::{Add, DataType, StructField, scalars::ScalarExt},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
     protocol::SaveMode,
     table::builder::ensure_table_uri,
     table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
-    DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError, NULL_PARTITION_VALUE_DATA_PATH,
 };
-
-fn convert_timestamps_to_microseconds(schema: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
-    let mut converted_fields = Vec::with_capacity(schema.fields().len());
-
-    for field in schema.fields() {
-        converted_fields.push(convert_field_timestamps(field)?);
-    }
-
-    Ok(ArrowSchema::new(converted_fields))
-}
-
-/// Recursively convert timestamp fields to microseconds
-fn convert_field_timestamps(field: &ArrowField) -> Result<ArrowField, ArrowError> {
-    let converted_data_type = match field.data_type() {
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz)
-        | ArrowDataType::Timestamp(TimeUnit::Millisecond, tz)
-        | ArrowDataType::Timestamp(TimeUnit::Second, tz) => {
-            Some(ArrowDataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
-        }
-        // Recursively handle nested structures
-        ArrowDataType::Struct(fields) => {
-            let converted_fields = fields
-                .iter()
-                .map(|field| convert_field_timestamps(field))
-                .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
-            Some(ArrowDataType::Struct(Fields::from(converted_fields)))
-        }
-        // Handle lists that might contain timestamps
-        ArrowDataType::List(field_ref) => {
-            let converted_field = convert_field_timestamps(field_ref)?;
-            Some(ArrowDataType::List(Arc::new(converted_field)))
-        }
-        _ => None,
-    };
-
-    if let Some(data_type) = converted_data_type {
-        Ok(
-            ArrowField::new(field.name(), data_type, field.is_nullable())
-                .with_metadata(field.metadata().clone()),
-        )
-    } else {
-        Ok(field.clone())
-    }
-}
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
@@ -97,7 +51,9 @@ enum Error {
     TryFromUsize(#[from] TryFromIntError),
     #[error("No parquet file is found in the given location")]
     ParquetFileNotFound,
-    #[error("The schema of partition columns must be provided to convert a Parquet table to a Delta table")]
+    #[error(
+        "The schema of partition columns must be provided to convert a Parquet table to a Delta table"
+    )]
     MissingPartitionSchema,
     #[error("Partition column provided by the user does not exist in the parquet files")]
     PartitionColumnNotExist,
@@ -306,7 +262,7 @@ impl ConvertToDeltaBuilder {
                 StorageConfig::parse_options(self.storage_options.clone().unwrap_or_default())?;
 
             Some(crate::logstore::logstore_for(
-                ensure_table_uri(location)?,
+                &ensure_table_uri(location)?,
                 storage_config,
             )?)
         } else {
@@ -322,7 +278,7 @@ impl ConvertToDeltaBuilder {
         }
         debug!(
             "Converting Parquet table in log store location: {:?}",
-            self.log_store().root_uri()
+            self.log_store().root_url()
         );
 
         // Get all the parquet files in the location
@@ -464,8 +420,8 @@ impl ConvertToDeltaBuilder {
         // Merge parquet file schemas
         // This step is needed because timestamp will not be preserved when copying files in S3. We can't use the schema of the latest parquet file as Delta table's schema
         let merged_schema = ArrowSchema::try_merge(arrow_schemas)?;
-        let converted_schema = convert_timestamps_to_microseconds(merged_schema)?;
-        let schema: StructType = (&converted_schema).try_into_kernel()?;
+        let converted_schema = normalize_for_delta(&Arc::new(merged_schema));
+        let schema: StructType = converted_schema.as_ref().try_into_kernel()?;
 
         let mut schema_fields = schema.fields().collect_vec();
         schema_fields.append(&mut partition_schema_fields.values().collect::<Vec<_>>());
@@ -529,9 +485,12 @@ mod tests {
     use std::fs::File;
     use tempfile::tempdir;
 
+    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, TimeUnit};
+
     use super::*;
-    use crate::kernel::{DataType, PrimitiveType};
-    use crate::{open_table, Path};
+    use crate::kernel::{DataType, PrimitiveType, Version};
+    use crate::open_table;
+    use crate::test_utils::file_paths_from;
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
@@ -558,7 +517,7 @@ mod tests {
     fn log_store(path: impl Into<String>) -> LogStoreRef {
         let path: String = path.into();
         let location = ensure_table_uri(path).expect("Failed to get the URI from the path");
-        crate::logstore::logstore_for(location, StorageConfig::default())
+        crate::logstore::logstore_for(&location, StorageConfig::default())
             .expect("Failed to create an object store")
     }
 
@@ -567,9 +526,9 @@ mod tests {
         partition_schema: Vec<StructField>,
         // Whether testing on object store or path
         from_path: bool,
-    ) -> DeltaTable {
-        let temp_dir = tempdir().expect("Failed to create a temp directory");
-        let temp_dir = temp_dir
+    ) -> (tempfile::TempDir, DeltaTable) {
+        let root = tempdir().expect("Failed to create a temp directory");
+        let temp_dir = root
             .path()
             .to_str()
             .expect("Failed to convert Path to string slice");
@@ -582,20 +541,24 @@ mod tests {
         } else {
             ConvertToDeltaBuilder::new().with_log_store(log_store(temp_dir))
         };
-        builder
-            .with_partition_schema(partition_schema)
-            .await
-            .unwrap_or_else(|e| {
-                panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
-            })
+        (
+            root,
+            builder
+                .with_partition_schema(partition_schema)
+                .await
+                .unwrap_or_else(|e| {
+                    panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
+                }),
+        )
     }
 
     async fn open_created_delta_table(
         path: &str,
         partition_schema: Vec<StructField>,
-    ) -> DeltaTable {
-        let temp_dir = tempdir().expect("Failed to create a temp directory");
-        let temp_dir = temp_dir
+    ) -> (tempfile::TempDir, DeltaTable) {
+        // The [TempDir] has to be returned so that it stays in scoipe until the function completes
+        let root = tempdir().expect("Failed to create a temp directory");
+        let temp_dir = root
             .path()
             .to_str()
             .expect("Failed to convert to string slice");
@@ -609,15 +572,18 @@ mod tests {
                 panic!("Failed to convert to Delta table. Location: {path}. Error: {e}")
             });
         let table_uri = url::Url::from_directory_path(std::path::Path::new(temp_dir)).unwrap();
-        open_table(table_uri).await.expect("Failed to open table")
+        (
+            root,
+            open_table(table_uri).await.expect("Failed to open table"),
+        )
     }
 
-    fn assert_delta_table(
+    async fn assert_delta_table(
         table: DeltaTable,
         // Test data location in the repo
         test_data_from: &str,
-        expected_version: i64,
-        expected_paths: Vec<Path>,
+        expected_version: Version,
+        expected_paths: Vec<String>,
         expected_schema: Vec<StructField>,
         expected_partition_values: &[(String, Scalar)],
     ) {
@@ -627,7 +593,11 @@ mod tests {
             "Testing location: {test_data_from:?}"
         );
 
-        let mut files = table.snapshot().unwrap().file_paths_iter().collect_vec();
+        // Execute the future, blocking the current thread until completion
+        let mut files = file_paths_from(table.snapshot().unwrap(), &table.log_store())
+            .await
+            .unwrap();
+
         files.sort();
         assert_eq!(
             files, expected_paths,
@@ -683,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn test_convert_to_delta() {
         let path = "../test/tests/data/delta-0.8.0-date";
-        let table = create_delta_table(path, Vec::new(), false).await;
+        let (_tmp, table) = create_delta_table(path, Vec::new(), false).await;
         let action = table
             .get_active_add_actions_by_partitions(&[])
             .next()
@@ -709,18 +679,17 @@ mod tests {
             table,
             path,
             0,
-            vec![Path::from(
-                "part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet",
-            )],
+            vec!["part-00000-d22c627d-9655-4153-9527-f8995620fa42-c000.snappy.parquet".into()],
             vec![
                 StructField::new("date", DataType::DATE, true),
                 schema_field("dayOfYear", PrimitiveType::Integer, true),
             ],
             &[],
-        );
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8.0-null-partition";
-        let table = create_delta_table(
+        let (_tmp2, table) = create_delta_table(
             path,
             vec![schema_field("k", PrimitiveType::String, true)],
             false,
@@ -731,8 +700,8 @@ mod tests {
             path,
             0,
             vec![
-                    Path::from("k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet"),
-                    Path::from("k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet")
+                    "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet".to_string(),
+                    "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet".to_string(),
             ],
             vec![
                 StructField::new("k", DataType::STRING, true),
@@ -742,10 +711,10 @@ mod tests {
                 ("k".to_string(), Scalar::String("A".to_string())),
                 ("k".to_string(), Scalar::Null(DataType::STRING)),
             ],
-        );
+        ).await;
 
         let path = "../test/tests/data/delta-0.8.0-special-partition";
-        let table = create_delta_table(
+        let (_tmp3, table) = create_delta_table(
             path,
             vec![schema_field("x", PrimitiveType::String, true)],
             false,
@@ -756,14 +725,10 @@ mod tests {
             path,
             0,
             vec![
-                Path::from_url_path(
-                    "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet",
-                )
-                .expect("Invalid URL path"),
-                Path::from_url_path(
-                    "x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet",
-                )
-                .expect("Invalid URL path"),
+                "x=A/A/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+                    .to_string(),
+                "x=B B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
+                    .to_string(),
             ],
             vec![
                 schema_field("x", PrimitiveType::String, true),
@@ -773,10 +738,11 @@ mod tests {
                 ("x".to_string(), Scalar::String("A/A".to_string())),
                 ("x".to_string(), Scalar::String("B B".to_string())),
             ],
-        );
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8.0-partitioned";
-        let table = create_delta_table(
+        let (_tmp4, table) = create_delta_table(
             path,
             vec![
                 schema_field("day", PrimitiveType::String, true),
@@ -791,24 +757,12 @@ mod tests {
             path,
             0,
             vec![
-                Path::from(
-                    "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
-                ),
+                    "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet".to_string(),
+                    "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+                    "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string(),
+                    "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+                    "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string(),
+                    "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet".to_string(),
             ],
             vec![
                 schema_field("day", PrimitiveType::String, true),
@@ -836,66 +790,69 @@ mod tests {
                 ("year".to_string(), Scalar::String("2021".to_string())),
                 ("year".to_string(), Scalar::String("2021".to_string())),
             ],
-        );
+        ).await;
     }
 
     // Test opening the newly created Delta table
     #[tokio::test]
     async fn test_open_created_delta_table() {
         let path = "../test/tests/data/delta-0.2.0";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
             0,
             vec![
-                Path::from("part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet"),
-                Path::from("part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet"),
-                Path::from("part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet"),
-                Path::from("part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet"),
-                Path::from("part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet"),
-                Path::from("part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet"),
-                Path::from("part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet"),
+                "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
+                "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet".to_string(),
+                "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet".to_string(),
+                "part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet".to_string(),
+                "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet".to_string(),
+                "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet".to_string(),
+                "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet".to_string(),
             ],
             vec![schema_field("value", PrimitiveType::Integer, false)],
             &[],
-        );
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8-empty";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp2, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
             0,
             vec![
-                Path::from("part-00000-b0cc5102-6177-4d60-80d3-b5d170011621-c000.snappy.parquet"),
-                Path::from("part-00007-02b8c308-e5a7-41a8-a653-cb5594582017-c000.snappy.parquet"),
+                "part-00000-b0cc5102-6177-4d60-80d3-b5d170011621-c000.snappy.parquet".to_string(),
+                "part-00007-02b8c308-e5a7-41a8-a653-cb5594582017-c000.snappy.parquet".to_string(),
             ],
             vec![schema_field("column", PrimitiveType::Long, true)],
             &[],
-        );
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8.0";
-        let table = open_created_delta_table(path, Vec::new()).await;
+        let (_tmp3, table) = open_created_delta_table(path, Vec::new()).await;
         assert_delta_table(
             table,
             path,
             0,
             vec![
-                Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"),
-                Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
-                Path::from("part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"),
+                "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet".to_string(),
+                "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet".to_string(),
+                "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
             ],
             vec![schema_field("value", PrimitiveType::Integer, true)],
             &[],
-        );
+        )
+        .await;
     }
 
     // Test Parquet files in path
     #[tokio::test]
     async fn test_convert_to_delta_from_path() {
         let path = "../test/tests/data/delta-2.2.0-partitioned-types";
-        let table = create_delta_table(
+        let (_tmp, table) = create_delta_table(
             path,
             vec![
                 schema_field("c1", PrimitiveType::Integer, true),
@@ -909,15 +866,12 @@ mod tests {
             path,
             0,
             vec![
-                Path::from(
-                    "c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet",
-                ),
+                "c1=4/c2=c/part-00003-f525f459-34f9-46f5-82d6-d42121d883fd.c000.snappy.parquet"
+                    .to_string(),
+                "c1=5/c2=b/part-00007-4e73fa3b-2c88-424a-8051-f8b54328ffdb.c000.snappy.parquet"
+                    .to_string(),
+                "c1=6/c2=a/part-00011-10619b10-b691-4fd0-acc4-2a9608499d7c.c000.snappy.parquet"
+                    .to_string(),
             ],
             vec![
                 schema_field("c1", PrimitiveType::Integer, true),
@@ -932,10 +886,11 @@ mod tests {
                 ("c2".to_string(), Scalar::String("b".to_string())),
                 ("c2".to_string(), Scalar::String("c".to_string())),
             ],
-        );
+        )
+        .await;
 
         let path = "../test/tests/data/delta-0.8.0-numeric-partition";
-        let table = create_delta_table(
+        let (_tmp2, table) = create_delta_table(
             path,
             vec![
                 schema_field("x", PrimitiveType::Long, true),
@@ -949,12 +904,10 @@ mod tests {
             path,
             0,
             vec![
-                Path::from(
-                    "x=10/y=10.0/part-00015-24eb4845-2d25-4448-b3bb-5ed7f12635ab.c000.snappy.parquet",
-                ),
-                Path::from(
-                    "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet",
-                ),
+                "x=10/y=10.0/part-00015-24eb4845-2d25-4448-b3bb-5ed7f12635ab.c000.snappy.parquet"
+                    .to_string(),
+                "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
+                    .to_string(),
             ],
             vec![
                 schema_field("x", PrimitiveType::Long, true),
@@ -967,7 +920,8 @@ mod tests {
                 ("y".to_string(), Scalar::Double(10.0)),
                 ("y".to_string(), Scalar::Double(9.9)),
             ],
-        );
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1015,164 +969,6 @@ mod tests {
             .with_location("../test/tests/data/delta-0.2.0")
             .await
             .expect_err("The given location is already a delta table location. Should error");
-    }
-
-    #[test]
-    fn test_convert_timestamps_to_microseconds_no_change() {
-        let schema = ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int32, false),
-            ArrowField::new("name", ArrowDataType::Utf8, true),
-            ArrowField::new(
-                "timestamp_micro",
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-        ]);
-
-        let result = convert_timestamps_to_microseconds(schema.clone()).unwrap();
-
-        // Should return the same schema instance when no conversion needed
-        assert_eq!(result.fields().len(), 3);
-        assert_eq!(result.field(0).data_type(), &ArrowDataType::Int32);
-        assert_eq!(result.field(1).data_type(), &ArrowDataType::Utf8);
-        assert_eq!(
-            result.field(2).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-    }
-
-    #[test]
-    fn test_convert_timestamps_to_microseconds_conversions() {
-        let inner_struct = ArrowDataType::Struct(Fields::from(vec![
-            ArrowField::new(
-                "ts_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            ),
-            ArrowField::new(
-                "ts_milli",
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new("value", ArrowDataType::Int32, false),
-        ]));
-
-        let list_element = ArrowField::new(
-            "element",
-            ArrowDataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-            true,
-        );
-        let list_type = ArrowDataType::List(Arc::new(list_element));
-
-        let schema = ArrowSchema::new(vec![
-            ArrowField::new(
-                "ts_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            ),
-            ArrowField::new(
-                "ts_milli",
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new(
-                "ts_sec",
-                ArrowDataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new(
-                "ts_micro",
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-            ArrowField::new("nested_struct", inner_struct, true),
-            ArrowField::new("timestamp_list", list_type, true),
-            ArrowField::new("regular_field", ArrowDataType::Utf8, true),
-        ]);
-
-        let result = convert_timestamps_to_microseconds(schema).unwrap();
-
-        assert_eq!(
-            result.field(0).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            result.field(1).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(
-            result.field(2).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(
-            result.field(3).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-
-        if let ArrowDataType::Struct(fields) = result.field(4).data_type() {
-            assert_eq!(
-                fields[0].data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-            );
-            assert_eq!(
-                fields[1].data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-            );
-            assert_eq!(fields[2].data_type(), &ArrowDataType::Int32);
-        } else {
-            panic!("Expected struct type");
-        }
-
-        if let ArrowDataType::List(element) = result.field(5).data_type() {
-            assert_eq!(
-                element.data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-            );
-        } else {
-            panic!("Expected list type");
-        }
-
-        assert_eq!(result.field(6).data_type(), &ArrowDataType::Utf8);
-    }
-
-    #[test]
-    fn test_convert_field_timestamps_no_conversion() {
-        let field = ArrowField::new("test", ArrowDataType::Int32, false);
-        let result = convert_field_timestamps(&field).unwrap();
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Int32,
-            "Should return original field for non-timestamp fields"
-        );
-
-        let micro_field = ArrowField::new(
-            "test",
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        );
-        let result = convert_field_timestamps(&micro_field).unwrap();
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-            "Should return original field for already-microsecond timestamps"
-        );
-    }
-
-    #[test]
-    fn test_convert_field_timestamps_with_conversion() {
-        let field = ArrowField::new(
-            "test",
-            ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            true,
-        );
-        let result = convert_field_timestamps(&field).unwrap();
-
-        assert_eq!(result.name(), "test");
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(result.is_nullable(), true);
     }
 
     #[tokio::test]

@@ -6,12 +6,12 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{resolve_snapshot, Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
-use crate::logstore::LogStoreRef;
-use crate::protocol::DeltaOperation;
 use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
@@ -84,7 +84,8 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), false).await?;
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -128,5 +129,25 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use crate::writer::test_utils::create_initialized_table;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+        let props = HashMap::from([
+            ("delta.minReaderVersion".to_string(), "3".to_string()),
+            ("delta.minWriterVersion".to_string(), "7".to_string()),
+        ]);
+        ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
     }
 }

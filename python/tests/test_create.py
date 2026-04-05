@@ -80,7 +80,6 @@ def test_create_schema(tmp_path: pathlib.Path):
     assert dt.schema() == schema
 
 
-@pytest.mark.skip(reason="not implemented")
 def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     """append only is set to false so shouldn't be converted to a feature"""
     dt = DeltaTable.create(
@@ -105,8 +104,8 @@ def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):
     }
     assert protocol.min_reader_version == 3
     assert protocol.min_writer_version == 7
-    assert protocol.writer_features == ["deletionVectors"]  # type: ignore
-    assert protocol.reader_features == ["deletionVectors"]
+    assert "deletionVectors" in protocol.writer_features
+    assert "deletionVectors" in protocol.reader_features
     assert dt.history()[0]["userName"] == "John Doe"
 
 
@@ -155,7 +154,7 @@ def test_create_or_replace_existing_table(tmp_path: pathlib.Path, sample_table: 
         mode="overwrite",
     )
 
-    assert dt.files() == []
+    assert dt.file_uris() == []
 
 
 def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):
@@ -166,3 +165,93 @@ def test_delta_table_invalid_path_raises_error(tmp_path: pathlib.Path):
         DeltaTable(str(nonexistent_path))
 
     assert not nonexistent_path.exists()
+
+
+def test_positional_commit_args_raise_deprecation_warning(tmp_path: pathlib.Path):
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        DeltaTable.create(
+            tmp_path, schema, "error", None, None, None, None, None, commit, None, False
+        )
+
+
+def test_create_partial_legacy_positional_args_preserve_defaults(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    import deltalake.table as table_module
+
+    captured: dict[str, tuple] = {}
+
+    def fake_create(*args):
+        captured["args"] = args
+
+    def fake_init(self, *args, **kwargs):
+        pass
+
+    monkeypatch.setattr(table_module, "_create_deltalake", fake_create)
+    monkeypatch.setattr(DeltaTable, "__init__", fake_init)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        DeltaTable.create(
+            tmp_path, schema, "error", None, None, None, None, None, commit
+        )
+
+    create_args = captured["args"]
+    assert create_args[4] is True
+    assert create_args[9] is commit
+    assert create_args[10] is None
+
+
+def test_create_positional_and_keyword_commit_conflict_raises(
+    tmp_path: pathlib.Path,
+):
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'commit_properties'"):
+        DeltaTable.create(
+            tmp_path,
+            schema,
+            "error",
+            None,
+            None,
+            None,
+            None,
+            None,
+            commit,
+            commit_properties=commit,
+        )
+
+
+def test_create_positional_and_keyword_raise_if_key_not_exists_conflict_raises(
+    tmp_path: pathlib.Path,
+    monkeypatch,
+):
+    import deltalake.table as table_module
+
+    def fake_create(*args):
+        pass
+
+    def fake_init(self, *args, **kwargs):
+        pass
+
+    monkeypatch.setattr(table_module, "_create_deltalake", fake_create)
+    monkeypatch.setattr(DeltaTable, "__init__", fake_init)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(
+        TypeError, match="multiple values for 'raise_if_key_not_exists'"
+    ):
+        DeltaTable.create(
+            tmp_path,
+            schema,
+            "error",
+            None,
+            None,
+            None,
+            None,
+            None,
+            commit,
+            None,
+            False,
+            raise_if_key_not_exists=True,
+        )

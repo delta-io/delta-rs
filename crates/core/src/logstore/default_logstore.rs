@@ -6,10 +6,11 @@ use bytes::Bytes;
 use object_store::{Attributes, Error as ObjectStoreError, ObjectStore, PutOptions, TagSet};
 use uuid::Uuid;
 
-use super::storage::{utils::commit_uri_from_version, ObjectStoreRef};
+use super::storage::{ObjectStoreRef, utils::commit_uri_from_version};
 use super::{CommitOrBytes, LogStore, LogStoreConfig};
-use crate::kernel::transaction::TransactionError;
 use crate::DeltaResult;
+use crate::kernel::Version;
+use crate::kernel::transaction::TransactionError;
 
 fn put_options() -> &'static PutOptions {
     static PUT_OPTS: OnceLock<PutOptions> = OnceLock::new();
@@ -58,7 +59,7 @@ impl LogStore for DefaultLogStore {
         "DefaultLogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
         super::read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
@@ -69,7 +70,7 @@ impl LogStore for DefaultLogStore {
     /// with retry logic.
     async fn write_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         _: Uuid,
     ) -> Result<(), TransactionError> {
@@ -77,7 +78,7 @@ impl LogStore for DefaultLogStore {
             CommitOrBytes::LogBytes(log_bytes) => self
                 .object_store(None)
                 .put_opts(
-                    &commit_uri_from_version(version),
+                    &commit_uri_from_version(Some(version)),
                     log_bytes.into(),
                     put_options().clone(),
                 )
@@ -97,7 +98,7 @@ impl LogStore for DefaultLogStore {
 
     async fn abort_commit_entry(
         &self,
-        _version: i64,
+        _version: Version,
         commit_or_bytes: CommitOrBytes,
         _: Uuid,
     ) -> Result<(), TransactionError> {
@@ -107,7 +108,7 @@ impl LogStore for DefaultLogStore {
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
         super::get_latest_version(self, current_version).await
     }
 

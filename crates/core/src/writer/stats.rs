@@ -8,27 +8,26 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
+use parquet::basic::LogicalType;
 use parquet::basic::Type;
 use parquet::file::metadata::ParquetMetaData;
-use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
-use parquet::{basic::LogicalType, errors::ParquetError};
 use parquet::{
+    basic::TimeUnit,
     file::{metadata::RowGroupMetaData, statistics::Statistics},
-    format::TimeUnit,
 };
 use tracing::warn;
 
 use super::*;
-use crate::kernel::{scalars::ScalarExt, Add};
+use crate::kernel::{Add, scalars::ScalarExt};
 use crate::protocol::{ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
-pub fn create_add(
+pub(crate) fn create_add(
     partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
@@ -100,24 +99,19 @@ pub(crate) fn stats_from_parquet_metadata(
 
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, Scalar>,
-    file_metadata: &FileMetaData,
+    file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Stats, DeltaWriterError> {
-    let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
-    let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
+    let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
-    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata
-        .row_groups
-        .iter()
-        .map(|rg| RowGroupMetaData::from_thrift(schema_descriptor.clone(), rg.clone()))
-        .collect::<Result<Vec<RowGroupMetaData>, ParquetError>>()?;
+    let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
 
     stats_from_metadata(
         partition_values,
-        schema_descriptor,
+        Arc::new(schema_descriptor.clone()),
         row_group_metadata,
-        file_metadata.num_rows,
+        file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
     )
@@ -193,7 +187,8 @@ fn stats_from_metadata(
             .flat_map(|g| {
                 g.column(idx).statistics().into_iter().filter_map(|s| {
                     let is_binary = matches!(&column_descr.physical_type(), Type::BYTE_ARRAY)
-                        && matches!(column_descr.logical_type(), Some(LogicalType::String)).not();
+                        && matches!(column_descr.logical_type_ref(), Some(LogicalType::String))
+                            .not();
                     if is_binary {
                         warn!(
                             "Skipping column {} because it's a binary field.",
@@ -201,7 +196,7 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, &column_descr.logical_type())))
+                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
                     }
                 })
             })
@@ -254,7 +249,7 @@ enum StatsScalar {
 impl StatsScalar {
     fn try_from_stats(
         stats: &Statistics,
-        logical_type: &Option<LogicalType>,
+        logical_type: Option<&LogicalType>,
         use_min: bool,
     ) -> Result<Self, DeltaWriterError> {
         macro_rules! get_stat {
@@ -291,9 +286,9 @@ impl StatsScalar {
                 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
                 let v = get_stat!(v);
                 let timestamp = match unit {
-                    TimeUnit::MILLIS(_) => chrono::DateTime::from_timestamp_millis(v),
-                    TimeUnit::MICROS(_) => chrono::DateTime::from_timestamp_micros(v),
-                    TimeUnit::NANOS(_) => {
+                    TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
+                    TimeUnit::NANOS => {
                         let secs = v / 1_000_000_000;
                         let nanosecs = (v % 1_000_000_000) as u32;
                         chrono::DateTime::from_timestamp(secs, nanosecs)
@@ -301,7 +296,7 @@ impl StatsScalar {
                 };
                 let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
                     debug_value: v.to_string(),
-                    logical_type: logical_type.clone(),
+                    logical_type: logical_type.cloned(),
                 })?;
                 Ok(Self::Timestamp(timestamp.naive_utc()))
             }
@@ -335,7 +330,7 @@ impl StatsScalar {
                     }
                     _ => Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{bytes:?}"),
-                        logical_type: logical_type.clone(),
+                        logical_type: logical_type.cloned(),
                     }),
                 }
             }
@@ -397,7 +392,7 @@ impl StatsScalar {
             }
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),
-                logical_type: logical_type.clone(),
+                logical_type: logical_type.cloned(),
             }),
         }
     }
@@ -458,8 +453,8 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
-    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+impl From<(&Statistics, Option<&LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, Option<&LogicalType>)) -> Self {
         let (stats, logical_type) = value;
         let null_count = stats.null_count_opt().unwrap_or_default();
         if stats.min_bytes_opt().is_some() && stats.max_bytes_opt().is_some() {
@@ -635,15 +630,15 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
+        DeltaTable,
         errors::DeltaTableError,
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
-        DeltaTable,
     };
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
     use parquet::{basic::Compression, file::properties::WriterProperties};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::LazyLock;
@@ -713,7 +708,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::NANOS(parquet::format::NanoSeconds {}),
+                    unit: parquet::basic::TimeUnit::NANOS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123456Z"),
             ),
@@ -721,7 +716,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
+                    unit: parquet::basic::TimeUnit::MICROS,
                 }),
                 Value::from("2022-01-01T12:34:56.789123Z"),
             ),
@@ -729,7 +724,7 @@ mod tests {
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
                 Some(LogicalType::Timestamp {
                     is_adjusted_to_u_t_c: true,
-                    unit: parquet::format::TimeUnit::MILLIS(parquet::format::MilliSeconds {}),
+                    unit: parquet::basic::TimeUnit::MILLIS,
                 }),
                 Value::from("2022-01-01T12:34:56.789Z"),
             ),
@@ -848,7 +843,7 @@ mod tests {
         ];
 
         for (stats, logical_type, expected) in cases {
-            let scalar = StatsScalar::try_from_stats(stats, logical_type, true).unwrap();
+            let scalar = StatsScalar::try_from_stats(stats, logical_type.as_ref(), true).unwrap();
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
@@ -990,12 +985,10 @@ mod tests {
     }
 
     async fn load_table(
-        table_uri: &Url,
+        table_url: &Url,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let table_uri = table_uri.clone();
-        DeltaTableBuilder::from_uri(table_uri)
-            .unwrap()
+        DeltaTableBuilder::from_url(table_url.clone())?
             .with_storage_options(options)
             .load()
             .await

@@ -5,10 +5,12 @@ import pathlib
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from urllib.request import urlopen
 
 import pytest
 from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
+from arro3.core import Schema as ArrowSchema
 
 from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
 from deltalake._internal import (
@@ -20,7 +22,6 @@ from deltalake._internal import (
 )
 from deltalake.exceptions import (
     DeltaError,
-    DeltaProtocolError,
     SchemaMismatchError,
 )
 from deltalake.query import QueryBuilder
@@ -177,9 +178,7 @@ def test_merge_schema(existing_table: DeltaTable):
     read_data = existing_table.to_pyarrow_table().sort_by(
         [("utf8", "ascending"), ("new_x", "ascending")]
     )
-    print(repr(read_data.to_pylist()))
     concated = pa.concat_tables([old_table_data, new_data])
-    print(repr(concated.to_pylist()))
     assert read_data == concated
 
     write_deltalake(existing_table, new_data, mode="overwrite", schema_mode="overwrite")
@@ -430,11 +429,14 @@ def test_merge_schema_rust_writer_with_overwrite(tmp_path: pathlib.Path):
     assert set(result) == set(["a", "b", "c"])
 
 
+@pytest.mark.pyarrow
 def test_local_path(
     tmp_path: pathlib.Path,
     sample_table: Table,
     monkeypatch,
 ):
+    import pyarrow as pa
+
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
     (tmp_path / "path/to/table").mkdir(parents=True)
 
@@ -448,14 +450,17 @@ def test_local_path(
         .execute("select * from tbl")
         .read_all()
     )
-    assert table == sample_table
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
 
+@pytest.mark.pyarrow
 def test_local_path_with_unsafe_rename(
     tmp_path: pathlib.Path,
     sample_table: Table,
     monkeypatch,
 ):
+    import pyarrow as pa
+
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
     (tmp_path / "path/to/table").mkdir(parents=True)
 
@@ -472,7 +477,7 @@ def test_local_path_with_unsafe_rename(
         .execute("select * from tbl")
         .read_all()
     )
-    assert table == sample_table
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
 
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_table: Table):
@@ -530,10 +535,13 @@ def test_roundtrip_partitioned(
         assert add_path.count("/") == 1
 
 
+@pytest.mark.pyarrow
 def test_roundtrip_null_partition(
     tmp_path: pathlib.Path,
     sample_table: Table,
 ):
+    import pyarrow as pa
+
     sample_table = sample_table.add_column(
         4,
         "utf8_with_nulls",
@@ -559,13 +567,16 @@ def test_roundtrip_null_partition(
         .execute("select * from tbl order by price asc")
         .read_all()
     )
-    assert table == sample_table
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
 
+@pytest.mark.pyarrow
 def test_roundtrip_multi_partitioned(
     tmp_path: pathlib.Path,
     sample_table: Table,
 ):
+    import pyarrow as pa
+
     write_deltalake(tmp_path, sample_table, partition_by=["sold", "price"])
 
     delta_table = DeltaTable(tmp_path)
@@ -576,25 +587,28 @@ def test_roundtrip_multi_partitioned(
         .execute("select id, price, sold, deleted from tbl order by id asc")
         .read_all()
     )
-    assert table == sample_table
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
     for add_path in get_add_paths(delta_table):
         # Paths should be relative
         assert add_path.count("/") == 2
 
 
+@pytest.mark.pyarrow
 def test_write_modes(tmp_path: pathlib.Path, sample_table: Table):
+    import pyarrow as pa
+
     write_deltalake(
         tmp_path,
         sample_table,
     )
-    assert (
+    data = (
         QueryBuilder()
         .register("tbl", DeltaTable(tmp_path))
         .execute("select * from tbl")
         .read_all()
-        == sample_table
     )
+    assert pa.table(data).to_pydict() == pa.table(sample_table).to_pydict()
 
     with pytest.raises(DeltaError):
         write_deltalake(tmp_path, sample_table, mode="error")
@@ -614,30 +628,35 @@ def test_write_modes(tmp_path: pathlib.Path, sample_table: Table):
     expected = RecordBatchReader.from_batches(
         sample_table.schema, [*sample_table.to_batches(), *sample_table.to_batches()]
     ).read_all()
-    assert (
+    data = (
         QueryBuilder()
         .register("tbl", DeltaTable(tmp_path))
         .execute("select * from tbl")
         .read_all()
-    ) == expected
+    )
+    assert pa.table(data).to_pydict() == pa.table(expected).to_pydict()
 
     write_deltalake(
         tmp_path,
         sample_table,
         mode="overwrite",
     )
-    assert (
+    data = (
         QueryBuilder()
         .register("tbl", DeltaTable(tmp_path))
         .execute("select * from tbl")
         .read_all()
-    ) == sample_table
+    )
+    assert pa.table(data).to_pydict() == pa.table(sample_table).to_pydict()
 
 
+@pytest.mark.pyarrow
 def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust equivalent rust
     tmp_path: pathlib.Path,
     sample_table: Table,
 ):
+    import pyarrow as pa
+
     config = {"delta.appendOnly": "true"}
 
     write_deltalake(
@@ -669,20 +688,23 @@ def test_append_only_should_append_only_with_the_overwrite_mode(  # Create rust 
         sample_table.schema, [*sample_table.to_batches(), *sample_table.to_batches()]
     ).read_all()
 
-    assert (
-        QueryBuilder().register("tbl", table).execute("select * from tbl").read_all()
-    ) == expected
+    data = QueryBuilder().register("tbl", table).execute("select * from tbl").read_all()
+    assert pa.table(data).to_pydict() == pa.table(expected).to_pydict()
     assert table.version() == 1
 
 
+@pytest.mark.pyarrow
 def test_writer_with_table(existing_sample_table: DeltaTable, sample_table: Table):
+    import pyarrow as pa
+
     write_deltalake(existing_sample_table, sample_table, mode="overwrite")
-    assert (
+    data = (
         QueryBuilder()
         .register("tbl", existing_sample_table)
         .execute("select * from tbl")
         .read_all()
-    ) == sample_table
+    )
+    assert pa.table(data).to_pydict() == pa.table(sample_table).to_pydict()
 
 
 @pytest.mark.pyarrow
@@ -776,19 +798,22 @@ def test_write_dataset_table_recordbatch(
     assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data_pyarrow
 
 
+@pytest.mark.pyarrow
 def test_write_recordbatchreader(
     tmp_path: pathlib.Path,
     sample_table: Table,
 ):
+    import pyarrow as pa
+
     reader = RecordBatchReader.from_arrow(sample_table)
     write_deltalake(tmp_path, reader, mode="overwrite")
-    assert (
+    table = (
         QueryBuilder()
         .register("tbl", DeltaTable(tmp_path))
         .execute("select * from tbl")
         .read_all()
-        == sample_table
     )
+    assert pa.table(table).to_pydict() == pa.table(sample_table).to_pydict()
 
 
 def test_writer_partitioning(tmp_path: pathlib.Path):
@@ -796,7 +821,7 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
         {
             "p": Array(
                 ["a=b", "hello world", "hello%20world"],
-                ArrowField("p", type=DataType.string(), nullable=False),
+                ArrowField("p", type=DataType.string_view(), nullable=False),
             ),
             "x": Array(
                 [0, 1, 2],
@@ -820,12 +845,12 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
-def get_add_actions(table: DeltaTable) -> list[str]:
+def get_add_actions(table: DeltaTable) -> list[dict]:
     log_path = get_log_path(table)
 
     actions = []
 
-    for line in open(log_path).readlines():
+    for line in urlopen(log_path).readlines():
         log_entry = json.loads(line)
 
         if "add" in log_entry:
@@ -955,7 +980,7 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     ) == _normalize_path(
         (
             delta_table,
-            str(tmp_path / "delta_table") + "/",
+            "file://" + str(tmp_path / "delta_table") + "/",
         )
     )
 
@@ -1139,7 +1164,7 @@ def test_partition_overwrite(
         )
         == expected_data
     )
-    with pytest.raises(DeltaProtocolError, match="Invariant violations"):
+    with pytest.raises(Exception, match="Invalid data found:"):
         write_deltalake(
             tmp_path,
             sample_data_pyarrow,
@@ -1305,9 +1330,12 @@ def test_replace_where_overwrite_partitioned(
     )
 
 
+@pytest.mark.pyarrow
 def test_partition_overwrite_with_new_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: Table
 ):
+    import pyarrow as pa
+
     write_deltalake(
         tmp_path,
         sample_data_for_partitioning,
@@ -1357,7 +1385,7 @@ def test_partition_overwrite_with_new_partition(
         .execute("select p1,p2,val from tbl order by p1 asc, p2 asc")
         .read_all()
     )
-    assert result == expected_data
+    assert pa.table(result).to_pydict() == pa.table(expected_data).to_pydict()
 
 
 def test_partition_overwrite_with_non_partitioned_data(
@@ -1427,8 +1455,8 @@ def test_partition_overwrite_with_wrong_partition(
     )
 
     with pytest.raises(
-        DeltaProtocolError,
-        match="Invariant violations",
+        Exception,
+        match="Invalid data found: 1 rows failed validation check.",
     ):
         write_deltalake(
             tmp_path,
@@ -1443,7 +1471,7 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
         {
             "field_one": Array(
                 [b"\x00\\"],
-                ArrowField("field_one", type=DataType.binary(), nullable=True),
+                ArrowField("field_one", type=DataType.binary_view(), nullable=True),
             ),
         }
     )
@@ -1567,10 +1595,10 @@ def test_partition_large_arrow_types(tmp_path: pathlib.Path):
     write_deltalake(tmp_path, table, partition_by=["foo"])
 
     dt = DeltaTable(tmp_path)
-    files = dt.files()
+    files = dt.file_uris()
     expected = ["foo=1", "foo=2"]
 
-    result = sorted([file.split("/")[0] for file in files])
+    result = sorted([abs_path.split(os.path.sep)[-2] for abs_path in files])
     assert expected == result
 
 
@@ -1705,7 +1733,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path):
             ),
             "foo": Array(
                 ["B"] * 10,
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1726,7 +1754,7 @@ def test_schema_cols_diff_order(tmp_path: pathlib.Path):
             ),
             "foo": Array(
                 ["B"] * 20,
-                ArrowField("foo", type=DataType.string(), nullable=True),
+                ArrowField("foo", type=DataType.string_view(), nullable=True),
             ),
         }
     )
@@ -1970,7 +1998,7 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     approximately, that CDC files are being written
     """
     raw_commit = r"""{"metaData":{"id":"bb0fdeb2-76dd-4f5e-b1ea-845ecec8fa7e","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{"delta.enableChangeDataFeed":"true"},"createdTime":1713110303902}}
-{"protocol":{"minReaderVersion":1,"minWriterVersion":4,"writerFeatures":["changeDataFeed"]}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":7,"writerFeatures":["changeDataFeed"]}}
 """
     # timestampNtz looks like it might be an unnecessary requirement to write from Python
     os.mkdir(os.path.join(tmp_path, "_delta_log"))
@@ -2010,7 +2038,6 @@ def test_roundtrip_cdc_evolution(tmp_path: pathlib.Path):
     delta_table.update(predicate="utf8 = '1'", updates={"utf8": "'hello world'"})
 
     delta_table = DeltaTable(tmp_path)
-    print(os.listdir(tmp_path))
     # This is kind of a weak test to verify that CDFs were written
     assert os.path.isdir(os.path.join(tmp_path, "_change_data"))
 
@@ -2557,3 +2584,286 @@ def test_dots_in_column_names_2624(tmp_path: pathlib.Path):
     # Sorting just to make sure the equivalency matches up
     actual = dt.to_pyarrow_table().sort_by("Product.Id")
     assert expected == actual
+
+
+def test_url_encoding(tmp_path):
+    """issue ref: https://github.com/delta-io/delta-rs/issues/3939"""
+    batch_1 = Table.from_pydict(
+        {
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array(list(range(1)), DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+    write_deltalake(tmp_path, batch_1, partition_by="id")
+
+    batch_2 = Table.from_pydict(
+        {
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+    write_deltalake(tmp_path, batch_2, mode="overwrite", predicate="id = '1 2'")
+
+
+@pytest.mark.pyarrow
+def test_url_encoding_timestamp(tmp_path):
+    import datetime as dt
+
+    import pyarrow as pa
+
+    # (step 1) write initial table
+    data = pa.Table.from_pylist(
+        [
+            {"time": dt.datetime(2026, 1, 1, 12, 5, 7), "value": 10},
+        ]
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=data,
+        partition_by=["time"],
+    )
+
+    # (step 2) overwrite with predicate that filters
+    # on a non-partition column
+    write_deltalake(
+        table_or_uri=tmp_path, data=data, mode="overwrite", predicate="value >= 10"
+    )
+
+
+def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
+    """
+    Tables with deletion vectors should still be writeable even without writing deletion vectors directly
+    """
+    schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("price", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(
+        tmp_path,
+        schema,
+        name="test_name",
+        description="test_desc",
+        configuration={
+            "delta.enableDeletionVectors": "true",
+        },
+    )
+    assert dt.protocol().min_writer_version == 7
+    assert dt.version() == 0
+
+    data = Table.from_pydict(
+        {
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(dt, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
+
+
+@pytest.mark.pyarrow
+def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
+    """
+    Calling create_write_transaction with mode="overwrite" and non-empty
+    partition_by and partition_filters which match an existing partition
+    doesn't overwrite that partition but instead append.
+
+    <https://github.com/delta-io/delta-rs/issues/4126>
+    """
+    from arro3.io import write_parquet
+
+    from deltalake.transaction import AddAction
+
+    schema = Schema(
+        fields=[
+            Field("ds", type=PrimitiveType("string"), nullable=False),
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("price", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(
+        tmp_path,
+        schema,
+        partition_by=["ds"],
+        name="test_name",
+        description="test_desc",
+    )
+    assert dt.version() == 0
+
+    data = Table.from_pydict(
+        {
+            "ds": Array(["2026-03-08"], DataType.string()),
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(dt, data, mode="append")
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
+    assert 1 == len(dt.file_uris()), (
+        "There should only be one file in the table at this point"
+    )
+
+    # Technically this test doesn't need to write data in order to do any
+    # validation, but I think it's good practice to do a data validation for
+    # the ticket too
+    new_file_path = tmp_path.joinpath("ds=2026-01-01")
+    new_file_path.mkdir(parents=True)
+    new_file_path = new_file_path.joinpath("foo.parquet")
+    write_parquet(data, new_file_path)
+
+    action = AddAction(
+        "/ds=2026-01-01/foo.parquet",
+        new_file_path.stat().st_size,
+        {"ds": "2026-01-01"},
+        0,
+        True,
+        "{}",
+    )
+    dt.create_write_transaction(
+        actions=[action], mode="overwrite", schema=schema, partition_by=["ds"]
+    )
+
+    # Reload the table
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 2, (
+        "Expected a write to have occurred after create_write_transaction!"
+    )
+
+    assert dt.partitions() == [{"ds": "2026-01-01"}], (
+        "There were more partitions than expected"
+    )
+    assert 1 == len(dt.file_uris()), (
+        "An overwrite was specified so there should only be one file"
+    )
+    loaded_data = Table.from_arrow(dt.to_pyarrow_table())
+    expected_data = Table.from_pydict(
+        {
+            "ds": Array(["2026-01-01"], DataType.string()),
+            "id": Array(["1 2"], DataType.string()),
+            "price": Array([10], DataType.int64()),
+        },
+        schema=schema,
+    )
+    assert expected_data == loaded_data, "The table contents do not match expectations"
+
+
+@pytest.mark.pyarrow
+def test_write_date64_normalizes_to_date32(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("sales_date", pa.date64(), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "sales_date": pa.array(
+                [date(2025, 10, 20), date(2025, 11, 15)], type=pa.date64()
+            ),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    date_field = delta_schema.fields[1]
+    assert date_field.type == PrimitiveType("date")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.schema.field("sales_date").type == pa.date32()
+    assert result.column("sales_date").to_pylist() == [
+        date(2025, 10, 20),
+        date(2025, 11, 15),
+    ]
+
+
+@pytest.mark.pyarrow
+def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456, tzinfo=timezone.utc)
+    ts2 = datetime(2025, 11, 15, 8, 30, 0, 789012, tzinfo=timezone.utc)
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("ts", pa.timestamp("ns", tz="UTC"), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int32()),
+            "ts": pa.array([ts1, ts2], type=pa.timestamp("ns", tz="UTC")),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+
+    delta_schema = dt.schema()
+    ts_field = delta_schema.fields[1]
+    assert ts_field.type == PrimitiveType("timestamp")
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 2
+    assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+    assert result.column("ts").to_pylist() == [ts1, ts2]
+
+
+@pytest.mark.pyarrow
+def test_write_timestamp_ntz_ns_normalizes_to_us(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456)
+
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int32(), nullable=False),
+            pa.field("ts_ntz", pa.timestamp("ns"), nullable=True),
+        ]
+    )
+    table = pa.table(
+        {
+            "id": pa.array([1], type=pa.int32()),
+            "ts_ntz": pa.array([ts1], type=pa.timestamp("ns")),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == 1
+    assert result.schema.field("ts_ntz").type == pa.timestamp("us")
