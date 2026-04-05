@@ -147,7 +147,7 @@ impl MetadataExt for Metadata {
 }
 
 /// checks if table contains timestamp_ntz in any field including nested fields.
-pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+pub(crate) fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn _check_type(dtype: &DataType) -> bool {
         match dtype {
             &DataType::TIMESTAMP_NTZ => true,
@@ -160,7 +160,7 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
 }
 
 /// checks if table contains variant in any field including nested fields.
-pub fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn _check_type(dtype: &DataType) -> bool {
         match dtype {
             DataType::Variant(_) => true,
