@@ -795,7 +795,7 @@ impl DeltaTable {
     pub fn table_provider(&self) -> TableProviderBuilder {
         let mut builder = TableProviderBuilder::new().with_log_store(self.log_store());
         if let Ok(state) = self.snapshot() {
-            builder = builder.with_eager_snapshot(state.snapshot().clone());
+            builder = builder.with_snapshot(state.snapshot().snapshot().clone());
         }
         builder
     }
@@ -1273,7 +1273,10 @@ fn partitioned_file_from_action(
 mod tests {
     use crate::kernel::{DataType, PrimitiveType, StructField, StructType};
     use crate::operations::create::CreateBuilder;
-    use crate::{DeltaTable, DeltaTableError};
+    use crate::test_utils::object_store::{
+        drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+    };
+    use crate::{DeltaTable, DeltaTableConfig, DeltaTableError};
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -1454,6 +1457,39 @@ mod tests {
             .unwrap();
         let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
         datafusion::assert_batches_sorted_eq!(&expected, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_table_provider_from_loaded_table_reuses_seeded_snapshot_state() {
+        let base = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let (log_store, mut operations) = recording_log_store(base);
+
+        let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+        table.load().await.unwrap();
+
+        drain_recorded_ops(&mut operations).await;
+
+        let provider = table.table_provider().await.unwrap();
+
+        let session = Arc::new(crate::delta_datafusion::create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let read_plan = provider.scan(&state, None, &[], None).await.unwrap();
+        let _read_batches: Vec<_> = collect_partitioned(read_plan, session.task_ctx())
+            .await
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "expected loaded table provider scan to reuse seeded snapshot state, got {replay_ops:?}",
+        );
     }
 
     #[tokio::test]

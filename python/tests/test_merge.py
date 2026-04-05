@@ -14,6 +14,7 @@ from deltalake import (
     Schema,
     write_deltalake,
 )
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
 
@@ -219,6 +220,70 @@ def test_merge_when_matched_update_wo_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+@pytest.mark.parametrize("use_update_all", (False, True))
+def test_merge_when_matched_update_duplicates(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    streaming: bool,
+    use_update_all: bool,
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    merger = dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=streaming,
+    )
+
+    if use_update_all:
+        merger = merger.when_matched_update_all(predicate="s.deleted = true")
+    else:
+        merger = merger.when_matched_update(
+            {"price": "s.price"},
+            predicate="s.deleted = true",
+        )
+
+    with pytest.raises(DeltaError):
+        merger.execute()
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    assert dt.version() == 0
+    assert result == sample_table
 
 
 def test_merge_when_matched_update_wo_predicate_with_schema_evolution(

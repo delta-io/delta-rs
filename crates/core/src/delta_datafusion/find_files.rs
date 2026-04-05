@@ -528,7 +528,7 @@ pub(crate) async fn scan_files_where_matches(
     // and with the source file path exposed as column.
     let table_source = provider_as_source(
         DeltaScanNext::builder()
-            .with_eager_snapshot(snapshot.clone())
+            .with_snapshot(snapshot.snapshot().clone())
             .with_file_skipping_predicates(skipping_pred.clone())
             .with_file_column(FILE_ID_COLUMN_DEFAULT)
             .await?,
@@ -577,7 +577,7 @@ pub(crate) async fn scan_files_where_matches(
     )?
     .with_missing_file_policy(MissingFilePolicy::Ignore);
     let selected_provider = DeltaScanNext::builder()
-        .with_eager_snapshot(snapshot.clone())
+        .with_snapshot(snapshot.snapshot().clone())
         .with_file_skipping_predicates(skipping_pred)
         .with_file_column(FILE_ID_COLUMN_DEFAULT)
         .build()

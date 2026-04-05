@@ -17,7 +17,92 @@ use url::Url;
 
 use crate::DeltaTableConfig;
 
-use super::{EagerSnapshot, Snapshot};
+use super::{EagerSnapshot, MaterializedFiles, MaterializedFilesScope, Snapshot};
+
+#[derive(Serialize, Deserialize)]
+struct MaterializedFilesWire {
+    version: delta_kernel::Version,
+    scope: MaterializedFilesScope,
+    batches: Vec<u8>,
+}
+
+impl MaterializedFilesWire {
+    fn try_from_materialized(value: &MaterializedFiles) -> Result<Self, String> {
+        if value.existing_predicate.is_some() {
+            return Err(
+                "serializing predicate-specific materialized state is not supported".into(),
+            );
+        }
+
+        Ok(Self {
+            version: value.version,
+            scope: value.scope,
+            batches: serialize_batches(value.batches.as_ref())?,
+        })
+    }
+
+    fn into_materialized(self) -> Result<MaterializedFiles, String> {
+        Ok(MaterializedFiles {
+            version: self.version,
+            scope: self.scope,
+            existing_predicate: None,
+            batches: deserialize_batches(self.batches)?.into(),
+        })
+    }
+}
+
+fn materialized_files_from_legacy_eager_payload(
+    snapshot: &Snapshot,
+    legacy_payload: Option<Vec<u8>>,
+) -> Result<Option<Arc<MaterializedFiles>>, String> {
+    if let Some(materialized_files) = snapshot.materialized_files().cloned() {
+        return Ok(Some(materialized_files));
+    }
+
+    let Some(legacy_payload) = legacy_payload else {
+        return Ok(None);
+    };
+
+    if legacy_payload.is_empty() && !snapshot.load_config().require_files {
+        return Ok(None);
+    }
+
+    Ok(Some(Arc::new(MaterializedFiles::full(
+        snapshot.version(),
+        deserialize_batches(legacy_payload)?,
+    ))))
+}
+
+fn serialize_batches(batches: &[arrow_array::RecordBatch]) -> Result<Vec<u8>, String> {
+    if batches.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut buffer = vec![];
+    let mut writer = FileWriter::try_new(&mut buffer, batches[0].schema().as_ref())
+        .map_err(|e| format!("failed to create ipc writer: {e}"))?;
+    for batch in batches {
+        writer
+            .write(batch)
+            .map_err(|e| format!("failed to write ipc batch: {e}"))?;
+    }
+    writer
+        .finish()
+        .map_err(|e| format!("failed to finish ipc writer: {e}"))?;
+    drop(writer);
+    Ok(buffer)
+}
+
+fn deserialize_batches(data: Vec<u8>) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    if data.is_empty() {
+        return Ok(vec![]);
+    }
+
+    FileReader::try_new(std::io::Cursor::new(data), None)
+        .map_err(|e| format!("failed to read ipc record batch: {e}"))?
+        .try_collect()
+        .map_err(|e| format!("failed to read ipc record batch: {e}"))
+}
 
 impl Serialize for Snapshot {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -71,6 +156,13 @@ impl Serialize for Snapshot {
         seq.serialize_element(&latest_commit_file)?;
 
         seq.serialize_element(&self.config)?;
+        let materialized_files = self
+            .materialized_files
+            .as_ref()
+            .map(|value| MaterializedFilesWire::try_from_materialized(value))
+            .transpose()
+            .map_err(serde::ser::Error::custom)?;
+        seq.serialize_element(&materialized_files)?;
 
         seq.end()
     }
@@ -149,6 +241,7 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
         let config: DeltaTableConfig = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(9, &self))?;
+        let materialized_files: Option<MaterializedFilesWire> = seq.next_element()?.unwrap_or(None);
 
         let ascending_commit_files = ascending_commit_files
             .into_iter()
@@ -223,6 +316,10 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             inner: Arc::new(snapshot),
             schema: Arc::new(schema),
             config,
+            materialized_files: materialized_files
+                .map(|value| value.into_materialized().map_err(de::Error::custom))
+                .transpose()?
+                .map(Arc::new),
         })
     }
 }
@@ -243,22 +340,6 @@ impl Serialize for EagerSnapshot {
     {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.snapshot)?;
-
-        if !self.files.is_empty() {
-            let mut buffer = vec![];
-            let mut writer = FileWriter::try_new(&mut buffer, self.files[0].schema().as_ref())
-                .map_err(serde::ser::Error::custom)?;
-            for file in &self.files {
-                writer.write(file).map_err(serde::ser::Error::custom)?;
-            }
-            writer.finish().map_err(serde::ser::Error::custom)?;
-            let data = writer.into_inner().map_err(serde::ser::Error::custom)?;
-
-            seq.serialize_element(&data)?;
-        } else {
-            seq.serialize_element(&Vec::<u8>::new())?;
-        }
-
         seq.end()
     }
 }
@@ -277,25 +358,20 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
     where
         V: SeqAccess<'de>,
     {
-        let snapshot = seq
+        let snapshot: Arc<Snapshot> = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-
-        let Some(elem) = seq.next_element::<Vec<u8>>()? else {
-            return Err(de::Error::invalid_length(3, &self));
-        };
-
-        let files = if elem.is_empty() {
-            vec![]
-        } else {
-            let reader = FileReader::try_new(std::io::Cursor::new(elem), None)
-                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?;
-            reader
-                .try_collect()
-                .map_err(|e| de::Error::custom(format!("failed to read ipc record batch: {e}")))?
-        };
-
-        Ok(EagerSnapshot { snapshot, files })
+        let legacy_payload: Option<Vec<u8>> = seq.next_element()?;
+        let snapshot =
+            match materialized_files_from_legacy_eager_payload(snapshot.as_ref(), legacy_payload)
+                .map_err(de::Error::custom)?
+            {
+                Some(materialized_files) if snapshot.materialized_files().is_none() => {
+                    Arc::new(snapshot.with_materialized_files(Some(materialized_files)))
+                }
+                _ => snapshot,
+            };
+        Ok(EagerSnapshot { snapshot })
     }
 }
 

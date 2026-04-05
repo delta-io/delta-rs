@@ -353,22 +353,9 @@ impl DeltaScan {
         scan_plan: &KernelScanPlan,
         engine: Arc<dyn Engine>,
     ) -> SendableScanMetadataStream {
-        match &self.snapshot {
-            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
-            SnapshotWrapper::EagerSnapshot(esn) => {
-                if let Ok(files) = esn.files() {
-                    let owned: Vec<_> = files.to_vec();
-                    scan_plan.scan.scan_metadata_from(
-                        engine,
-                        esn.snapshot().version(),
-                        Box::new(owned.into_iter()),
-                        None,
-                    )
-                } else {
-                    scan_plan.scan.scan_metadata(engine)
-                }
-            }
-        }
+        scan_plan
+            .scan
+            .scan_metadata_seeded(engine, self.snapshot.snapshot().materialized_files())
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -524,7 +511,12 @@ mod tests {
             Action, DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType,
         },
         logstore::get_actions,
-        test_utils::{TestResult, TestTables},
+        test_utils::{
+            TestResult, TestTables,
+            object_store::{
+                drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+            },
+        },
     };
 
     use super::*;
@@ -858,6 +850,85 @@ mod tests {
             "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query_materialized_snapshot_avoids_log_replay() -> TestResult {
+        let base = TestTables::Simple.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+
+        drain_recorded_ops(&mut operations).await;
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let read_plan = provider.scan(&state, None, &[], None).await?;
+        let _read_batches: Vec<_> = collect_partitioned(read_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "expected materialized snapshot scan to avoid log replay, got {replay_ops:?}",
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_materialized_snapshot_serde_update_provider_preserves_reuse() -> TestResult {
+        let base = TestTables::SimpleWithCheckpoint
+            .table_builder()?
+            .build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
+
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(9)).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+
+        let bytes = serde_json::to_vec(snapshot.as_ref())?;
+        let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
+        let snapshot = Arc::new(snapshot)
+            .update(log_store.engine(None), Some(10))
+            .await?;
+
+        drain_recorded_ops(&mut operations).await;
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let read_plan = provider.scan(&state, None, &[], None).await?;
+        let _read_batches: Vec<_> = collect_partitioned(read_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "expected serde+update+provider scan to reuse materialized state, got {replay_ops:?}",
+        );
 
         Ok(())
     }

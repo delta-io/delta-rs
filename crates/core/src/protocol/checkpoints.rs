@@ -7,6 +7,7 @@ use url::Url;
 
 use chrono::{TimeZone, Utc};
 use delta_kernel::FileMeta;
+use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStore;
@@ -293,14 +294,24 @@ pub async fn cleanup_expired_logs_for(
     Ok(deleted.len())
 }
 
+/// Parse `_last_checkpoint` JSON bytes into a [`LastCheckpointHint`].
+///
+/// Invalid JSON is logged as a warning and treated as absent so callers can
+/// safely fall back to directory listing. Callers are responsible for their
+/// own I/O and can adapt the parsed result to their needs (e.g., extracting
+/// only the version field).
+pub(crate) fn parse_last_checkpoint_hint(data: &[u8]) -> Option<LastCheckpointHint> {
+    serde_json::from_slice(data)
+        .inspect_err(|e| tracing::warn!("invalid _last_checkpoint JSON: {e}"))
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
     use object_store::Error as ObjectStoreError;
     use object_store::path::Path;
-    use tracing::warn;
 
     use crate::writer::test_utils::get_delta_schema;
 
@@ -320,9 +331,39 @@ mod tests {
             Err(ObjectStoreError::NotFound { .. }) => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        Ok(serde_json::from_slice(&data)
-            .inspect_err(|e| warn!("invalid _last_checkpoint JSON: {e}"))
-            .ok())
+        Ok(parse_last_checkpoint_hint(&data))
+    }
+
+    #[test]
+    fn test_parse_last_checkpoint_hint_valid() {
+        let json = br#"{"version": 42, "size": 100}"#;
+        let hint = parse_last_checkpoint_hint(json).expect("should parse valid JSON");
+        assert_eq!(hint.version, 42);
+    }
+
+    #[test]
+    fn test_parse_last_checkpoint_hint_invalid_json() {
+        let data = b"not valid json";
+        assert!(parse_last_checkpoint_hint(data).is_none());
+    }
+
+    #[test]
+    fn test_parse_last_checkpoint_hint_empty() {
+        assert!(parse_last_checkpoint_hint(b"").is_none());
+    }
+
+    #[test]
+    fn test_parse_last_checkpoint_hint_missing_required_fields() {
+        // version and size are required by LastCheckpointHint
+        let json = br#"{"version": 1}"#;
+        assert!(parse_last_checkpoint_hint(json).is_none());
+    }
+
+    #[test]
+    fn test_parse_last_checkpoint_hint_extra_fields_ignored() {
+        let json = br#"{"version": 5, "size": 10, "unknownField": true}"#;
+        let hint = parse_last_checkpoint_hint(json).expect("extra fields should be ignored");
+        assert_eq!(hint.version, 5);
     }
 
     #[tokio::test]

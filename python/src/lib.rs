@@ -126,6 +126,7 @@ type StringVec = Vec<String>;
 
 const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 52;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
+const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
 /// Maximum number of file-level deletion vector entries per Arrow RecordBatch when returning
 /// results from `DeltaTable.deletion_vectors()`.  Each entry is one (filepath, selection_vector)
@@ -144,6 +145,22 @@ fn deletion_vector_schema() -> Arc<arrow::datatypes::Schema> {
             false,
         ),
     ]))
+}
+
+fn parse_optimize_target_size(target_size: u64) -> PyResult<NonZeroU64> {
+    let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "target_file_size must be between 1 and {MAX_OPTIMIZE_TARGET_SIZE}"
+        ))
+    })?;
+
+    if target_size.get() > MAX_OPTIMIZE_TARGET_SIZE {
+        return Err(PyValueError::new_err(format!(
+            "target_file_size must be between 1 and {MAX_OPTIMIZE_TARGET_SIZE}"
+        )));
+    }
+
+    Ok(target_size)
 }
 
 fn build_deletion_vector_batches(
@@ -730,7 +747,7 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    /// Run compact optimize on the Delta Table while preserving partition-local file order.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         partition_filters = None,
@@ -770,9 +787,7 @@ impl RawDeltaTable {
             }
 
             if let Some(target_size) = target_size {
-                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
-                    PyValueError::new_err("target_file_size must be greater than 0")
-                })?;
+                let target_size = parse_optimize_target_size(target_size)?;
                 cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
@@ -850,9 +865,7 @@ impl RawDeltaTable {
             }
 
             if let Some(target_size) = target_size {
-                let target_size = NonZeroU64::new(target_size).ok_or_else(|| {
-                    PyValueError::new_err("target_file_size must be greater than 0")
-                })?;
+                let target_size = parse_optimize_target_size(target_size)?;
                 cmd = cmd.with_target_size(target_size);
             }
             if let Some(commit_interval) = min_commit_interval {
