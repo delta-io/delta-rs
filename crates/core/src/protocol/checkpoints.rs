@@ -2,7 +2,6 @@
 
 use std::sync::LazyLock;
 
-use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use chrono::{TimeZone, Utc};
@@ -20,6 +19,7 @@ use uuid::Uuid;
 
 use crate::kernel::{Version, spawn_blocking_with_span};
 use crate::logstore::{DELTA_LOG_REGEX, LogStore};
+use crate::parquet_utils::default_writer_properties;
 use crate::protocol::to_rb;
 use crate::table::config::TablePropertiesExt as _;
 use crate::{DeltaResult, DeltaTableError};
@@ -67,11 +67,9 @@ pub(crate) async fn create_checkpoint_for(
     let mut writer = AsyncArrowWriter::try_new(
         object_store_writer,
         first_batch.schema(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(parquet::basic::Compression::SNAPPY)
-                .build(),
-        ),
+        Some(default_writer_properties(
+            parquet::basic::Compression::SNAPPY,
+        )),
     )?;
     writer.write(&first_batch).await?;
 
