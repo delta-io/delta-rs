@@ -43,6 +43,7 @@ use datafusion::common::{
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
+use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
@@ -72,6 +73,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
+use self::validation::{MergeValidation, MergeValidationExec};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
@@ -102,16 +104,21 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 mod barrier;
 mod filter;
+mod validation;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
 const TARGET_COLUMN: &str = "__delta_rs_target";
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
+const TARGET_ROW_INDEX_COLUMN: &str = "__delta_rs_target_row_index";
 pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
 pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
 pub(crate) const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
+
+// Duplicate match validation markers
+const TARGET_MATCH_CARDINALITY_CLASS_COLUMN: &str = "__delta_rs_match_cardinality_class";
 
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 const TARGET_COUNT_METRIC: &str = "num_target_rows";
@@ -536,6 +543,27 @@ enum OperationType {
     Copy,
 }
 
+/// Duplicate-match validation class encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+enum CardinalityClass {
+    Ignore = 0,
+    MatchedUnconditionalDelete = 1,
+    DuplicateInvalidating = 2,
+}
+
+impl CardinalityClass {
+    fn for_matched_operation(op_type: OperationType, is_unconditional: bool) -> Self {
+        match op_type {
+            OperationType::Delete if is_unconditional => Self::MatchedUnconditionalDelete,
+            OperationType::Delete | OperationType::Update | OperationType::Copy => {
+                Self::DuplicateInvalidating
+            }
+            OperationType::Insert | OperationType::SourceDelete => Self::Ignore,
+        }
+    }
+}
+
 //Encapsute the User's Merge configuration for later processing
 struct MergeOperationConfig {
     /// Which records to update
@@ -551,6 +579,8 @@ struct MergeOperation {
     /// How to update columns in a record that match the predicate
     operations: HashMap<Column, Expr>,
     r#type: OperationType,
+    /// Duplicate-match validation class for this operation.
+    cardinality_class: CardinalityClass,
 }
 
 impl MergeOperation {
@@ -610,7 +640,16 @@ impl MergeOperation {
             predicate: maybe_into_expr(config.predicate, schema, state)?,
             operations: ops,
             r#type: config.r#type,
+            cardinality_class: CardinalityClass::Ignore,
         })
+    }
+
+    fn into_matched(mut self) -> Self {
+        let is_unconditional =
+            matches!(self.r#type, OperationType::Delete) && self.predicate.is_none();
+        self.cardinality_class =
+            CardinalityClass::for_matched_operation(self.r#type, is_unconditional);
+        self
     }
 }
 
@@ -742,6 +781,18 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
                     },
                 )?));
             }
+        }
+
+        if let Some(validation) = node.as_any().downcast_ref::<MergeValidation>() {
+            if physical_inputs.len() != 1 {
+                return plan_err!("MergeValidationExec expects exactly one input");
+            }
+
+            let schema = validation.input.schema();
+            return Ok(Some(Arc::new(MergeValidationExec::new(
+                physical_inputs.first().unwrap().clone(),
+                planner.create_physical_expr(&validation.expr, schema, session_state)?,
+            ))));
         }
 
         if let Some(barrier) = node.as_any().downcast_ref::<MergeBarrier>() {
@@ -949,6 +1000,7 @@ async fn execute(
         }),
     });
     let target = DataFrame::new(state.clone(), target);
+    let target = target.with_column(TARGET_ROW_INDEX_COLUMN, row_number())?;
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
 
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
@@ -956,7 +1008,10 @@ async fn execute(
 
     let match_operations: Vec<MergeOperation> = match_operations
         .into_iter()
-        .map(|op| MergeOperation::try_from(op, &join_schema_df, &state, &target_alias))
+        .map(|op| {
+            MergeOperation::try_from(op, &join_schema_df, &state, &target_alias)
+                .map(MergeOperation::into_matched)
+        })
         .collect::<Result<Vec<MergeOperation>, DeltaTableError>>()?;
 
     let not_match_target_operations: Vec<MergeOperation> = not_match_target_operations
@@ -1036,11 +1091,12 @@ async fn execute(
 
     let mut when_expr = Vec::with_capacity(operations_size);
     let mut then_expr = Vec::with_capacity(operations_size);
-    let mut ops = Vec::with_capacity(operations_size);
+    let mut ops: Vec<(HashMap<Column, Expr>, OperationType, CardinalityClass)> =
+        Vec::with_capacity(operations_size);
 
     fn update_case(
         operations: Vec<MergeOperation>,
-        ops: &mut Vec<(HashMap<Column, Expr>, OperationType)>,
+        ops: &mut Vec<(HashMap<Column, Expr>, OperationType, CardinalityClass)>,
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
@@ -1056,7 +1112,7 @@ async fn execute(
             when_expr.push(predicate);
             then_expr.push(lit(ops.len() as i32));
 
-            ops.push((op.operations, op.r#type));
+            ops.push((op.operations, op.r#type, op.cardinality_class));
 
             let action_type = match op.r#type {
                 OperationType::Update => "update",
@@ -1110,15 +1166,27 @@ async fn execute(
 
     when_expr.push(matched);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), OperationType::Copy));
+    ops.push((
+        HashMap::new(),
+        OperationType::Copy,
+        CardinalityClass::DuplicateInvalidating,
+    ));
 
     when_expr.push(not_matched_target);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), OperationType::SourceDelete));
+    ops.push((
+        HashMap::new(),
+        OperationType::SourceDelete,
+        CardinalityClass::Ignore,
+    ));
 
     when_expr.push(not_matched_source);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), OperationType::Copy));
+    ops.push((
+        HashMap::new(),
+        OperationType::Copy,
+        CardinalityClass::Ignore,
+    ));
 
     let case = CaseBuilder::new(None, when_expr, then_expr, None).end()?;
 
@@ -1180,8 +1248,8 @@ async fn execute(
             Column::new(source_qualifier.clone(), name)
         };
 
-        for (idx, (operations, _)) in ops.iter().enumerate() {
-            let op = operations
+        for (idx, (operations, _, _)) in ops.iter().enumerate() {
+            let op: Expr = operations
                 .get(&column)
                 .map(|expr| expr.to_owned())
                 .unwrap_or_else(|| col(column.clone()));
@@ -1239,7 +1307,7 @@ async fn execute(
     let mut copy_when = Vec::with_capacity(ops.len());
     let mut copy_then = Vec::with_capacity(ops.len());
 
-    for (idx, (_operations, r#type)) in ops.iter().enumerate() {
+    for (idx, (_operations, r#type, _)) in ops.iter().enumerate() {
         let op = idx as i32;
 
         // Used to indicate the record should be dropped prior to write
@@ -1330,6 +1398,37 @@ async fn execute(
         fields.extend(new_columns.into_iter().map(|(name, ex)| ex.alias(name)));
 
         LogicalPlanBuilder::from(plan).project(fields)?.build()?
+    };
+
+    let new_columns = if !match_operations.is_empty() {
+        let mut cardinality_when = Vec::with_capacity(ops.len());
+        let mut cardinality_then = Vec::with_capacity(ops.len());
+
+        for (idx, (_, _, cardinality_class)) in ops.iter().enumerate() {
+            cardinality_when.push(lit(idx as i32));
+            cardinality_then.push(lit(*cardinality_class as i32));
+        }
+
+        let cardinality_class = CaseBuilder::new(
+            Some(Box::new(col(OPERATION_COLUMN))),
+            cardinality_when,
+            cardinality_then,
+            Some(Box::new(lit(0))),
+        )
+        .end()?;
+
+        let new_columns = DataFrame::new(state.clone(), new_columns)
+            .with_column(TARGET_MATCH_CARDINALITY_CLASS_COLUMN, cardinality_class)?
+            .into_unoptimized_plan();
+
+        LogicalPlan::Extension(Extension {
+            node: Arc::new(MergeValidation {
+                input: new_columns,
+                expr: col(TARGET_ROW_INDEX_COLUMN),
+            }),
+        })
+    } else {
+        new_columns
     };
 
     let distribute_expr = col(file_column.as_str());
@@ -3356,6 +3455,57 @@ mod tests {
             .unwrap()
             .await;
         assert!(res.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_merge_update_multiple_source_match_error() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
+        let res = table
+            .clone()
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await;
+
+        assert!(res.is_err());
+        assert_eq!(table.version(), Some(1));
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]

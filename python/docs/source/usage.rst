@@ -483,8 +483,14 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 Optimizing tables
 ~~~~~~~~~~~~~~~~~
 
-Optimizing a table will perform bin-packing on a Delta Table which merges small files
-into a large file. Bin-packing reduces the number of API calls required for read operations.
+Optimizing a table rewrites files to improve read efficiency.
+Compaction reduces small-file overhead while preserving stable file-order locality
+within each partition by default.
+The ``target_size`` setting is still approximate: optimize plans around it, but
+final Parquet file sizes can differ because encoding and compression happen at
+write time.
+Use z-order when you want an explicit clustering rewrite that intentionally
+trades locality for better data skipping across multiple columns.
 Optimizing will increments the table's version and creates remove actions for optimized files.
 Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
 
@@ -502,7 +508,8 @@ For just file compaction, use the :meth:`TableOptimizer.compact` method:
      'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
      'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
      'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+     'totalFilesSkipped': 0, 'plannerStrategy': 'preserveLocality',
+     'preservedStableOrder': True, 'preserveInsertionOrder': True, 'maxBinSpanFiles': 5}
 
 For improved data skipping, use the :meth:`TableOptimizer.z_order` method. This
 is slower than just file compaction, but can improve performance for queries that
@@ -516,7 +523,8 @@ filter on multiple columns at once.
      'filesAdded': {'min': 2473439, 'max': 2473439, 'avg': 2473439.0, 'totalFiles': 1, 'totalSize': 2473439},
      'filesRemoved': {'min': 325440, 'max': 895702, 'avg': 773810.625, 'totalFiles': 8, 'totalSize': 6190485},
      'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 8,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+     'totalFilesSkipped': 0, 'plannerStrategy': 'zOrder',
+     'preservedStableOrder': False, 'preserveInsertionOrder': False, 'maxBinSpanFiles': 8}
 
 Writing Delta Tables
 --------------------

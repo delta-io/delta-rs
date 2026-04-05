@@ -1,0 +1,16 @@
+name: Upload to codecov
+inputs:
+  token:
+    required: true
+    type: string
+runs:
+  using: "composite"
+  steps:
+    - name: Upload coverage to Codecov
+      # https://github.com/codecov/codecov-action/releases/tag/v6.0.0>
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2
+      with:
+        files: codecov.json
+        fail_ci_if_error: true
+      env:
+        CODECOV_TOKEN: ${{ inputs.token }}
