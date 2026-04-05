@@ -12,6 +12,8 @@ use futures::future::ready;
 use futures::stream::once;
 use url::Url;
 
+#[cfg(feature = "datafusion")]
+use super::MaterializedFiles;
 use crate::DeltaResult;
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 
@@ -149,6 +151,28 @@ impl Scan {
 
         builder.spawn_blocking(blocking_iter);
         builder.build()
+    }
+
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn scan_metadata_seeded(
+        &self,
+        engine: Arc<dyn Engine>,
+        materialized_files: Option<&Arc<MaterializedFiles>>,
+    ) -> SendableScanMetadataStream {
+        match materialized_files.and_then(|materialized_files| materialized_files.full_table_seed())
+        {
+            Some(materialized_seed) => {
+                let (existing_version, existing_data, existing_predicate) =
+                    materialized_seed.into_parts();
+                self.scan_metadata_from(
+                    engine,
+                    existing_version,
+                    Box::new(existing_data),
+                    existing_predicate,
+                )
+            }
+            None => self.scan_metadata(engine),
+        }
     }
 
     pub fn scan_metadata_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
