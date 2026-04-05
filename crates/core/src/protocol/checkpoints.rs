@@ -542,7 +542,7 @@ mod tests {
         }
         /// This test validates that a checkpoint can be written and re-read with the minimum viable
         /// Metadata. There was a bug which didn't handle the optionality of createdTime.
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_create_checkpoint_with_metadata() {
             use crate::kernel::new_metadata;
 
@@ -661,7 +661,7 @@ mod tests {
             assert!(res.is_ok());
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_cleanup_with_checkpoints() {
             let table = setup_table().await;
             create_checkpoint(&table, None).await.unwrap();
@@ -701,7 +701,7 @@ mod tests {
             assert!(res.is_ok());
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_struct_with_single_list_field() {
             // you need another column otherwise the entire stats struct is empty
             // which also fails parquet write during checkpoint
@@ -821,7 +821,7 @@ mod tests {
         }
 
         /// <https://github.com/delta-io/delta-rs/issues/3030>
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_create_checkpoint_overwrite() -> DeltaResult<()> {
             use crate::protocol::SaveMode;
             use crate::writer::test_utils::datafusion::get_data_sorted;

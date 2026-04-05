@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_json_write_checkpoint() {
         use std::fs;
 

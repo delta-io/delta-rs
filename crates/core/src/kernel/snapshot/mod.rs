@@ -1067,11 +1067,7 @@ mod tests {
 
             let engine = log_store.engine(None);
             let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
-            let schema = snapshot
-                .table_configuration()
-                .schema()
-                .as_ref()
-                .try_into_arrow()?;
+            let schema = snapshot.schema().as_ref().try_into_arrow()?;
 
             Ok((
                 Self {
@@ -1626,7 +1622,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_file_views_return_newest_files_first() -> TestResult {
         let (_dir, mut table) = checkpoint_rebase_table().await?;
 
@@ -1651,7 +1647,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1671,7 +1667,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1690,7 +1686,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult
     {
         let (_dir, table) = checkpoint_rebase_table().await?;
@@ -1715,7 +1711,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1762,7 +1758,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_same_version_checkpoint_refresh_is_idempotent() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1803,7 +1799,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_same_version_surfaces_invalid_current_checkpoint_hint()
     -> TestResult {
         let (_table_dir, table) = checkpoint_rebase_table().await?;
