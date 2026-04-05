@@ -174,7 +174,7 @@ pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField
 }
 
 /// checks if table contains variant in any field including nested fields.
-pub fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn _check_type(dtype: &DataType) -> bool {
         match dtype {
             DataType::Variant(_) => true,
