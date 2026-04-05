@@ -13,7 +13,7 @@ mod simple_checkpoint {
     use std::fs::{self, File};
     use std::path::{Path, PathBuf};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn simple_checkpoint_test() {
         let table_location = "../test/tests/data/checkpoints";
@@ -169,7 +169,7 @@ mod delete_expired_delta_log_in_checkpoint {
         file.set_times(times).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_expired_logs() -> DeltaResult<()> {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired",
@@ -244,7 +244,7 @@ mod delete_expired_delta_log_in_checkpoint {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_version_same_version_refreshes_checkpoint_base() -> DeltaResult<()> {
         let tmp_dir = tempfile::tempdir().unwrap();
         let table_location = tmp_dir.path().to_string_lossy().into_owned();
@@ -314,7 +314,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
     // Test to verify that intermediate versions can still be loaded after the checkpoint is created.
     // This is to verify the behavior of `cleanup_expired_logs_for` and its use of safe checkpoints.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_expired_logs_safe_checkpoint() -> DeltaResult<()> {
         // For additional tracing:
         // let _ = pretty_env_logger::try_init();
@@ -401,7 +401,7 @@ mod delete_expired_delta_log_in_checkpoint {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_not_delete_expired_logs() -> DeltaResult<()> {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/not_delete_expired",

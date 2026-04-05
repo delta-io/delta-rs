@@ -836,7 +836,7 @@ mod tests {
     // This test will do some table operations after executing a vacuum with versions to ensure
     // that the table is still functional, can be read, checkpointed, etc.
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_vacuum_keep_version_validity() {
         use datafusion::prelude::SessionContext;
         use object_store::GetResultPayload;
