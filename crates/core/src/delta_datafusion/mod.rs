@@ -633,6 +633,7 @@ mod tests {
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
     use serde_json::json;
+    use std::ops::Range;
     use url::Url;
 
     use super::*;
