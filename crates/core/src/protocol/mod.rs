@@ -489,6 +489,7 @@ impl DeltaOperation {
         match self {
             // Predicate is none -> Merge operation had to join full source and target
             Self::Merge { predicate, .. } if predicate.is_none() => true,
+            Self::Restore { .. } => true,
             _ => false,
         }
     }

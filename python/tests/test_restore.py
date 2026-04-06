@@ -4,7 +4,12 @@ import pathlib
 import pytest
 from arro3.core import Table
 
-from deltalake import CommitProperties, DeltaTable, PostCommitHookProperties, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    PostCommitHookProperties,
+    write_deltalake,
+)
 
 
 @pytest.mark.parametrize("use_relative", [True, False])
