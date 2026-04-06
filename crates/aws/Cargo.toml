@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.32.0", path = "../core" , features = ["cloud"]}
+deltalake-core = { version = "0.32.0", path = "../core" , default-features = false, features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
