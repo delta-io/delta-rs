@@ -25,7 +25,7 @@ aws-sdk-glue = { version = "1.120", default-features = false, features = [
     # Use the new default HTTPS client stack (no hyper 0.14).
     "default-https-client",
 ] }
-deltalake-core = { version = "0.32.0", path = "../core" }
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false }
 thiserror = { workspace = true }
 
 [dev-dependencies]

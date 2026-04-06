@@ -21,7 +21,7 @@ futures.workspace = true
 chrono.workspace = true
 tracing.workspace = true
 typed-builder = { workspace = true }
-deltalake-core = { version = "0.32.0", path = "../core" }
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false }
 deltalake-aws = { version = "0.15.0", path = "../aws", optional = true }
 deltalake-azure = { version = "0.15.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "0.16.0", path = "../gcp", optional = true }

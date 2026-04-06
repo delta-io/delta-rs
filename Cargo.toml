@@ -19,7 +19,6 @@ repository = "https://github.com/delta-io/delta.rs"
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
 delta_kernel = { package = "buoyant_kernel", version = "0.21.101", features = [
     "arrow-57",
-    "default-engine-rustls",
     "internal-api",
 ] }
 
