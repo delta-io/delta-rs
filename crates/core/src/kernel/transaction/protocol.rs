@@ -263,6 +263,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
+    writer_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(TableFeature::ChangeDataFeed);
