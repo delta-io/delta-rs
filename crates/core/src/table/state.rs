@@ -19,8 +19,8 @@ use super::DeltaTableConfig;
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
-    Version,
+    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, Snapshot,
+    TombstoneView, Version,
 };
 use crate::logstore::LogStore;
 use crate::{DeltaResult, DeltaTableError};
@@ -209,7 +209,7 @@ impl DeltaTableState {
     }
 }
 
-impl EagerSnapshot {
+impl Snapshot {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
     ///
     /// # Arguments
@@ -236,7 +236,7 @@ impl EagerSnapshot {
     ///   (if available).
     /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
-    pub fn add_actions_table(
+    pub(crate) fn add_actions_table(
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
@@ -255,7 +255,7 @@ impl EagerSnapshot {
     /// limit for tables with a very large number of files.
     ///
     /// See [Self::add_actions_table] for schema details.
-    pub fn add_actions_batches(
+    pub(crate) fn add_actions_batches(
         &self,
         flatten: bool,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
@@ -266,13 +266,14 @@ impl EagerSnapshot {
     /// Get add action metadata batches containing only path and partition columns.
     ///
     /// This is a fast-path for partition-only planning and file matching.
+    #[cfg(feature = "datafusion")]
     pub(crate) fn add_actions_partition_batches(
         &self,
     ) -> Result<Vec<RecordBatch>, DeltaTableError> {
         let mut expressions = vec![column_expr_ref!("path")];
         let mut fields = vec![StructField::not_null("path", DataType::STRING)];
 
-        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -291,12 +292,15 @@ impl EagerSnapshot {
         expression: Expression,
         table_schema: DataType,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
-        let files = self.files()?;
+        let files = self
+            .materialized_files()
+            .map(|materialized_files| materialized_files.batches.as_ref())
+            .ok_or_else(|| DeltaTableError::NotInitializedWithFiles("add_actions".into()))?;
         if files.is_empty() {
             return Ok(vec![]);
         }
 
-        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
+        let input_schema = self.inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             input_schema,
@@ -331,7 +335,7 @@ impl EagerSnapshot {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot().inner.stats_schema()?;
+        let stats_schema = self.inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::SchemaMismatch {
@@ -360,7 +364,7 @@ impl EagerSnapshot {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -392,6 +396,29 @@ impl EagerSnapshot {
         } else {
             Ok(empty_batch)
         }
+    }
+}
+
+impl EagerSnapshot {
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        self.snapshot().add_actions_table(flatten)
+    }
+
+    pub fn add_actions_batches(
+        &self,
+        flatten: bool,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
+        self.snapshot().add_actions_batches(flatten)
+    }
+
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn add_actions_partition_batches(
+        &self,
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        self.snapshot().add_actions_partition_batches()
     }
 }
 
