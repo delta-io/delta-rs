@@ -28,7 +28,8 @@ use datafusion::{
     error::DataFusionError,
     execution::context::SessionState,
     logical_expr::{
-        Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
+        Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, cast, col, lit,
+        when,
     },
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
@@ -342,10 +343,18 @@ async fn execute(
         .into_iter()
         .map(|field| {
             let expr = match updates.get(field.name()) {
-                Some(expr) => case(col(UPDATE_PREDICATE_COLNAME))
-                    .when(lit(true), expr.to_owned())
-                    .otherwise(col(Column::from_name(field.name())))?
-                    .alias(field.name()),
+                Some(expr) => {
+                    // Cast the update expression to the target column type so that
+                    // (a) the CASE branches are always the same type and DataFusion cannot
+                    //     silently widen the column (e.g. Int32 → Utf8), and
+                    // (b) incompatible assignments (e.g. a non-numeric string into an Int32
+                    //     column) are caught during plan optimisation via constant folding.
+                    let typed_expr = cast(expr.to_owned(), field.data_type().clone());
+                    case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), typed_expr)
+                        .otherwise(col(Column::from_name(field.name())))?
+                        .alias(field.name())
+                }
                 None => col(Column::from_name(field.name())),
             };
             Ok::<_, DataFusionError>(expr)
