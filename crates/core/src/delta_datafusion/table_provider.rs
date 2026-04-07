@@ -344,7 +344,9 @@ impl<'a> DeltaScanBuilder<'a> {
             // partition filters with Exact pushdown were removed from projection by DF optimizer,
             // we need to add them back for the predicate pruning to work
             if let Some(expr) = &self.filter {
-                for c in expr.column_refs() {
+                // Avoid non-determinism of HashSet (affects the expressions in pushed-down filters)
+                let column_refs = expr.column_refs().into_iter().collect::<BTreeSet<_>>();
+                for c in column_refs {
                     let idx = logical_schema.index_of(c.name.as_str())?;
                     if !used_columns.contains(&idx) {
                         fields.push(logical_schema.field(idx).to_owned());
