@@ -1694,7 +1694,7 @@ mod tests {
         .unwrap();
 
         // The scan only projects the first column. This requires the TableProvider to add the
-        // columns required for the filter to an intermediate schema. This test should asser that
+        // columns required for the filter to an intermediate schema. This test should assert that
         // this intermediate schema is created deterministically.
         let filter = and(col("v2").eq(lit(2)), col("v3").eq(lit(3)));
         let scan = table_provider
