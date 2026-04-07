@@ -192,3 +192,4 @@ datafusion-session = { git = 'https://github.com/hstack/datafusion.git', branch 
 datafusion-spark = { git = 'https://github.com/hstack/datafusion.git', branch = 'main' }
 datafusion-sql = { git = 'https://github.com/hstack/datafusion.git', branch = 'main' }
 datafusion-substrait = { git = 'https://github.com/hstack/datafusion.git', branch = 'main' }
+delta_kernel = { git = "https://github.com/hstack/delta-kernel-rs", branch = "main-0.19.2" }
