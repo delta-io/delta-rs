@@ -1286,7 +1286,6 @@ mod tests {
     use datafusion::prelude::{and, col, lit};
     use object_store::path::Path;
     use std::sync::Arc;
-    use tempfile::TempDir;
     use url::Url;
 
     use super::*;
