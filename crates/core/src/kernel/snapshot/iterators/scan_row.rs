@@ -10,6 +10,7 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
+use delta_kernel::EngineData;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::expressions::UnaryExpressionOp;
 use delta_kernel::scan::scan_row_schema;
@@ -142,7 +143,20 @@ fn parse_stats_column_impl(
     let stats_batch = batch.project(&[stats_idx])?;
     let stats_data = Box::new(ArrowEngineData::new(stats_batch));
 
-    let parsed = parse_json(stats_data, stats_schema)?;
+    let parsed: Box<dyn EngineData> = match parse_json(stats_data, stats_schema.clone()) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("Failed to parse stats JSON, treating stats as absent: {e}");
+            let arrow_schema: Arc<arrow_schema::Schema> = Arc::new(stats_schema.as_ref().try_into_arrow()?);
+            let null_columns: Vec<_> = arrow_schema
+                .fields()
+                .iter()
+                .map(|f| new_null_array(f.data_type(), batch.num_rows()))
+                .collect();
+            let null_batch = RecordBatch::try_new(arrow_schema, null_columns)?;
+            Box::new(ArrowEngineData::new(null_batch))
+        }
+    };
     let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
 
     let stats_array: Arc<StructArray> = Arc::new(parsed.into());
