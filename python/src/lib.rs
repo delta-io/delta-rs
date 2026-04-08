@@ -1241,7 +1241,7 @@ impl RawDeltaTable {
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
     #[pyo3(signature = (
-        target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None
+        target, *, ignore_missing_files = false, protocol_downgrade_allowed = false, commit_properties=None, post_commithook_properties=None
     ))]
     pub fn restore(
         &self,
@@ -1249,6 +1249,7 @@ impl RawDeltaTable {
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
         commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
         let table = self._table.lock().map_err(to_rt_err)?.clone();
         let mut cmd = table.restore();
@@ -1268,7 +1269,9 @@ impl RawDeltaTable {
         cmd = cmd.with_ignore_missing_files(ignore_missing_files);
         cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
 
-        if let Some(commit_properties) = maybe_create_commit_properties(commit_properties, None) {
+        if let Some(commit_properties) =
+            maybe_create_commit_properties(commit_properties, post_commithook_properties)
+        {
             cmd = cmd.with_commit_properties(commit_properties);
         }
 

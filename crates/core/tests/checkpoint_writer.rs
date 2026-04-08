@@ -35,6 +35,7 @@ mod simple_checkpoint {
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
+        assert_checkpoint_created_by(&checkpoint_path);
 
         // Check that the checkpoint does use run length encoding
         assert_column_rle_encoding(checkpoint_path, true);
@@ -49,6 +50,7 @@ mod simple_checkpoint {
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
+        assert_checkpoint_created_by(&checkpoint_path);
 
         // Check that the checkpoint does use run length encoding
         assert_column_rle_encoding(checkpoint_path, true);
@@ -89,6 +91,18 @@ mod simple_checkpoint {
         } else {
             assert!(!found_rle, "Expected no RLE_DICTIONARY encoding");
         }
+    }
+
+    fn assert_checkpoint_created_by(file_path: &Path) {
+        let file = File::open(file_path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let meta = reader.metadata();
+        let expected_created_by = format!("delta-rs version {}", deltalake_core::crate_version());
+
+        assert_eq!(
+            meta.file_metadata().created_by(),
+            Some(expected_created_by.as_str())
+        );
     }
 
     fn get_last_checkpoint_version(log_path: &Path) -> i64 {
