@@ -237,7 +237,7 @@ impl DeltaScanConfig {
     /// such as dictionary encoding of partition columns or
     /// view types.
     pub(crate) fn table_schema(&self, table_config: &TableConfiguration) -> Result<SchemaRef> {
-        let table_schema: Schema = table_config.schema().as_ref().try_into_arrow()?;
+        let table_schema: Schema = table_config.logical_schema().as_ref().try_into_arrow()?;
         self.physical_arrow_schema(table_config, &table_schema)
     }
 
@@ -484,12 +484,9 @@ fn process_predicate<'a>(
 }
 
 fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
-    let logical_fields = config.schema().leaves(None);
+    let logical_fields = config.logical_schema().leaves(None);
     let (logical_names, _) = logical_fields.as_ref();
-    let physical_schema = config
-        .schema()
-        .make_physical(config.column_mapping_mode())
-        .leaves(None);
+    let physical_schema = config.physical_schema().leaves(None);
     let (physical_names, _) = physical_schema.as_ref();
     let name_mapping: HashMap<_, _> = logical_names.iter().zip(physical_names).collect();
     let transformed = expr.transform(|node| match &node {

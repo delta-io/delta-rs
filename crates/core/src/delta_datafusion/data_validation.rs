@@ -259,7 +259,10 @@ pub(crate) fn validation_predicates(
 ) -> Result<Vec<Expr>> {
     // find all columns that are non-nullable in the table schema but nullable
     // in the source schema and add IS NOT NULL checks for them.
-    let table_schema: Schema = table_configuration.schema().as_ref().try_into_arrow()?;
+    let table_schema: Schema = table_configuration
+        .logical_schema()
+        .as_ref()
+        .try_into_arrow()?;
     let non_nullable_table: HashSet<_> = collect_non_nullable_fields(&table_schema)
         .into_iter()
         .collect();
@@ -279,7 +282,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration
-            .schema()
+            .logical_schema()
             .get_invariants()
             .map_err(|e| plan_datafusion_err!("Failed to read invariants from schema: {}", e))?;
         for invariant in invariants {
@@ -296,7 +299,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::GeneratedColumns) {
         let generated = table_configuration
-            .schema()
+            .logical_schema()
             .get_generated_columns()
             .map_err(|e| {
                 plan_datafusion_err!("Failed to read generated columns from schema: {}", e)

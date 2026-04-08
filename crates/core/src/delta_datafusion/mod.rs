@@ -170,7 +170,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -184,7 +184,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),

@@ -90,6 +90,7 @@ humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["prettyprint"]}
 criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test" }
@@ -105,7 +106,7 @@ tokio-test = "0.4.5"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
-default = ["datafusion", "rustls"]
+default = ["rustls"]
 datafusion = [
     "dep:datafusion",
     "datafusion-datasource",

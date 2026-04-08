@@ -6,7 +6,7 @@ use arrow_ipc::writer::FileWriter;
 use delta_kernel::FileMeta;
 use delta_kernel::actions::{Metadata, Protocol};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::log_segment::{ListedLogFilesBuilder, LogSegment};
+use delta_kernel::log_segment::{LogSegment, LogSegmentFiles};
 use delta_kernel::path::ParsedLogPath;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
@@ -112,6 +112,7 @@ impl Serialize for Snapshot {
         let ascending_commit_files = self
             .inner
             .log_segment()
+            .listed
             .ascending_commit_files
             .iter()
             .map(|f| FileMetaSerde::from(&f.location))
@@ -119,6 +120,7 @@ impl Serialize for Snapshot {
         let ascending_compaction_files = self
             .inner
             .log_segment()
+            .listed
             .ascending_compaction_files
             .iter()
             .map(|f| FileMetaSerde::from(&f.location))
@@ -126,6 +128,7 @@ impl Serialize for Snapshot {
         let checkpoint_parts = self
             .inner
             .log_segment()
+            .listed
             .checkpoint_parts
             .iter()
             .map(|f| FileMetaSerde::from(&f.location))
@@ -133,12 +136,14 @@ impl Serialize for Snapshot {
         let latest_crc_file = self
             .inner
             .log_segment()
+            .listed
             .latest_crc_file
             .as_ref()
             .map(|f| FileMetaSerde::from(&f.location));
         let latest_commit_file = self
             .inner
             .log_segment()
+            .listed
             .latest_commit_file
             .as_ref()
             .map(|f| FileMetaSerde::from(&f.location));
@@ -280,16 +285,14 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .transpose()?
             .flatten();
 
-        let listed_log_files = ListedLogFilesBuilder {
+        let listed_log_files = LogSegmentFiles {
             ascending_commit_files,
             ascending_compaction_files,
             checkpoint_parts,
             latest_crc_file,
             latest_commit_file,
             ..Default::default()
-        }
-        .build()
-        .map_err(de::Error::custom)?;
+        };
 
         let log_root = if !table_url.path().ends_with("/") {
             let mut aux = table_url.clone();
@@ -308,16 +311,9 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
                 .map_err(de::Error::custom)?;
 
         let snapshot = KernelSnapshot::new(log_segment, table_configuration);
-        let schema = snapshot
-            .table_configuration()
-            .schema()
-            .as_ref()
-            .try_into_arrow()
-            .map_err(de::Error::custom)?;
 
         Ok(Snapshot {
             inner: Arc::new(snapshot),
-            schema: Arc::new(schema),
             config,
             materialized_files: materialized_files
                 .map(|value| value.into_materialized().map_err(de::Error::custom))

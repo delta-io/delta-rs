@@ -185,7 +185,7 @@ impl DeltaScanExec {
         if config.is_feature_enabled(&TableFeature::ColumnMapping) {
             let get_index = |name| {
                 if let Some(logical) = self.scan_plan.scan.logical_schema().field(name) {
-                    let physical = logical.make_physical(config.column_mapping_mode());
+                    let physical = logical.make_physical(config.column_mapping_mode()).ok()?;
                     self.input.schema().index_of(physical.name()).ok()
                 } else {
                     None

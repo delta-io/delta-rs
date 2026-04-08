@@ -131,7 +131,7 @@ mod datafusion {
 
     impl LogDataHandler<'_> {
         fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
-            let schema = self.config.schema();
+            let schema = self.config.logical_schema();
             let field = schema.field(&column.name)?;
             // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
             if field.data_type() == &DataType::Primitive(PrimitiveType::Binary) {

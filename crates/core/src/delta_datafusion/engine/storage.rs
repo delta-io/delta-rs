@@ -105,6 +105,10 @@ impl StorageHandler for DataFusionStorageHandler {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("head not implemented"))
     }
+
+    fn put(&self, _: &Url, _: bytes::Bytes, _: bool) -> Result<(), delta_kernel::Error> {
+        Err(delta_kernel::Error::generic("put not implemented"))
+    }
 }
 
 pub trait AsObjectStoreUrl {
