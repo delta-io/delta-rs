@@ -297,6 +297,7 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
+        .with_max_retries(0)
         .with_operation_id(operation_id)
         .with_post_commit_hook_handler(custom_execute_handler)
         .build(Some(&snapshot), log_store.clone(), operation)
