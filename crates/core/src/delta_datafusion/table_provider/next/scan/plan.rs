@@ -131,6 +131,7 @@ impl KernelScanPlan {
         let missing_columns: Vec<_> = columns_in_filters
             .difference(&columns_in_scan)
             .cloned()
+            .sorted() // Prevent non-deterministic ordering from HashSet
             .collect();
 
         let file_id_field = config.file_id_field();
@@ -518,19 +519,18 @@ fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        delta_datafusion::create_session,
+        test_utils::{TestResult, open_fs_path},
+    };
+    use datafusion::logical_expr::and;
     use datafusion::{
         assert_batches_sorted_eq,
         physical_plan::collect,
         prelude::{col, lit},
         scalar::ScalarValue,
     };
-
-    use crate::{
-        delta_datafusion::create_session,
-        test_utils::{TestResult, open_fs_path},
-    };
-
-    use super::*;
 
     fn schema_has_view_types(schema: &Schema) -> bool {
         schema
@@ -859,5 +859,38 @@ mod tests {
             field.data_type(),
             &crate::delta_datafusion::file_id::file_id_data_type()
         );
+    }
+
+    /// The scan in this test only projects one column. This requires the scan plan to add the
+    /// columns required for the filter to the physical schema. This test should assert that
+    /// these additional columns in the physical schema are created deterministically.
+    #[tokio::test]
+    async fn test_scan_with_projection_has_stable_schema_for_filters() {
+        let mut table = open_fs_path("../test/tests/data/COVID-19_NYT");
+        table.load().await.unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().snapshot();
+        let filter = and(
+            col("state").eq(lit("Louisiana")),
+            col("county").eq(lit("Cameron")),
+        );
+        let scan_plan = KernelScanPlan::try_new(
+            snapshot,
+            Some(&vec![4]),
+            &[filter],
+            &DeltaScanConfig::default(),
+            None,
+        )
+        .unwrap();
+
+        let expected_schema = snapshot
+            .schema()
+            .project(&vec!["cases", "county", "state"])
+            .unwrap();
+        // Assert string representation as the equality check is order-insensitive.
+        assert_eq!(
+            scan_plan.scan.physical_schema().to_string(),
+            expected_schema.to_string()
+        )
     }
 }
