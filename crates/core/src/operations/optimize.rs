@@ -58,11 +58,12 @@ use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIE
 use crate::kernel::{Action, Add, PartitionsExt, Remove, Version, scalars::ScalarExt};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
+use crate::parquet_utils::default_writer_properties;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaTable, ObjectMeta, PartitionFilter, crate_version, to_kernel_predicate};
+use crate::{DeltaTable, ObjectMeta, PartitionFilter, to_kernel_predicate};
 
 /// Planner used by optimize.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -421,10 +422,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             this.pre_execute(operation_id).await?;
 
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
-                WriterProperties::builder()
-                    .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
-                    .set_created_by(format!("delta-rs version {}", crate_version()))
-                    .build()
+                default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
             });
             let (session, _) = resolve_session_state(
                 this.session.as_deref(),

@@ -83,6 +83,7 @@ pub mod errors;
 pub mod kernel;
 pub mod logstore;
 pub mod operations;
+pub(crate) mod parquet_utils;
 pub mod protocol;
 pub use kernel::schema;
 pub mod table;
