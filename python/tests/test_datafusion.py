@@ -111,7 +111,9 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
     write_deltalake(tmp_path, table)
     dt = DeltaTable(tmp_path)
 
-    with pytest.raises(ValueError, match="Expected PyCapsule name"):
+    with pytest.raises(
+        ValueError, match="PyCapsule_GetPointer called with incorrect name"
+    ):
         dt.__datafusion_table_provider__(session=BadSession())  # type: ignore[call-arg]
 
 

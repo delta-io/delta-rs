@@ -19,7 +19,6 @@ features = [
     "gcs",
     "hdfs",
     "json",
-    "python",
     "s3",
     "unity-experimental",
 ]
@@ -47,7 +46,7 @@ gcs = ["deltalake-gcp"]
 glue = ["deltalake-catalog-glue"]
 hdfs = ["deltalake-hdfs"]
 json = ["deltalake-core/json"]
-python = ["deltalake-core/python"]
+# TODO: restore python = ["deltalake-core/python"] after arrow 58 upgrade
 s3-native-tls = ["deltalake-aws/native-tls", "native-tls"]
 s3 = ["deltalake-aws/rustls", "rustls"]
 unity-experimental = ["deltalake-catalog-unity"]
