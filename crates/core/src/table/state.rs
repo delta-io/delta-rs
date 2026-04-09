@@ -281,7 +281,7 @@ impl Snapshot {
             expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
-        let expression = Expression::Struct(expressions);
+        let expression = Expression::Struct(expressions, None);
         let table_schema = DataType::try_struct_type(fields)?;
         self.add_actions_batches_with_schema(true, expression, table_schema)
     }
@@ -372,7 +372,7 @@ impl Snapshot {
             expressions.push(column_expr_ref!("partitionValues_parsed"));
         }
 
-        let expression = Expression::Struct(expressions);
+        let expression = Expression::Struct(expressions, None);
         let table_schema = DataType::try_struct_type(fields)?;
         Ok((expression, table_schema))
     }

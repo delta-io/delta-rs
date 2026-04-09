@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use arrow::datatypes::Int32Type;
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{Array, RecordBatch, StructArray};
+use arrow_array::{Array, MapArray, RecordBatch, StringArray, StructArray};
 use arrow_schema::DataType as ArrowDataType;
 use chrono::{DateTime, Utc};
 use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
@@ -31,6 +31,8 @@ mod tombstones;
 const FIELD_NAME_PATH: &str = "path";
 const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
+const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
+const FIELD_NAME_RAW_PARTITION_VALUES: &str = "partitionValues";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
@@ -188,25 +190,24 @@ impl LogicalFileView {
             })
     }
 
-    /// Converts partition values to a map of column names to serialized values.
-    fn partition_values_map(&self) -> HashMap<String, Option<String>> {
-        self.partition_values()
-            .map(|data| {
-                data.fields()
-                    .iter()
-                    .zip(data.values().iter())
-                    .map(|(k, v)| {
-                        (
-                            k.name().to_string(),
-                            if v.is_null() {
-                                None
-                            } else {
-                                Some(v.serialize())
-                            },
-                        )
-                    })
-                    .collect()
+    fn raw_partition_values(&self) -> Option<&MapArray> {
+        self.files
+            .column_by_name(FIELD_NAME_FILE_CONSTANT_VALUES)
+            .and_then(|col| col.as_struct_opt())
+            .and_then(|file_constants| {
+                file_constants.column_by_name(FIELD_NAME_RAW_PARTITION_VALUES)
             })
+            .and_then(|col| col.as_map_opt())
+    }
+
+    /// Returns the raw partition value map stored in the log for this file.
+    ///
+    /// This preserves all partition columns even when `partitionValues_parsed` was narrowed to the
+    /// predicate-referenced subset for data skipping.
+    fn partition_values_map(&self) -> HashMap<String, Option<String>> {
+        self.raw_partition_values()
+            .filter(|partitions| partitions.is_valid(self.index))
+            .and_then(|partitions| collect_string_map(&partitions.value(self.index)))
             .unwrap_or_default()
     }
 
@@ -454,6 +455,18 @@ fn get_string_value(data: &dyn Array, index: usize) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+fn collect_string_map(data: &dyn Array) -> Option<HashMap<String, Option<String>>> {
+    let entries = data.as_any().downcast_ref::<StructArray>()?;
+    let keys = entries.column(0).as_any().downcast_ref::<StringArray>()?;
+    let values = entries.column(1).as_any().downcast_ref::<StringArray>()?;
+    Some(
+        keys.iter()
+            .zip(values.iter())
+            .filter_map(|(key, value)| key.map(|k| (k.to_string(), value.map(str::to_string))))
+            .collect(),
+    )
 }
 
 impl TryFrom<&LogicalFileView> for ObjectMeta {

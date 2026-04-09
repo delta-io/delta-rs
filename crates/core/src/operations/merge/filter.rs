@@ -337,7 +337,7 @@ pub(crate) async fn try_construct_early_filter(
 
     match generalize_filter(
         join_predicate,
-        partition_columns,
+        &partition_columns.to_vec(),
         source_name,
         target_name,
         &mut placeholders,

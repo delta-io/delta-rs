@@ -36,8 +36,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
-    Version,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, Transaction, Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -432,7 +431,7 @@ impl RawDeltaTable {
             id: metadata.id().to_string(),
             name: metadata.name().map(String::from),
             description: metadata.description().map(String::from),
-            partition_columns: metadata.partition_columns().clone(),
+            partition_columns: metadata.partition_columns().to_vec(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
         })
@@ -1439,6 +1438,24 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
+        let partition_column_keys: Vec<(&str, String)> = partition_columns
+            .iter()
+            .map(|col| {
+                let physical_name = schema
+                    .field(col)
+                    .and_then(|field| {
+                        field
+                            .metadata()
+                            .get("delta.columnMapping.physicalName")
+                            .and_then(|value| match value {
+                                MetadataValue::String(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                    })
+                    .unwrap_or_else(|| (*col).to_string());
+                (*col, physical_name)
+            })
+            .collect();
 
         let state = self.cloned_state()?;
         let log_store = self.log_store()?;
@@ -1450,21 +1467,21 @@ impl RawDeltaTable {
                     .await
             })
             .map_err(PythonError::from)?;
-        let _active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
+                #[allow(deprecated)]
+                let partition_values = add.add_action().partition_values;
                 Ok::<_, PythonError>(
-                    partition_columns
+                    partition_column_keys
                         .iter()
-                        .map(|col| {
+                        .map(|(logical_name, physical_name)| {
                             (
-                                *col,
-                                add.partition_values()
-                                    .and_then(|v| {
-                                        v.index_of(col).and_then(|idx| v.value(idx).cloned())
-                                    })
-                                    .map(|v| v.serialize()),
+                                *logical_name,
+                                partition_values
+                                    .get(physical_name.as_str())
+                                    .cloned()
+                                    .flatten(),
                             )
                         })
                         .collect(),
