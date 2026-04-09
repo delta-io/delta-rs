@@ -165,7 +165,7 @@ mod tests {
     use std::ops::Range;
 
     use datafusion::prelude::SessionContext;
-    use object_store::{ObjectStore, local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStore, ObjectStoreExt as _, local::LocalFileSystem, path::Path};
     use rstest::*;
 
     use crate::test_utils::TestResult;

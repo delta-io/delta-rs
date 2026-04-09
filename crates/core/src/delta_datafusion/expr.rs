@@ -181,9 +181,6 @@ impl ExprPlanner for CustomNestedFunctionPlanner {
     fn plan_make_map(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
         self.original.plan_make_map(args)
     }
-    fn plan_any(&self, expr: RawBinaryExpr) -> Result<PlannerResult<RawBinaryExpr>> {
-        self.original.plan_any(expr)
-    }
 }
 
 pub(crate) struct DeltaContextProvider<'a> {

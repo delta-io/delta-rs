@@ -77,10 +77,13 @@ impl CredentialProvider for AWSForObjectStore {
             }
         }
 
-        let provider = self
-            .sdk_config
-            .credentials_provider()
-            .ok_or(ObjectStoreError::NotImplemented)?;
+        let provider =
+            self.sdk_config
+                .credentials_provider()
+                .ok_or(ObjectStoreError::NotImplemented {
+                    operation: "Failed to load AWS credentials provider".into(),
+                    implementer: "deltalake-aws".into(),
+                })?;
 
         let credentials =
             provider

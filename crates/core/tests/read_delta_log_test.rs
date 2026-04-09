@@ -1,8 +1,10 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
+use futures::stream::BoxStream;
 use object_store::path::Path as StorePath;
 use object_store::{
-    MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    CopyOptions, MultipartUpload, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult,
 };
 use pretty_assertions::assert_eq;
 use std::path::{Path, PathBuf};
@@ -83,10 +85,6 @@ impl InstrumentedStore {
 
 #[async_trait::async_trait]
 impl ObjectStore for InstrumentedStore {
-    async fn put(&self, location: &StorePath, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &StorePath,
@@ -94,14 +92,6 @@ impl ObjectStore for InstrumentedStore {
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
-    }
-
-    async fn get(&self, location: &StorePath) -> ObjectStoreResult<GetResult> {
-        self.record_get(location);
-        if self.delay_gets {
-            tokio::time::sleep(tokio::time::Duration::from_secs_f64(0.01)).await;
-        }
-        self.inner.get(location).await
     }
 
     async fn get_opts(
@@ -113,36 +103,11 @@ impl ObjectStore for InstrumentedStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(
-        &self,
-        location: &StorePath,
-        range: std::ops::Range<u64>,
-    ) -> ObjectStoreResult<bytes::Bytes> {
-        self.record_get(location);
-        self.inner.get_range(location, range).await
-    }
-
-    async fn head(&self, location: &StorePath) -> ObjectStoreResult<object_store::ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &StorePath) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
-    }
-
     fn list(
         &self,
         prefix: Option<&StorePath>,
     ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
         self.inner.list(prefix)
-    }
-
-    fn list_with_offset(
-        &self,
-        prefix: Option<&StorePath>,
-        offset: &StorePath,
-    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
-        self.inner.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(
@@ -152,27 +117,13 @@ impl ObjectStore for InstrumentedStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &StorePath, to: &StorePath) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &StorePath, to: &StorePath) -> ObjectStoreResult<()> {
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn rename_if_not_exists(
+    async fn copy_opts(
         &self,
         from: &StorePath,
         to: &StorePath,
+        options: CopyOptions,
     ) -> ObjectStoreResult<()> {
-        self.inner.rename_if_not_exists(from, to).await
-    }
-
-    async fn put_multipart(
-        &self,
-        location: &StorePath,
-    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
+        self.inner.copy_opts(from, to, options).await
     }
 
     async fn put_multipart_opts(
@@ -181,6 +132,13 @@ impl ObjectStore for InstrumentedStore {
         options: PutMultipartOptions,
     ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<StorePath>>,
+    ) -> BoxStream<'static, object_store::Result<StorePath>> {
+        self.inner.delete_stream(locations)
     }
 }
 

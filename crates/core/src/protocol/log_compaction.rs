@@ -2,7 +2,7 @@
 
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 
 use uuid::Uuid;

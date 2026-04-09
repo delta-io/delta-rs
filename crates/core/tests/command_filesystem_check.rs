@@ -4,6 +4,7 @@ use deltalake_core::Path;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_test::utils::*;
 use futures::TryStreamExt as _;
+use object_store::ObjectStoreExt as _;
 use serial_test::serial;
 
 #[tokio::test]

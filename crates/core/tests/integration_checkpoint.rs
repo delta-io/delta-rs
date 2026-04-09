@@ -5,6 +5,7 @@ use deltalake_core::kernel::{DataType, PrimitiveType};
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
 use deltalake_core::{DeltaTableBuilder, ObjectStore, ensure_table_uri, errors::DeltaResult};
 use deltalake_test::utils::*;
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;

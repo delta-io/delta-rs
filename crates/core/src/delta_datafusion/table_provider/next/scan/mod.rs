@@ -578,7 +578,7 @@ impl SchemaAdapter {
         );
         let needs_rebuild = !can_reuse;
         if needs_rebuild {
-            let adapter = self.factory.make_adapter(Arc::clone(&source_schema))?;
+            let adapter = self.factory.make_adapter(&source_schema)?;
             self.cached_source = Some(source_schema);
             self.cached_adapter = Some(adapter);
         }
@@ -605,7 +605,7 @@ mod tests {
         physical_plan::collect,
         prelude::{col, lit},
     };
-    use object_store::{ObjectStore as _, memory::InMemory};
+    use object_store::{ObjectStoreExt as _, memory::InMemory};
     use parquet::arrow::ArrowWriter;
     use url::Url;
 

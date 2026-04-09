@@ -115,7 +115,7 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
-# TODO: restore python = ["arrow/pyarrow"] after arrow 58 upgrade (arrow-pyarrow 58 supports pyo3 0.28)
+python = ["arrow/pyarrow"]
 native-tls = ["delta_kernel/default-engine-native-tls"]
 rustls = ["delta_kernel/default-engine-rustls"]
 cloud = ["object_store/cloud", "dep:humantime"]

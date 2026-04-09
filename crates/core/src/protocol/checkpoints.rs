@@ -5,11 +5,10 @@ use std::sync::LazyLock;
 use url::Url;
 
 use chrono::{TimeZone, Utc};
-use delta_kernel::FileMeta;
 use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use regex::Regex;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -182,7 +181,7 @@ pub async fn cleanup_expired_logs_for(
 
     // Step 4: Delete DELTA_LOG files where log_ver < safe_checkpoint_version && ts <= cutoff_timestamp
     let locations = futures::stream::iter(log_entries.into_iter())
-        .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
+        .filter_map(move |meta: Result<crate::ObjectMeta, _>| async move {
             let meta = match meta {
                 Ok(m) => m,
                 Err(err) => {

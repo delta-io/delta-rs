@@ -5,10 +5,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use futures::stream::BoxStream;
-use object_store::ObjectMeta;
+use object_store::{CopyOptions, ObjectMeta};
 use object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
-    PutOptions, PutPayload, PutResult, path::Path,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, ObjectStoreExt as _,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, path::Path,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use url::Url;
@@ -143,10 +143,6 @@ fn classify_optional_path(path: Option<&Path>) -> RecordedPathKind {
 
 #[async_trait::async_trait]
 impl ObjectStore for RecordingObjectStore {
-    async fn put(&self, location: &Path, payload: PutPayload) -> object_store::Result<PutResult> {
-        self.inner.put(location, payload).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -156,26 +152,12 @@ impl ObjectStore for RecordingObjectStore {
         self.inner.put_opts(location, payload, opts).await
     }
 
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
-    }
-
     async fn put_multipart_opts(
         &self,
         location: &Path,
         opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
         self.inner.put_multipart_opts(location, opts).await
-    }
-
-    async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-        self.operations
-            .send(RecordedObjectStoreOperation::Get(classify_path(location)))
-            .unwrap();
-        self.inner.get(location).await
     }
 
     async fn get_opts(
@@ -191,45 +173,10 @@ impl ObjectStore for RecordingObjectStore {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> object_store::Result<Bytes> {
-        self.operations
-            .send(RecordedObjectStoreOperation::GetRange(
-                classify_path(location),
-                range.clone(),
-            ))
-            .unwrap();
-        self.inner.get_range(location, range).await
-    }
-
-    async fn get_ranges(
+    fn delete_stream(
         &self,
-        location: &Path,
-        ranges: &[Range<u64>],
-    ) -> object_store::Result<Vec<Bytes>> {
-        self.operations
-            .send(RecordedObjectStoreOperation::GetRanges(
-                classify_path(location),
-                ranges.to_vec(),
-            ))
-            .unwrap();
-        self.inner.get_ranges(location, ranges).await
-    }
-
-    async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-        self.operations
-            .send(RecordedObjectStoreOperation::Head(classify_path(location)))
-            .unwrap();
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> object_store::Result<()> {
-        self.inner.delete(location).await
-    }
-
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, object_store::Result<Path>>,
-    ) -> BoxStream<'a, object_store::Result<Path>> {
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
@@ -242,37 +189,17 @@ impl ObjectStore for RecordingObjectStore {
         self.inner.list(prefix)
     }
 
-    fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.operations
-            .send(RecordedObjectStoreOperation::ListWithOffset(
-                classify_optional_path(prefix),
-            ))
-            .unwrap();
-        self.inner.list_with_offset(prefix, offset)
-    }
-
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        self.inner.rename(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-        self.inner.rename_if_not_exists(from, to).await
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 }
 

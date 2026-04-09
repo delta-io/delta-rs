@@ -28,7 +28,9 @@ impl Expression {
         };
         // Coerce literal types to match schema column types for parsed string predicates
         let expr = coerce_predicate_literals(expr, schema.as_ref())?;
-        let context = SimplifyContext::new(session.execution_props()).with_schema(schema);
+        let context = SimplifyContext::default()
+            .with_config_options(Arc::new(session.config_options().clone()))
+            .with_schema(schema);
         let simplifier = ExprSimplifier::new(context);
         simplifier.simplify(expr)
     }

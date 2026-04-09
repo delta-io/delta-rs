@@ -134,6 +134,7 @@ mod delete_expired_delta_log_in_checkpoint {
     use std::path::Path as FsPath;
     use std::time::{Duration, SystemTime};
 
+    use ::object_store::ObjectStoreExt as _;
     use ::object_store::path::Path as ObjectStorePath;
     use deltalake_core::table::config::TableProperty;
     use deltalake_core::*;

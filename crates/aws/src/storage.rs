@@ -1,13 +1,11 @@
 //! AWS S3 storage backend.
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use aws_config::{Region, SdkConfig};
-use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
@@ -20,6 +18,7 @@ use deltalake_core::logstore::{
 use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
 use futures::Future;
 use futures::stream::BoxStream;
+use object_store::CopyOptions;
 use object_store::aws::AmazonS3;
 use object_store::client::SpawnedReqwestConnector;
 use tracing::log::*;
@@ -375,10 +374,6 @@ impl Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for S3StorageBackend {
-    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -388,8 +383,11 @@ impl ObjectStore for S3StorageBackend {
         self.inner.put_opts(location, bytes, options).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     async fn put_multipart_opts(
@@ -400,59 +398,25 @@ impl ObjectStore for S3StorageBackend {
         self.inner.put_multipart_opts(location, options).await
     }
 
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        self.inner.get(location).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.inner.get_opts(location, options).await
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
-        self.inner.get_range(location, range).await
-    }
-
-    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
-    fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
-        self.inner.list_with_offset(prefix, offset)
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
-        todo!()
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        if self.allow_unsafe_rename {
-            self.inner.rename(from, to).await
-        } else {
-            Err(ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(crate::errors::LockClientError::LockClientRequired),
-            })
-        }
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> ObjectStoreResult<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 }
 

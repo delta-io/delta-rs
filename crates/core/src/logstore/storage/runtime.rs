@@ -1,7 +1,5 @@
-use std::ops::Range;
 use std::sync::OnceLock;
 
-use bytes::Bytes;
 use deltalake_derive::DeltaConfig;
 use futures::FutureExt;
 use futures::TryFutureExt;

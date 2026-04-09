@@ -5,6 +5,7 @@ use deltalake_core::table::builder::DeltaTableBuilder;
 use deltalake_gcp::register_handlers;
 use deltalake_test::utils::*;
 use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;

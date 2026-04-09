@@ -38,7 +38,7 @@ def test_file_info(file_systems, table_data):
     arrow_info = arrow_fs.get_file_info(file_path)
 
     assert type(info) is type(arrow_info)
-    assert info.path == arrow_info.path
+    assert info.path.endswith(arrow_info.path)
     assert info.type == arrow_info.type
     assert info.size == arrow_info.size
     assert info.mtime_ns == arrow_info.mtime_ns

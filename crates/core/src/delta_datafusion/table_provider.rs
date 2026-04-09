@@ -41,7 +41,7 @@ use datafusion::{
 };
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
-use object_store::ObjectMeta;
+use object_store::{ObjectMeta, ObjectStoreExt as _};
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
@@ -1034,7 +1034,7 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.parquet_scan.properties()
     }
 
@@ -1147,7 +1147,9 @@ pub(crate) fn simplify_expr(
     df_schema: DFSchemaRef,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let context = SimplifyContext::new(session.execution_props()).with_schema(df_schema.clone());
+    let context = SimplifyContext::default()
+        .with_config_options(Arc::new(session.config_options().clone()))
+        .with_schema(df_schema.clone());
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
@@ -1261,6 +1263,7 @@ fn partitioned_file_from_action(
             ..action.try_into().unwrap()
         },
         partition_values,
+        ordering: None,
         range: None,
         extensions: None,
         statistics: None,
@@ -1685,6 +1688,7 @@ mod tests {
                 version: None,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
+            ordering: None,
             range: None,
             extensions: None,
             statistics: None,

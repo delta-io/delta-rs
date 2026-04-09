@@ -19,7 +19,7 @@ use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::basic::Compression;
