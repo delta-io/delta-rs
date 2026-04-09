@@ -63,11 +63,13 @@ serial_test = "3"
 default = ["rustls"]
 integration_test = []
 native-tls = [
+    "deltalake-core/native-tls",
     "aws-config/client-hyper",
     "aws-smithy-runtime/connector-hyper-0-14-x",
     "hyper-tls",
 ]
 rustls = [
+    "deltalake-core/rustls",
     "aws-config/client-hyper",
     # Use the new AWS SDK default HTTPS client stack (hyper 1.x + rustls via aws-lc-rs),
     # not the legacy `rustls` feature which pins us to hyper 0.14.
