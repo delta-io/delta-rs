@@ -113,7 +113,7 @@ pub struct DeltaScanExec {
     /// Column name for the file id
     file_id_column: String,
     /// plan properties
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     /// Denotes if file ids should be returned as part of the output
     retain_file_ids: bool,
     /// Aggregated partition column statistics
@@ -144,12 +144,12 @@ impl DeltaScanExec {
         retain_file_ids: bool,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(scan_plan.output_schema.clone()),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
-        );
+        ));
         Self {
             scan_plan,
             input,
@@ -232,7 +232,7 @@ impl ExecutionPlan for DeltaScanExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -319,10 +319,6 @@ impl ExecutionPlan for DeltaScanExec {
         let mut new_plan = self.clone();
         new_plan.input = new_input;
         Some(Arc::new(new_plan))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
