@@ -25,7 +25,7 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource::file_scan_config::wrap_partition_type_in_dict;
-use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::TableFeature;
@@ -84,6 +84,7 @@ impl KernelScanPlan {
         skipping_predicate: Option<Vec<Expr>>,
     ) -> Result<Self> {
         let table_config = snapshot.table_configuration();
+        let kernel_logical_schema = table_config.logical_schema();
         let table_schema = config.table_schema(table_config)?;
 
         // At this point we should only have supported predicates, but we decide where
@@ -146,7 +147,13 @@ impl KernelScanPlan {
         }
 
         // With the updated projection, build the scan
-        let kernel_scan_schema = Arc::new((&table_schema.project(&projection)?).try_into_kernel()?);
+        let kernel_projection_names = projection
+            .iter()
+            .map(|idx| table_schema.field(*idx).name().as_str())
+            .collect_vec();
+        let kernel_scan_schema = kernel_logical_schema
+            .project(&kernel_projection_names)
+            .map_err(crate::DeltaTableError::from)?;
         let scan = Arc::new(scan_builder.with_schema(kernel_scan_schema).build()?);
 
         // We may have read columns in the scan that are purely for predicate processing.
@@ -780,6 +787,38 @@ mod tests {
                 .field_with_name("day")
                 .is_err()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_projected_scan_plan_preserves_column_mapping_annotations() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+        let config = DeltaScanConfig::default();
+        let table_schema = config.table_schema(snapshot.table_configuration())?;
+        let projection = vec![table_schema.index_of("Super Name")?];
+        let filter = col(r#""Company Very Short""#).eq(lit("BME"));
+
+        let scan_plan =
+            KernelScanPlan::try_new(snapshot, Some(&projection), &[filter], &config, None)?;
+
+        let field = scan_plan
+            .scan
+            .logical_schema()
+            .field("Super Name")
+            .expect("projected scan should keep projected column");
+        assert!(matches!(
+            field.metadata().get("delta.columnMapping.id"),
+            Some(delta_kernel::schema::MetadataValue::Number(_))
+        ));
+        assert!(matches!(
+            field.metadata().get("delta.columnMapping.physicalName"),
+            Some(delta_kernel::schema::MetadataValue::String(_))
+        ));
+        assert_eq!(scan_plan.result_projection, Some(vec![0]));
 
         Ok(())
     }
