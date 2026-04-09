@@ -633,6 +633,7 @@ mod tests {
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
     use serde_json::json;
+    use std::ops::Range;
     use url::Url;
 
     use super::*;
@@ -1451,28 +1452,65 @@ mod tests {
         let small = batch.column_by_name("small").unwrap().as_string::<i32>();
         assert_eq!("a", small.iter().next().unwrap().unwrap());
 
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(1, files.len());
+        let object_store = table.object_store();
+        let file_meta = object_store.head(&files[0]).await.unwrap();
+        let file_reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+            object_store,
+            file_meta.location.clone(),
+        )
+        .with_file_size(file_meta.size);
+        let parquet_metadata =
+            parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder::new(file_reader)
+                .await
+                .unwrap()
+                .metadata()
+                .as_ref()
+                .clone();
+        let (small_start, small_len) = parquet_metadata.row_group(0).column(0).byte_range();
+        let small_range = small_start..small_start + small_len;
+        let (large_start, large_len) = parquet_metadata.row_group(0).column(1).byte_range();
+        let large_range = large_start..large_start + large_len;
+
         let actual = drain_recorded_ops(&mut operations).await;
+
+        let data_ranges = actual
+            .iter()
+            .flat_map(|operation| match operation {
+                ObjectStoreOperation::GetRange(PathKind::Data, range) => vec![range.clone()],
+                ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let overlaps = |left: &Range<u64>, right: &Range<u64>| {
+            left.start < right.end && right.start < left.end
+        };
+
         assert!(
-            actual.iter().any(|op| matches!(
-                op,
-                ObjectStoreOperation::GetRange(PathKind::Data, range)
-                    if range == &(957_u64..965_u64)
-            )),
-            "expected footer range read for the selected column, saw {actual:?}",
+            !data_ranges.is_empty(),
+            "expected ranged parquet data reads, saw {actual:?}"
         );
         assert!(
-            actual.iter().any(|op| matches!(
-                op,
-                ObjectStoreOperation::GetRange(PathKind::Data, range)
-                    if range == &(326_u64..957_u64)
-            )),
-            "expected column chunk range read for the selected column, saw {actual:?}",
-        );
-        assert!(
-            !actual
+            data_ranges
                 .iter()
-                .any(|op| matches!(op, ObjectStoreOperation::Get(PathKind::Data))),
-            "expected column pruning to avoid full parquet object reads, saw {actual:?}",
+                .any(|range| overlaps(range, &small_range)),
+            "expected selected column chunk {small_range:?} to be read, saw {actual:?}"
+        );
+        assert!(
+            data_ranges
+                .iter()
+                .all(|range| !overlaps(range, &large_range)),
+            "expected unselected column chunk {large_range:?} to be pruned, saw {actual:?}"
+        );
+        assert!(
+            !actual.iter().any(|operation| matches!(
+                operation,
+                ObjectStoreOperation::Get(PathKind::Data)
+                    | ObjectStoreOperation::GetOpts(PathKind::Data)
+            )),
+            "expected no full data file reads, saw {actual:?}"
         );
     }
 
