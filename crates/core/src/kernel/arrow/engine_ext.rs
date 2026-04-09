@@ -69,8 +69,6 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for TableConfiguration {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.metadata().partition_columns();
-        let column_mapping_mode = self.column_mapping_mode();
         Ok(Arc::new(stats_schema(
             self.physical_schema().as_ref(),
             self.table_properties(),
@@ -79,7 +77,7 @@ impl SnapshotExt for TableConfiguration {
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
         Ok(partitions_schema(
-            self.logical_schema().as_ref(),
+            self.physical_schema().as_ref(),
             self.metadata().partition_columns(),
         )?
         .map(Arc::new))
