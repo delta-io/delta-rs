@@ -18,25 +18,25 @@ repository = "https://github.com/delta-io/delta.rs"
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
 delta_kernel = { package = "buoyant_kernel", version = "0.21.101", features = [
-    "arrow-57",
+    "arrow-58",
     "internal-api",
 ] }
 
 
 # arrow
-arrow = { version = "57" }
-arrow-arith = { version = "57" }
-arrow-array = { version = "57", features = ["chrono-tz"] }
-arrow-buffer = { version = "57" }
-arrow-cast = { version = "57" }
-arrow-ipc = { version = "57" }
-arrow-json = { version = "57" }
-arrow-ord = { version = "57" }
-arrow-row = { version = "57" }
-arrow-schema = { version = "57" }
-arrow-select = { version = "57" }
+arrow = { version = "58" }
+arrow-arith = { version = "58" }
+arrow-array = { version = "58", features = ["chrono-tz"] }
+arrow-buffer = { version = "58" }
+arrow-cast = { version = "58" }
+arrow-ipc = { version = "58" }
+arrow-json = { version = "58" }
+arrow-ord = { version = "58" }
+arrow-row = { version = "58" }
+arrow-schema = { version = "58" }
+arrow-select = { version = "58" }
 object_store = { version = "0.13.1" }
-parquet = { version = "57" }
+parquet = { version = "58" }
 
 # datafusion 52.1
 datafusion = { version = "52.1.0" }
