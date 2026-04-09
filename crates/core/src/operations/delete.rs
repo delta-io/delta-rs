@@ -616,6 +616,7 @@ mod tests {
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::PrimitiveType;
     use delta_kernel::schema::StructType;
+    use object_store::ObjectStoreExt as _;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;

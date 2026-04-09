@@ -36,8 +36,8 @@ use delta_kernel::{
 use futures::future::ready;
 use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde_json::Deserializer;
 use url::Url;
 

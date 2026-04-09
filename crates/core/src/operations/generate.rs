@@ -75,13 +75,14 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use object_store::ObjectStoreExt as _;
 use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
-use crate::logstore::object_store::{ObjectStoreExt, PutPayload};
+use crate::logstore::object_store::PutPayload;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

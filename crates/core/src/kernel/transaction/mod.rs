@@ -82,6 +82,7 @@ use conflict_checker::ConflictChecker;
 use delta_kernel::table_properties::TableProperties;
 use futures::future::BoxFuture;
 use object_store::Error as ObjectStoreError;
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 use serde_json::Value;
 use tracing::*;
