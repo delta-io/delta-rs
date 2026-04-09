@@ -14,6 +14,7 @@ from deltalake import (
     Schema,
     write_deltalake,
 )
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
 
@@ -219,6 +220,70 @@ def test_merge_when_matched_update_wo_predicate(
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+@pytest.mark.parametrize("use_update_all", (False, True))
+def test_merge_when_matched_update_duplicates(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    streaming: bool,
+    use_update_all: bool,
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    merger = dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=streaming,
+    )
+
+    if use_update_all:
+        merger = merger.when_matched_update_all(predicate="s.deleted = true")
+    else:
+        merger = merger.when_matched_update(
+            {"price": "s.price"},
+            predicate="s.deleted = true",
+        )
+
+    with pytest.raises(DeltaError):
+        merger.execute()
+
+    dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    assert dt.version() == 0
+    assert result == sample_table
 
 
 def test_merge_when_matched_update_wo_predicate_with_schema_evolution(
@@ -1915,6 +1980,58 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operationParameters"].get("predicate") == predicate
 
 
+def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(
+    tmp_path: pathlib.Path,
+):
+    initial = Table(
+        {
+            "id": Array([1], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["a"], ArrowField("part", type=DataType.string_view(), nullable=True)
+            ),
+        }
+    )
+    write_deltalake(tmp_path, initial, partition_by=["part"])
+
+    dt = DeltaTable(tmp_path)
+    source = Table(
+        {
+            "id": Array([2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["b"], ArrowField("part", type=DataType.string_view(), nullable=True)
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        predicate="s.id = t.id",
+        source_alias="s",
+        target_alias="t",
+        merge_schema=True,
+    ).when_not_matched_insert_all().execute()
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    expected = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "part": Array(
+                ["a", "b"],
+                ArrowField("part", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    assert result.schema == expected.schema
+    assert result == expected
+
+
 @pytest.mark.parametrize("streaming", (True, False))
 def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = Table(
@@ -2289,6 +2406,96 @@ def test_merge_isin_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
     assert metrics["num_target_files_skipped_during_scan"] == 3
 
 
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_isin_string_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
+    date_parts = [
+        "2025-01-01",
+        "2025-01-02",
+        "2025-01-03",
+        "2025-01-04",
+        "2025-01-05",
+    ]
+    data = Table(
+        {
+            "id": Array(
+                [str(x) for x in range(len(date_parts))],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                date_parts,
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                list(range(len(date_parts))),
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append", partition_by="date_part")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["1", "3"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                ["2025-01-02", "2025-01-04"],
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    metrics = (
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id and t.date_part in ('2025-01-02', '2025-01-04')",
+            source_alias="s",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    expected = Table(
+        {
+            "id": Array(
+                ["0", "1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "date_part": Array(
+                date_parts,
+                ArrowField("date_part", type=DataType.string_view(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 10, 2, 20, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, date_part, sold from tbl order by id asc")
+        .read_all()
+    )
+    last_action = dt.history(1)[0]
+
+    assert last_action["operation"] == "MERGE"
+    assert result == expected
+    assert metrics["num_target_files_scanned"] == 2
+    assert metrics["num_target_files_skipped_during_scan"] == 3
+
+
 @pytest.mark.pyarrow
 @pytest.mark.parametrize("streaming", (True, False))
 def test_cdc_merge_planning_union_2908(tmp_path, streaming: bool):
@@ -2444,7 +2651,7 @@ def test_merge_on_decimal_3033(tmp_path):
 
     assert (
         string_predicate
-        == "timestamp = arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude = '1505'::decimal(4, 1)"
+        == "timestamp = arrow_cast('2024-03-20T12:30:00.000000', 'Timestamp(Microsecond, None)') AND altitude = '1505'::decimal(6, 1)"
     )
 
 
@@ -2472,3 +2679,33 @@ def test_merge(tmp_path: pathlib.Path):
 
     new_df = pl.read_delta(str(tmp_path))
     assert_frame_equal(df, new_df, check_row_order=False)
+
+
+@pytest.mark.pyarrow
+def test_merge_with_spill_config(tmp_path: pathlib.Path):
+    """Verify merge accepts and uses spill configuration without error."""
+    import pyarrow as pa
+
+    from deltalake import DeltaTable, write_deltalake
+
+    data = pa.table({"id": [1, 2, 3], "value": [10, 20, 30]})
+    write_deltalake(str(tmp_path), data)
+
+    dt = DeltaTable(str(tmp_path))
+    new_data = pa.table({"id": [1, 2], "value": [100, 200]})
+
+    result = (
+        dt.merge(
+            source=new_data,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            max_spill_size=100_000_000,  # 100MB
+            max_temp_directory_size=1_000_000_000,  # 1GB
+        )
+        .when_matched_update_all()
+        .execute()
+    )
+
+    assert result["num_target_rows_updated"] == 2
+    assert result["num_target_rows_copied"] == 1

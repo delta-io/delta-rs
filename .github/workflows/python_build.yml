@@ -19,8 +19,8 @@ jobs:
   test-minimal:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
@@ -44,8 +44,8 @@ jobs:
     name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -68,13 +68,35 @@ jobs:
           uv pip uninstall pyarrow
           uv run --no-sync pytest -n auto -m "not pyarrow and not pandas and not datafusion and not integration and not benchmark"
 
+  test-datafusion:
+    name: Python Build (Python 3.10 DataFusion integration)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+        with:
+          python-version: '3.10'
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Assert DataFusion major version
+        run: uv run --no-sync python -c "from importlib.metadata import version; v=version('datafusion'); assert v.split('.')[0]=='52', f'Expected 52.x, got {v}'"
+
+      - name: Run DataFusion integration test
+        run: DELTALAKE_RUN_DATAFUSION_TESTS=1 uv run --no-sync pytest -v tests/test_datafusion.py -m datafusion
+
   test-lakefs:
     name: Python Build (Python 3.10 LakeFS Integration tests)
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
@@ -92,13 +114,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
       - name: Run Mockoon CLI
-        uses: mockoon/cli-action@v2
+        # <https://github.com/mockoon/cli-action/releases/tag/v3.0.0>
+        uses: mockoon/cli-action@b935e787f80cca275e3834423e7bffb6256180e2
         with:
           version: "latest"
           data-file: ".github/mockoon_data_files/unitycatalog_databricks.json"
@@ -115,13 +138,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
       - name: Run Mockoon CLI
-        uses: mockoon/cli-action@v2
+        # <https://github.com/mockoon/cli-action/releases/tag/v3.0.0>
+        uses: mockoon/cli-action@b935e787f80cca275e3834423e7bffb6256180e2
         with:
           version: "latest"
           data-file: ".github/mockoon_data_files/unitycatalog_oss.json"
@@ -138,12 +162,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
 
-      - uses: actions/setup-java@v2
+      # <https://github.com/actions/setup-java/releases/tag/v5.2.0>
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
         with:
           distribution: "zulu"
           java-version: "21"
@@ -163,8 +188,8 @@ jobs:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:

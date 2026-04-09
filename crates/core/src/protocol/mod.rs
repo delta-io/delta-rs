@@ -9,15 +9,22 @@ use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
 
+use arrow::compute::filter_record_batch;
+use arrow_array::{BooleanArray, RecordBatch};
+use delta_kernel::FilteredEngineData;
+use delta_kernel::engine::arrow_data::ArrowEngineData;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
+use crate::kernel::{
+    Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures, Version,
+};
 
 pub mod checkpoints;
+pub mod log_compaction;
 
 pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 
@@ -338,10 +345,10 @@ pub enum DeltaOperation {
     /// Represents a `Restore` operation
     Restore {
         /// Version to restore
-        version: Option<i64>,
+        version: Option<Version>,
         ///Datetime to restore
         datetime: Option<i64>,
-    }, // TODO: Add more operations
+    },
 
     #[serde(rename_all = "camelCase")]
     /// Represents the start of `Vacuum` operation
@@ -525,6 +532,14 @@ pub enum OutputMode {
     Complete,
     /// Only rows with updates will be written when new or changed data is available.
     Update,
+}
+
+pub(crate) fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
+    let (underlying_data, selection_vector) = data.into_parts();
+    let engine_data = ArrowEngineData::try_from_engine_data(underlying_data)?;
+    let predicate = BooleanArray::from(selection_vector);
+    let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
+    Ok(batch)
 }
 
 #[cfg(test)]

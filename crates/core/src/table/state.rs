@@ -19,7 +19,8 @@ use super::DeltaTableConfig;
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
 use crate::kernel::{
-    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, TombstoneView,
+    ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, Snapshot,
+    TombstoneView, Version,
 };
 use crate::logstore::LogStore;
 use crate::{DeltaResult, DeltaTableError};
@@ -40,7 +41,7 @@ impl DeltaTableState {
     pub async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaTableConfig,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> DeltaResult<Self> {
         log_store.refresh().await?;
         // TODO: pass through predictae
@@ -49,7 +50,7 @@ impl DeltaTableState {
     }
 
     /// Return table version
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> Version {
         self.snapshot.version()
     }
 
@@ -81,7 +82,7 @@ impl DeltaTableState {
     /// Get the timestamp when a version commit was created.
     /// This is the timestamp of the commit file.
     /// If the commit file is not present, None is returned.
-    pub fn version_timestamp(&self, version: i64) -> Option<i64> {
+    pub fn version_timestamp(&self, version: Version) -> Option<i64> {
         self.snapshot.version_timestamp(version)
     }
 
@@ -158,12 +159,10 @@ impl DeltaTableState {
     pub async fn update(
         &mut self,
         log_store: &dyn LogStore,
-        version: Option<i64>,
+        version: Option<Version>,
     ) -> Result<(), DeltaTableError> {
         log_store.refresh().await?;
-        self.snapshot
-            .update(log_store, version.map(|v| v as u64))
-            .await?;
+        self.snapshot.update(log_store, version).await?;
         Ok(())
     }
 
@@ -210,7 +209,7 @@ impl DeltaTableState {
     }
 }
 
-impl EagerSnapshot {
+impl Snapshot {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
     ///
     /// # Arguments
@@ -237,7 +236,7 @@ impl EagerSnapshot {
     ///   (if available).
     /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
-    pub fn add_actions_table(
+    pub(crate) fn add_actions_table(
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
@@ -256,12 +255,35 @@ impl EagerSnapshot {
     /// limit for tables with a very large number of files.
     ///
     /// See [Self::add_actions_table] for schema details.
-    pub fn add_actions_batches(
+    pub(crate) fn add_actions_batches(
         &self,
         flatten: bool,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
         let (expression, table_schema) = self.add_actions_expr_and_schema()?;
         self.add_actions_batches_with_schema(flatten, expression, table_schema)
+    }
+
+    /// Get add action metadata batches containing only path and partition columns.
+    ///
+    /// This is a fast-path for partition-only planning and file matching.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn add_actions_partition_batches(
+        &self,
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        let mut expressions = vec![column_expr_ref!("path")];
+        let mut fields = vec![StructField::not_null("path", DataType::STRING)];
+
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
+            fields.push(StructField::nullable(
+                "partition",
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
+            ));
+            expressions.push(column_expr_ref!("partitionValues_parsed"));
+        }
+
+        let expression = Expression::Struct(expressions);
+        let table_schema = DataType::try_struct_type(fields)?;
+        self.add_actions_batches_with_schema(true, expression, table_schema)
     }
 
     fn add_actions_batches_with_schema(
@@ -270,12 +292,15 @@ impl EagerSnapshot {
         expression: Expression,
         table_schema: DataType,
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
-        let files = self.files()?;
+        let files = self
+            .materialized_files()
+            .map(|materialized_files| materialized_files.batches.as_ref())
+            .ok_or_else(|| DeltaTableError::NotInitializedWithFiles("add_actions".into()))?;
         if files.is_empty() {
             return Ok(vec![]);
         }
 
-        let input_schema = self.snapshot().inner.scan_row_parsed_schema_arrow()?;
+        let input_schema = self.inner.scan_row_parsed_schema_arrow()?;
         let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             input_schema,
@@ -283,22 +308,18 @@ impl EagerSnapshot {
             table_schema,
         )?;
 
-        let results = files
-            .iter()
-            .map(|file| evaluator.evaluate_arrow(file.clone()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let evaluated_batches = files.iter().map(|file| {
+            let batch = evaluator.evaluate_arrow(file.clone())?;
+            if flatten {
+                Ok(batch.normalize(".", None)?)
+            } else {
+                Ok(batch)
+            }
+        });
 
-        let results = if flatten {
-            results
-                .into_iter()
-                .map(|batch| Ok(batch.normalize(".", None)?))
-                .collect::<Result<Vec<_>, DeltaTableError>>()?
-        } else {
-            results
-        };
-
-        // Coalesce small batches into larger ones for efficiency.
-        coalesce_batches(results)
+        // Coalesce small batches into larger ones for efficiency while streaming
+        // evaluator output instead of materializing all batches first.
+        coalesce_batches(evaluated_batches)
     }
 
     /// Build the expression and output schema used by add_actions_table / add_actions_batches.
@@ -314,7 +335,7 @@ impl EagerSnapshot {
             StructField::not_null("modification_time", DataType::LONG),
         ];
 
-        let stats_schema = self.snapshot().inner.stats_schema()?;
+        let stats_schema = self.inner.stats_schema()?;
         let num_records_field = stats_schema
             .field("numRecords")
             .ok_or_else(|| DeltaTableError::SchemaMismatch {
@@ -343,7 +364,7 @@ impl EagerSnapshot {
             fields.push(max_values_field);
         }
 
-        if let Some(partition_schema) = self.snapshot().inner.partitions_schema()? {
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
             fields.push(StructField::nullable(
                 "partition",
                 DataType::try_struct_type(partition_schema.fields().cloned())?,
@@ -378,6 +399,29 @@ impl EagerSnapshot {
     }
 }
 
+impl EagerSnapshot {
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        self.snapshot().add_actions_table(flatten)
+    }
+
+    pub fn add_actions_batches(
+        &self,
+        flatten: bool,
+    ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
+        self.snapshot().add_actions_batches(flatten)
+    }
+
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn add_actions_partition_batches(
+        &self,
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        self.snapshot().add_actions_partition_batches()
+    }
+}
+
 /// Target number of rows per coalesced batch. Matches DataFusion's default batch size.
 const COALESCE_TARGET_BATCH_SIZE: usize = 8192;
 
@@ -388,21 +432,26 @@ const COALESCE_TARGET_BATCH_SIZE: usize = 8192;
 /// into batches of approximately [`COALESCE_TARGET_BATCH_SIZE`] rows using
 /// Arrow's [`BatchCoalescer`], which is more memory-efficient than
 /// [`concat_batches`].
-fn coalesce_batches(input: Vec<RecordBatch>) -> Result<Vec<RecordBatch>, DeltaTableError> {
-    if input.len() <= 1 {
-        return Ok(input);
-    }
-
-    let schema = input[0].schema();
-    let mut coalescer = BatchCoalescer::new(schema, COALESCE_TARGET_BATCH_SIZE);
-    let mut output = Vec::with_capacity(input.len());
+fn coalesce_batches<I>(input: I) -> Result<Vec<RecordBatch>, DeltaTableError>
+where
+    I: IntoIterator<Item = Result<RecordBatch, DeltaTableError>>,
+{
+    let mut coalescer = None;
+    let mut output = Vec::new();
 
     for batch in input {
-        coalescer.push_batch(batch)?;
-        while let Some(done) = coalescer.next_completed_batch() {
+        let batch = batch?;
+        let current = coalescer
+            .get_or_insert_with(|| BatchCoalescer::new(batch.schema(), COALESCE_TARGET_BATCH_SIZE));
+        current.push_batch(batch)?;
+        while let Some(done) = current.next_completed_batch() {
             output.push(done);
         }
     }
+
+    let Some(mut coalescer) = coalescer else {
+        return Ok(vec![]);
+    };
 
     coalescer.finish_buffered_batch()?;
     while let Some(done) = coalescer.next_completed_batch() {
@@ -417,6 +466,8 @@ mod tests {
     use super::*;
     #[cfg(feature = "datafusion")]
     use crate::protocol::SaveMode;
+    #[cfg(feature = "datafusion")]
+    use crate::test_utils::multibatch_add_actions_for_partition;
     use crate::writer::test_utils::get_delta_schema;
     #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::get_record_batch;
@@ -517,6 +568,64 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_batches_flatten_multibatch_stress() -> DeltaResult<()> {
+        let action_count = 9000;
+        let actions = multibatch_add_actions_for_partition(
+            action_count,
+            "modified",
+            "2021-02-02",
+            "2021-02-03",
+        );
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .with_actions(actions)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let batches = snapshot.add_actions_batches(true)?;
+        assert!(batches.len() > 1, "expected multi-batch add-actions output");
+
+        let total_rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(total_rows, action_count);
+
+        let concatenated = concat_batches(batches[0].schema_ref(), &batches)?;
+        let single = snapshot.add_actions_table(true)?;
+        assert_eq!(concatenated.num_rows(), action_count);
+        assert_eq!(concatenated, single);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_partition_batches_only_path_and_partitions() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let snapshot = table.snapshot()?.snapshot();
+        let batches = snapshot.add_actions_partition_batches()?;
+        assert!(!batches.is_empty());
+
+        let schema = batches[0].schema();
+        assert!(schema.field_with_name("path").is_ok());
+        assert!(schema.field_with_name("partition.modified").is_ok());
+        assert!(schema.field_with_name("size_bytes").is_err());
+        assert!(schema.field_with_name("modification_time").is_err());
+        assert!(schema.field_with_name("num_records").is_err());
+        Ok(())
+    }
+
     #[test]
     fn test_coalesce_batches_merges_small_batches() -> DeltaResult<()> {
         let schema = Arc::new(ArrowSchema::new(vec![arrow::datatypes::Field::new(
@@ -531,7 +640,11 @@ mod tests {
             RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![3]))])?,
         ];
 
-        let output_batches = coalesce_batches(input_batches)?;
+        let output_batches = coalesce_batches(
+            input_batches
+                .into_iter()
+                .map(Ok::<RecordBatch, DeltaTableError>),
+        )?;
         assert_eq!(output_batches.len(), 1);
         assert_eq!(output_batches[0].num_rows(), 3);
 

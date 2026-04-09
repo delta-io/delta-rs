@@ -282,8 +282,8 @@ impl LogicalFileView {
             .flatten()
     }
 
-    /// Converts this file view into an Add action for log operations.
-    pub(crate) fn add_action(&self) -> Add {
+    /// Internal API
+    pub(crate) fn to_add(&self) -> Add {
         Add {
             path: self.path().to_string(),
             partition_values: self.partition_values_map(),
@@ -297,6 +297,15 @@ impl LogicalFileView {
             default_row_commit_version: None,
             clustering_provider: None,
         }
+    }
+
+    /// Converts this file view into an Add action for log operations.
+    #[deprecated(
+        since = "0.31.0",
+        note = "Use Arrow arrays directly instead of converting to Add actions."
+    )]
+    pub fn add_action(&self) -> Add {
+        self.to_add()
     }
 
     /// Converts this file view into a Remove action for log operations.
@@ -501,7 +510,7 @@ mod tests {
         assert!(datetime.timestamp_millis() > 0);
 
         // Test action conversions
-        let add_action = view.add_action();
+        let add_action = view.to_add();
         assert_eq!(add_action.path, view.path());
         assert_eq!(add_action.size, view.size());
         assert!(add_action.data_change);

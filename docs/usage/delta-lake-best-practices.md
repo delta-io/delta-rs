@@ -46,7 +46,7 @@ Let’s look at some of the built-in Delta features that help maintain the integ
 
 Delta Lake supports schema enforcement and column constraints to protect the integrity of your data.
 
-Delta Lake enabled schema enforcement by default, so you can only append data to an existing table with the same exact schema.  You can bypass schema enforcement by enabling schema evolution, which allows you to append mismatched schemas to a table.
+Delta Lake enables schema enforcement by default, so you can only append data to an existing table with the same exact schema.  You can bypass schema enforcement by enabling schema evolution, which allows you to append mismatched schemas to a table.
 
 You should only enable schema evolution when you want to allow the schema of your table to change.  You should not enable schema evolution if you don’t want this flexibility.  Schema enforcement is a good default setting.
 
@@ -70,7 +70,7 @@ You should periodically purge deletion vectors because they can accumulate and s
 
 ## Use vacuum to save storage costs
 
-Delta Lake supports transactions, which necessitates keeping old versions of data in storage, even the files marked for removal in the transactions log.
+Delta Lake supports transactions, which necessitates keeping old versions of data in storage, even the files marked for removal in the transaction log.
 
 Keeping old versions of Delta tables in storage is often desirable because it allows for versioned data, time travel, and rolling back tables to a previous state.
 
@@ -96,7 +96,7 @@ You should understand your organization’s query patterns and use these feature
 
 Delta tables don’t always store each column's min/max values.  Some Delta Lake implementations only store min/max values for the first 32 columns in the table, for example.
 
-Delta Lake can only apply file-skipping when it has min/max values for the relevant columns stored in the transaction log.  Suppose you’re running a filtering operation on `col_a,` for example.  Delta Lake can only apply file skipping when the transaction log stores `col_a` min/max metadata.
+Delta Lake can only apply file-skipping when it has min/max values for the relevant columns stored in the transaction log.  Suppose you’re running a filtering operation on `col_a`, for example.  Delta Lake can only apply file skipping when the transaction log stores `col_a` min/max metadata.
 
 Ensure the transaction log stores metadata stats for all the columns that benefit from file skipping.
 

@@ -74,7 +74,7 @@ pub(crate) fn consume_dv_mask(
             should_remove: is_empty,
         }
     } else {
-        let mut sv: Vec<bool> = selection_vector.drain(..).collect();
+        let mut sv: Vec<bool> = std::mem::take(selection_vector);
         sv.resize(batch_num_rows, true);
         DvMaskResult {
             selection: Some(sv),
@@ -379,7 +379,10 @@ struct DeltaScanStream {
 
 impl DeltaScanStream {
     fn batch_project(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        let _timer = self.baseline_metrics.elapsed_compute().timer();
+        // Clone the metric so the timer guard does not immutably borrow `self`,
+        // which would conflict with the `&mut self` calls below.
+        let elapsed = self.baseline_metrics.elapsed_compute().clone();
+        let _timer = elapsed.timer();
 
         if batch.num_rows() == 0 {
             return Ok(vec![RecordBatch::new_empty(Arc::clone(
@@ -390,36 +393,21 @@ impl DeltaScanStream {
         let file_id_idx = file_id_column_idx(&batch, &self.file_id_column)?;
         let file_runs = split_by_file_id_runs(&batch, file_id_idx)?;
 
-        file_runs
-            .into_iter()
-            .map(|(file_id, slice)| {
-                Self::batch_project_single_file_inner(
-                    &self.scan_plan,
-                    &self.kernel_type,
-                    &self.transforms,
-                    &self.selection_vectors,
-                    self.return_file_ids,
-                    &mut self.schema_adapter,
-                    slice,
-                    file_id,
-                    file_id_idx,
-                )
-            })
-            .collect::<Result<Vec<_>>>()
+        let mut results = Vec::with_capacity(file_runs.len());
+        for (file_id, slice) in file_runs {
+            results.push(self.batch_project_single_file(slice, file_id, file_id_idx)?);
+        }
+        Ok(results)
     }
 
-    fn batch_project_single_file_inner(
-        scan_plan: &KernelScanPlan,
-        kernel_type: &KernelDataType,
-        transforms: &HashMap<String, ExpressionRef>,
-        selection_vectors: &DashMap<String, Vec<bool>>,
-        return_file_ids: bool,
-        schema_adapter: &mut super::SchemaAdapter,
+    fn batch_project_single_file(
+        &mut self,
         batch: RecordBatch,
         file_id: String,
         file_id_idx: usize,
     ) -> Result<RecordBatch> {
-        let dv_result = if let Some(mut selection_vector) = selection_vectors.get_mut(&file_id) {
+        let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
+        {
             consume_dv_mask(&mut selection_vector, batch.num_rows())
         } else {
             DvMaskResult {
@@ -429,7 +417,7 @@ impl DeltaScanStream {
         };
 
         if dv_result.should_remove {
-            selection_vectors.remove(&file_id);
+            self.selection_vectors.remove(&file_id);
         }
 
         let mut batch = if let Some(selection) = dv_result.selection {
@@ -441,12 +429,12 @@ impl DeltaScanStream {
         let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
-        let result = if let Some(transform) = transforms.get(&file_id) {
+        let result = if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
-                    scan_plan.scan.physical_schema().clone(),
+                    self.scan_plan.scan.physical_schema().clone(),
                     transform.clone(),
-                    kernel_type.clone(),
+                    self.kernel_type.clone(),
                 )
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -457,15 +445,20 @@ impl DeltaScanStream {
             batch
         };
 
-        if return_file_ids {
+        if self.return_file_ids {
             super::finalize_transformed_batch(
                 result,
-                scan_plan,
+                &self.scan_plan,
                 Some((file_id_col, Arc::new(file_id_field))),
-                schema_adapter,
+                &mut self.schema_adapter,
             )
         } else {
-            super::finalize_transformed_batch(result, scan_plan, None, schema_adapter)
+            super::finalize_transformed_batch(
+                result,
+                &self.scan_plan,
+                None,
+                &mut self.schema_adapter,
+            )
         }
     }
 }

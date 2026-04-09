@@ -128,7 +128,7 @@ let df = ctx.sql("SELECT value FROM simple_table WHERE year = 2021").await?;
 df.show().await?;
 ```
 
-Apache Datafusion also supports a Dataframe interface than can be used instead of the SQL interface:
+Apache Datafusion also supports a Dataframe interface that can be used instead of the SQL interface:
 ```rust
 let delta_path = Url::from_directory_path("/rust/tests/data/delta-0.8.0-partitioned").unwrap();
 let table = deltalake::open_table(delta_path).await?;

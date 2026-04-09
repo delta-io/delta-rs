@@ -104,8 +104,8 @@ impl FileSelection {
     /// Create a selection from pre-normalized file IDs.
     ///
     /// This constructor does not normalize or validate the input IDs.
-    /// Callers with relative paths or Add actions should prefer:
-    /// - [`FileSelection::from_paths`]
+    /// Callers with relative file paths or Add actions should prefer:
+    /// - [`FileSelection::from_file_paths`]
     /// - [`FileSelection::from_adds`]
     /// - [`normalize_path_as_file_id`]
     pub(crate) fn new(file_ids: impl IntoIterator<Item = String>) -> Self {
@@ -120,13 +120,13 @@ impl FileSelection {
         self
     }
 
-    pub(crate) fn from_paths(
-        paths: impl IntoIterator<Item = impl AsRef<str>>,
+    pub(crate) fn from_file_paths(
+        file_paths: impl IntoIterator<Item = impl AsRef<str>>,
         table_root_url: &Url,
     ) -> crate::DeltaResult<Self> {
         let table_root_url = ensure_table_root_url(table_root_url);
         let mut file_ids = HashSet::new();
-        for path in paths {
+        for path in file_paths {
             let file_id = normalize_path_as_file_id_with_table_root(
                 path.as_ref(),
                 &table_root_url,
@@ -145,11 +145,11 @@ impl FileSelection {
         adds: impl IntoIterator<Item = crate::kernel::Add>,
         table_root_url: &Url,
     ) -> crate::DeltaResult<Self> {
-        Self::from_paths(adds.into_iter().map(|a| a.path), table_root_url)
+        Self::from_file_paths(adds.into_iter().map(|a| a.path), table_root_url)
     }
 }
 
-fn ensure_table_root_url(table_root_url: &Url) -> Url {
+pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
     if table_root_url.path().ends_with('/') {
         table_root_url.clone()
     } else {
@@ -172,7 +172,7 @@ pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
     Url::parse(urlish).map_or_else(
         |_| {
             urlish
-                .split(|c| c == '?' || c == '#')
+                .split(['?', '#'])
                 .next()
                 .unwrap_or(urlish)
                 .to_string()
@@ -353,21 +353,9 @@ impl DeltaScan {
         scan_plan: &KernelScanPlan,
         engine: Arc<dyn Engine>,
     ) -> SendableScanMetadataStream {
-        match &self.snapshot {
-            SnapshotWrapper::Snapshot(_) => scan_plan.scan.scan_metadata(engine),
-            SnapshotWrapper::EagerSnapshot(esn) => {
-                if let Ok(files) = esn.files() {
-                    scan_plan.scan.scan_metadata_from(
-                        engine,
-                        esn.snapshot().version() as u64,
-                        Box::new(files.to_vec().into_iter()),
-                        None,
-                    )
-                } else {
-                    scan_plan.scan.scan_metadata(engine)
-                }
-            }
-        }
+        scan_plan
+            .scan
+            .scan_metadata_seeded(engine, self.snapshot.snapshot().materialized_files())
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -495,7 +483,12 @@ impl TableProvider for DeltaScan {
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::Int64Array, record_batch::RecordBatch};
+    use arrow::{
+        array::Int64Array,
+        datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+        record_batch::RecordBatch,
+    };
+    use arrow_array::{DictionaryArray, UInt16Array, types::UInt16Type};
     use datafusion::{
         catalog::Session,
         datasource::MemTable,
@@ -514,8 +507,16 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq,
         delta_datafusion::{DeltaScanConfig, session::create_session},
-        kernel::{DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType},
-        test_utils::{TestResult, TestTables},
+        kernel::{
+            Action, DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType,
+        },
+        logstore::get_actions,
+        test_utils::{
+            TestResult, TestTables,
+            object_store::{
+                drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+            },
+        },
     };
 
     use super::*;
@@ -675,6 +676,76 @@ mod tests {
             .flatten()
             .collect();
 
+        let commit_bytes = log_store
+            .read_commit_entry(2)
+            .await?
+            .expect("expected overwrite commit bytes at version 2");
+        let overwrite_actions = get_actions(2, &commit_bytes)?;
+        assert!(
+            overwrite_actions
+                .iter()
+                .any(|action| matches!(action, Action::Remove(_))),
+            "expected overwrite commit to contain at least one Remove action"
+        );
+        assert!(
+            overwrite_actions
+                .iter()
+                .any(|action| matches!(action, Action::Add(_))),
+            "expected overwrite commit to contain at least one Add action"
+        );
+
+        let read_provider = DeltaScan::builder().with_log_store(log_store).await?;
+        session.register_table("delta_table", read_provider)?;
+        let batches = session
+            .sql("SELECT id FROM delta_table ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_insert_into_dictionary_source_is_cast_to_table_schema() -> TestResult {
+        let table = create_in_memory_id_table().await?;
+        let log_store = table.log_store();
+        let provider = DeltaScan::builder()
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let dictionary_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "id",
+            ArrowDataType::Dictionary(
+                Box::new(ArrowDataType::UInt16),
+                Box::new(ArrowDataType::Int64),
+            ),
+            true,
+        )]));
+
+        let dictionary_values = Int64Array::from(vec![11, 13]);
+        let dictionary_keys = UInt16Array::from(vec![0, 1]);
+        let dictionary_array =
+            DictionaryArray::<UInt16Type>::new(dictionary_keys, Arc::new(dictionary_values));
+        let dictionary_batch =
+            RecordBatch::try_new(dictionary_schema.clone(), vec![Arc::new(dictionary_array)])?;
+
+        let mem_table = MemTable::try_new(dictionary_schema, vec![vec![dictionary_batch]])?;
+        let input = mem_table.scan(&state, None, &[], None).await?;
+        let write_plan = provider
+            .insert_into(&state, input, InsertOp::Append)
+            .await?;
+        let _write_batches: Vec<_> = collect_partitioned(write_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
         let read_provider = DeltaScan::builder().with_log_store(log_store).await?;
         session.register_table("delta_table", read_provider)?;
         let batches = session
@@ -779,6 +850,85 @@ mod tests {
             "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_query_materialized_snapshot_avoids_log_replay() -> TestResult {
+        let base = TestTables::Simple.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+
+        drain_recorded_ops(&mut operations).await;
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let read_plan = provider.scan(&state, None, &[], None).await?;
+        let _read_batches: Vec<_> = collect_partitioned(read_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "expected materialized snapshot scan to avoid log replay, got {replay_ops:?}",
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_materialized_snapshot_serde_update_provider_preserves_reuse() -> TestResult {
+        let base = TestTables::SimpleWithCheckpoint
+            .table_builder()?
+            .build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
+
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(9)).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+
+        let bytes = serde_json::to_vec(snapshot.as_ref())?;
+        let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
+        let snapshot = Arc::new(snapshot)
+            .update(log_store.engine(None), Some(10))
+            .await?;
+
+        drain_recorded_ops(&mut operations).await;
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store.clone())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let read_plan = provider.scan(&state, None, &[], None).await?;
+        let _read_batches: Vec<_> = collect_partitioned(read_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "expected serde+update+provider scan to reuse materialized state, got {replay_ops:?}",
+        );
 
         Ok(())
     }
@@ -891,7 +1041,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_with_file_selection_from_paths_reads_selected_file() -> TestResult {
+    async fn test_scan_with_file_selection_from_file_paths_reads_selected_file() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
         let table_root = snapshot.scan_builder().build()?.table_root().clone();
@@ -908,7 +1058,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let selection = FileSelection::from_paths([selected_path.as_str()], &table_root)?;
+        let selection = FileSelection::from_file_paths([selected_path.as_str()], &table_root)?;
 
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
@@ -1069,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_file_selection_from_paths_normalizes_urls() -> TestResult {
+    fn test_file_selection_from_file_paths_normalizes_urls() -> TestResult {
         let cases = vec![
             (
                 "file:///tmp/delta",
@@ -1105,7 +1255,7 @@ mod tests {
 
         for (table_root, input, expected) in cases {
             let table_root = Url::parse(table_root).unwrap();
-            let selection = FileSelection::from_paths([input], &table_root)?;
+            let selection = FileSelection::from_file_paths([input], &table_root)?;
             assert!(selection.file_ids.contains(expected));
             assert_eq!(selection.missing_file_policy, MissingFilePolicy::Error);
         }

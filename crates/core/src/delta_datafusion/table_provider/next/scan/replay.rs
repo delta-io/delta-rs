@@ -78,19 +78,21 @@ fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
 fn create_minimal_stats_schema(
     scan: &KernelScan,
     predicate_columns: Option<&HashSet<String>>,
-) -> Arc<Schema> {
+) -> DeltaResult<Arc<Schema>> {
+    let minimal_schema = || {
+        Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
+            .map(Arc::new)
+            .map_err(Into::into)
+    };
+
     match predicate_columns {
         None => {
             // No predicate - only need numRecords for file statistics
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
+            minimal_schema()
         }
         Some(cols) if cols.is_empty() => {
             // Empty predicate columns - minimal schema
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
+            minimal_schema()
         }
         Some(cols) => {
             // Filter physical schema to only referenced columns
@@ -103,17 +105,14 @@ fn create_minimal_stats_schema(
 
             if filtered_fields.is_empty() {
                 // Predicate references only partition columns - minimal schema
-                Arc::new(
-                    Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
-                        .unwrap(),
-                )
+                minimal_schema()
             } else {
                 // Create stats schema for filtered fields
-                let filtered_schema = Schema::try_new(filtered_fields).unwrap();
-                Arc::new(stats_schema(
+                let filtered_schema = Schema::try_new(filtered_fields)?;
+                Ok(Arc::new(stats_schema(
                     &filtered_schema,
                     scan.snapshot().table_properties(),
-                ))
+                )))
             }
         }
     }
@@ -142,7 +141,7 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
 
         #[pin]
         stream: S,
@@ -159,7 +158,7 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
@@ -210,12 +209,13 @@ where
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
                         let file_url = file.file_url.clone();
+                        let num_records = file.num_records;
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -233,10 +233,13 @@ where
                 let predicate_columns = extract_predicate_columns(this.kernel_scan.as_ref());
 
                 // Create minimal stats schema based on predicate columns
-                let stats_schema = create_minimal_stats_schema(
+                let stats_schema = match create_minimal_stats_schema(
                     this.kernel_scan.as_ref(),
                     predicate_columns.as_ref(),
-                );
+                ) {
+                    Ok(schema) => schema,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                };
 
                 // Parse statistics (will skip parsing for unreferenced columns)
                 let parsed_stats = parse_stats_column_with_schema(
@@ -245,10 +248,9 @@ where
                     stats_schema,
                 )?;
 
-                // TODO: do we need to make the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
-                    &this.scan_config,
+                    this.scan_config,
                     parsed_stats,
                     predicate_columns.as_ref(),
                 );
@@ -464,6 +466,8 @@ struct ScanFileContextInner {
     pub size: u64,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
+    /// Number of records in the file from Add-file stats.
+    pub num_records: Option<u64>,
 
     pub dv_info: DvInfo,
 }
@@ -529,16 +533,14 @@ fn apply_file_selection(
     // Kernel allows a shorter selection vector; missing entries are implicitly true.
     selection_vector.resize(batch.num_rows(), true);
 
-    for idx in 0..batch.num_rows() {
-        if !selection_vector[idx] {
-            continue;
+    for (idx, select) in selection_vector.iter_mut().enumerate() {
+        if *select {
+            let file_url = parse_path(
+                table_root,
+                LogicalFileView::new(batch.clone(), idx).path_raw(),
+            )?;
+            *select = file_selection.contains(file_url.as_str());
         }
-
-        let file_url = parse_path(
-            table_root,
-            LogicalFileView::new(batch.clone(), idx).path_raw(),
-        )?;
-        selection_vector[idx] = file_selection.contains(file_url.as_str());
     }
 
     scan_data.scan_files =
@@ -560,6 +562,7 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
         transform: scan_file.transform,
         file_url,
         size: scan_file.size as u64,
+        num_records: scan_file.stats.map(|stats| stats.num_records),
     });
     ctx.count += 1;
 }

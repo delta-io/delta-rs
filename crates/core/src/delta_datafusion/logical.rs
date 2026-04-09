@@ -61,9 +61,8 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
         let projection = self
             .schema()
             .iter()
-            .filter_map(|(_, f)| {
-                (!away_names.contains(f.name())).then(|| col(Column::from_name(f.col_name())))
-            })
+            .filter(|(_, f)| !away_names.contains(f.name()))
+            .map(|(_, f)| col(Column::from_name(f.col_name())))
             .collect_vec();
         self.project(projection)
     }

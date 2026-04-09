@@ -31,7 +31,9 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{
+    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
+};
 use crate::logstore::{LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
@@ -43,9 +45,9 @@ pub struct CdfLoadBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to read from
-    starting_version: Option<i64>,
+    starting_version: Option<Version>,
     /// Version to stop reading at
-    ending_version: Option<i64>,
+    ending_version: Option<Version>,
     /// Starting timestamp of commits to accept
     starting_timestamp: Option<DateTime<Utc>>,
     /// Ending timestamp of commits to accept
@@ -86,13 +88,13 @@ impl CdfLoadBuilder {
     }
 
     /// Version to start at (version 0 if not provided)
-    pub fn with_starting_version(mut self, starting_version: i64) -> Self {
+    pub fn with_starting_version(mut self, starting_version: Version) -> Self {
         self.starting_version = Some(starting_version);
         self
     }
 
     /// Version (inclusive) to end at
-    pub fn with_ending_version(mut self, ending_version: i64) -> Self {
+    pub fn with_ending_version(mut self, ending_version: Version) -> Self {
         self.ending_version = Some(ending_version);
         self
     }
@@ -121,7 +123,7 @@ impl CdfLoadBuilder {
         self
     }
 
-    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<i64> {
+    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await

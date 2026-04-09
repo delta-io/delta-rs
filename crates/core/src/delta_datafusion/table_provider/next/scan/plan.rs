@@ -19,7 +19,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 use arrow_schema::{DataType, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{HashMap, HashSet, exec_err, plan_err};
+use datafusion::common::{HashMap, HashSet, plan_err};
 use datafusion::logical_expr::TableProviderFilterPushDown;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::prelude::Expr;
@@ -31,6 +31,7 @@ use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{Expression, Predicate, PredicateRef};
 use itertools::Itertools;
+use tracing::debug;
 
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::{
@@ -92,10 +93,14 @@ impl KernelScanPlan {
         // if some dedicated file skipping predicate is supplied,
         // we do not push the scan filters into the kernel scan.
         let scan_predicate = if let Some(sp) = skipping_predicate {
-            let (Some(pred), _) = process_filters(&sp, table_config, config)? else {
-                return exec_err!("Failed to convert file skipping perdicate to kernel.");
-            };
-            Some(pred)
+            let (scan_predicate, _) = process_filters(&sp, table_config, config)?;
+            if scan_predicate.is_none() {
+                debug!(
+                    predicate = ?sp,
+                    "Dropping dedicated file-skipping predicate because no kernel terms survived conversion"
+                );
+            }
+            scan_predicate
         } else {
             kernel_predicate
         };
@@ -126,6 +131,7 @@ impl KernelScanPlan {
         let missing_columns: Vec<_> = columns_in_filters
             .difference(&columns_in_scan)
             .cloned()
+            .sorted() // Prevent non-deterministic ordering from HashSet
             .collect();
 
         let file_id_field = config.file_id_field();
@@ -395,7 +401,8 @@ fn process_filters(
     } else {
         conjunction(parquet.iter().flatten().map(|ex| (*ex).clone()))
     };
-    let kernel = (!kernel.is_empty()).then(|| Predicate::and_from(kernel.into_iter().flatten()));
+    let kernel_terms = kernel.into_iter().flatten().collect_vec();
+    let kernel = (!kernel_terms.is_empty()).then(|| Predicate::and_from(kernel_terms));
     Ok((kernel.map(Arc::new), parquet))
 }
 
@@ -415,7 +422,7 @@ fn process_predicate<'a>(
     let only_partition_refs = expr.column_refs().iter().all(|c| cols.contains(&c.name));
     let any_partition_refs =
         only_partition_refs || expr.column_refs().iter().any(|c| cols.contains(&c.name));
-    let has_file_id = expr.column_refs().iter().any(|c| file_id_column == &c.name);
+    let has_file_id = expr.column_refs().iter().any(|c| file_id_column == c.name);
 
     if has_file_id {
         // file-id filters cannot be evaluated in kernel and must not be pushed to parquet.
@@ -512,19 +519,18 @@ fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::{
+        delta_datafusion::create_session,
+        test_utils::{TestResult, open_fs_path},
+    };
+    use datafusion::logical_expr::and;
     use datafusion::{
         assert_batches_sorted_eq,
         physical_plan::collect,
         prelude::{col, lit},
         scalar::ScalarValue,
     };
-
-    use crate::{
-        delta_datafusion::create_session,
-        test_utils::{TestResult, open_fs_path},
-    };
-
-    use super::*;
 
     fn schema_has_view_types(schema: &Schema) -> bool {
         schema
@@ -822,6 +828,29 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_dedicated_skipping_predicate_with_no_survivors_falls_back_to_full_scan()
+    -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/delta-0.8.0-partitioned");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+        let scan_plan = KernelScanPlan::try_new(
+            snapshot,
+            None,
+            &[],
+            &DeltaScanConfig::default(),
+            Some(vec![
+                col("year").in_list(vec![lit(ScalarValue::Utf8(None))], false),
+            ]),
+        )?;
+
+        assert!(scan_plan.scan.physical_predicate().is_none());
+        assert!(scan_plan.parquet_predicate.is_none());
+
+        Ok(())
+    }
+
     #[test]
     fn test_file_id_field_uses_canonical_file_id_type() {
         let config = DeltaScanConfig::default();
@@ -830,5 +859,38 @@ mod tests {
             field.data_type(),
             &crate::delta_datafusion::file_id::file_id_data_type()
         );
+    }
+
+    /// The scan in this test only projects one column. This requires the scan plan to add the
+    /// columns required for the filter to the physical schema. This test should assert that
+    /// these additional columns in the physical schema are created deterministically.
+    #[tokio::test]
+    async fn test_scan_with_projection_has_stable_schema_for_filters() {
+        let mut table = open_fs_path("../test/tests/data/COVID-19_NYT");
+        table.load().await.unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().snapshot();
+        let filter = and(
+            col("state").eq(lit("Louisiana")),
+            col("county").eq(lit("Cameron")),
+        );
+        let scan_plan = KernelScanPlan::try_new(
+            snapshot,
+            Some(&vec![4]),
+            &[filter],
+            &DeltaScanConfig::default(),
+            None,
+        )
+        .unwrap();
+
+        let expected_schema = snapshot
+            .schema()
+            .project(&vec!["cases", "county", "state"])
+            .unwrap();
+        // Assert string representation as the equality check is order-insensitive.
+        assert_eq!(
+            scan_plan.scan.physical_schema().to_string(),
+            expected_schema.to_string()
+        )
     }
 }

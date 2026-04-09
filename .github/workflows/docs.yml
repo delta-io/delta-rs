@@ -22,8 +22,10 @@ jobs:
   markdown-link-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: tcort/github-action-markdown-link-check@v1
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # <https://github.com/tcort/markdown-link-check/releases/tag/v3.14.2>
+      - uses: tcort/github-action-markdown-link-check@e7c7a18363c842693fadde5d41a3bd3573a7a225
         with:
           config-file: "docs/mlc_config.json"
           folder-path: docs
@@ -34,7 +36,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - run: |
           cd docs
           make check
@@ -45,7 +48,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Environment
         uses: ./.github/actions/setup-env
@@ -55,6 +59,7 @@ jobs:
           cd python
           python -m venv venv
           source venv/bin/activate
+          python -m pip install --upgrade pip
           make ${{ env.BUILD_ARGS }}
 
       - name: Install dependencies
@@ -69,7 +74,8 @@ jobs:
 
       - name: Deploy
         if: ${{ env.IS_RELEASE == 'true' }}
-        uses: JamesIves/github-pages-deploy-action@v4
+        # <https://github.com/JamesIves/github-pages-deploy-action/releases/tag/v4.8.0>
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f
         with:
           folder: site
           clean-exclude: |

@@ -23,6 +23,35 @@ pub fn create_session() -> DeltaSessionContext {
     DeltaSessionContext::default()
 }
 
+/// Create a [`SessionState`] with optional spill-to-disk configuration.
+///
+/// When either parameter is `Some`, a [`FairSpillPool`] memory pool and a sized
+/// [`DiskManagerBuilder`] are wired into the runtime environment so that
+/// DataFusion can spill intermediate results to disk instead of running out of
+/// memory.
+///
+/// # Arguments
+/// * `max_spill_size` – Maximum bytes kept in memory before spilling. `None` uses DataFusion's default (unbounded) pool.
+/// * `max_temp_directory_size` – Maximum disk space for temporary spill files. `None` uses DataFusion's default disk manager.
+pub fn create_session_state_with_spill_config(
+    max_spill_size: Option<usize>,
+    max_temp_directory_size: Option<u64>,
+) -> SessionState {
+    if max_spill_size.is_none() && max_temp_directory_size.is_none() {
+        return DeltaSessionContext::new().state();
+    }
+
+    let mut builder = DeltaRuntimeEnvBuilder::new();
+    if let Some(spill_size) = max_spill_size {
+        builder = builder.with_max_spill_size(spill_size);
+    }
+    if let Some(directory_size) = max_temp_directory_size {
+        builder = builder.with_max_temp_directory_size(directory_size);
+    }
+
+    DeltaSessionContext::with_runtime_env(builder.build()).state()
+}
+
 pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// Ensure the session's `RuntimeEnv` has the object store registered for the log store's
     /// root URL.
@@ -90,20 +119,15 @@ where
 /// This is an opt-in knob on operations that accept `with_session_state(...)`. Defaults to
 /// `InternalDefaults` to preserve existing behavior.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionFallbackPolicy {
     /// If the provided session is not a `SessionState`, log a warning and use internal defaults.
+    #[default]
     InternalDefaults,
     /// Derive a `SessionState` from the `Session` trait (runtime/config/UDF registries).
     DeriveFromTrait,
     /// Return an error if the provided session is not a `SessionState`.
     RequireSessionState,
-}
-
-impl Default for SessionFallbackPolicy {
-    fn default() -> Self {
-        Self::InternalDefaults
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

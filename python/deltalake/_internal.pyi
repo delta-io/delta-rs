@@ -169,16 +169,19 @@ class RawDeltaTable:
         properties: dict[str, str],
         raise_if_not_exists: bool,
         commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def set_table_name(
         self,
         name: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def set_table_description(
         self,
         description: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def restore(
         self,
@@ -186,6 +189,7 @@ class RawDeltaTable:
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
         commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def history(self, limit: int | None) -> list[str]: ...
     def update_incremental(self) -> None: ...
@@ -195,6 +199,7 @@ class RawDeltaTable:
         partition_filters: FilterConjunctionType | None,
     ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
+    def compact_logs(self, starting_version: int, ending_version: int) -> None: ...
     def get_add_actions(self, flatten: bool) -> Table: ...
     def delete(
         self,
@@ -231,6 +236,8 @@ class RawDeltaTable:
         post_commithook_properties: PostCommitHookProperties | None,
         safe_cast: bool,
         streamed_exec: bool,
+        max_spill_size: int | None,
+        max_temp_directory_size: int | None,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
@@ -266,7 +273,7 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
-    def __datafusion_table_provider__(self) -> Any: ...
+    def __datafusion_table_provider__(self, session: Any | None = None) -> Any: ...
     def write(
         self,
         data: RecordBatchReader,

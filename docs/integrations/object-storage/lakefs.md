@@ -8,7 +8,7 @@ You don’t need to install any extra dependencies to read/write Delta tables to
 
 You can pass your LakeFS credentials explicitly by using:
 
-- the `storage_options `kwarg
+- the `storage_options` kwarg
 - Environment variables
 
 ## Example

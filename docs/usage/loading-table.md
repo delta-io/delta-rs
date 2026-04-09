@@ -109,7 +109,7 @@ the `DeltaTable.is_deltatable()` method.
 ## Custom Storage Backends
 
 While delta always needs its internal storage backend to work and be
-properly configured, in order to manage the delta log, it may sometime
+properly configured, in order to manage the delta log, it may sometimes
 be advantageous - and is common practice in the arrow world - to
 customize the storage interface used for reading the bulk data.
 
@@ -214,3 +214,57 @@ You may load a Delta Table from your Databricks or Open Source Unity Catalog usi
     dt.is_deltatable(dt.table_uri)
     # True
     ```
+
+### Following environmental variables are supported
+
+#### Connection Configuration
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_HOST` | Databricks workspace host URL |
+| `DATABRICKS_WORKSPACE_URL` | Alternative workspace URL variable |
+| `UNITY_WORKSPACE_URL` | Unity-prefixed workspace URL |
+
+#### Authentication Credentials
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_TOKEN` | Access token for Databricks authentication|
+| `DATABRICKS_ACCESS_TOKEN` | Alternative access token variable |
+| `UNITY_ACCESS_TOKEN` | Unity-prefixed access token variable |
+
+#### OAuth / Service Principal Authentication
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_AUTHORITY_HOST` | Authority host for OAuth flows |
+| `DATABRICKS_AUTHORITY_ID` | Authority (tenant) ID for OAuth flows |
+| `DATABRICKS_CLIENT_ID` | Service principal client ID |
+| `DATABRICKS_CLIENT_SECRET` | Service principal client secret |
+| or ||
+| `UNITY_AUTHORITY_HOST` | Unity-prefixed authority host |
+| `UNITY_AUTHORITY_ID` | Unity-prefixed authority ID |
+| `UNITY_CLIENT_ID` | Unity-prefixed client ID |
+| `UNITY_CLIENT_SECRET` | Unity-prefixed client secret |
+
+#### Azure Managed Identity Authentication
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_FEDERATED_TOKEN_FILE` | File containing token for Azure AD workload identity federation |
+| `DATABRICKS_MSI_ENDPOINT` | Endpoint to request managed identity token |
+| `DATABRICKS_MSI_RESOURCE_ID` | MSI resource ID for managed identity |
+| `DATABRICKS_OBJECT_ID` | Object ID for managed identity authentication |
+| `DATABRICKS_USE_AZURE_CLI` | Use Azure CLI for acquiring access token |
+| or ||
+| `UNITY_FEDERATED_TOKEN_FILE` | Unity-prefixed federated token file |
+| `UNITY_MSI_ENDPOINT` | Unity-prefixed MSI endpoint |
+| `UNITY_MSI_RESOURCE_ID` | Unity-prefixed MSI resource ID |
+| `UNITY_OBJECT_ID` | Unity-prefixed object ID |
+| `UNITY_USE_AZURE_CLI` | Unity-prefixed Azure CLI flag |
+
+#### Additional Settings
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `UNITY_ALLOW_HTTP_URL` | Allow HTTP URLs (e.g., http://localhost:8080) for testing |

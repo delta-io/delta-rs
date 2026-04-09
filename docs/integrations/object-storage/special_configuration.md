@@ -1,6 +1,6 @@
 # Advanced object storage configuration
 
-Delta-rs provides some addition values to be set in the storage_options for advanced use case:
+Delta-rs provides some additional values to be set in the storage_options for advanced use cases:
 
 - Limit concurrent requests overall
 - Set retry configuration
@@ -41,6 +41,7 @@ The following configuration options from `ClientConfigKey` work across all stora
 | `http2_max_frame_size` | Maximum HTTP/2 frame size in bytes. Must be between 16,384 and 16,777,215. |
 | `user_agent` | Custom User-Agent header to send with requests. Example: `my-app/1.0` |
 | `default_content_type` | Default Content-Type header for uploads when not otherwise specified. Example: `application/octet-stream` |
+| `certificate_path` | Path to a PEM-encoded root certificate file for TLS connections. Example: `/path/to/my_cert.pem` |
 
 ### Example Usage
 

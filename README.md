@@ -54,17 +54,6 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 [crates]: https://crates.io/crates/deltalake
 [crates-dl]: https://img.shields.io/crates/d/deltalake?color=F75101
 
-## Table of contents
-
-- [Table of contents](#table-of-contents)
-- [Quick Start](#quick-start)
-- [Get Involved](#get-involved)
-- [Integrations](#integrations)
-- [Features](#features)
-  - [Cloud Integrations](#cloud-integrations)
-  - [Supported Operations](#supported-operations)
-  - [Protocol Support Level](#protocol-support-level)
-
 ## Quick Start
 
 The `deltalake` library aims to adopt patterns from other libraries in data processing,
@@ -105,16 +94,18 @@ async fn main() -> Result<(), DeltaTableError> {
 }
 ```
 
-You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub) | [Docker Repo](https://go.delta.io/docker)
+You can also try Delta Lake in Docker at [DockerHub](https://go.delta.io/dockerhub) | [Docker Repo](https://go.delta.io/docker)
 
 ## Get Involved
 
-We encourage you to reach out, and are [committed](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
-to provide a welcoming community.
+The `delta-rs` team is [committed](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
+to providing a welcoming community.
 
-- [Join us in our Slack workspace](https://go.delta.io/slack)
-- [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
-- Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
+- [Join us in our Slack workspace](https://go.delta.io/slack).
+- [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md).
+- Looking to contribute?
+  - Read our [contributing guide](COMTRIBUTING.m).
+  - See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
 ## Integrations
 

@@ -1,5 +1,7 @@
 import os
 import pathlib
+from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 import pytest
 from arro3.core import Table
@@ -150,6 +152,186 @@ def test_vacuum_keep_versions():
     }
 
 
+def test_vacuum_keep_versions_from_history_order():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    keep_versions = [commit["version"] for commit in dt.history()]
+
+    tombstones_sorted = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+            keep_versions=sorted(keep_versions),
+        )
+    )
+
+    tombstones_from_history = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+            keep_versions=keep_versions,
+        )
+    )
+
+    assert tombstones_from_history == tombstones_sorted
+
+
+def test_vacuum_lite_mode_no_list_operation(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    """Test that vacuum in lite mode (default) only removes files referenced as
+    expired tombstones in the transaction log and does NOT perform a storage list
+    operation.  A stray parquet file that exists on disk but is never referenced by
+    the delta log is used as a sentinel: Lite mode must not return it, while Full
+    mode must find it via the list operation."""
+
+    # Write initial data then overwrite so the first batch of files becomes
+    # expired tombstones in the transaction log.
+    write_deltalake(tmp_path, sample_table, mode="overwrite")
+    dt = DeltaTable(tmp_path)
+    original_files = set(dt.file_uris())
+
+    write_deltalake(tmp_path, sample_table, mode="overwrite")
+    dt.update_incremental()
+    new_files = set(dt.file_uris())
+    assert new_files.isdisjoint(original_files)
+
+    # Plant a stray file in the table directory that is NOT referenced anywhere
+    # in the transaction log.  Only a storage list operation would discover it.
+    stray_filename = "stray_file_not_in_log.parquet"
+    (tmp_path / stray_filename).write_bytes(b"not a real parquet file")
+
+    # Lite mode: Should return only the expired tombstones derived from the log.
+    lite_tombstones = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=False,
+        )
+    )
+
+    expected_tombstones = {f.split(os.path.sep)[-1] for f in original_files}
+    assert lite_tombstones == expected_tombstones, (
+        "Lite mode should return exactly the log-referenced expired tombstones"
+    )
+
+    # The stray file must NOT appear: if it did, a list operation was performed.
+    assert stray_filename not in lite_tombstones, (
+        "Lite mode must not discover files via a storage list operation"
+    )
+
+    # Full mode performs a list and must include the stray file.
+    full_tombstones = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+        )
+    )
+
+    assert stray_filename in full_tombstones, (
+        "Full mode should discover the stray file via a storage list operation"
+    )
+
+
+def test_vacuum_lite_mode_no_list_operation_partitioned(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    """Same as test_vacuum_lite_mode_no_list_operation but for a partitioned table.
+    Verifies that lite mode does not perform a storage list operation even when
+    the table is partitioned  a stray parquet file planted inside a partition
+    directory must not be returned by lite mode but must be found by full mode."""
+
+    # Write partitioned data, then overwrite to create expired tombstones.
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="overwrite")
+    dt = DeltaTable(tmp_path)
+    original_files = set(dt.file_uris())
+
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="overwrite")
+    dt.update_incremental()
+    new_files = set(dt.file_uris())
+    assert new_files.isdisjoint(original_files)
+
+    # Plant a stray parquet file inside one of the existing partition directories.
+    # Because it is never mentioned in the transaction log, only a storage list
+    # operation would discover it.
+    partition_dir = tmp_path / "deleted=false"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    stray_filename = "stray_file_not_in_log.parquet"
+    (partition_dir / stray_filename).write_bytes(b"not a real parquet file")
+    stray_relative = f"deleted=false/{stray_filename}"
+
+    # Lite mode: Should return only the expired tombstones derived from the log.
+    lite_tombstones = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=False,
+        )
+    )
+
+    expected_tombstones = {
+        os.path.join(*f.split(os.path.sep)[-2:]) for f in original_files
+    }
+    assert lite_tombstones == expected_tombstones, (
+        "Lite mode should return exactly the log-referenced expired tombstones"
+    )
+
+    # The stray file must NOT appear: if it did, a list operation was performed.
+    assert stray_relative not in lite_tombstones, (
+        "Lite mode must not discover files via a storage list operation"
+    )
+
+    # Full mode performs a list and must include the stray file.
+    full_tombstones = set(
+        dt.vacuum(
+            retention_hours=0,
+            dry_run=True,
+            enforce_retention_duration=False,
+            full=True,
+        )
+    )
+
+    assert stray_relative in full_tombstones, (
+        "Full mode should discover the stray file via a storage list operation"
+    )
+
+
+@pytest.mark.pyarrow
+def test_vacuum_full_keeps_recent_tombstones_readable_for_time_travel(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+    dt = DeltaTable(tmp_path)
+    original_file_uris = dt.file_uris()
+    assert original_file_uris
+
+    old_ts = (datetime.now() - timedelta(days=10)).timestamp()
+    backdated_path = pathlib.Path(urlparse(original_file_uris[0]).path)
+    os.utime(backdated_path, (old_ts, old_ts))
+
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+    write_deltalake(tmp_path, sample_table, partition_by=["deleted"], mode="append")
+
+    dt = DeltaTable(tmp_path)
+    version_before_optimize = dt.version()
+
+    optimize_metrics = dt.optimize.compact(min_commit_interval=timedelta(minutes=10))
+    assert optimize_metrics["numFilesRemoved"] > 0
+    assert dt.version() > version_before_optimize
+    dt.vacuum(dry_run=False, full=True)
+
+    time_travel = DeltaTable(tmp_path, version=version_before_optimize)
+    assert time_travel.to_pyarrow_table().num_rows == sample_table.num_rows * 3
+
+
 # https://github.com/delta-io/delta-rs/issues/3745
 @pytest.mark.pyarrow
 def test_issue_3745(tmp_path: pathlib.Path):
@@ -169,3 +351,63 @@ def test_issue_3745(tmp_path: pathlib.Path):
 
     table = DeltaTable(tmp_path)
     table.vacuum()
+
+
+def test_positional_commit_args_raise_deprecation_warning(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        dt.vacuum(None, True, True, None, commit, True, [0])
+
+
+def test_vacuum_partial_legacy_positional_args_preserve_defaults():
+    captured: dict[str, tuple] = {}
+
+    class StubTable:
+        def vacuum(self, *args):
+            captured["args"] = args
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.warns(DeprecationWarning, match="positionally"):
+        dt.vacuum(None, True, True, None, commit)
+
+    assert captured["args"] == (True, None, True, commit, None, False, None)
+
+
+def test_vacuum_positional_and_keyword_commit_conflict_raises():
+    dt = object.__new__(DeltaTable)
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'commit_properties'"):
+        dt.vacuum(None, True, True, None, commit, commit_properties=commit)
+
+
+def test_vacuum_positional_and_keyword_full_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'full'"):
+        dt.vacuum(None, True, True, None, commit, False, full=True)
+
+
+def test_vacuum_positional_and_keyword_keep_versions_conflict_raises():
+    class StubTable:
+        def vacuum(self, *args):
+            return []
+
+    dt = object.__new__(DeltaTable)
+    dt._table = StubTable()
+    commit = CommitProperties(custom_metadata={"userName": "John Doe"})
+    with pytest.raises(TypeError, match="multiple values for 'keep_versions'"):
+        dt.vacuum(None, True, True, None, commit, False, [1], keep_versions=[2])

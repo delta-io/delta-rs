@@ -129,21 +129,15 @@ impl TreeNodeVisitor<'_> for NotNullExtractor {
                 // we dont't actually need a kernel expression here, but DF field access
                 // if somewhat tedious to extract and the kernel ColumnName is convenient
                 // for this purpose.
-                match to_delta_expression(expr) {
-                    Ok(Expression::Column(col_name)) => {
-                        self.non_nullable_columns.push(col_name);
-                    }
-                    _ => {}
+                if let Ok(Expression::Column(col_name)) = to_delta_expression(expr) {
+                    self.non_nullable_columns.push(col_name);
                 }
                 Ok(TreeNodeRecursion::Continue)
             }
             Expr::Not(expr) => match expr.as_ref() {
                 Expr::IsNull(inner_expr) => {
-                    match to_delta_expression(inner_expr) {
-                        Ok(Expression::Column(col_name)) => {
-                            self.non_nullable_columns.push(col_name);
-                        }
-                        _ => {}
+                    if let Ok(Expression::Column(col_name)) = to_delta_expression(inner_expr) {
+                        self.non_nullable_columns.push(col_name);
                     }
                     Ok(TreeNodeRecursion::Continue)
                 }
@@ -594,7 +588,7 @@ where
                             .filter(|v| matches!(v, Some(false) | None))
                             .count();
                         if invalid_count > 0 {
-                            let invalid_data = filter_record_batch(&batch, &not(&validity_mask)?)?;
+                            let invalid_data = filter_record_batch(&batch, &not(validity_mask)?)?;
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
@@ -618,7 +612,7 @@ where
                 }
                 let (_, arrays, _) = batch.into_parts();
                 Poll::Ready(Some(Ok(RecordBatch::try_new(
-                    Arc::clone(&this.schema),
+                    Arc::clone(this.schema),
                     arrays,
                 )?)))
             }
@@ -731,7 +725,7 @@ pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) ->
     // Convert ColumnName paths to Vec<String> for easier comparison
     let target_paths: HashSet<Vec<String>> = paths
         .iter()
-        .map(|col_name| col_name.path().iter().map(|s| s.clone()).collect())
+        .map(|col_name| col_name.path().to_vec())
         .collect();
 
     // Recursively update fields

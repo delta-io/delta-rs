@@ -825,7 +825,7 @@ def test_read_cdf_last_version(tmp_path):
             ),
             "_commit_version": Array(
                 [0, 0, 0],
-                type=Field("_commit_version", DataType.int64(), nullable=True),
+                type=Field("_commit_version", DataType.uint64(), nullable=True),
             ),
         }
     )

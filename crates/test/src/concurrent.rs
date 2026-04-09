@@ -4,7 +4,9 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 use deltalake_core::kernel::transaction::CommitBuilder;
-use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
+use deltalake_core::kernel::{
+    Action, Add, DataType, PrimitiveType, StructField, StructType, Version,
+};
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder};
 
@@ -104,8 +106,8 @@ async fn prepare_table(
     Ok((table, table_uri))
 }
 
-const WORKERS: i64 = 5;
-const COMMITS: i64 = 3;
+const WORKERS: u64 = 5;
+const COMMITS: Version = 3;
 
 async fn run_test<F, Fut>(create_worker: F)
 where
@@ -129,12 +131,12 @@ where
     }
 
     // to ensure that there's been no collisions between workers of acquiring the same version
-    assert_eq!(map.len() as i64, WORKERS * COMMITS);
+    assert_eq!(map.len() as u64, WORKERS * COMMITS);
 
     // check that we have unique and ascending versions committed
     let mut versions = Vec::from_iter(map.keys().copied());
     versions.sort();
-    assert_eq!(versions, Vec::from_iter(1i64..=WORKERS * COMMITS));
+    assert_eq!(versions, Vec::from_iter(1u64..=WORKERS * COMMITS));
 
     // check that each file for each worker is committed as expected
     let mut files = Vec::from_iter(map.values().cloned());
@@ -166,7 +168,7 @@ impl Worker {
         Self { table, name }
     }
 
-    async fn commit_sequence(&mut self, n: i64) -> HashMap<i64, String> {
+    async fn commit_sequence(&mut self, n: Version) -> HashMap<Version, String> {
         let mut result = HashMap::new();
         for i in 0..n {
             let name = format!("{}-{i}", self.name);
@@ -178,7 +180,7 @@ impl Worker {
         result
     }
 
-    async fn commit_file(&mut self, name: &str) -> i64 {
+    async fn commit_file(&mut self, name: &str) -> Version {
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: None,
