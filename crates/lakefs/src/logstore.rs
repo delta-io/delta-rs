@@ -10,7 +10,7 @@ use deltalake_core::{
     DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
 use deltalake_core::{DeltaTableError, kernel::Version, logstore::*};
-use object_store::{Error as ObjectStoreError, ObjectStore, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _, PutOptions};
 use tracing::debug;
 use url::Url;
 use uuid::Uuid;

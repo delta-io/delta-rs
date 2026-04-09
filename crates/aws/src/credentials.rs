@@ -77,10 +77,13 @@ impl CredentialProvider for AWSForObjectStore {
             }
         }
 
-        let provider = self
-            .sdk_config
-            .credentials_provider()
-            .ok_or(ObjectStoreError::NotImplemented)?;
+        let provider =
+            self.sdk_config
+                .credentials_provider()
+                .ok_or(ObjectStoreError::NotImplemented {
+                    operation: "credentials_provider".to_string(),
+                    implementer: "AWSForObjectStore".to_string(),
+                })?;
 
         let credentials =
             provider

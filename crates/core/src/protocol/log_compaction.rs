@@ -2,7 +2,7 @@
 
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 
 use uuid::Uuid;
@@ -12,7 +12,6 @@ use crate::logstore::LogStore;
 use crate::protocol::to_rb;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use arrow_json::LineDelimitedWriter;
-use object_store::MultipartUpload;
 
 #[tracing::instrument(skip(log_store, snapshot), fields(operation = "log_compaction", start_version = start_version, end_version = end_version, table_uri = %log_store.root_url()))]
 pub(crate) async fn compact_logs_for(

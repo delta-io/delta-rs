@@ -10,8 +10,9 @@ use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreExt, ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    RenameOptions, RenameTargetMode, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
@@ -375,10 +376,6 @@ impl Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for S3StorageBackend {
-    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -386,10 +383,6 @@ impl ObjectStore for S3StorageBackend {
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
-    }
-
-    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
     }
 
     async fn put_multipart_opts(
@@ -400,24 +393,23 @@ impl ObjectStore for S3StorageBackend {
         self.inner.put_multipart_opts(location, options).await
     }
 
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        self.inner.get(location).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
-        self.inner.get_range(location, range).await
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<u64>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, ObjectStoreResult<Path>>,
+    ) -> BoxStream<'static, ObjectStoreResult<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
@@ -436,22 +428,30 @@ impl ObjectStore for S3StorageBackend {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> ObjectStoreResult<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 
-    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
-        todo!()
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        if self.allow_unsafe_rename {
-            self.inner.rename(from, to).await
-        } else {
-            Err(ObjectStoreError::Generic {
+    async fn rename_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: RenameOptions,
+    ) -> ObjectStoreResult<()> {
+        match options.target_mode {
+            RenameTargetMode::Create if self.allow_unsafe_rename => {
+                self.inner.rename(from, to).await
+            }
+            RenameTargetMode::Create => Err(ObjectStoreError::Generic {
                 store: STORE_NAME,
                 source: Box::new(crate::errors::LockClientError::LockClientRequired),
-            })
+            }),
+            RenameTargetMode::Overwrite => self.inner.rename_opts(from, to, options).await,
         }
     }
 }

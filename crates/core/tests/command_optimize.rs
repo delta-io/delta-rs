@@ -19,7 +19,7 @@ use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt as _;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::basic::Compression;
@@ -1505,7 +1505,7 @@ async fn read_parquet_file(
 ) -> Result<RecordBatch, Box<dyn Error>> {
     let file = object_store.head(path).await?;
     let file_reader =
-        ParquetObjectReader::new(object_store, file.location).with_file_size(file.size);
+        ParquetObjectReader::new(object_store, path.clone()).with_file_size(file.size);
     let batches = ParquetRecordBatchStreamBuilder::new(file_reader)
         .await?
         .build()?

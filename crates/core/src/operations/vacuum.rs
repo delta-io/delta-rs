@@ -646,7 +646,7 @@ fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp
 
 #[cfg(test)]
 mod tests {
-    use object_store::{PutPayload, local::LocalFileSystem, memory::InMemory};
+    use object_store::{ObjectStoreExt as _, PutPayload, local::LocalFileSystem, memory::InMemory};
     use serde_json::json;
 
     use super::*;
