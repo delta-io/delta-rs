@@ -396,7 +396,7 @@ async fn test_update_incremental_does_not_reread_initial_commit() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant_hint_lookup() {
     let n_commits = 2;
     let tmp_dir = tempfile::tempdir().unwrap();
@@ -461,13 +461,14 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
 }
 
 #[tokio::test]
-#[ignore = "not implemented"]
+#[ignore]
 async fn test_read_table_features() -> DeltaResult<()> {
     let path = "../test/tests/data/simple_table_features";
-    let table_uri = Url::from_directory_path(path).unwrap();
-    let mut _table = deltalake_core::open_table(table_uri).await?;
-    let rf = _table.snapshot()?.protocol().reader_features();
-    let wf = _table.snapshot()?.protocol().writer_features();
+    let table_uri =
+        Url::from_directory_path(std::fs::canonicalize(path)?).expect("Failed to create Url path");
+    let mut table = deltalake_core::open_table(table_uri).await?;
+    let rf = table.snapshot()?.protocol().reader_features();
+    let wf = table.snapshot()?.protocol().writer_features();
 
     assert!(rf.is_some());
     assert!(wf.is_some());
@@ -478,10 +479,13 @@ async fn test_read_table_features() -> DeltaResult<()> {
 
 // test for: https://github.com/delta-io/delta-rs/issues/1302
 #[tokio::test]
-#[ignore = "not implemented"]
 async fn read_delta_table_from_dlt() {
     let table = deltalake_core::open_table(
-        Url::from_directory_path(Path::new("../test/tests/data/delta-live-table")).unwrap(),
+        Url::from_directory_path(
+            std::fs::canonicalize("../test/tests/data/delta-live-table")
+                .expect("Failed to canonicalize"),
+        )
+        .unwrap(),
     )
     .await
     .unwrap();
