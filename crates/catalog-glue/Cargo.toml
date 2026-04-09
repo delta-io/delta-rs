@@ -28,5 +28,10 @@ aws-sdk-glue = { version = "1.120", default-features = false, features = [
 deltalake-core = { version = "0.32.0", path = "../core", default-features = false }
 thiserror = { workspace = true }
 
+[features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
