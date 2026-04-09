@@ -15,15 +15,15 @@ def _datafusion_major_version() -> int | None:
 
 
 def test_datafusion_table_provider_incompatible_version_errors(tmp_path, monkeypatch):
-    # Force the runtime check to behave like an incompatible pre-52 datafusion install.
+    # Force the runtime check to behave like an incompatible pre-53 datafusion install.
     call_count = {"count": 0}
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
         call_count["count"] += 1
         if call_count["count"] == 1:
-            return "51.0.0"
-        return "52.0.0"
+            return "52.0.0"
+        return "53.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -41,7 +41,7 @@ def test_datafusion_table_provider_incompatible_version_errors(tmp_path, monkeyp
 
     msg = str(exc_info.value)
     assert "datafusion" in msg
-    assert "datafusion==52" in msg
+    assert "datafusion==53" in msg
     assert "QueryBuilder" in msg
 
 
@@ -71,7 +71,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
 ):
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "52.0.0"
+        return "53.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -81,7 +81,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
     write_deltalake(tmp_path, table)
     dt = DeltaTable(tmp_path)
 
-    # DataFusion 52+ calls this hook with a session argument.
+    # DataFusion 53+ calls this hook with a session argument.
     capsule = dt.__datafusion_table_provider__(session=object())  # type: ignore[call-arg]
     assert capsule is not None
 
@@ -93,7 +93,7 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "52.0.0"
+        return "53.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -123,8 +123,8 @@ def test_datafusion_table_provider(tmp_path):
         )
 
     datafusion_major = _datafusion_major_version()
-    if datafusion_major is None or datafusion_major < 52:
-        pytest.skip("DataFusion Python integration requires datafusion>=52 wheels")
+    if datafusion_major is None or datafusion_major < 53:
+        pytest.skip("DataFusion Python integration requires datafusion>=53 wheels")
     nrows = 5
     table = Table(
         {
@@ -154,7 +154,7 @@ def test_datafusion_table_provider(tmp_path):
     session.register_table("tbl", dt)
     data = session.sql("SELECT * FROM tbl")
 
-    # DataFusion 52 can materialize string columns as Utf8View while our fixture uses Utf8.
+    # DataFusion 53 can materialize string columns as Utf8View while our fixture uses Utf8.
     # Compare row content instead of requiring an exact Arrow string storage type match.
     import pyarrow as pa
 

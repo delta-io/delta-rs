@@ -303,7 +303,7 @@ async fn execute(
         .try_collect()?;
 
     let current_metadata = snapshot.metadata();
-    let table_partition_cols = current_metadata.partition_columns().clone();
+    let table_partition_cols = current_metadata.partition_columns().to_vec();
 
     let scan_start = Instant::now();
 

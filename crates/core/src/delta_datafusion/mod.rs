@@ -631,7 +631,13 @@ mod tests {
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
-    use futures::{StreamExt, TryStreamExt};
+    use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+    use object_store::ObjectMeta;
+    use object_store::{
+        CopyOptions, GetOptions, GetRange as ObjectStoreGetRange, GetResult, ListResult,
+        ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+        path::Path,
+    };
     use serde_json::json;
     use std::ops::Range;
     use url::Url;
@@ -1558,6 +1564,7 @@ mod tests {
         let _ = df.collect().await?;
         Ok(())
     }
+
     /// Records operations made by the inner object store on a channel obtained at construction
     struct RecordingObjectStore {
         inner: ObjectStoreRef,
@@ -1631,7 +1638,7 @@ mod tests {
             &self,
             location: &Path,
             opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
             self.inner.put_multipart_opts(location, opts).await
         }
 
@@ -1640,9 +1647,22 @@ mod tests {
             location: &Path,
             options: GetOptions,
         ) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::GetOpts(location.into()))
-                .unwrap();
+            let is_plain_get = options.if_match.is_none()
+                && options.if_none_match.is_none()
+                && options.if_modified_since.is_none()
+                && options.if_unmodified_since.is_none()
+                && options.range.is_none()
+                && options.version.is_none()
+                && !options.head;
+            let operation = match options.range.as_ref() {
+                Some(ObjectStoreGetRange::Bounded(range)) => {
+                    ObjectStoreOperation::GetRange(location.into(), range.clone())
+                }
+                Some(_) => ObjectStoreOperation::GetOpts(location.into()),
+                None if is_plain_get => ObjectStoreOperation::Get(location.into()),
+                None => ObjectStoreOperation::GetOpts(location.into()),
+            };
+            self.operations.send(operation).unwrap();
             self.inner.get_opts(location, options).await
         }
 
@@ -1660,10 +1680,10 @@ mod tests {
             self.inner.get_ranges(location, ranges).await
         }
 
-        fn delete_stream<'a>(
-            &'a self,
-            locations: BoxStream<'a, object_store::Result<Path>>,
-        ) -> BoxStream<'a, object_store::Result<Path>> {
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, object_store::Result<Path>>,
+        ) -> BoxStream<'static, object_store::Result<Path>> {
             self.inner.delete_stream(locations)
         }
 
@@ -1689,8 +1709,22 @@ mod tests {
             self.inner.list_with_delimiter(prefix).await
         }
 
-        async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: CopyOptions,
+        ) -> object_store::Result<()> {
             self.inner.copy_opts(from, to, options).await
+        }
+
+        async fn rename_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: RenameOptions,
+        ) -> object_store::Result<()> {
+            self.inner.rename_opts(from, to, options).await
         }
     }
 }

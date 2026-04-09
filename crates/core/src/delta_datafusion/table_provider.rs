@@ -1034,7 +1034,7 @@ impl ExecutionPlan for DeltaScan {
         self.parquet_scan.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.parquet_scan.properties()
     }
 
@@ -1147,7 +1147,16 @@ pub(crate) fn simplify_expr(
     df_schema: DFSchemaRef,
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let context = SimplifyContext::new(session.execution_props()).with_schema(df_schema.clone());
+    let execution_props = session.execution_props();
+    let context = SimplifyContext::default()
+        .with_schema(df_schema.clone())
+        .with_query_execution_start_time(execution_props.query_execution_start_time.clone())
+        .with_config_options(
+            execution_props
+                .config_options()
+                .cloned()
+                .unwrap_or_else(|| session.config().options().clone()),
+        );
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
@@ -1262,8 +1271,9 @@ fn partitioned_file_from_action(
         },
         partition_values,
         range: None,
-        extensions: None,
         statistics: None,
+        ordering: None,
+        extensions: None,
         metadata_size_hint: None,
     }
 }
@@ -1686,8 +1696,9 @@ mod tests {
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
-            extensions: None,
             statistics: None,
+            ordering: None,
+            extensions: None,
             metadata_size_hint: None,
         };
         assert_eq!(file.partition_values, ref_file.partition_values)

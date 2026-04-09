@@ -123,7 +123,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 52;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 53;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
@@ -232,11 +232,13 @@ fn datafusion_task_context_provider_from_session(
             "Expected datafusion_task_context_provider PyCapsule to have name set.",
         ));
     }
-    let capsule_name = capsule_name.unwrap().to_str().map_err(|err| {
-        PyValueError::new_err(format!(
-            "Invalid datafusion_task_context_provider capsule name: {err}"
-        ))
-    })?;
+    let capsule_name = unsafe { capsule_name.unwrap().as_cstr() }
+        .to_str()
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "Invalid datafusion_task_context_provider capsule name: {err}"
+            ))
+        })?;
     if capsule_name != "datafusion_task_context_provider" {
         return Err(PyValueError::new_err(format!(
             "Expected PyCapsule name datafusion_task_context_provider, got {capsule_name}",
