@@ -93,8 +93,8 @@ version = "0"
 features = [
     "azure",
     "gcs",
-    "datafusion",
     "python",
+    "datafusion",
     "unity-experimental",
     "hdfs",
     "lakefs",
