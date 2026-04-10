@@ -101,7 +101,7 @@ features = [
 ]
 
 [features]
-default = ["rustls", "nanosecond-timestamps"]  # TODO shouldn't be enabled in upstream PR
+default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
 nanosecond-timestamps = ["deltalake/nanosecond-timestamps"]
