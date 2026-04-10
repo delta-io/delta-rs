@@ -1520,7 +1520,7 @@ async fn read_parquet_metadata(
 ) -> Result<parquet::file::metadata::ParquetMetaData, Box<dyn Error>> {
     let file = object_store.head(path).await?;
     let file_reader =
-        ParquetObjectReader::new(object_store, file.location).with_file_size(file.size);
+        ParquetObjectReader::new(object_store, path.clone()).with_file_size(file.size);
     let builder = ParquetRecordBatchStreamBuilder::new(file_reader).await?;
     Ok(builder.metadata().as_ref().clone())
 }
