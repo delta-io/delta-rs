@@ -4,21 +4,12 @@ use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{
     Action, Add, DataType, PrimitiveType, StructField, StructType, Version,
 };
-use deltalake_core::logstore::object_store::{
-    CopyOptions, GetResult, RenameOptions, Result as ObjectStoreResult,
-};
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
-use object_store::path::Path as StorePath;
-use object_store::{
-    MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
-use url::Url;
 use uuid::Uuid;
 
 pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
@@ -129,123 +120,4 @@ pub async fn commit_actions(
         .await
         .expect("Failed to commit_actions: {actions:?}");
     version
-}
-#[derive(Debug)]
-pub struct SlowStore {
-    inner: Arc<dyn ObjectStore>,
-}
-impl std::fmt::Display for SlowStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-impl SlowStore {
-    #[allow(dead_code)]
-    pub fn new(location: Url) -> deltalake_core::DeltaResult<Self> {
-        Ok(Self {
-            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl ObjectStore for SlowStore {
-    async fn put_opts(
-        &self,
-        location: &StorePath,
-        bytes: PutPayload,
-        options: PutOptions,
-    ) -> ObjectStoreResult<PutResult> {
-        self.inner.put_opts(location, bytes, options).await
-    }
-
-    /// Perform a get request with options
-    ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
-    async fn get_opts(
-        &self,
-        location: &StorePath,
-        options: object_store::GetOptions,
-    ) -> ObjectStoreResult<GetResult> {
-        tokio::time::sleep(tokio::time::Duration::from_secs_f64(0.01)).await;
-        self.inner.get_opts(location, options).await
-    }
-
-    async fn get_ranges(
-        &self,
-        location: &StorePath,
-        ranges: &[std::ops::Range<u64>],
-    ) -> ObjectStoreResult<Vec<bytes::Bytes>> {
-        self.inner.get_ranges(location, ranges).await
-    }
-
-    fn delete_stream(
-        &self,
-        locations: futures::stream::BoxStream<'static, ObjectStoreResult<StorePath>>,
-    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<StorePath>> {
-        self.inner.delete_stream(locations)
-    }
-
-    /// List all the objects with the given prefix.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
-    fn list(
-        &self,
-        prefix: Option<&StorePath>,
-    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
-        self.inner.list(prefix)
-    }
-
-    /// List all the objects with the given prefix and a location greater than `offset`
-    ///
-    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
-    /// the number of network requests required
-    fn list_with_offset(
-        &self,
-        prefix: Option<&StorePath>,
-        offset: &StorePath,
-    ) -> futures::stream::BoxStream<'static, ObjectStoreResult<object_store::ObjectMeta>> {
-        self.inner.list_with_offset(prefix, offset)
-    }
-
-    /// List objects with the given prefix and an implementation specific
-    /// delimiter. Returns common prefixes (directories) in addition to object
-    /// metadata.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
-    async fn list_with_delimiter(
-        &self,
-        prefix: Option<&StorePath>,
-    ) -> ObjectStoreResult<object_store::ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    async fn copy_opts(
-        &self,
-        from: &StorePath,
-        to: &StorePath,
-        options: CopyOptions,
-    ) -> ObjectStoreResult<()> {
-        self.inner.copy_opts(from, to, options).await
-    }
-
-    async fn rename_opts(
-        &self,
-        from: &StorePath,
-        to: &StorePath,
-        options: RenameOptions,
-    ) -> ObjectStoreResult<()> {
-        self.inner.rename_opts(from, to, options).await
-    }
-
-    async fn put_multipart_opts(
-        &self,
-        location: &StorePath,
-        options: PutMultipartOptions,
-    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, options).await
-    }
 }

@@ -230,8 +230,7 @@ mod tests {
     use super::*;
 
     use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
-    use object_store::Error as ObjectStoreError;
-    use object_store::path::Path;
+    use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _, path::Path};
 
     use crate::writer::test_utils::get_delta_schema;
 
