@@ -10,9 +10,9 @@ use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
-    CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, ObjectStoreExt, ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, RenameOptions, RenameTargetMode, Result as ObjectStoreResult,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
@@ -443,38 +443,8 @@ impl ObjectStore for S3StorageBackend {
         to: &Path,
         options: RenameOptions,
     ) -> ObjectStoreResult<()> {
-        match options.target_mode {
-            RenameTargetMode::Create if self.allow_unsafe_rename => {
-                self.inner
-                    .copy_opts(
-                        from,
-                        to,
-                        CopyOptions::new()
-                            .with_mode(CopyMode::Create)
-                            .with_extensions(options.extensions.clone()),
-                    )
-                    .await?;
-                self.inner.delete(from).await
-            }
-            RenameTargetMode::Create => Err(ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(crate::errors::LockClientError::LockClientRequired),
-            }),
-            RenameTargetMode::Overwrite => self.inner.rename_opts(from, to, options).await,
-        }
+        self.inner.rename_opts(from, to, options).await
     }
-}
-
-/// Storage option keys to use when creating [`S3StorageOptions`].
-///
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-/// Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
-#[deprecated(
-    since = "0.20.0",
-    note = "s3_constants has moved up to deltalake_aws::constants::*"
-)]
-pub mod s3_constants {
-    pub use crate::constants::*;
 }
 
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
@@ -513,19 +483,19 @@ pub(crate) trait S3StorageOptionsConversion {
             }
         }
 
-        // All S3-like Object Stores use conditional put, object-store crate however still requires you to explicitly
-        // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
-        // that PutIfAbsent is supported.
-        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
+        // With object_store 0.13.0 conditional put is supported almost everywhere. The
+        // copy_if_not_exists behavior needs to be explicitly specifedj for AWS  S3 however.
+        //
+        // Users of other stores should define their copy_if_not_exists configuration as needed
         if !options.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
-                AmazonS3ConfigKey::ConditionalPut.as_ref(),
-                "conditional_put",
+                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
+                "copy_if_not_exists",
             ]
             .contains(&key.as_str())
         }) {
-            options.insert("conditional_put".into(), "etag".into());
+            options.insert("copy_if_not_exists".into(), "multipart".into());
         }
         options
     }
@@ -536,6 +506,7 @@ mod tests {
     use super::*;
 
     use crate::constants;
+    use object_store::ObjectStoreExt as _;
     use object_store::memory::InMemory;
     use serial_test::serial;
 
@@ -953,7 +924,7 @@ mod tests {
             assert_eq!(combined_options.len(), 5);
 
             for (key, v) in combined_options {
-                if key != "conditional_put" {
+                if key != "copy_if_not_exists" {
                     assert_eq!(v, "env_key");
                 }
             }
@@ -984,7 +955,7 @@ mod tests {
             let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 
             for (key, v) in combined_options {
-                if key != "conditional_put" {
+                if key != "copy_if_not_exists" {
                     assert_eq!(v, "options_key");
                 }
             }
