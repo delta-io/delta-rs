@@ -8,6 +8,7 @@ use deltalake_core::DeltaTableBuilder;
 use deltalake_core::data_catalog::storage::ListingSchemaProvider;
 use deltalake_test::read::read_table_paths;
 use deltalake_test::{IntegrationContext, TestResult, test_concurrent_writes, test_read_tables};
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 use serial_test::serial;
 use url::Url;

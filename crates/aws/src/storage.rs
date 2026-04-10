@@ -10,9 +10,9 @@ use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    RenameOptions, RenameTargetMode, Result as ObjectStoreResult,
+    CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, ObjectStoreExt, ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, RenameTargetMode, Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
@@ -445,7 +445,16 @@ impl ObjectStore for S3StorageBackend {
     ) -> ObjectStoreResult<()> {
         match options.target_mode {
             RenameTargetMode::Create if self.allow_unsafe_rename => {
-                self.inner.rename(from, to).await
+                self.inner
+                    .copy_opts(
+                        from,
+                        to,
+                        CopyOptions::new()
+                            .with_mode(CopyMode::Create)
+                            .with_extensions(options.extensions.clone()),
+                    )
+                    .await?;
+                self.inner.delete(from).await
             }
             RenameTargetMode::Create => Err(ObjectStoreError::Generic {
                 store: STORE_NAME,
@@ -527,6 +536,7 @@ mod tests {
     use super::*;
 
     use crate::constants;
+    use object_store::memory::InMemory;
     use serial_test::serial;
 
     struct ScopedEnv {
@@ -898,6 +908,31 @@ mod tests {
                 std::env::var(constants::AWS_ROLE_SESSION_NAME).unwrap()
             );
         });
+    }
+
+    #[tokio::test]
+    async fn unsafe_rename_create_mode_does_not_overwrite_existing_destination() {
+        let backend = S3StorageBackend::try_new(Arc::new(InMemory::new()), true).unwrap();
+        let src = Path::from("src");
+        let dst = Path::from("dst");
+
+        backend
+            .put(&src, Bytes::from_static(b"src").into())
+            .await
+            .unwrap();
+        backend
+            .put(&dst, Bytes::from_static(b"dst").into())
+            .await
+            .unwrap();
+
+        let err = backend.rename_if_not_exists(&src, &dst).await.unwrap_err();
+        assert!(matches!(err, ObjectStoreError::AlreadyExists { .. }));
+
+        let dst_bytes = backend.get(&dst).await.unwrap().bytes().await.unwrap();
+        assert_eq!(dst_bytes.as_ref(), b"dst");
+
+        let src_bytes = backend.get(&src).await.unwrap().bytes().await.unwrap();
+        assert_eq!(src_bytes.as_ref(), b"src");
     }
 
     #[test]

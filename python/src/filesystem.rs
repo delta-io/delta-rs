@@ -165,7 +165,7 @@ impl DeltaFileSystemHandler {
                             ),
                         ]);
                         infos.push(to_file_info(
-                            meta.location.as_ref(),
+                            path.as_ref(),
                             &file_types.getattr("File")?,
                             &kwargs,
                         )?);
