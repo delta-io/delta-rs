@@ -10,7 +10,6 @@ mod tracing_otlp;
 mod utils;
 mod writer;
 
-use arrow::pyarrow::PyArrowType;
 use arrow_schema::{ArrowError, SchemaRef};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
@@ -27,6 +26,7 @@ use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{
     DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext,
 };
+use pyo3_arrow::PyDataType;
 
 use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
@@ -224,32 +224,15 @@ fn datafusion_task_context_provider_from_session(
     let task_ctx_provider_obj = session
         .getattr("__datafusion_task_context_provider__")?
         .call0()?;
-    let task_ctx_provider = task_ctx_provider_obj.downcast::<PyCapsule>()?;
+    let task_ctx_provider = task_ctx_provider_obj.cast::<PyCapsule>()?;
 
-    let capsule_name = task_ctx_provider.name()?;
-    if capsule_name.is_none() {
-        return Err(PyValueError::new_err(
-            "Expected datafusion_task_context_provider PyCapsule to have name set.",
-        ));
-    }
-    let capsule_name = unsafe { capsule_name.unwrap().as_cstr() }
-        .to_str()
-        .map_err(|err| {
-            PyValueError::new_err(format!(
-                "Invalid datafusion_task_context_provider capsule name: {err}"
-            ))
-        })?;
-    if capsule_name != "datafusion_task_context_provider" {
-        return Err(PyValueError::new_err(format!(
-            "Expected PyCapsule name datafusion_task_context_provider, got {capsule_name}",
-        )));
-    }
+    let ptr = task_ctx_provider.pointer_checked(Some(c"datafusion_task_context_provider"))?;
 
-    // SAFETY: `task_ctx_provider` is a `PyCapsule` (downcast above) and we verify its
-    // capsule name is exactly `datafusion_task_context_provider` before taking a typed
-    // reference, matching the producer side DataFusion capsule contract.
+    // SAFETY: pointer_checked validated the capsule name and non-null pointer.
+    // The capsule contains an FFI_TaskContextProvider per the producer-side contract.
     let task_ctx_provider = unsafe {
-        task_ctx_provider.reference::<datafusion_ffi::execution::FFI_TaskContextProvider>()
+        ptr.cast::<datafusion_ffi::execution::FFI_TaskContextProvider>()
+            .as_ref()
     };
     Ok(Some(task_ctx_provider.clone()))
 }
@@ -2471,7 +2454,7 @@ fn filestats_to_expression_next<'py>(
             })?
             .data_type()
             .clone();
-        let column_type = PyArrowType(column_type).into_pyobject(py)?;
+        let column_type = PyDataType::new(column_type).into_pyarrow(py)?;
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
@@ -2668,7 +2651,12 @@ pub struct PyPostCommitHookProperties {
 }
 
 #[derive(Clone)]
-#[pyclass(name = "Transaction", module = "deltalake._internal", get_all)]
+#[pyclass(
+    name = "Transaction",
+    module = "deltalake._internal",
+    get_all,
+    from_py_object
+)]
 pub struct PyTransaction {
     app_id: String,
     version: i64,
@@ -3027,7 +3015,7 @@ fn convert_to_deltalake(
     })
 }
 
-#[pymodule]
+#[pymodule(gil_used = true)]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};
