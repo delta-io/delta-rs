@@ -19,6 +19,7 @@ features = [
     "gcs",
     "hdfs",
     "json",
+    "python",
     "s3",
     "unity-experimental",
 ]
