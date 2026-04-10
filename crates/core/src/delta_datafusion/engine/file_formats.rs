@@ -137,8 +137,9 @@ impl ParquetHandler for DataFusionFileFormatHandler {
         todo!("write parquet file")
     }
 
-    fn read_parquet_footer(&self, _file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
-        todo!("read parquet footer")
+    fn read_parquet_footer(&self, file: &FileMeta) -> KernelResult<delta_kernel::ParquetFooter> {
+        self.get_or_create_pq(file.as_object_store_url())?
+            .read_parquet_footer(file)
     }
 }
 

@@ -10,7 +10,7 @@ deltalake-core = { version = "0.32.0", path = "../core", features = [
 ] }
 
 arrow-array = { workspace = true, features = ["chrono-tz"] }
-arrow-cast = { workspace = true }
+arrow-cast = { workspace = true, features = ["prettyprint"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }

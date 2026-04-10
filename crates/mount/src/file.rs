@@ -5,9 +5,9 @@
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::{
-    Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta, ObjectStore,
-    PutOptions, PutResult, Result as ObjectStoreResult, local::LocalFileSystem,
-    path::Path as ObjectStorePath,
+    CopyOptions, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta,
+    ObjectStore, PutOptions, PutResult, RenameOptions, RenameTargetMode,
+    Result as ObjectStoreResult, local::LocalFileSystem, path::Path as ObjectStorePath,
 };
 use object_store::{MultipartUpload, PutMode, PutMultipartOptions, PutPayload};
 use std::ops::Range;
@@ -133,14 +133,6 @@ impl std::fmt::Display for MountFileStorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for MountFileStorageBackend {
-    async fn put(
-        &self,
-        location: &ObjectStorePath,
-        bytes: PutPayload,
-    ) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &ObjectStorePath,
@@ -153,10 +145,6 @@ impl ObjectStore for MountFileStorageBackend {
         self.inner.put_opts(location, bytes, options).await
     }
 
-    async fn get(&self, location: &ObjectStorePath) -> ObjectStoreResult<GetResult> {
-        self.inner.get(location).await
-    }
-
     async fn get_opts(
         &self,
         location: &ObjectStorePath,
@@ -165,20 +153,19 @@ impl ObjectStore for MountFileStorageBackend {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(
+    async fn get_ranges(
         &self,
         location: &ObjectStorePath,
-        range: Range<u64>,
-    ) -> ObjectStoreResult<Bytes> {
-        self.inner.get_range(location, range).await
+        ranges: &[Range<u64>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &ObjectStorePath) -> ObjectStoreResult<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &ObjectStorePath) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, ObjectStoreResult<ObjectStorePath>>,
+    ) -> BoxStream<'static, ObjectStoreResult<ObjectStorePath>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(
@@ -203,33 +190,29 @@ impl ObjectStore for MountFileStorageBackend {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &ObjectStorePath, to: &ObjectStorePath) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(
+    async fn copy_opts(
         &self,
         from: &ObjectStorePath,
         to: &ObjectStorePath,
+        options: CopyOptions,
     ) -> ObjectStoreResult<()> {
-        self.inner.copy_if_not_exists(from, to).await
+        self.inner.copy_opts(from, to, options).await
     }
 
-    async fn rename_if_not_exists(
+    async fn rename_opts(
         &self,
         from: &ObjectStorePath,
         to: &ObjectStorePath,
+        options: RenameOptions,
     ) -> ObjectStoreResult<()> {
-        let path_from = self.path_to_filesystem(from);
-        let path_to = self.path_to_filesystem(to);
-        Ok(regular_rename(path_from.as_ref(), path_to.as_ref()).await?)
-    }
-
-    async fn put_multipart(
-        &self,
-        location: &ObjectStorePath,
-    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
+        match options.target_mode {
+            RenameTargetMode::Overwrite => self.inner.rename_opts(from, to, options).await,
+            RenameTargetMode::Create => {
+                let path_from = self.path_to_filesystem(from);
+                let path_to = self.path_to_filesystem(to);
+                Ok(regular_rename(path_from.as_ref(), path_to.as_ref()).await?)
+            }
+        }
     }
 
     async fn put_multipart_opts(

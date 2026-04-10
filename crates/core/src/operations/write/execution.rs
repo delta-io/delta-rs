@@ -571,7 +571,7 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let partition_columns = table_config.metadata().partition_columns().clone();
+    let partition_columns = table_config.metadata().partition_columns().to_vec();
 
     if write_as_cdc {
         write_cdc_plan(

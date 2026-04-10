@@ -19,9 +19,10 @@ use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, PartitionFilter, Path};
 use futures::TryStreamExt;
-use object_store::ObjectStore;
+use object_store::ObjectStoreExt as _;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
@@ -300,6 +301,83 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
     assert_eq!(parameters["predicate"], "[]");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_write_default_writer_properties_include_delta_rs_created_by()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let dt = context.table;
+
+    let dt = dt
+        .write(vec![tuples_to_batch(
+            vec![(1, 2), (1, 3), (1, 4)],
+            "2022-05-22",
+        )?])
+        .await?;
+
+    let files = dt.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+
+    let metadata = read_parquet_metadata(&files[0], dt.object_store()).await?;
+    let expected_created_by = format!("delta-rs version {}", deltalake_core::crate_version());
+    assert_eq!(
+        metadata.file_metadata().created_by(),
+        Some(expected_created_by.as_str())
+    );
+    assert_eq!(
+        metadata.row_group(0).column(0).compression(),
+        Compression::SNAPPY
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_optimize_default_writer_properties_include_delta_rs_created_by()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 3), (2, 4)], "2022-05-23")?,
+    )
+    .await?;
+
+    let (dt, metrics) = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(1_000_000).unwrap())
+        .await?;
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    let files = dt.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+
+    let metadata = read_parquet_metadata(&files[0], dt.object_store()).await?;
+    let expected_created_by = format!("delta-rs version {}", deltalake_core::crate_version());
+    assert_eq!(
+        metadata.file_metadata().created_by(),
+        Some(expected_created_by.as_str())
+    );
+    assert!(
+        matches!(
+            metadata.row_group(0).column(0).compression(),
+            Compression::ZSTD(_)
+        ),
+        "expected optimize to use ZSTD compression by default"
+    );
 
     Ok(())
 }
@@ -1427,11 +1505,22 @@ async fn read_parquet_file(
 ) -> Result<RecordBatch, Box<dyn Error>> {
     let file = object_store.head(path).await?;
     let file_reader =
-        ParquetObjectReader::new(object_store, file.location).with_file_size(file.size);
+        ParquetObjectReader::new(object_store, path.clone()).with_file_size(file.size);
     let batches = ParquetRecordBatchStreamBuilder::new(file_reader)
         .await?
         .build()?
         .try_collect::<Vec<_>>()
         .await?;
     Ok(concat_batches(&batches[0].schema(), &batches)?)
+}
+
+async fn read_parquet_metadata(
+    path: &Path,
+    object_store: ObjectStoreRef,
+) -> Result<parquet::file::metadata::ParquetMetaData, Box<dyn Error>> {
+    let file = object_store.head(path).await?;
+    let file_reader =
+        ParquetObjectReader::new(object_store, path.clone()).with_file_size(file.size);
+    let builder = ParquetRecordBatchStreamBuilder::new(file_reader).await?;
+    Ok(builder.metadata().as_ref().clone())
 }

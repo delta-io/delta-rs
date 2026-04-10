@@ -78,7 +78,7 @@ pub(crate) async fn find_files(
             // Validate the Predicate and determine if it only contains partition columns
             let mut expr_properties = FindFilesExprProperties {
                 partition_only: true,
-                partition_columns: current_metadata.partition_columns().clone(),
+                partition_columns: current_metadata.partition_columns().to_vec(),
                 result: Ok(()),
             };
 
@@ -503,7 +503,7 @@ pub(crate) async fn scan_files_where_matches(
     // validate that the expressions contain no illegal variants
     // that are not eligible for file skipping, e.g. volatile functions.
     let mut visitor = FindFilesExprProperties {
-        partition_columns: partition_columns.clone(),
+        partition_columns: partition_columns.to_vec(),
         partition_only: true,
         result: Ok(()),
     };

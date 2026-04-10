@@ -892,6 +892,7 @@ class DeltaTable:
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """
         Restores table to a given version or datetime.
@@ -901,6 +902,7 @@ class DeltaTable:
             ignore_missing_files: whether the operation carry on when some data files missing.
             protocol_downgrade_allowed: whether the operation when protocol version upgraded.
             commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
             the metrics from restore.
@@ -911,6 +913,7 @@ class DeltaTable:
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
                 commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
             )
         else:
             metrics = self._table.restore(
@@ -918,6 +921,7 @@ class DeltaTable:
                 ignore_missing_files=ignore_missing_files,
                 protocol_downgrade_allowed=protocol_downgrade_allowed,
                 commit_properties=commit_properties,
+                post_commithook_properties=post_commithook_properties,
             )
         return json.loads(metrics)
 

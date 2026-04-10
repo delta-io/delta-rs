@@ -76,7 +76,7 @@ fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
     Err(PyValueError::new_err("Invalid data type"))
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct PrimitiveType {
     inner_type: DeltaPrimitive,
@@ -177,7 +177,7 @@ impl PrimitiveType {
     }
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct ArrayType {
     inner_type: DeltaArrayType,
@@ -303,7 +303,7 @@ impl ArrayType {
     }
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct MapType {
     inner_type: DeltaMapType,
@@ -445,7 +445,7 @@ impl MapType {
     }
 }
 
-#[pyclass(module = "deltalake._internal")]
+#[pyclass(module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct Field {
     pub inner: StructField,
@@ -600,7 +600,7 @@ impl Field {
     }
 }
 
-#[pyclass(subclass, module = "deltalake._internal")]
+#[pyclass(subclass, module = "deltalake._internal", from_py_object)]
 #[derive(Clone)]
 pub struct StructType {
     pub(crate) inner_type: DeltaStructType,

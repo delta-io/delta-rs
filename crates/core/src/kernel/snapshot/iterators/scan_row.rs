@@ -398,6 +398,7 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_schema::Field;
     use delta_kernel::schema::{MapType, MetadataValue, SchemaRef, StructField};
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_physical_partition_name_mapping() -> DeltaResult<()> {
@@ -416,15 +417,16 @@ mod tests {
                 ),
             ]),
         ])
-        .unwrap();
+        .expect("Failed to initialize partition schema");
 
         let partition_values = MapType::new(DataType::STRING, DataType::STRING, true);
         let file_constant_values: SchemaRef = Arc::new(
             StructType::try_new([
                 StructField::nullable("partitionValues", partition_values),
                 StructField::nullable("baseRowId", DataType::LONG),
+                StructField::nullable("clusteringProvider", DataType::STRING),
             ])
-            .unwrap(),
+            .expect("Failed to create SchemaRef for file_constant_values"),
         );
         // Inspecting the schema of file_constant_values:
         let _: ArrowSchema = file_constant_values.as_ref().try_into_arrow()?;
@@ -496,6 +498,14 @@ mod tests {
                     true,
                 )),
                 Arc::new(tags.finish()) as ArrayRef,
+            ),
+            (
+                Arc::new(ArrowField::new(
+                    "clusteringProvider",
+                    ArrowDataType::Utf8,
+                    true,
+                )),
+                Arc::new(StringArray::from(vec![Option::<String>::None])) as ArrayRef,
             ),
         ]);
 
