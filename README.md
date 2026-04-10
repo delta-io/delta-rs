@@ -104,7 +104,7 @@ to providing a welcoming community.
 - [Join us in our Slack workspace](https://go.delta.io/slack).
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md).
 - Looking to contribute?
-  - Read our [contributing guide](COMTRIBUTING.m).
+  - Read our [contributing guide](CONTRIBUTING.md).
   - See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
 ## Integrations
