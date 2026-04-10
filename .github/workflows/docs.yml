@@ -69,7 +69,8 @@ jobs:
 
       - name: Get changelog for docs
         run: |
-          ../scripts/docs_changelog.sh
+          cd ../../delta-rs/.github/scripts/
+          ./docs_changelog.sh
 
       - name: Build
         run: |
