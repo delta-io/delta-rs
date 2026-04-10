@@ -204,7 +204,7 @@ This command logically deletes the data by creating a new transaction.
 
 ### Optimize & Vacuum
 
-Partitioned tables can accummulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../../delta_table/#deltalake.DeltaTable.optimize).
+Partitioned tables can accumulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../../delta_table/#deltalake.DeltaTable.optimize).
 
 If we want to target compaction at specific partitions we can include partition filters.
 
