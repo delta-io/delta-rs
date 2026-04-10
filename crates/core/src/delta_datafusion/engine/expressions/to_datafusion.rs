@@ -81,6 +81,7 @@ pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
         Scalar::Timestamp(value) => {
             ScalarValue::TimestampMicrosecond(Some(*value), Some("UTC".into()))
         }
+        #[cfg(feature = "nanosecond-timestamps")]
         Scalar::TimestampNanos(value) => {
             ScalarValue::TimestampNanosecond(Some(*value), Some("UTC".into()))
         }
