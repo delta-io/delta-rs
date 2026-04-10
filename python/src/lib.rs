@@ -2383,9 +2383,14 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Long(val) => val.into_py_any(py)?,
         Float(val) => val.into_py_any(py)?,
         Double(val) => val.into_py_any(py)?,
-        Timestamp(_) | TimestampNanos(_) => {
+        Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
             // scalar value to pa.timestamp("us","UTC") or pa.timestamp("ns", "UTC")
+            let value = value.serialize();
+            format!("{value}Z").into_py_any(py)?
+        }
+        //#[cfg(feature = "nanosecond-timestamps")]  // TODO uncomment for non-fork PR
+        TimestampNanos(_) => {
             let value = value.serialize();
             format!("{value}Z").into_py_any(py)?
         }
@@ -3055,6 +3060,12 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::ObjectInputFile>()?;
     m.add_class::<filesystem::ObjectOutputStream>()?;
     m.add_class::<features::TableFeatures>()?;
+
+    m.add(
+        "_NANOSECOND_TIMESTAMPS",
+        cfg!(feature = "nanosecond-timestamps"),
+    )?;
+
     Ok(())
 }
 

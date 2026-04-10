@@ -16,7 +16,7 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-# There is also a nanoseconds-timestamps branch off of delta-kernel-rs main as of mid-February 2026:
+# There is also a nanosecond-timestamps branch off of delta-kernel-rs main as of mid-February 2026:
 delta_kernel = { git = "https://github.com/itamarst/delta-kernel-rs.git", branch = "nanosecond-timestamps-0.19", features = [
     "arrow-57",
     "default-engine-rustls",

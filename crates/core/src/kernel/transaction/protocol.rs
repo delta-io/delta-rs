@@ -4,9 +4,10 @@ use std::sync::LazyLock;
 use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
+#[cfg(feature = "nanosecond-timestamps")]
+use crate::kernel::contains_timestamp_nanos;
 use crate::kernel::{
-    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestamp_nanos,
-    contains_timestampntz,
+    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -132,7 +133,8 @@ impl ProtocolChecker {
         )
     }
 
-    /// Check can write_timestamp_ntz
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// Check can write_timestamp_nanos
     pub fn check_can_write_timestamp_nanos(
         &self,
         snapshot: &EagerSnapshot,
@@ -263,6 +265,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
+    #[cfg(feature = "nanosecond-timestamps")]
     writer_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
     {

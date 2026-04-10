@@ -986,7 +986,7 @@ mod tests {
             ),
             ArrowField::new(
                 "timestamp_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 true,
             ),
             ArrowField::new(
@@ -1008,11 +1008,14 @@ mod tests {
                     ])
                     .with_timezone("UTC"),
                 ),
-                Arc::new(arrow::array::TimestampNanosecondArray::from(vec![
-                    Some(1609459200000000000),
-                    Some(1609545600000000000),
-                    Some(1609632000000000000),
-                ])),
+                Arc::new(
+                    arrow::array::TimestampNanosecondArray::from(vec![
+                        Some(1609459200000000000),
+                        Some(1609545600000000000),
+                        Some(1609632000000000000),
+                    ])
+                    .with_timezone("UTC"),
+                ),
                 Arc::new(
                     arrow::array::TimestampMicrosecondArray::from(vec![
                         Some(1609459200000000),
@@ -1039,6 +1042,19 @@ mod tests {
 
         assert_eq!(state.version(), 0);
 
+        #[cfg(not(feature = "nanosecond-timestamps"))]
+        fn maybe_nano(_dtype: &DataType) -> bool {
+            false
+        }
+
+        #[cfg(feature = "nanosecond-timestamps")]
+        fn maybe_nano(dtype: &DataType) -> bool {
+            matches!(
+                dtype,
+                crate::kernel::DataType::Primitive(crate::kernel::PrimitiveType::TimestampNanos)
+            )
+        }
+
         let delta_schema = state.schema();
         let fields: Vec<_> = delta_schema.fields().collect();
         let timestamp_fields: Vec<_> = fields
@@ -1050,7 +1066,7 @@ mod tests {
                         | crate::kernel::DataType::Primitive(
                             crate::kernel::PrimitiveType::TimestampNtz
                         )
-                )
+                ) && maybe_nano(f.data_type())
             })
             .collect();
 

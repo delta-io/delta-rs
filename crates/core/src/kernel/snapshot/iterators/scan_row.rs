@@ -330,6 +330,7 @@ pub(crate) fn parse_partitions(
                             }))
                             .with_timezone("UTC"),
                         ) as ArrayRef,
+                        //#[cfg(feature = "nanosecond-timestamps")] // TODO enable in post-fork PR where delta-kernel-rs has a feature too
                         PrimitiveType::TimestampNanos => Arc::new(
                             TimestampNanosecondArray::from_iter(values.iter().map(|v| match v {
                                 Scalar::TimestampNanos(t) => Some(*t),

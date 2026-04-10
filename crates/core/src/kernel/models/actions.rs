@@ -167,6 +167,7 @@ pub fn contains_timestampntz<'a>(fields: impl Iterator<Item = &'a StructField>) 
     contains_datatype(fields, &DataType::TIMESTAMP_NTZ)
 }
 
+#[cfg(feature = "nanosecond-timestamps")]
 /// checks if table contains timestamp_nanos in any field including nested fields.
 pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
     contains_datatype(fields, &DataType::TIMESTAMP_NANOS)
@@ -420,12 +421,14 @@ impl ProtocolInner {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+        #[cfg(feature = "nanosecond-timestamps")]
         let contains_timestamp_nanos = self.contains_timestamp_nanos(schema.fields());
 
         if contains_timestamp_ntz {
             self = self.enable_timestamp_ntz()
         }
 
+        #[cfg(feature = "nanosecond-timestamps")]
         if contains_timestamp_nanos {
             self = self.enable_timestamp_nanos()
         }
@@ -583,11 +586,13 @@ impl ProtocolInner {
         self
     }
 
+    #[cfg(feature = "nanosecond-timestamps")]
     /// checks if table contains timestamp_nanos in any field including nested fields.
     fn contains_timestamp_nanos<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
         contains_timestamp_nanos(fields)
     }
 
+    #[cfg(feature = "nanosecond-timestamps")]
     /// Enable timestamp_nanos in the protocol
     fn enable_timestamp_nanos(mut self) -> Self {
         self = self.append_reader_features([TableFeature::TimestampNanos]);
@@ -626,8 +631,9 @@ pub enum TableFeatures {
     /// timestamps without timezone support
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
-    /// Timestamps that are nanosecond resolution
+    #[cfg(feature = "nanosecond-timestamps")]
     #[serde(rename = "timestampNanos")]
+    /// Timestamps that are nanosecond resolution
     TimestampNanos,
     /// version 2 of checkpointing
     V2Checkpoint,
@@ -660,6 +666,7 @@ impl FromStr for TableFeatures {
             "columnMapping" => Ok(TableFeatures::ColumnMapping),
             "deletionVectors" => Ok(TableFeatures::DeletionVectors),
             "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            #[cfg(feature = "nanosecond-timestamps")]
             "timestampNanos" => Ok(TableFeatures::TimestampNanos),
             "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
             "appendOnly" => Ok(TableFeatures::AppendOnly),
@@ -683,6 +690,7 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::ColumnMapping => "columnMapping",
             TableFeatures::DeletionVectors => "deletionVectors",
             TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            #[cfg(feature = "nanosecond-timestamps")]
             TableFeatures::TimestampNanos => "timestampNanos",
             TableFeatures::V2Checkpoint => "v2Checkpoint",
             TableFeatures::AppendOnly => "appendOnly",
@@ -742,7 +750,6 @@ impl TableFeatures {
                     | TableFeature::ColumnMapping
                     | TableFeature::DeletionVectors
                     | TableFeature::TimestampWithoutTimezone
-                    | TableFeature::TimestampNanos
                     | TableFeature::TypeWidening
                     | TableFeature::TypeWideningPreview
                     | TableFeature::V2Checkpoint
@@ -752,6 +759,10 @@ impl TableFeatures {
                     | TableFeature::VariantShreddingPreview => {
                         (Some(feature.clone()), Some(feature))
                     }
+
+                    // Optional ReaderWriter features
+                    //#[cfg(feature = "nanosecond-timestamps")]  // TODO uncomment for non-fork PR
+                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 
                     // Unknown features
                     TableFeature::Unknown(_) => (None, None),
