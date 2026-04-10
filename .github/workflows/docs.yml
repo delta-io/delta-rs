@@ -69,7 +69,7 @@ jobs:
 
       - name: Get changelog for docs
         run: |
-          cd ../../delta-rs/.github/scripts/
+          cd .github/scripts/
           ./docs_changelog.sh
 
       - name: Build
