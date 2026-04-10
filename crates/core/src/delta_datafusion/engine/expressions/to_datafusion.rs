@@ -41,7 +41,7 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
             Ok(name_iter.fold(ident(base_name), |acc, n| acc.field(n)))
         }
         Expression::Predicate(expr) => predicate_to_df(expr, output_type),
-        Expression::Struct(fields) => struct_to_df(fields, output_type),
+        Expression::Struct(fields, _) => struct_to_df(fields, output_type),
         Expression::Binary(expr) => binary_to_df(expr, output_type),
         Expression::Unary(expr) => unary_to_df(expr, output_type),
         Expression::Variadic(expr) => {
@@ -57,6 +57,10 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
         Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
         Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
         Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
+        Expression::ParseJson(_) => not_impl_err!("ParseJson expressions are not yet supported"),
+        Expression::MapToStruct(_) => {
+            not_impl_err!("MapToStruct expressions are not yet supported")
+        }
     }
 }
 
@@ -585,10 +589,13 @@ mod tests {
 
     #[test]
     fn test_struct_expression() {
-        let expr = Expression::Struct(vec![
-            Expression::Column(ColumnName::new(["a"])).into(),
-            Expression::Column(ColumnName::new(["b"])).into(),
-        ]);
+        let expr = Expression::Struct(
+            vec![
+                Expression::Column(ColumnName::new(["a"])).into(),
+                Expression::Column(ColumnName::new(["b"])).into(),
+            ],
+            None,
+        );
         let result = to_datafusion_expr(
             &expr,
             &DataType::Struct(Box::new(
@@ -867,15 +874,18 @@ mod tests {
         assert_eq!(result, col("a").gt(lit(0)).and(col("b").or(col("c"))));
 
         // Test struct expressions with nested fields
-        let expr = Expression::Struct(vec![
-            Expression::Column(ColumnName::new(["a"])).into(),
-            Expression::Binary(BinaryExpression {
-                left: Box::new(Expression::Column(ColumnName::new(["b"]))),
-                op: BinaryExpressionOp::Plus,
-                right: Box::new(Expression::Column(ColumnName::new(["c"]))),
-            })
-            .into(),
-        ]);
+        let expr = Expression::Struct(
+            vec![
+                Expression::Column(ColumnName::new(["a"])).into(),
+                Expression::Binary(BinaryExpression {
+                    left: Box::new(Expression::Column(ColumnName::new(["b"]))),
+                    op: BinaryExpressionOp::Plus,
+                    right: Box::new(Expression::Column(ColumnName::new(["c"]))),
+                })
+                .into(),
+            ],
+            None,
+        );
         let result = to_datafusion_expr(
             &expr,
             &DataType::Struct(Box::new(

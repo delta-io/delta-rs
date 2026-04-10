@@ -85,11 +85,12 @@ percent-encoding = "2"
 pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
 rand = "0.8"
-sqlparser = { version = "0.59.0" }
+sqlparser = { version = "0.61.0" }
 humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["prettyprint"]}
 criterion = "0.5"
 ctor = "0"
 deltalake-test = { path = "../test" }
@@ -123,7 +124,7 @@ cloud = ["object_store/cloud", "dep:humantime"]
 delta-cache = ["foyer", "tempfile", "url/serde"]
 
 # Experimental support for nanosecond timestamps primitive type
-nanosecond-timestamps = []  # TODO ["delta_kernel/nanosecond-timestamps"]
+nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]
 
 integration_test = []
 

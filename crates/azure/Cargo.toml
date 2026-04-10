@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.0", path = "../core", features = ["cloud"] }
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false, features = ["cloud"] }
 
 # workspace depenndecies
 bytes = { workspace = true }
@@ -36,4 +36,7 @@ futures.workspace = true
 azure_storage = "0.21.0"
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = []

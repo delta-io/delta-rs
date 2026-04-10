@@ -544,6 +544,7 @@ mod tests {
     use crate::writer::test_utils::*;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use object_store::ObjectStoreExt as _;
     use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
 

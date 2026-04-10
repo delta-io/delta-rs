@@ -480,12 +480,13 @@ impl<'a> ConflictChecker<'a> {
                     self.txn_info.read_whole_table(),
                 ) {
                     let arrow_schema = self.txn_info.read_snapshot.read_schema();
-                    let partition_columns = &self
+                    let partition_columns = self
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .partition_columns();
-                    AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
+                        .partition_columns()
+                        .to_vec();
+                    AddContainer::new(&added_files_to_check, &partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),

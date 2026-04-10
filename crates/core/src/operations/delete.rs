@@ -374,7 +374,7 @@ async fn execute(
         .table_configuration()
         .metadata()
         .partition_columns()
-        .clone();
+        .to_vec();
     let mut props = crate::delta_datafusion::FindFilesExprProperties {
         partition_columns,
         partition_only: true,
@@ -616,6 +616,7 @@ mod tests {
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::PrimitiveType;
     use delta_kernel::schema::StructType;
+    use object_store::ObjectStoreExt as _;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;

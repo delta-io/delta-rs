@@ -761,7 +761,7 @@ impl TableFeatures {
                     }
 
                     // Optional ReaderWriter features
-                    //#[cfg(feature = "nanosecond-timestamps")]  // TODO uncomment for non-fork PR
+                    #[cfg(feature = "nanosecond-timestamps")]
                     TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 
                     // Unknown features

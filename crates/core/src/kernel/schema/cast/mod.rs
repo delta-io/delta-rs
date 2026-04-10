@@ -954,10 +954,16 @@ mod tests {
 
         let result = normalize_for_delta(&schema);
 
+        let expected_timestamp_dtype = if cfg!(feature = "nanosecond-timestamps") {
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+        } else {
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        };
         if let DataType::Struct(fields) = result.field(0).data_type() {
             assert_eq!(
                 fields[0].data_type(),
-                &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+                #
+                &expected_timestamp_dtype,
             );
             if let DataType::List(inner) = fields[1].data_type() {
                 assert_eq!(inner.data_type(), &DataType::Date32);

@@ -78,7 +78,7 @@ pub(crate) struct DeltaScanMetaExec {
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
     /// plan properties
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DisplayAs for DeltaScanMetaExec {
@@ -119,7 +119,7 @@ impl DeltaScanMetaExec {
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let properties = Self::make_properties(scan_plan.as_ref(), input.len());
+        let properties = Arc::new(Self::make_properties(scan_plan.as_ref(), input.len()));
         Self {
             scan_plan,
             input,
@@ -185,7 +185,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -224,7 +224,10 @@ impl ExecutionPlan for DeltaScanMetaExec {
             .into_iter()
             .map(|chunk| chunk.collect())
             .collect();
-        let properties = Self::make_properties(self.scan_plan.as_ref(), new_input.len());
+        let properties = Arc::new(Self::make_properties(
+            self.scan_plan.as_ref(),
+            new_input.len(),
+        ));
 
         Ok(Some(Arc::new(Self {
             properties,
@@ -255,10 +258,6 @@ impl ExecutionPlan for DeltaScanMetaExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {

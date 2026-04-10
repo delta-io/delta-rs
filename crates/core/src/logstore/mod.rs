@@ -53,7 +53,7 @@ use std::sync::{Arc, LazyLock};
 use bytes::Bytes;
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use delta_kernel::engine::default::DefaultEngine;
+use delta_kernel::engine::default::DefaultEngineBuilder;
 use delta_kernel::engine::default::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
@@ -62,7 +62,7 @@ use delta_kernel::path::{LogPathFileType, ParsedLogPath};
 use delta_kernel::{AsAny, Engine};
 use futures::StreamExt;
 use object_store::ObjectStoreScheme;
-use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _, path::Path};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
@@ -485,14 +485,16 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 pub(crate) fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
     let handle = tokio::runtime::Handle::current();
     match handle.runtime_flavor() {
-        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
-            Arc::new(TokioMultiThreadExecutor::new(handle)),
-        )),
-        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
-            Arc::new(TokioBackgroundExecutor::new()),
-        )),
+        RuntimeFlavor::MultiThread => Arc::new(
+            DefaultEngineBuilder::new(store)
+                .with_task_executor(Arc::new(TokioMultiThreadExecutor::new(handle)))
+                .build(),
+        ),
+        RuntimeFlavor::CurrentThread => Arc::new(
+            DefaultEngineBuilder::new(store)
+                .with_task_executor(Arc::new(TokioBackgroundExecutor::new()))
+                .build(),
+        ),
         _ => panic!("unsupported runtime flavor"),
     }
 }

@@ -170,7 +170,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -184,7 +184,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -632,6 +632,7 @@ mod tests {
     use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
+    use object_store::ObjectStoreExt as _;
     use serde_json::json;
     use std::ops::Range;
     use url::Url;

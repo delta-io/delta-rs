@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use deltalake_core::Path;
 use deltalake_core::errors::DeltaTableError;
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_test::utils::*;
 use futures::TryStreamExt as _;
 use serial_test::serial;

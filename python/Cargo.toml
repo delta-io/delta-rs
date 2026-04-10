@@ -24,7 +24,7 @@ ignored = ["deltalake-catalog-unity"]
 delta_kernel.workspace = true
 url.workspace = true
 
-pyo3-arrow = { version = "0.14.0", default-features = false }
+pyo3-arrow = { version = "0.17.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
@@ -32,7 +32,7 @@ arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
-datafusion-execution = { version = "52.1.0" }
+datafusion-execution = { version = "53.0.0" }
 
 # serde
 serde = { workspace = true }
@@ -84,7 +84,7 @@ jemallocator = { version = "0.5", features = [
 jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
-version = "0.26"
+version = "0.28"
 features = ["extension-module", "abi3", "abi3-py310"]
 
 [dependencies.deltalake]
