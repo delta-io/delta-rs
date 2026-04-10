@@ -36,7 +36,4 @@ futures.workspace = true
 azure_storage = "0.21.0"
 
 [features]
-default = ["rustls"]
-native-tls = ["deltalake-core/native-tls"]
-rustls = ["deltalake-core/rustls"]
 integration_test = []
