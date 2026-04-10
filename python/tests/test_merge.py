@@ -1980,6 +1980,73 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operationParameters"].get("predicate") == predicate
 
 
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_partition_value_with_space_is_idempotent_4352(
+    tmp_path: pathlib.Path, streaming: bool
+):
+    import pyarrow as pa
+
+    source = pa.table(
+        {
+            "group": pa.array(["foo bar", "foo bar", "foo bar"], type=pa.string()),
+            "region": pa.array(["A", "B", "C"], type=pa.string()),
+            "ts": pa.array(
+                [datetime.datetime(2024, 1, 1)] * 3, type=pa.timestamp("us")
+            ),
+            "val": pa.array([1.0, 2.0, 3.0], type=pa.float64()),
+        }
+    )
+
+    DeltaTable.create(
+        tmp_path, schema=source.schema, partition_by=["group"], mode="overwrite"
+    )
+    dt = DeltaTable(tmp_path)
+    predicate = (
+        "target.`group` = source.`group` "
+        "AND target.region = source.region "
+        "AND target.ts = source.ts"
+    )
+
+    first_metrics = (
+        dt.merge(
+            source=source,
+            predicate=predicate,
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+    dt.update_incremental()
+
+    second_metrics = (
+        dt.merge(
+            source=source,
+            predicate=predicate,
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+    dt.update_incremental()
+
+    result = dt.to_pyarrow_table().sort_by([("region", "ascending")])
+    expected = source.sort_by([("region", "ascending")])
+
+    assert first_metrics["num_target_rows_inserted"] == 3
+    assert first_metrics["num_target_files_removed"] == 0
+    assert second_metrics["num_target_rows_updated"] == 3
+    assert second_metrics["num_target_files_removed"] == 1
+    assert len(dt.file_uris()) == 1
+    assert result == expected
+
+
 def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(
     tmp_path: pathlib.Path,
 ):

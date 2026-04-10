@@ -1547,10 +1547,9 @@ async fn execute(
     let table_root = snapshot.table_configuration().table_root().clone();
 
     for action in snapshot.log_data() {
-        let rel_path = action.path();
-        let rel_path_str = rel_path.as_ref();
+        let log_path = action.path_raw();
 
-        if should_remove_rewritten_file(&survivors, rel_path_str, &table_root)? {
+        if should_remove_rewritten_file(&survivors, log_path, &table_root)? {
             metrics.num_target_files_removed += 1;
             actions.push(action.remove_action(true).into());
         }
@@ -1745,15 +1744,16 @@ fn get_metric_any_or(
 
 fn should_remove_rewritten_file(
     survivors: &barrier::BarrierSurvivorSet,
-    rel_path: &str,
+    log_path: &str,
     table_root: &url::Url,
 ) -> DeltaResult<bool> {
-    if survivors.contains(rel_path) {
+    if survivors.contains(log_path) {
         return Ok(true);
     }
 
-    // Compare against normalized file IDs.
-    let full_id = normalize_path_as_file_id(rel_path, table_root, "merge remove")?;
+    // Compare against normalized file IDs built from the raw log path so percent-encoded
+    // partition values map back to the same canonical file ID used by DeltaScanNext.
+    let full_id = normalize_path_as_file_id(log_path, table_root, "merge remove")?;
     Ok(survivors.contains(full_id.as_str()))
 }
 impl std::future::IntoFuture for MergeBuilder {
@@ -2151,6 +2151,142 @@ mod tests {
             duplicate_count, 0,
             "Expected merge output without duplicate rows"
         );
+    }
+
+    async fn assert_merge_encoded_partition_value_removes_original_file(
+        partition_value: &str,
+        expected_raw_encoded_segment: &str,
+    ) {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let make_source = || {
+            let ctx = SessionContext::new();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C"])),
+                    Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(arrow::array::StringArray::from(vec![
+                        partition_value,
+                        partition_value,
+                        partition_value,
+                    ])),
+                ],
+            )
+            .unwrap();
+            ctx.read_batch(batch).unwrap()
+        };
+
+        let predicate = col("target.modified")
+            .eq(lit(partition_value))
+            .and(col("target.id").eq(col("source.id")));
+
+        let (table, first_metrics) = table
+            .merge(make_source(), predicate.clone())
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(first_metrics.num_target_rows_inserted, 3);
+        assert_eq!(first_metrics.num_target_files_removed, 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+
+        let original_file = table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .into_iter()
+            .next()
+            .unwrap();
+        let original_path = original_file.path().to_string();
+        let original_path_raw = original_file.path_raw().to_string();
+        assert!(
+            original_path_raw.contains(expected_raw_encoded_segment),
+            "expected raw encoded path to contain {expected_raw_encoded_segment}, got {original_path_raw}"
+        );
+
+        let (table, second_metrics) = table
+            .merge(make_source(), predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(second_metrics.num_target_rows_updated, 3);
+        assert_eq!(second_metrics.num_target_files_removed, 1);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 1);
+
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(2)
+            .await
+            .unwrap()
+            .expect("failed to get snapshot bytes");
+        let actions = crate::logstore::get_actions(2, &snapshot_bytes).unwrap();
+        let removed_paths: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                Action::Remove(remove) => Some(remove.path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(removed_paths, vec![original_path]);
+
+        let expected = vec![
+            "+----+-------+------------+".to_string(),
+            "| id | value | modified   |".to_string(),
+            "+----+-------+------------+".to_string(),
+            format!("| A  | 1     | {partition_value} |"),
+            format!("| B  | 2     | {partition_value} |"),
+            format!("| C  | 3     | {partition_value} |"),
+            "+----+-------+------------+".to_string(),
+        ];
+        let expected_refs: Vec<_> = expected.iter().map(String::as_str).collect();
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected_refs, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_partition_value_with_space_removes_original_file() {
+        assert_merge_encoded_partition_value_removes_original_file("2021 02 01", "%2520").await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_partition_value_with_slash_removes_original_file() {
+        assert_merge_encoded_partition_value_removes_original_file("2021/02/01", "%252F").await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_partition_value_with_percent_removes_original_file() {
+        assert_merge_encoded_partition_value_removes_original_file("2021%02%01", "%2525").await;
     }
 
     // TODO(ion): property keys are not passed through or translated as table features.. fix this as well
