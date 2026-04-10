@@ -10,8 +10,9 @@ use aws_config::{Region, SdkConfig};
 use bytes::Bytes;
 use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 use deltalake_core::logstore::object_store::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, ObjectStoreScheme,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result as ObjectStoreResult,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
@@ -375,10 +376,6 @@ impl Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl ObjectStore for S3StorageBackend {
-    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -386,10 +383,6 @@ impl ObjectStore for S3StorageBackend {
         options: PutOptions,
     ) -> ObjectStoreResult<PutResult> {
         self.inner.put_opts(location, bytes, options).await
-    }
-
-    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
     }
 
     async fn put_multipart_opts(
@@ -400,24 +393,23 @@ impl ObjectStore for S3StorageBackend {
         self.inner.put_multipart_opts(location, options).await
     }
 
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        self.inner.get(location).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
-        self.inner.get_range(location, range).await
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<u64>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, ObjectStoreResult<Path>>,
+    ) -> BoxStream<'static, ObjectStoreResult<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
@@ -436,36 +428,23 @@ impl ObjectStore for S3StorageBackend {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> ObjectStoreResult<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 
-    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
-        todo!()
+    async fn rename_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: RenameOptions,
+    ) -> ObjectStoreResult<()> {
+        self.inner.rename_opts(from, to, options).await
     }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        if self.allow_unsafe_rename {
-            self.inner.rename(from, to).await
-        } else {
-            Err(ObjectStoreError::Generic {
-                store: STORE_NAME,
-                source: Box::new(crate::errors::LockClientError::LockClientRequired),
-            })
-        }
-    }
-}
-
-/// Storage option keys to use when creating [`S3StorageOptions`].
-///
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-/// Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
-#[deprecated(
-    since = "0.20.0",
-    note = "s3_constants has moved up to deltalake_aws::constants::*"
-)]
-pub mod s3_constants {
-    pub use crate::constants::*;
 }
 
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
@@ -504,19 +483,19 @@ pub(crate) trait S3StorageOptionsConversion {
             }
         }
 
-        // All S3-like Object Stores use conditional put, object-store crate however still requires you to explicitly
-        // set this behaviour. We will however assume, when a locking provider/copy-if-not-exists keys are not provided
-        // that PutIfAbsent is supported.
-        // With conditional put in S3-like API we can use the deltalake default logstore which use PutIfAbsent
+        // With object_store 0.13.0 conditional put is supported almost everywhere. The
+        // copy_if_not_exists behavior needs to be explicitly specifedj for AWS  S3 however.
+        //
+        // Users of other stores should define their copy_if_not_exists configuration as needed
         if !options.keys().any(|key| {
             let key = key.to_ascii_lowercase();
             [
-                AmazonS3ConfigKey::ConditionalPut.as_ref(),
-                "conditional_put",
+                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
+                "copy_if_not_exists",
             ]
             .contains(&key.as_str())
         }) {
-            options.insert("conditional_put".into(), "etag".into());
+            options.insert("copy_if_not_exists".into(), "multipart".into());
         }
         options
     }
@@ -527,6 +506,8 @@ mod tests {
     use super::*;
 
     use crate::constants;
+    use object_store::ObjectStoreExt as _;
+    use object_store::memory::InMemory;
     use serial_test::serial;
 
     struct ScopedEnv {
@@ -900,6 +881,31 @@ mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn unsafe_rename_create_mode_does_not_overwrite_existing_destination() {
+        let backend = S3StorageBackend::try_new(Arc::new(InMemory::new()), true).unwrap();
+        let src = Path::from("src");
+        let dst = Path::from("dst");
+
+        backend
+            .put(&src, Bytes::from_static(b"src").into())
+            .await
+            .unwrap();
+        backend
+            .put(&dst, Bytes::from_static(b"dst").into())
+            .await
+            .unwrap();
+
+        let err = backend.rename_if_not_exists(&src, &dst).await.unwrap_err();
+        assert!(matches!(err, ObjectStoreError::AlreadyExists { .. }));
+
+        let dst_bytes = backend.get(&dst).await.unwrap().bytes().await.unwrap();
+        assert_eq!(dst_bytes.as_ref(), b"dst");
+
+        let src_bytes = backend.get(&src).await.unwrap().bytes().await.unwrap();
+        assert_eq!(src_bytes.as_ref(), b"src");
+    }
+
     #[test]
     #[serial]
     fn when_merging_with_env_unsupplied_options_are_added() {
@@ -918,7 +924,7 @@ mod tests {
             assert_eq!(combined_options.len(), 5);
 
             for (key, v) in combined_options {
-                if key != "conditional_put" {
+                if key != "copy_if_not_exists" {
                     assert_eq!(v, "env_key");
                 }
             }
@@ -949,7 +955,7 @@ mod tests {
             let combined_options = S3ObjectStoreFactory {}.with_env_s3(&raw_options);
 
             for (key, v) in combined_options {
-                if key != "conditional_put" {
+                if key != "copy_if_not_exists" {
                     assert_eq!(v, "options_key");
                 }
             }

@@ -646,7 +646,7 @@ fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp
 
 #[cfg(test)]
 mod tests {
-    use object_store::{PutPayload, local::LocalFileSystem, memory::InMemory};
+    use object_store::{ObjectStoreExt as _, PutPayload, local::LocalFileSystem, memory::InMemory};
     use serde_json::json;
 
     use super::*;
@@ -836,7 +836,7 @@ mod tests {
     // This test will do some table operations after executing a vacuum with versions to ensure
     // that the table is still functional, can be read, checkpointed, etc.
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_vacuum_keep_version_validity() {
         use datafusion::prelude::SessionContext;
         use object_store::GetResultPayload;

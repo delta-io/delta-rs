@@ -86,7 +86,7 @@ impl ExecutionPlan for MetricObserverExec {
         self.parent.schema()
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         self.parent.properties()
     }
 

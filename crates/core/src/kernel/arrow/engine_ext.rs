@@ -14,12 +14,12 @@ use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::expressions::{ColumnName, Scalar, StructData};
 use delta_kernel::scan::ScanMetadata;
 use delta_kernel::schema::{
-    ArrayType, DataType, MapType, PrimitiveType, Schema, SchemaRef, SchemaTransform, StructField,
-    StructType,
+    ArrayType, DataType, MapType, PrimitiveType, Schema, SchemaRef, StructField, StructType,
 };
 use delta_kernel::snapshot::Snapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
+use delta_kernel::transforms::SchemaTransform;
 use delta_kernel::{DeltaResult, ExpressionEvaluator};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
@@ -69,25 +69,18 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for TableConfiguration {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
-        let partition_columns = self.metadata().partition_columns();
-        let column_mapping_mode = self.column_mapping_mode();
-        let physical_schema = StructType::try_new(
-            self.schema()
-                .fields()
-                .filter(|field| !partition_columns.contains(field.name()))
-                .map(|field| field.make_physical(column_mapping_mode)),
-        )?;
         Ok(Arc::new(stats_schema(
-            &physical_schema,
+            self.physical_schema().as_ref(),
             self.table_properties(),
         )))
     }
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
-        Ok(
-            partitions_schema(self.schema().as_ref(), self.metadata().partition_columns())?
-                .map(Arc::new),
-        )
+        Ok(partitions_schema(
+            self.logical_schema().as_ref(),
+            self.metadata().partition_columns(),
+        )?
+        .map(Arc::new))
     }
 }
 

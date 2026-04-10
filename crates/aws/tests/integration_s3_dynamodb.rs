@@ -21,6 +21,7 @@ use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::{DeltaTable, DeltaTableBuilder, ObjectStoreError};
 use deltalake_test::utils::*;
+use object_store::ObjectStoreExt as _;
 use object_store::path::Path;
 use serde_json::Value;
 use serial_test::serial;

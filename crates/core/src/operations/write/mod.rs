@@ -362,7 +362,7 @@ impl WriteBuilder {
         let active_partitions = self
             .snapshot
             .as_ref()
-            .map(|s| s.metadata().partition_columns().clone());
+            .map(|s| s.metadata().partition_columns().to_vec());
 
         if let Some(active_part) = active_partitions {
             if let Some(ref partition_columns) = self.partition_columns {
@@ -378,7 +378,7 @@ impl WriteBuilder {
                 Ok(active_part)
             }
         } else {
-            Ok(self.partition_columns.clone().unwrap_or_default())
+            Ok(self.partition_columns.clone().unwrap_or_default().to_vec())
         }
     }
 

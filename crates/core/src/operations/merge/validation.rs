@@ -47,7 +47,7 @@ impl ExecutionPlan for MergeValidationExec {
         self.input.schema()
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         self.input.properties()
     }
 

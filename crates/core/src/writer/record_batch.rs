@@ -18,8 +18,7 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{ObjectStore, path::Path};
-use parquet::{arrow::ArrowWriter, errors::ParquetError};
-use parquet::{basic::Compression, file::properties::WriterProperties};
+use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use tracing::log::*;
 use uuid::Uuid;
 
@@ -37,6 +36,7 @@ use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
 use crate::kernel::{MetadataExt as _, Version};
 use crate::logstore::ObjectStoreRetryExt;
+use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 
@@ -74,10 +74,7 @@ impl RecordBatchWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .build()?;
         // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
 
         // if metadata fails to load, use an empty hashmap and default values for num_indexed_cols and stats_columns
         let configuration = delta_table.snapshot().map_or_else(
@@ -128,13 +125,10 @@ impl RecordBatchWriter {
         let metadata = table.snapshot()?.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
         let arrow_schema_ref = Arc::new(arrow_schema);
-        let partition_columns = metadata.partition_columns().clone();
+        let partition_columns = metadata.partition_columns().into();
 
         // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
         Ok(Self {
@@ -567,6 +561,38 @@ mod tests {
         writer.write(batch).await.unwrap();
 
         assert!(writer.buffer_len() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_record_batch_writer_for_table_defaults_include_delta_rs_created_by() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let partition_cols = vec![];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+
+        let writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        assert_eq!(
+            writer.writer_properties.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_batch_writer_try_new_defaults_include_delta_rs_created_by() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let partition_cols = vec![];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let table_uri = crate::ensure_table_uri(table_path).unwrap();
+
+        let writer = RecordBatchWriter::try_new(table_uri, schema, None, None).unwrap();
+
+        assert_eq!(
+            writer.writer_properties.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
     }
 
     #[tokio::test]

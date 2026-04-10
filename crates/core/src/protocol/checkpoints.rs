@@ -2,25 +2,18 @@
 
 use std::sync::LazyLock;
 
-use parquet::file::properties::WriterProperties;
+use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use url::Url;
 
 use chrono::{TimeZone, Utc};
-use delta_kernel::FileMeta;
-use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
 use delta_kernel::snapshot::Snapshot;
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStore;
-use object_store::path::Path;
-use parquet::arrow::AsyncArrowWriter;
-use parquet::arrow::async_writer::ParquetObjectWriter;
 use regex::Regex;
 use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::kernel::{Version, spawn_blocking_with_span};
 use crate::logstore::{DELTA_LOG_REGEX, LogStore};
-use crate::protocol::to_rb;
 use crate::table::config::TablePropertiesExt as _;
 use crate::{DeltaResult, DeltaTableError};
 use crate::{DeltaTable, open_table_with_version};
@@ -47,81 +40,7 @@ pub(crate) async fn create_checkpoint_for(
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-    let cp_writer = snapshot.checkpoint()?;
-
-    let cp_url = cp_writer.checkpoint_path()?;
-    let cp_path = Path::from_url_path(cp_url.path())?;
-    let mut cp_data = cp_writer.checkpoint_data(engine.as_ref())?;
-
-    let (first_batch, mut cp_data) = spawn_blocking_with_span(move || {
-        let Some(first_batch) = cp_data.next() else {
-            return Err(DeltaTableError::Generic("No data".to_string()));
-        };
-        Ok((to_rb(first_batch?)?, cp_data))
-    })
-    .await
-    .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-    let root_store = log_store.root_object_store(operation_id);
-    let object_store_writer = ParquetObjectWriter::new(root_store.clone(), cp_path.clone());
-    let mut writer = AsyncArrowWriter::try_new(
-        object_store_writer,
-        first_batch.schema(),
-        Some(
-            WriterProperties::builder()
-                .set_compression(parquet::basic::Compression::SNAPPY)
-                .build(),
-        ),
-    )?;
-    writer.write(&first_batch).await?;
-
-    // Hold onto the schema used for future batches.
-    // This ensures that each batch is consistent since the kernel will yeet back the data that it
-    // read from prior checkpoints regardless of whether they are identical in schema.
-    //
-    // See: <https://github.com/delta-io/delta-rs/issues/3527>!
-    let checkpoint_schema = first_batch.schema();
-
-    let mut current_batch;
-    loop {
-        (current_batch, cp_data) = spawn_blocking_with_span(move || {
-            let Some(first_batch) = cp_data.next() else {
-                return Ok::<_, DeltaTableError>((None, cp_data));
-            };
-            Ok((Some(to_rb(first_batch?)?), cp_data))
-        })
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
-        let Some(batch) = current_batch else {
-            break;
-        };
-
-        // If the subsequently yielded batches do not match the first batch written for whatever
-        // reason, attempt to safely cast the batches to ensure a coherent checkpoint parquet file
-        //
-        // See also: <https://github.com/delta-io/delta-rs/issues/3527>
-        let batch = if batch.schema() != checkpoint_schema {
-            crate::cast_record_batch(&batch, checkpoint_schema.clone(), true, true)?
-        } else {
-            batch
-        };
-
-        writer.write(&batch).await?;
-    }
-
-    let _pq_meta = writer.close().await?;
-    let file_meta = root_store.head(&cp_path).await?;
-    let file_meta = FileMeta {
-        location: cp_url,
-        size: file_meta.size,
-        last_modified: file_meta.last_modified.timestamp_millis(),
-    };
-
-    spawn_blocking_with_span(move || cp_writer.finalize(engine.as_ref(), &file_meta, cp_data))
-        .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
-
+    snapshot.checkpoint(engine.as_ref())?;
     Ok(())
 }
 
@@ -261,7 +180,7 @@ pub async fn cleanup_expired_logs_for(
 
     // Step 4: Delete DELTA_LOG files where log_ver < safe_checkpoint_version && ts <= cutoff_timestamp
     let locations = futures::stream::iter(log_entries.into_iter())
-        .filter_map(|meta: Result<crate::ObjectMeta, _>| async move {
+        .filter_map(move |meta: Result<crate::ObjectMeta, _>| async move {
             let meta = match meta {
                 Ok(m) => m,
                 Err(err) => {
@@ -310,8 +229,8 @@ pub(crate) fn parse_last_checkpoint_hint(data: &[u8]) -> Option<LastCheckpointHi
 mod tests {
     use super::*;
 
-    use object_store::Error as ObjectStoreError;
-    use object_store::path::Path;
+    use delta_kernel::last_checkpoint_hint::LastCheckpointHint;
+    use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _, path::Path};
 
     use crate::writer::test_utils::get_delta_schema;
 
@@ -366,7 +285,7 @@ mod tests {
         assert_eq!(hint.version, 5);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_create_checkpoint_for() {
         let table_schema = get_delta_schema();
 
@@ -464,7 +383,7 @@ mod tests {
         }
         /// This test validates that a checkpoint can be written and re-read with the minimum viable
         /// Metadata. There was a bug which didn't handle the optionality of createdTime.
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_create_checkpoint_with_metadata() {
             use crate::kernel::new_metadata;
 
@@ -583,7 +502,7 @@ mod tests {
             assert!(res.is_ok());
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_cleanup_with_checkpoints() {
             let table = setup_table().await;
             create_checkpoint(&table, None).await.unwrap();
@@ -623,7 +542,7 @@ mod tests {
             assert!(res.is_ok());
         }
 
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_struct_with_single_list_field() {
             // you need another column otherwise the entire stats struct is empty
             // which also fails parquet write during checkpoint
@@ -743,7 +662,7 @@ mod tests {
         }
 
         /// <https://github.com/delta-io/delta-rs/issues/3030>
-        #[tokio::test]
+        #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
         async fn test_create_checkpoint_overwrite() -> DeltaResult<()> {
             use crate::protocol::SaveMode;
             use crate::writer::test_utils::datafusion::get_data_sorted;

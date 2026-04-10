@@ -111,7 +111,6 @@ dev = [
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.32"]
-datafusion = ["datafusion==52.*"]
 lakefs = ["lakefs==0.8.0"]
 pyspark = [
     "pyspark==4.0.1",
@@ -128,4 +127,5 @@ other = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "opentelemetry", "polars", "datafusion", "lakefs", "docs", "other"]
+# Re-enable a Python DataFusion dependency group once DataFusion 53 wheels are published.
+default-groups = ["dev", "opentelemetry", "polars", "lakefs", "docs", "other"]

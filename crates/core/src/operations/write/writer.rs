@@ -19,11 +19,10 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use crate::crate_version;
-
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
+use crate::parquet_utils::default_writer_properties;
 use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -86,17 +85,6 @@ async fn upload_parquet_file(
 
 fn sort_completed_writes_by_path<T>(results: &mut [(Path, usize, T)]) {
     results.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-}
-
-fn default_writer_properties(include_created_by: bool) -> WriterProperties {
-    let builder = WriterProperties::builder().set_compression(Compression::SNAPPY);
-    if include_created_by {
-        builder
-            .set_created_by(format!("delta-rs version {}", crate_version()))
-            .build()
-    } else {
-        builder.build()
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -169,7 +157,7 @@ impl WriterConfig {
         stats_columns: Option<Vec<String>>,
     ) -> Self {
         let writer_properties =
-            writer_properties.unwrap_or_else(|| default_writer_properties(false));
+            writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Self {
@@ -335,7 +323,7 @@ impl PartitionWriterConfig {
         let part_path = partition_values.hive_partition_path();
         let prefix = Path::parse(part_path)?;
         let writer_properties =
-            writer_properties.unwrap_or_else(|| default_writer_properties(true));
+            writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
@@ -550,11 +538,14 @@ impl PartitionWriter {
 mod tests {
     use super::*;
     use crate::DeltaTableBuilder;
+    use crate::crate_version;
     use crate::logstore::tests::flatten_list_stream as list;
     use crate::table::config::DEFAULT_NUM_INDEX_COLS;
     use crate::writer::test_utils::*;
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use object_store::ObjectStoreExt as _;
+    use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
 
     fn get_delta_writer(
@@ -599,6 +590,59 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    fn assert_default_created_by(writer_properties: &WriterProperties) {
+        assert_eq!(
+            writer_properties.created_by(),
+            format!("delta-rs version {}", crate_version())
+        );
+    }
+
+    #[test]
+    fn test_writer_config_defaults_include_delta_rs_created_by() {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            true,
+        )]));
+        let config = WriterConfig::new(
+            schema,
+            vec![],
+            None,
+            None,
+            None,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        );
+
+        assert_default_created_by(&config.writer_properties);
+        assert_eq!(
+            config
+                .writer_properties
+                .compression(&ColumnPath::from("id")),
+            Compression::SNAPPY
+        );
+    }
+
+    #[test]
+    fn test_partition_writer_config_defaults_include_delta_rs_created_by() {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            true,
+        )]));
+        let config =
+            PartitionWriterConfig::try_new(schema, IndexMap::new(), None, None, None, None)
+                .unwrap();
+
+        assert_default_created_by(&config.writer_properties);
+        assert_eq!(
+            config
+                .writer_properties
+                .compression(&ColumnPath::from("id")),
+            Compression::SNAPPY
+        );
     }
 
     #[tokio::test]
