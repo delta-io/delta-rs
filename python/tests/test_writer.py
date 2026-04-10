@@ -19,6 +19,7 @@ from deltalake._internal import (
     PrimitiveType,
     Schema,
     StructType,
+    _NANOSECOND_TIMESTAMPS,
 )
 from deltalake.exceptions import (
     DeltaError,
@@ -904,6 +905,8 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_mins["decimal"] = 10.0
     expected_mins["date32"] = "2022-01-01"
+    if _NANOSECOND_TIMESTAMPS:
+        expected_mins["timestamp_ns"] = "1970-01-01T00:00:00Z"
 
     assert stats["minValues"] == expected_mins
 
@@ -922,6 +925,8 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_maxs["decimal"] = 14.0
     expected_maxs["date32"] = "2022-01-05"
+    if _NANOSECOND_TIMESTAMPS:
+        expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000000004Z"
 
     assert stats["maxValues"] == expected_maxs
 
@@ -1968,6 +1973,44 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
     assert protocol.writer_features == ["timestampNtz"]
 
 
+@pytest.mark.skipif(
+    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+)
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    "array",
+    [
+        lambda pa, ts: pa.array([[ts]]),
+        lambda pa, ts: pa.array([{"foo": ts}]),
+        lambda pa, ts: pa.array([{"foo": [[ts]]}]),
+        lambda pa, ts: pa.array([{"foo": [[{"foo": ts}]]}]),
+    ],
+)
+def test_write_timestamp_nanos_nested(tmp_path: pathlib.Path, array):
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "x": array(
+                pa,
+                pa.scalar(datetime(2010, 1, 1), type=pa.timestamp("ns", "UTC")),
+            )
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 3
+    assert protocol.min_writer_version == 7
+    assert protocol.reader_features == ["timestampNanos"]
+    assert protocol.writer_features == ["timestampNanos"]
+
+
 def test_parse_stats_with_new_schema(tmp_path):
     data = Table(
         {
@@ -2093,6 +2136,7 @@ def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
 @pytest.mark.pandas
 def test_write_timestampntz(tmp_path: pathlib.Path):
     import pandas as pd
+    from pandas.testing import assert_frame_equal
 
     data = [
         ("AAPL", "20240731", 100, 11.1),
@@ -2835,11 +2879,19 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     delta_schema = dt.schema()
     ts_field = delta_schema.fields[1]
-    assert ts_field.type == PrimitiveType("timestamp")
+    if _NANOSECOND_TIMESTAMPS:
+        expected_type = PrimitiveType("timestamp_nanos")
+    else:
+        expected_type = PrimitiveType("timestamp")
+    assert ts_field.type == expected_type
 
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
-    assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+    if _NANOSECOND_TIMESTAMPS:
+        expected_resolution = "ns"
+    else:
+        expected_resolution = "us"
+    assert result.schema.field("ts").type == pa.timestamp(expected_resolution, tz="UTC")
     assert result.column("ts").to_pylist() == [ts1, ts2]
 
 
