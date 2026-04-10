@@ -77,7 +77,7 @@ impl SnapshotExt for TableConfiguration {
 
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
         Ok(partitions_schema(
-            self.physical_schema().as_ref(),
+            self.logical_schema().as_ref(),
             self.metadata().partition_columns(),
         )?
         .map(Arc::new))
