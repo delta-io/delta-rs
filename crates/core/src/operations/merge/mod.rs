@@ -29,7 +29,7 @@
 //! ````
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::ops::Deref;
+use std::ops::{Deref, Not};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -48,7 +48,7 @@ use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
+    Expr, ExprFunctionExt, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
 };
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
@@ -110,7 +110,8 @@ const TARGET_COLUMN: &str = "__delta_rs_target";
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
-const TARGET_ROW_INDEX_COLUMN: &str = "__delta_rs_target_row_index";
+const TARGET_ROW_ORDINAL_IN_FILE_COLUMN: &str = "__delta_rs_target_row_ordinal_in_file";
+const TARGET_MATCH_ROW_RANK_COLUMN: &str = "__delta_rs_target_match_row_rank";
 pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
 pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
@@ -542,25 +543,15 @@ enum OperationType {
     Copy,
 }
 
-/// Duplicate-match validation class encoding.
+// This enum models whether a matched source/target pair participated in a duplicate relevant
+// WHEN MATCHED clause, not the final write path operation chosen for the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
-enum CardinalityClass {
+enum MatchParticipationClass {
     Ignore = 0,
-    MatchedUnconditionalDelete = 1,
-    DuplicateInvalidating = 2,
-}
-
-impl CardinalityClass {
-    fn for_matched_operation(op_type: OperationType, is_unconditional: bool) -> Self {
-        match op_type {
-            OperationType::Delete if is_unconditional => Self::MatchedUnconditionalDelete,
-            OperationType::Delete | OperationType::Update | OperationType::Copy => {
-                Self::DuplicateInvalidating
-            }
-            OperationType::Insert | OperationType::SourceDelete => Self::Ignore,
-        }
-    }
+    MatchedNoop = 1,
+    MatchedUnconditionalDelete = 2,
+    MatchedAction = 3,
 }
 
 //Encapsute the User's Merge configuration for later processing
@@ -579,7 +570,7 @@ struct MergeOperation {
     operations: HashMap<Column, Expr>,
     r#type: OperationType,
     /// Duplicate-match validation class for this operation.
-    cardinality_class: CardinalityClass,
+    match_participation_class: MatchParticipationClass,
 }
 
 impl MergeOperation {
@@ -639,15 +630,19 @@ impl MergeOperation {
             predicate: maybe_into_expr(config.predicate, schema, state)?,
             operations: ops,
             r#type: config.r#type,
-            cardinality_class: CardinalityClass::Ignore,
+            match_participation_class: MatchParticipationClass::Ignore,
         })
     }
 
     fn into_matched(mut self) -> Self {
-        let is_unconditional =
-            matches!(self.r#type, OperationType::Delete) && self.predicate.is_none();
-        self.cardinality_class =
-            CardinalityClass::for_matched_operation(self.r#type, is_unconditional);
+        self.match_participation_class = match self.r#type {
+            OperationType::Delete if self.predicate.is_none() => {
+                MatchParticipationClass::MatchedUnconditionalDelete
+            }
+            OperationType::Delete | OperationType::Update => MatchParticipationClass::MatchedAction,
+            OperationType::Copy => MatchParticipationClass::MatchedNoop,
+            OperationType::Insert | OperationType::SourceDelete => MatchParticipationClass::Ignore,
+        };
         self
     }
 }
@@ -790,7 +785,9 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             let schema = validation.input.schema();
             return Ok(Some(Arc::new(MergeValidationExec::new(
                 physical_inputs.first().unwrap().clone(),
-                planner.create_physical_expr(&validation.expr, schema, session_state)?,
+                planner.create_physical_expr(&validation.file_expr, schema, session_state)?,
+                Arc::clone(&validation.file_column),
+                Arc::clone(&validation.row_ordinal_column),
             ))));
         }
 
@@ -996,7 +993,12 @@ async fn execute(
         }),
     });
     let target = DataFrame::new(state.clone(), target);
-    let target = target.with_column(TARGET_ROW_INDEX_COLUMN, row_number())?;
+    let target = target.with_column(
+        TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+        row_number()
+            .partition_by(vec![col(file_column.as_str())])
+            .build()?,
+    )?;
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
 
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
@@ -1087,12 +1089,19 @@ async fn execute(
 
     let mut when_expr = Vec::with_capacity(operations_size);
     let mut then_expr = Vec::with_capacity(operations_size);
-    let mut ops: Vec<(HashMap<Column, Expr>, OperationType, CardinalityClass)> =
-        Vec::with_capacity(operations_size);
+    let mut ops: Vec<(
+        HashMap<Column, Expr>,
+        OperationType,
+        MatchParticipationClass,
+    )> = Vec::with_capacity(operations_size);
 
     fn update_case(
         operations: Vec<MergeOperation>,
-        ops: &mut Vec<(HashMap<Column, Expr>, OperationType, CardinalityClass)>,
+        ops: &mut Vec<(
+            HashMap<Column, Expr>,
+            OperationType,
+            MatchParticipationClass,
+        )>,
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
@@ -1108,7 +1117,7 @@ async fn execute(
             when_expr.push(predicate);
             then_expr.push(lit(ops.len() as i32));
 
-            ops.push((op.operations, op.r#type, op.cardinality_class));
+            ops.push((op.operations, op.r#type, op.match_participation_class));
 
             let action_type = match op.r#type {
                 OperationType::Update => "update",
@@ -1160,12 +1169,12 @@ async fn execute(
         &not_matched_source,
     )?;
 
-    when_expr.push(matched);
+    when_expr.push(matched.clone());
     then_expr.push(lit(ops.len() as i32));
     ops.push((
         HashMap::new(),
         OperationType::Copy,
-        CardinalityClass::DuplicateInvalidating,
+        MatchParticipationClass::MatchedNoop,
     ));
 
     when_expr.push(not_matched_target);
@@ -1173,7 +1182,7 @@ async fn execute(
     ops.push((
         HashMap::new(),
         OperationType::SourceDelete,
-        CardinalityClass::Ignore,
+        MatchParticipationClass::Ignore,
     ));
 
     when_expr.push(not_matched_source);
@@ -1181,7 +1190,7 @@ async fn execute(
     ops.push((
         HashMap::new(),
         OperationType::Copy,
-        CardinalityClass::Ignore,
+        MatchParticipationClass::Ignore,
     ));
 
     let case = CaseBuilder::new(None, when_expr, then_expr, None).end()?;
@@ -1407,16 +1416,37 @@ async fn execute(
         )
         .end()?;
 
+        let match_row_rank = row_number()
+            .partition_by(vec![
+                col(file_column.as_str()),
+                col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN),
+            ])
+            .order_by(vec![
+                col(TARGET_MATCH_CARDINALITY_CLASS_COLUMN).sort(false, false),
+            ])
+            .build()?;
+
         let new_columns = DataFrame::new(state.clone(), new_columns)
             .with_column(TARGET_MATCH_CARDINALITY_CLASS_COLUMN, cardinality_class)?
+            .with_column(TARGET_MATCH_ROW_RANK_COLUMN, match_row_rank)?
             .into_unoptimized_plan();
 
-        LogicalPlan::Extension(Extension {
+        let validated = LogicalPlan::Extension(Extension {
             node: Arc::new(MergeValidation {
                 input: new_columns,
-                expr: col(TARGET_ROW_INDEX_COLUMN),
+                file_expr: col(file_column.as_str()),
+                file_column: Arc::clone(&file_column),
+                row_ordinal_column: Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
             }),
-        })
+        });
+
+        DataFrame::new(state.clone(), validated)
+            .filter(
+                matched
+                    .and(col(TARGET_MATCH_ROW_RANK_COLUMN).gt(lit(1_u64)))
+                    .not(),
+            )?
+            .into_unoptimized_plan()
     } else {
         new_columns
     };
@@ -3490,7 +3520,257 @@ mod tests {
             .unwrap()
             .await;
 
-        assert!(res.is_err());
+        let err = res.expect_err("expected duplicate validation failure");
+        assert!(
+            err.to_string()
+                .contains("duplicate relevant WHEN MATCHED clauses")
+        );
+        assert_eq!(table.version(), Some(1));
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_update_duplicate_with_noop_source_row_passes() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .predicate(col("source.value").gt(lit(11)))
+                    .update("value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(metrics.num_source_rows, 2);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert_eq!(metrics.num_output_rows, 4);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 12    | 2023-07-05 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_cdf_enabled_update_duplicate_with_noop_source_row_passes() {
+        use crate::kernel::ProtocolInner;
+        use crate::operations::merge::Action;
+
+        let delta_schema = get_delta_schema();
+        let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_actions(actions)
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+
+        let schema = get_arrow_schema(&None);
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, metrics) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| {
+                update
+                    .predicate(col("source.value").gt(lit(11)))
+                    .update("value", "source.value")
+                    .update("modified", "source.modified")
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(metrics.num_source_rows, 2);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert_eq!(metrics.num_output_rows, 4);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 12    | 2023-07-05 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let cdf = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+
+        let mut batches = collect(cdf, ctx.task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+
+        let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
+
+        let expected_cdf = vec![
+            "+----+-------+------------+------------------+-----------------+",
+            "| id | value | modified   | _change_type     | _commit_version |",
+            "+----+-------+------------+------------------+-----------------+",
+            "| A  | 1     | 2021-02-01 | insert           | 1               |",
+            "| B  | 10    | 2021-02-01 | insert           | 1               |",
+            "| B  | 10    | 2021-02-01 | update_preimage  | 2               |",
+            "| B  | 12    | 2023-07-05 | update_postimage | 2               |",
+            "| C  | 10    | 2021-02-02 | insert           | 1               |",
+            "| D  | 100   | 2021-02-02 | insert           | 1               |",
+            "+----+-------+------------+------------------+-----------------+",
+        ];
+        assert_batches_sorted_eq!(&expected_cdf, &batches);
+    }
+
+    #[tokio::test]
+    async fn test_merge_unconditional_delete_multiple_source_match_allowed() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (table, _) = table
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), Some(2));
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_conditional_delete_multiple_source_match_error() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![11, 12])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2023-07-04",
+                    "2023-07-05",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
+        let res = table
+            .clone()
+            .merge(source, "target.id = source.id")
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_delete(|delete| delete.predicate(col("source.value").gt(lit(10))))
+            .unwrap()
+            .await;
+
+        let err = res.expect_err("expected duplicate validation failure");
+        assert!(
+            err.to_string()
+                .contains("duplicate relevant WHEN MATCHED clauses")
+        );
         assert_eq!(table.version(), Some(1));
 
         let actual = get_data(&table).await;

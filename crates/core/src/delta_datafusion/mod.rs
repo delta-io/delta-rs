@@ -290,7 +290,7 @@ pub(crate) fn get_path_column<'a>(
     let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
     batch
         .column_by_name(path_column)
-        .unwrap()
+        .ok_or_else(err)?
         .as_any()
         .downcast_ref::<DictionaryArray<UInt16Type>>()
         .ok_or_else(err)?
