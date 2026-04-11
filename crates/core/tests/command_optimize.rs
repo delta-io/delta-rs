@@ -1299,9 +1299,10 @@ async fn test_zorder_rejects_nonexistent_columns() -> Result<(), Box<dyn Error>>
         .with_type(OptimizeType::ZOrder(vec!["non-existent".to_string()]))
         .await;
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains(
-        "Z-order columns must be present in the table schema. Unknown columns: [\"non-existent\"]"
-    ));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("field \"non-existent\" not found in schema"));
     Ok(())
 }
 
@@ -1495,6 +1496,123 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
 
     // Allow going a little over the target size
     assert!(metrics.files_added.max < 11_000_000);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_nested_columns() -> Result<(), Box<dyn Error>> {
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(
+            "meta",
+            ArrowDataType::Struct(
+                vec![Field::new("field_a", ArrowDataType::Int32, false)].into(),
+            ),
+            false,
+        ),
+        Field::new("value", ArrowDataType::Int32, false),
+    ]));
+
+    let batch1 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(arrow_array::StructArray::from(vec![(
+                Arc::new(Field::new("field_a", ArrowDataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn arrow_array::Array>,
+            )])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+
+    let batch2 = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(arrow_array::StructArray::from(vec![(
+                Arc::new(Field::new("field_a", ArrowDataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![4, 5, 6])) as Arc<dyn arrow_array::Array>,
+            )])),
+            Arc::new(Int32Array::from(vec![40, 50, 60])),
+        ],
+    )?;
+
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch1])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+
+    let table = table
+        .write(vec![batch2])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+
+    let (_, metrics) = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["meta.field_a".to_string()]))
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>> {
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(
+            "meta",
+            ArrowDataType::Struct(
+                vec![Field::new("field_a", ArrowDataType::Int32, false)].into(),
+            ),
+            false,
+        ),
+        Field::new("value", ArrowDataType::Int32, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(arrow_array::StructArray::from(vec![(
+                Arc::new(Field::new("field_a", ArrowDataType::Int32, false)),
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as Arc<dyn arrow_array::Array>,
+            )])),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+        ],
+    )?;
+
+    // Non-existent nested field
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch.clone()])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+
+    let result = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec![
+            "meta.nonexistent".to_string(),
+        ]))
+        .await;
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("field \"nonexistent\" not found in schema"));
+
+    // Non-struct intermediate field
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+
+    let result = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["value.sub".to_string()]))
+        .await;
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("\"value\" is not a struct type"));
 
     Ok(())
 }
