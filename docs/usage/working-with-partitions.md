@@ -4,10 +4,10 @@ Partitions in Delta Lake let you organize data based on specific columns (for ex
 
 Below, we demonstrate how to create, query, and update partitioned Delta tables, covering both Python and Rust examples.
 
-
 ## Creating a Partitioned Table
 
 To create a partitioned Delta table, specify one or more partition columns when creating the table. Here we partition by the country column.
+
 ```python
 from deltalake import write_deltalake,DeltaTable
 import pandas as pd
@@ -22,7 +22,8 @@ df = pd.DataFrame({
 write_deltalake("tmp/partitioned-table", df, partition_by=["country"])
 ```
 
-The structure in the "tmp/partitioned-table" folder shows how Delta Lake organizes data by the partition column. The "_delta_log" folder holds transaction metadata, while each "country=<value>" subfolder contains the Parquet files for rows matching that partition value. This layout allows efficient queries and updates on partitioned data.
+The structure in the "tmp/partitioned-table" folder shows how Delta Lake organizes data by the partition column. The "\_delta_log" folder holds transaction metadata, while each "country=<value>" subfolder contains the Parquet files for rows matching that partition value. This layout allows efficient queries and updates on partitioned data.
+
 ```plaintext
 tmp/partitioned-table/
 ├── _delta_log/
@@ -40,12 +41,14 @@ tmp/partitioned-table/
 Because partition columns are part of the storage path, queries that filter on those columns can skip reading unneeded partitions. You can specify partition filters when reading data with [DeltaTable.to_pandas()](../api/delta_table/index.md#deltalake.DeltaTable.to_pandas).
 
 In this example we restrict our query to the `country="US"` partition.
+
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
 pdf = dt.to_pandas(partitions=[("country", "=", "US")])
 print(pdf)
 ```
+
 ```plaintext
     num letter country
 0    1      a      US
@@ -137,6 +140,7 @@ print(pdf)
 You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. If only a subset of existing partitions are present in the source (i.e. new) data then `deltalake` can skip reading the partitions not present in the source data. You can do this by providing a predicate that specifies which partition values are in the source data.
 
 This example shows an upsert merge operation:
+
 - The merge condition (`predicate`) matches rows between source and target based on the partition column and specifies which partitions are present in the source data
 - If a match is found between a source row and a target row, the `"letter"` column is updated with the source data
 - Otherwise if no match is found for a source row then the row is inserted, creating a new partition if necessary
@@ -179,6 +183,7 @@ print(pdf)
 ## Deleting Partition Data
 
 You may want to delete all rows from a specific partition. For example:
+
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
@@ -197,6 +202,7 @@ print(pdf)
 3    10      x      CA
 4     3      c      CA
 ```
+
 This command logically deletes the data by creating a new transaction.
 
 ## Maintaining Partitioned Tables
@@ -209,7 +215,7 @@ If we want to target compaction at specific partitions we can include partition 
 
 ```python
  dt.optimize.compact(partition_filters=[("country", "=", "CA")])
- ```
+```
 
 Then optionally [`vacuum`](../api/delta_table/index.md#deltalake.DeltaTable.vacuum) the table to remove older, unreferenced files.
 

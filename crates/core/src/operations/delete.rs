@@ -69,7 +69,7 @@ use crate::delta_datafusion::{
     Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
     scan_files_where_matches, update_datafusion_session,
 };
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
@@ -81,6 +81,7 @@ use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 
 const SOURCE_COUNT_ID: &str = "delete_source_count";
+const RESCUED_COUNT_ID: &str = "delete_rescued_count";
 const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 
 /// Delete Records from the Delta Table.
@@ -314,10 +315,10 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         _session_state: &SessionState,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
-            && metric_observer.id.eq(SOURCE_COUNT_ID)
+            && (metric_observer.id.eq(SOURCE_COUNT_ID) || metric_observer.id.eq(RESCUED_COUNT_ID))
         {
             return Ok(Some(MetricObserverExec::try_new(
-                SOURCE_COUNT_ID.into(),
+                metric_observer.id.clone(),
                 physical_inputs,
                 |batch, metrics| {
                     MetricBuilder::new(metrics)
@@ -484,6 +485,13 @@ async fn execute(
         .into_builder()
         .filter(files_scan.predicate.clone().is_not_true())?
         .build()?;
+    let rescued_data = LogicalPlan::Extension(Extension {
+        node: Arc::new(MetricObserver {
+            id: RESCUED_COUNT_ID.into(),
+            input: rescued_data,
+            enable_pushdown: false,
+        }),
+    });
 
     let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
         // create change set entries for all records we deleted
@@ -519,13 +527,20 @@ async fn execute(
     )
     .await?;
 
-    if let Some(source_count) = find_metric_node(SOURCE_COUNT_ID, &exec) {
-        let source_count_metrics = source_count.metrics().unwrap();
-        let read_records = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
-        let filter_records = exec.metrics().and_then(|m| m.output_rows()).unwrap_or(0);
-        metrics.num_copied_rows = filter_records;
-        metrics.num_deleted_rows = read_records - filter_records;
-    };
+    let err = || DeltaTableError::Generic("Unable to locate expected metric node".into());
+    let source_count = find_metric_node(SOURCE_COUNT_ID, &exec).ok_or_else(err)?;
+    let rescued_count = find_metric_node(RESCUED_COUNT_ID, &exec).ok_or_else(err)?;
+    let source_count_metrics = source_count.metrics().ok_or_else(err)?;
+    let rescued_count_metrics = rescued_count.metrics().ok_or_else(err)?;
+    let read_records = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+    let rescued_records = get_metric(&rescued_count_metrics, SOURCE_COUNT_METRIC);
+
+    metrics.num_copied_rows = rescued_records;
+    metrics.num_deleted_rows = read_records.checked_sub(rescued_records).ok_or_else(|| {
+        DeltaTableError::Generic(
+            "Delete metrics invariant violated: rescued rows exceeded source rows".into(),
+        )
+    })?;
 
     metrics.num_added_files = actions.len();
     actions.extend(removes);
@@ -1795,6 +1810,96 @@ mod tests {
         "| 3     | insert       | 1               |",
         "+-------+--------------+-----------------+",
         ], &batches }
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled_metrics() {
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = table
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), Some(1));
+
+        let (table, metrics) = table
+            .delete()
+            .with_predicate(col("value").eq(lit(2)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(2));
+
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 2);
+        assert_eq!(metrics.num_deleted_rows, 1);
+        assert_eq!(metrics.num_copied_rows, 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_cdc_enabled_metrics_all_rows_deleted() {
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "value",
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+                None,
+            )
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)]))],
+        )
+        .unwrap();
+        let table = table
+            .write(vec![batch])
+            .await
+            .expect("Failed to write first batch");
+        assert_eq!(table.version(), Some(1));
+
+        let (table, metrics) = table
+            .delete()
+            .with_predicate(col("value").gt(lit(0)))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(2));
+
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_added_files, 1);
+        assert_eq!(metrics.num_deleted_rows, 3);
+        assert_eq!(metrics.num_copied_rows, 0);
     }
 
     #[tokio::test]
