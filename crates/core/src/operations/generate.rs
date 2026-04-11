@@ -75,6 +75,7 @@ use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use object_store::ObjectStoreExt as _;
 use object_store::path::{Path, PathPart};
 use tracing::log::*;
 

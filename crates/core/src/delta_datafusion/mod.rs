@@ -83,6 +83,8 @@ pub(crate) use table_provider::{
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
+#[doc(hidden)]
+pub mod bench_support;
 pub mod cdf;
 mod data_validation;
 pub mod engine;
@@ -170,7 +172,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -184,7 +186,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -632,6 +634,7 @@ mod tests {
     use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
+    use object_store::ObjectStoreExt as _;
     use serde_json::json;
     use std::ops::Range;
     use url::Url;

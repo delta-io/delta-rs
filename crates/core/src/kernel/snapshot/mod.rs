@@ -36,8 +36,8 @@ use delta_kernel::{
 use futures::future::ready;
 use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStore;
 use object_store::path::Path;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde_json::Deserializer;
 use url::Url;
 
@@ -69,8 +69,6 @@ pub struct Snapshot {
     pub(crate) inner: Arc<KernelSnapshot>,
     /// Configuration for the current session
     config: DeltaTableConfig,
-    /// Logical table schema
-    schema: SchemaRef,
     /// Optional materialized replay state owned by this snapshot.
     materialized_files: Option<Arc<MaterializedFiles>>,
 }
@@ -103,18 +101,9 @@ impl Snapshot {
             }
         };
 
-        let schema = Arc::new(
-            snapshot
-                .table_configuration()
-                .schema()
-                .as_ref()
-                .try_into_arrow()?,
-        );
-
         Ok(Self {
             inner: snapshot,
             config,
-            schema,
             materialized_files: None,
         })
     }
@@ -183,17 +172,8 @@ impl Snapshot {
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-        let schema = Arc::new(
-            snapshot
-                .table_configuration()
-                .schema()
-                .as_ref()
-                .try_into_arrow()?,
-        );
-
         let snapshot = Arc::new(Self {
             inner: snapshot,
-            schema,
             config: self.config.clone(),
             materialized_files: None,
         });
@@ -271,13 +251,21 @@ impl Snapshot {
         self.inner.log_segment().checkpoint_version
     }
 
-    /// Get the table schema of the snapshot
+    /// Get the logical table schema of the snapshot
     pub fn schema(&self) -> KernelSchemaRef {
-        self.inner.table_configuration().schema()
+        self.inner.table_configuration().logical_schema()
     }
 
+    /// Convert the lgoical schema into an Arrow [SchemaRef]
+    ///
+    /// NOTE: This can panic if the table's logical schema is not compatible with Arrow!
     pub fn arrow_schema(&self) -> SchemaRef {
-        self.schema.clone()
+        Arc::new(
+            self.schema()
+                .as_ref()
+                .try_into_arrow()
+                .expect("Failed to coerce the logical schema into Arrow"),
+        )
     }
 
     /// Get the table metadata of the snapshot
@@ -452,7 +440,6 @@ impl Snapshot {
         Self {
             inner: self.inner.clone(),
             config: self.config.clone(),
-            schema: self.schema.clone(),
             materialized_files,
         }
     }
@@ -588,11 +575,11 @@ impl Snapshot {
         // TODO: bundle operation id with log store ...
         let engine = log_store.engine(None);
 
-        let remove_data = match self.inner.log_segment().read_actions(
-            engine.as_ref(),
-            TOMBSTONE_SCHEMA.clone(),
-            None,
-        ) {
+        let remove_data = match self
+            .inner
+            .log_segment()
+            .read_actions(engine.as_ref(), TOMBSTONE_SCHEMA.clone())
+        {
             Ok(data) => data,
             Err(err) => {
                 return Box::pin(once(ready(Err(DeltaTableError::KernelError(err)))));
@@ -884,7 +871,13 @@ impl EagerSnapshot {
 
     /// Get the timestamp of the given version
     pub fn version_timestamp(&self, version: Version) -> Option<i64> {
-        for path in &self.snapshot.inner.log_segment().ascending_commit_files {
+        for path in &self
+            .snapshot
+            .inner
+            .log_segment()
+            .listed
+            .ascending_commit_files
+        {
             if path.version == version {
                 return Some(path.location.last_modified);
             }
@@ -1067,17 +1060,11 @@ mod tests {
 
             let engine = log_store.engine(None);
             let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
-            let schema = snapshot
-                .table_configuration()
-                .schema()
-                .as_ref()
-                .try_into_arrow()?;
 
             Ok((
                 Self {
                     inner: snapshot,
                     config: Default::default(),
-                    schema: Arc::new(schema),
                     materialized_files: None,
                 },
                 log_store,
@@ -1243,15 +1230,15 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
-            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------------------------------------------------------+",
-            "| path                                                                | size | modificationTime | stats_parsed                                          | deletionVector | fileConstantValues                                                    |",
-            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------------------------------------------------------+",
-            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: } |",
-            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: } |",
-            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: } |",
-            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: } |",
-            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: } |",
-            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+-----------------------------------------------------------------------+",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+---------------------------------------------------------------------------------------------+",
+            "| path                                                                | size | modificationTime | stats_parsed                                          | deletionVector | fileConstantValues                                                                          |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+---------------------------------------------------------------------------------------------+",
+            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } |",
+            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } |",
+            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } |",
+            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } |",
+            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    | {numRecords: , nullCount: , minValues: , maxValues: } |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } |",
+            "+---------------------------------------------------------------------+------+------------------+-------------------------------------------------------+----------------+---------------------------------------------------------------------------------------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1626,7 +1613,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_file_views_return_newest_files_first() -> TestResult {
         let (_dir, mut table) = checkpoint_rebase_table().await?;
 
@@ -1651,7 +1638,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1671,7 +1658,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1690,7 +1677,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_update_explicit_same_version_adopts_late_checkpoint() -> TestResult
     {
         let (_dir, table) = checkpoint_rebase_table().await?;
@@ -1715,7 +1702,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_update_latest_same_version_adopts_late_checkpoint() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1762,7 +1749,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_eager_snapshot_same_version_checkpoint_refresh_is_idempotent() -> TestResult {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
@@ -1803,7 +1790,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_snapshot_update_same_version_surfaces_invalid_current_checkpoint_hint()
     -> TestResult {
         let (_table_dir, table) = checkpoint_rebase_table().await?;

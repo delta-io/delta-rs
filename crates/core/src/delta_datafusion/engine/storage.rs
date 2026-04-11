@@ -101,6 +101,11 @@ impl StorageHandler for DataFusionStorageHandler {
         Err(delta_kernel::Error::generic("copy_atomic not implemented"))
     }
 
+    fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> DeltaResult<()> {
+        self.get_or_create(path.as_object_store_url())?
+            .put(path, data, overwrite)
+    }
+
     fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("head not implemented"))
@@ -161,7 +166,7 @@ mod tests {
     use std::ops::Range;
 
     use datafusion::prelude::SessionContext;
-    use object_store::{ObjectStore, local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt as _, local::LocalFileSystem, path::Path};
     use rstest::*;
 
     use crate::test_utils::TestResult;

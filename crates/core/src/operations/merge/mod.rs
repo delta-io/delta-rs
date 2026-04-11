@@ -45,7 +45,6 @@ use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::build_join_schema;
-use datafusion::logical_expr::execution_props::ExecutionProps;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
@@ -1514,14 +1513,14 @@ async fn execute(
         .or_else(|| find_node::<DeltaScanExec>(&write))
         .ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns().clone();
+    let table_partition_cols = current_metadata.partition_columns().to_vec();
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
         &state,
         write,
-        table_partition_cols.clone(),
+        table_partition_cols.to_vec(),
         log_store.object_store(Some(operation_id)),
         Some(snapshot.table_properties().target_file_size()),
         None,
@@ -1703,8 +1702,7 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
 
 fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
     let expr = coerce_predicate_literals(expr, target_schema.as_ref())?;
-    let props = ExecutionProps::new();
-    let simplify_context = SimplifyContext::new(&props).with_schema(target_schema);
+    let simplify_context = SimplifyContext::default().with_schema(target_schema);
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     Ok(simplifier.simplify(expr)?)
 }
