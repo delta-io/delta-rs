@@ -211,19 +211,23 @@ impl ExecutionPlan for DeltaScanMetaExec {
         _: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         let total_files = self.input.iter().map(|q| q.len()).sum::<usize>();
-        let partition_size = total_files / target_partitions;
-        if partition_size == 0 {
+        if total_files < target_partitions {
             return Ok(None);
         }
-        let new_input: Vec<VecDeque<(String, usize)>> = self
-            .input
-            .iter()
-            .flatten()
-            .cloned()
-            .chunks(partition_size)
-            .into_iter()
-            .map(|chunk| chunk.collect())
-            .collect();
+
+        // Distribute files round-robin across exactly `target_partitions`.
+        //
+        // The previous implementation used `chunks(total / target)` which produces
+        // MORE partitions than requested when `total % target != 0` due to integer
+        // division truncation. For example, 3 files with target=2 gave chunk size 1,
+        // producing 3 partitions. The optimizer would then only execute a subset of
+        // partitions, silently dropping files and returning incorrect query results.
+        let mut new_input: Vec<VecDeque<(String, usize)>> =
+            (0..target_partitions).map(|_| VecDeque::new()).collect();
+        for (idx, item) in self.input.iter().flatten().cloned().enumerate() {
+            new_input[idx % target_partitions].push_back(item);
+        }
+
         let properties = Arc::new(Self::make_properties(
             self.scan_plan.as_ref(),
             new_input.len(),
@@ -1086,9 +1090,14 @@ mod tests {
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected metadata-only scan");
 
+        // f2 has a deletion vector: keeps rows 0 and 2, deletes rows 1 and 3
+        // so f2 effective rows = 4 raw - 2 deleted = 2 kept
         let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
         selection_vectors.insert("f2".to_string(), vec![true, false, true, false]);
 
+        // Input: 4 files in 1 partition
+        //   f1: 10 rows, f2: 4 rows (2 effective), f3: 6 rows, f4: 2 rows
+        //   Total effective: 10 + 2 + 6 + 2 = 20
         let exec = DeltaScanMetaExec::new(
             Arc::clone(&template.scan_plan),
             vec![VecDeque::from([
@@ -1119,17 +1128,177 @@ mod tests {
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected repartitioned DeltaScanMetaExec");
         assert_eq!(repartitioned.input.len(), 2);
+
+        // Round-robin distribution (idx % 2):
+        //   idx=0 f1(10)         → partition 0
+        //   idx=1 f2(4→2 w/ DV) → partition 1
+        //   idx=2 f3(6)          → partition 0
+        //   idx=3 f4(2)          → partition 1
+        //
+        // Partition 0: f1(10) + f3(6)          = 16
+        // Partition 1: f2(4→2 after DV) + f4(2) = 4
+        // Total: 16 + 4 = 20
         assert_eq!(
             repartitioned.partition_statistics(Some(0))?.num_rows,
-            Precision::Exact(12)
+            Precision::Exact(16)
         );
         assert_eq!(
             repartitioned.partition_statistics(Some(1))?.num_rows,
-            Precision::Exact(8)
+            Precision::Exact(4)
         );
         assert_eq!(
             repartitioned.partition_statistics(None)?.num_rows,
             Precision::Exact(20)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartitioned_produces_exactly_target_partitions_with_odd_file_count()
+    -> TestResult {
+        // Regression test: when total_files % target_partitions != 0, the old
+        // implementation used chunks(total/target) which produced MORE partitions
+        // than requested. For 3 files with target=2, chunk size was 3/2=1, creating
+        // 3 partitions instead of 2. The optimizer would then only execute a subset,
+        // silently dropping files and returning incorrect count(*) results.
+        let (_table_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let empty_projection = vec![];
+        let scan = provider
+            .scan(&session.state(), Some(&empty_projection), &[], None)
+            .await?;
+        let template = scan
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan");
+
+        // 3 files, target 2 partitions — the exact scenario that triggered the bug
+        let exec = DeltaScanMetaExec::new(
+            Arc::clone(&template.scan_plan),
+            vec![VecDeque::from([
+                ("f1".to_string(), 712usize),
+                ("f2".to_string(), 2usize),
+                ("f3".to_string(), 1usize),
+            ])],
+            Arc::clone(&template.transforms),
+            Arc::new(DashMap::new()),
+            template.file_id_field.clone(),
+            ExecutionPlanMetricsSet::new(),
+        );
+
+        let repartitioned = exec
+            .repartitioned(2, &ConfigOptions::default())?
+            .expect("expected repartitioned metadata scan");
+
+        // Must produce exactly 2 partitions, not 3
+        assert_eq!(
+            repartitioned
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            2,
+            "repartitioned must produce exactly target_partitions partitions"
+        );
+
+        let repartitioned = repartitioned
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected repartitioned DeltaScanMetaExec");
+        assert_eq!(repartitioned.input.len(), 2);
+
+        // All files must be present across the two partitions
+        let total_files: usize = repartitioned.input.iter().map(|q| q.len()).sum();
+        assert_eq!(total_files, 3, "all files must be distributed across partitions");
+
+        // Total row count must be preserved
+        assert_eq!(
+            repartitioned.partition_statistics(None)?.num_rows,
+            Precision::Exact(715),
+            "total row count must be preserved after repartitioning"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartitioned_returns_none_when_fewer_files_than_target() -> TestResult {
+        let (_table_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let empty_projection = vec![];
+        let scan = provider
+            .scan(&session.state(), Some(&empty_projection), &[], None)
+            .await?;
+        let template = scan
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan");
+
+        // 1 file, target 4 partitions — should return None
+        let exec = DeltaScanMetaExec::new(
+            Arc::clone(&template.scan_plan),
+            vec![VecDeque::from([("f1".to_string(), 100usize)])],
+            Arc::clone(&template.transforms),
+            Arc::new(DashMap::new()),
+            template.file_id_field.clone(),
+            ExecutionPlanMetricsSet::new(),
+        );
+
+        let result = exec.repartitioned(4, &ConfigOptions::default())?;
+        assert!(
+            result.is_none(),
+            "should return None when fewer files than target partitions"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartitioned_even_split() -> TestResult {
+        let (_table_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let empty_projection = vec![];
+        let scan = provider
+            .scan(&session.state(), Some(&empty_projection), &[], None)
+            .await?;
+        let template = scan
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan");
+
+        // 4 files, target 2 partitions — should split evenly
+        let exec = DeltaScanMetaExec::new(
+            Arc::clone(&template.scan_plan),
+            vec![VecDeque::from([
+                ("f1".to_string(), 100usize),
+                ("f2".to_string(), 200usize),
+                ("f3".to_string(), 300usize),
+                ("f4".to_string(), 400usize),
+            ])],
+            Arc::clone(&template.transforms),
+            Arc::new(DashMap::new()),
+            template.file_id_field.clone(),
+            ExecutionPlanMetricsSet::new(),
+        );
+
+        let repartitioned = exec
+            .repartitioned(2, &ConfigOptions::default())?
+            .expect("expected repartitioned metadata scan");
+
+        let repartitioned = repartitioned
+            .as_any()
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected repartitioned DeltaScanMetaExec");
+        assert_eq!(repartitioned.input.len(), 2);
+        assert_eq!(repartitioned.input[0].len(), 2);
+        assert_eq!(repartitioned.input[1].len(), 2);
+
+        assert_eq!(
+            repartitioned.partition_statistics(None)?.num_rows,
+            Precision::Exact(1000),
         );
 
         Ok(())
