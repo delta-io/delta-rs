@@ -1299,10 +1299,12 @@ async fn test_zorder_rejects_nonexistent_columns() -> Result<(), Box<dyn Error>>
         .with_type(OptimizeType::ZOrder(vec!["non-existent".to_string()]))
         .await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("field \"non-existent\" not found in schema"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("field \"non-existent\" not found in schema")
+    );
     Ok(())
 }
 
@@ -1505,9 +1507,7 @@ async fn test_zorder_nested_columns() -> Result<(), Box<dyn Error>> {
     let schema = Arc::new(ArrowSchema::new(vec![
         Field::new(
             "meta",
-            ArrowDataType::Struct(
-                vec![Field::new("field_a", ArrowDataType::Int32, false)].into(),
-            ),
+            ArrowDataType::Struct(vec![Field::new("field_a", ArrowDataType::Int32, false)].into()),
             false,
         ),
         Field::new("value", ArrowDataType::Int32, false),
@@ -1561,9 +1561,7 @@ async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>>
     let schema = Arc::new(ArrowSchema::new(vec![
         Field::new(
             "meta",
-            ArrowDataType::Struct(
-                vec![Field::new("field_a", ArrowDataType::Int32, false)].into(),
-            ),
+            ArrowDataType::Struct(vec![Field::new("field_a", ArrowDataType::Int32, false)].into()),
             false,
         ),
         Field::new("value", ArrowDataType::Int32, false),
@@ -1588,15 +1586,15 @@ async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>>
 
     let result = table
         .optimize()
-        .with_type(OptimizeType::ZOrder(vec![
-            "meta.nonexistent".to_string(),
-        ]))
+        .with_type(OptimizeType::ZOrder(vec!["meta.nonexistent".to_string()]))
         .await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("field \"nonexistent\" not found in schema"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("field \"nonexistent\" not found in schema")
+    );
 
     // Non-struct intermediate field
     let table = DeltaTable::new_in_memory()
@@ -1609,10 +1607,12 @@ async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>>
         .with_type(OptimizeType::ZOrder(vec!["value.sub".to_string()]))
         .await;
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("\"value\" is not a struct type"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("\"value\" is not a struct type")
+    );
 
     Ok(())
 }
