@@ -248,7 +248,10 @@ impl DeltaScanConfig {
             return Some(name);
         };
         let file_id_idx = result_schema.fields().len();
-        projection.iter().any(|&idx| idx == file_id_idx).then_some(name)
+        projection
+            .iter()
+            .any(|&idx| idx == file_id_idx)
+            .then_some(name)
     }
 
     /// The physical arrow schema exposed by the table provider

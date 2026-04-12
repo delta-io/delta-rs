@@ -136,22 +136,10 @@ mod provider_schema_override {
             .with_location(table_dir.path().to_str().unwrap())
             .with_columns(
                 StructType::try_new(vec![
-                    StructField::new(
-                        "letter",
-                        DataType::Primitive(PrimitiveType::String),
-                        true,
-                    ),
+                    StructField::new("letter", DataType::Primitive(PrimitiveType::String), true),
                     StructField::new("date", DataType::DATE, true),
-                    StructField::new(
-                        "data",
-                        DataType::Primitive(PrimitiveType::Binary),
-                        true,
-                    ),
-                    StructField::new(
-                        "number",
-                        DataType::Primitive(PrimitiveType::Long),
-                        true,
-                    ),
+                    StructField::new("data", DataType::Primitive(PrimitiveType::Binary), true),
+                    StructField::new("number", DataType::Primitive(PrimitiveType::Long), true),
                 ])?
                 .fields()
                 .cloned(),

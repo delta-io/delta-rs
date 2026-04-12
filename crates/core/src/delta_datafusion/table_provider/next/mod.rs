@@ -396,10 +396,6 @@ impl TableProvider for DeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        eprintln!(
-            "[DEBUG] DeltaScan::scan called with projection: {:?}",
-            projection
-        );
         let engine = DataFusionEngine::new_from_session(session);
 
         // Filter out file_id column from projection if present

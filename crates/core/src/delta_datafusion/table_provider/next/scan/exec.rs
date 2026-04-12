@@ -446,10 +446,7 @@ impl DeltaScanStream {
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,
-                Some((
-                    file_id_col,
-                    file_id_field(Some(file_id_column)),
-                )),
+                Some((file_id_col, file_id_field(Some(file_id_column)))),
                 &mut self.schema_adapter,
             )
         } else {
@@ -1260,13 +1257,8 @@ mod tests {
             false,
         )?;
 
-        let mut stream = test_scan_stream(
-            scan_plan,
-            kernel_type,
-            selection_vectors,
-            vec![batch],
-            None,
-        );
+        let mut stream =
+            test_scan_stream(scan_plan, kernel_type, selection_vectors, vec![batch], None);
 
         let batch1 = stream.next().await.transpose()?.expect("first batch");
         let batch2 = stream.next().await.transpose()?.expect("second batch");

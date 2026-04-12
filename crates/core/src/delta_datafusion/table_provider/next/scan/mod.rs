@@ -87,7 +87,8 @@ pub(super) async fn execution_plan(
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
     let table_schema = config.table_schema(scan_plan.table_configuration())?;
-    let projected_file_id_column = config.projected_file_id_column(projection, table_schema.as_ref());
+    let projected_file_id_column =
+        config.projected_file_id_column(projection, table_schema.as_ref());
     if scan_plan.is_metadata_only() {
         let map_file = |f: &ScanFileContext| {
             Ok((
@@ -456,9 +457,6 @@ async fn get_read_plan(
     let full_read_schema = Arc::new(full_read_schema.finish());
     let full_read_df_schema = full_read_schema.clone().to_dfschema()?;
 
-    let adapter_factory =
-        Arc::new(datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory {});
-
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
             state.runtime_env().object_store(&store_url)?,
@@ -482,10 +480,10 @@ async fn get_read_plan(
         if !has_selection_vectors && let Some(pred) = predicate {
             // Predicate pushdown can reference the synthetic file-id partition column.
             // Use the full read schema (data columns + file-id) when planning.
-            let adapted_physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
+            let physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
 
             file_source = file_source
-                .with_predicate(adapted_physical)
+                .with_predicate(physical)
                 .with_pushdown_filters(true);
         }
 
@@ -497,7 +495,6 @@ async fn get_read_plan(
             .with_file_groups(file_groups)
             .with_statistics(statistics)
             .with_limit(limit)
-            .with_expr_adapter(Some(adapter_factory.clone() as _))
             .build();
 
         plans.push(DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>);
@@ -548,7 +545,6 @@ fn finalize_transformed_batch(
             columns,
         )?)
     } else {
-        println!("FINAL BATCH SCHEMA LEN: {}", result.schema().fields().len());
         Ok(result)
     }
 }
