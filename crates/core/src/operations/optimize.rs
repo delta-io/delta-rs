@@ -728,10 +728,9 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
         table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::common::Column;
         use datafusion::functions::core::expr_ext::FieldAccessor;
         use datafusion::logical_expr::expr::ScalarFunction;
-        use datafusion::logical_expr::{Expr, ScalarUDF};
+        use datafusion::logical_expr::{Expr, ScalarUDF, ident};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
@@ -742,7 +741,7 @@ impl MergePlan {
             .map(|col_name| {
                 let mut segments = col_name.split('.');
                 let first = segments.next().expect("column name cannot be empty");
-                let mut expr = Expr::Column(Column::new_unqualified(first));
+                let mut expr = ident(first);
                 for segment in segments {
                     expr = expr.field(segment);
                 }
