@@ -487,16 +487,19 @@ impl TableProvider for DeltaScan {
 }
 
 #[cfg(test)]
-mod test_bug;
-
-#[cfg(test)]
 mod tests {
     use arrow::{
-        array::Int64Array,
-        datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+        array::{Date32Array, Int64Array, TimestampMillisecondArray},
+        datatypes::{
+            DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+        },
         record_batch::RecordBatch,
     };
-    use arrow_array::{DictionaryArray, UInt16Array, types::UInt16Type};
+    use arrow_array::{
+        DictionaryArray, UInt16Array,
+        builder::{BinaryDictionaryBuilder, StringDictionaryBuilder},
+        types::UInt16Type,
+    };
     use datafusion::{
         catalog::Session,
         datasource::MemTable,
@@ -509,9 +512,10 @@ mod tests {
     use futures::{StreamExt as _, TryStreamExt as _};
     use parquet::file::reader::FileReader as _;
     use parquet::file::serialized_reader::SerializedFileReader;
-    use std::fs::File;
+    use std::{fs::File, sync::Arc};
     use url::Url;
 
+    use super::*;
     use crate::{
         assert_batches_sorted_eq,
         delta_datafusion::{DeltaScanConfig, session::create_session},
@@ -519,15 +523,15 @@ mod tests {
             Action, DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType,
         },
         logstore::get_actions,
+        operations::create::CreateBuilder,
         test_utils::{
             TestResult, TestTables,
             object_store::{
                 drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
             },
+            open_fs_path,
         },
     };
-
-    use super::*;
 
     /// Extracts fields from the parquet scan
     #[derive(Default)]
@@ -1360,6 +1364,235 @@ mod tests {
 
         let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert_eq!(deletion_vectors, expected);
+
+        Ok(())
+    }
+
+    fn multi_partitioned_override_schema() -> Arc<ArrowSchema> {
+        Arc::new(ArrowSchema::new(vec![
+            ArrowField::new(
+                "letter",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                true,
+            ),
+            ArrowField::new("date", ArrowDataType::Date32, true),
+            ArrowField::new(
+                "data",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt16),
+                    Box::new(ArrowDataType::Binary),
+                ),
+                true,
+            ),
+            ArrowField::new(
+                "number",
+                ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]))
+    }
+
+    async fn provider_for_partitioned_table() -> TestResult<(
+        crate::DeltaTable,
+        Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
+    )> {
+        let mut table =
+            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        table.load().await.unwrap();
+
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
+            table.snapshot().unwrap().snapshot().clone(),
+            DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+        )?
+        .with_log_store(table.log_store());
+
+        Ok((table, Arc::new(provider)))
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_config_schema_override_scan() -> TestResult {
+        let (_table, provider) = provider_for_partitioned_table().await?;
+
+        let ctx = create_session().into_inner();
+        ctx.register_table("test_table", provider).unwrap();
+
+        let df = ctx.sql("SELECT number FROM test_table").await.unwrap();
+        let batches = df.collect().await.unwrap();
+
+        assert_eq!(batches[0].columns().len(), 1);
+        assert_eq!(
+            batches[0].schema().fields()[0].data_type(),
+            &ArrowDataType::Timestamp(TimeUnit::Millisecond, None)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_config_schema_override_filter() -> TestResult {
+        let (_table, provider) = provider_for_partitioned_table().await?;
+
+        let ctx = create_session().into_inner();
+        ctx.register_table("test_table", provider).unwrap();
+
+        let df = ctx
+            .sql("SELECT * FROM test_table WHERE number < '1970-01-01T00:00:00.007'")
+            .await
+            .unwrap();
+        let batches = df.collect().await?;
+
+        assert_eq!(batches[0].num_rows(), 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_config_schema_override_filter_aggregate() -> TestResult {
+        let (_table, provider) = provider_for_partitioned_table().await?;
+
+        let ctx = create_session().into_inner();
+        ctx.register_table("test_table", provider)?;
+        let query = "SELECT count(1) c, max(number) fake_ts FROM test_table WHERE letter != 'a' and number < '2020-01-01T00:00:00Z'";
+        let df = ctx.sql(query).await?;
+        let batches = df.collect().await?;
+        datafusion::assert_batches_eq!(
+            [
+                "+---+-------------------------+",
+                "| c | fake_ts                 |",
+                "+---+-------------------------+",
+                "| 2 | 1970-01-01T00:00:00.007 |",
+                "+---+-------------------------+",
+            ],
+            &batches
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_config_schema_override_insert() -> TestResult {
+        let (_partitioned_table, provider) = provider_for_partitioned_table().await?;
+        let logical_schema = provider.schema();
+
+        let table_dir = tempfile::tempdir()?;
+        let table = CreateBuilder::new()
+            .with_location(table_dir.path().to_str().unwrap())
+            .with_columns(
+                StructType::try_new(vec![
+                    StructField::new(
+                        "letter",
+                        delta_kernel::schema::DataType::Primitive(
+                            delta_kernel::schema::PrimitiveType::String,
+                        ),
+                        true,
+                    ),
+                    StructField::new("date", delta_kernel::schema::DataType::DATE, true),
+                    StructField::new(
+                        "data",
+                        delta_kernel::schema::DataType::Primitive(
+                            delta_kernel::schema::PrimitiveType::Binary,
+                        ),
+                        true,
+                    ),
+                    StructField::new(
+                        "number",
+                        delta_kernel::schema::DataType::Primitive(
+                            delta_kernel::schema::PrimitiveType::Long,
+                        ),
+                        true,
+                    ),
+                ])?
+                .fields()
+                .cloned(),
+            )
+            .await?;
+
+        let provider = Arc::new(
+            crate::delta_datafusion::table_provider::next::DeltaScan::new(
+                table.snapshot().unwrap().snapshot().clone(),
+                DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+            )?
+            .with_log_store(table.log_store()),
+        );
+
+        let ctx = create_session().into_inner();
+        ctx.register_table("test_table", provider.clone())?;
+        let state = ctx.state();
+
+        let mut dict_builder = StringDictionaryBuilder::<UInt16Type>::new();
+        dict_builder.append("a")?;
+        let mut bin_builder = BinaryDictionaryBuilder::<UInt16Type>::new();
+        bin_builder.append(b"hello")?;
+
+        let batch = RecordBatch::try_new(
+            logical_schema.clone(),
+            vec![
+                Arc::new(dict_builder.finish()),
+                Arc::new(Date32Array::from(vec![0])),
+                Arc::new(bin_builder.finish()),
+                Arc::new(TimestampMillisecondArray::from(vec![2000])),
+            ],
+        )?;
+
+        let mem_table = MemTable::try_new(logical_schema.clone(), vec![vec![batch]])?;
+        let input = mem_table.scan(&state, None, &[], None).await?;
+
+        let write_plan = provider
+            .insert_into(&state, input, InsertOp::Append)
+            .await?;
+
+        let batches = collect_partitioned(write_plan, ctx.task_ctx()).await?;
+
+        datafusion::assert_batches_eq!(
+            [
+                "+-------+",
+                "| count |",
+                "+-------+",
+                "| 1     |",
+                "+-------+",
+            ],
+            &batches[0]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_config_file_column_projection() -> TestResult {
+        let mut table =
+            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        table.load().await?;
+        let provider = Arc::new(
+            crate::delta_datafusion::table_provider::next::DeltaScan::new(
+                table.snapshot()?.snapshot().clone(),
+                DeltaScanConfig::default()
+                    .with_schema(multi_partitioned_override_schema())
+                    .with_file_column_name("my_files"),
+            )?
+            .with_log_store(table.log_store()),
+        );
+
+        let ctx = create_session().into_inner();
+        ctx.register_table("test_table", provider)?;
+
+        let df = ctx
+            .sql("SELECT * EXCEPT (my_files) FROM test_table")
+            .await?;
+        let batches = df.collect().await?;
+        let schema = batches[0].schema();
+
+        assert_eq!(schema.fields().len(), 4);
+        assert!(schema.column_with_name("my_files").is_none(),);
+
+        let df_file = ctx.sql("SELECT data, my_files FROM test_table").await?;
+        let batches_file = df_file.collect().await?;
+        let schema_file = batches_file[0].schema();
+
+        assert_eq!(schema_file.fields().len(), 2);
+        assert!(schema_file.column_with_name("my_files").is_some());
 
         Ok(())
     }
