@@ -482,6 +482,9 @@ impl TableProvider for DeltaScan {
 }
 
 #[cfg(test)]
+mod test_bug;
+
+#[cfg(test)]
 mod tests {
     use arrow::{
         array::Int64Array,
