@@ -17,11 +17,13 @@ use arrow_array::{Array, BooleanArray};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -337,11 +339,49 @@ impl ExecutionPlan for DeltaScanExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
+        // With schema overrides, DataFusion builds a FilterExec above DeltaScanExec and then
+        // re-pushes that physical predicate into the child scan. If an overridden column's
+        // output type differs from the child input type, simplification/coercion runs against
+        // incompatible physical types and the pushed-down predicate can fail to plan.
+        if parent_filters.iter().any(|filter| {
+            filter_references_type_mismatch(
+                filter,
+                &self.scan_plan.result_schema,
+                &self.input.schema(),
+            )
+        }) {
+            return Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            ));
+        }
+
         // TODO(roeap): this will likely not do much for column mapping enabled tables
         // since the default methods determines this based on existence of columns in child
         // schemas. In the case of column mapping all columns will have a different name.
         FilterDescription::from_children(parent_filters, &self.children())
     }
+}
+
+fn filter_references_type_mismatch(
+    filter: &Arc<dyn PhysicalExpr>,
+    result_schema: &SchemaRef,
+    input_schema: &SchemaRef,
+) -> bool {
+    filter
+        .exists(|expr| {
+            Ok(
+                if let Some(column) = expr.as_any().downcast_ref::<Column>()
+                    && let Ok(result_field) = result_schema.field_with_name(column.name())
+                    && let Ok(input_field) = input_schema.field_with_name(column.name())
+                {
+                    result_field.data_type() != input_field.data_type()
+                } else {
+                    false
+                },
+            )
+        })
+        .unwrap_or(false)
 }
 
 /// Stream that produces logical RecordBatches from a Delta table scan.

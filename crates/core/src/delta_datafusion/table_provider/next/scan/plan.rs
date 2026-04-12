@@ -386,7 +386,16 @@ pub(crate) fn supports_filters_pushdown(
         && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     filter
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled).pushdown)
+        .map(|f| {
+            process_predicate(
+                f,
+                config,
+                scan_config,
+                file_id_field,
+                parquet_pushdown_enabled,
+            )
+            .pushdown
+        })
         .collect()
 }
 
@@ -414,7 +423,15 @@ fn process_filters(
         && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled))
+        .map(|f| {
+            process_predicate(
+                f,
+                config,
+                scan_config,
+                file_id_field,
+                parquet_pushdown_enabled,
+            )
+        })
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
     let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
@@ -441,6 +458,7 @@ struct ProcessedPredicate<'a> {
 fn process_predicate<'a>(
     expr: &'a Expr,
     config: &TableConfiguration,
+    scan_config: &DeltaScanConfig,
     file_id_column: &str,
     parquet_pushdown_enabled: bool,
 ) -> ProcessedPredicate<'a> {
@@ -501,6 +519,33 @@ fn process_predicate<'a>(
             parquet_predicate: None,
         };
     }
+
+    // Reject filters on filters that would be pushed down with wrong data type
+    // forom an overridden schema
+    if let (Some(override_schema), Ok(table_schema)) = (
+        scan_config.schema.as_ref(),
+        delta_kernel::engine::arrow_conversion::TryIntoArrow::<Schema>::try_into_arrow(
+            config.physical_schema().as_ref(),
+        ),
+    ) {
+        let has_override_type_mismatch = expr.column_refs().iter().any(|c| {
+            if let (Ok(outer_field), Ok(table_field)) = (
+                table_schema.field_with_name(c.name.as_str()),
+                override_schema.field_with_name(&c.name),
+            ) {
+                outer_field.data_type() != table_field.data_type()
+            } else {
+                false
+            }
+        });
+        if has_override_type_mismatch {
+            return ProcessedPredicate {
+                pushdown: TableProviderFilterPushDown::Unsupported,
+                kernel_predicate: None,
+                parquet_predicate: None,
+            };
+        }
+    };
 
     ProcessedPredicate {
         pushdown: TableProviderFilterPushDown::Inexact,
