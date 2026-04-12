@@ -55,7 +55,9 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{Action, Add, PartitionsExt, Remove, Version, scalars::ScalarExt};
+use crate::kernel::{
+    Action, Add, DataType, PartitionsExt, Remove, StructType, Version, scalars::ScalarExt,
+};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::parquet_utils::default_writer_properties;
@@ -726,9 +728,9 @@ impl MergePlan {
         context: Arc<zorder::ZOrderExecContext>,
         table_provider: DeltaTableProvider,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::common::Column;
+        use datafusion::functions::core::expr_ext::FieldAccessor;
         use datafusion::logical_expr::expr::ScalarFunction;
-        use datafusion::logical_expr::{Expr, ScalarUDF};
+        use datafusion::logical_expr::{Expr, ScalarUDF, ident};
 
         let provider = table_provider.with_files(files.files);
         let df = context.ctx.read_table(Arc::new(provider))?;
@@ -736,7 +738,15 @@ impl MergePlan {
         let cols = context
             .columns
             .iter()
-            .map(|col| Expr::Column(Column::from_qualified_name_ignore_case(col)))
+            .map(|col_name| {
+                let mut segments = col_name.split('.');
+                let first = segments.next().expect("column name cannot be empty");
+                let mut expr = ident(first);
+                for segment in segments {
+                    expr = expr.field(segment);
+                }
+                expr
+            })
             .collect_vec();
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(ScalarUDF::from(zorder::datafusion::ZOrderUDF)),
@@ -1235,6 +1245,31 @@ async fn build_compaction_plan(
     ))
 }
 
+/// Validates that a z-order column path exists in the schema, supporting nested
+/// struct fields via dot notation (e.g., "meta.field_a").
+fn validate_zorder_column(schema: &StructType, column: &str) -> Result<(), DeltaTableError> {
+    let mut segments = column.split('.').peekable();
+    let mut current_struct = schema;
+    while let Some(segment) = segments.next() {
+        let field = current_struct.field(segment).ok_or_else(|| {
+            DeltaTableError::Generic(format!(
+                "Z-order column \"{column}\": field \"{segment}\" not found in schema"
+            ))
+        })?;
+        if segments.peek().is_some() {
+            match field.data_type() {
+                DataType::Struct(inner) => current_struct = inner,
+                _ => {
+                    return Err(DeltaTableError::Generic(format!(
+                        "Z-order column \"{column}\": \"{segment}\" is not a struct type"
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn build_zorder_plan(
     log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
@@ -1257,19 +1292,8 @@ async fn build_zorder_plan(
             "Z-order columns cannot be partition columns. Found: {zorder_partition_cols:?}"
         )));
     }
-    let field_names = snapshot
-        .schema()
-        .fields()
-        .map(|field| field.name().to_string())
-        .collect_vec();
-    let unknown_columns = zorder_columns
-        .iter()
-        .filter(|col| !field_names.contains(col))
-        .collect_vec();
-    if !unknown_columns.is_empty() {
-        return Err(DeltaTableError::Generic(format!(
-            "Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"
-        )));
+    for col in &zorder_columns {
+        validate_zorder_column(snapshot.schema().as_ref(), col)?;
     }
 
     // For now, just be naive and optimize all files in each selected partition.
