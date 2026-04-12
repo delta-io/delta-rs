@@ -287,9 +287,13 @@ impl DeltaScan {
     pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
         let snapshot = snapshot.into();
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
-        let full_schema = if config.retain_file_id() {
+        let full_schema = if let Some(file_id_column) =
+            config.projected_file_id_column(None, scan_schema.as_ref())
+        {
             let mut fields = scan_schema.fields().to_vec();
-            fields.push(config.file_id_field());
+            fields.push(crate::delta_datafusion::file_id::file_id_field(Some(
+                file_id_column,
+            )));
             Arc::new(Schema::new(fields))
         } else {
             scan_schema.clone()

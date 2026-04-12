@@ -195,9 +195,13 @@ impl KernelScanPlan {
         result_projection: Option<Vec<usize>>,
         parquet_predicate: Option<Expr>,
     ) -> Result<Self> {
-        let output_schema = if config.retain_file_id() {
+        let output_schema = if let Some(file_id_column) =
+            config.projected_file_id_column(None, result_schema.as_ref())
+        {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
-            schema_builder.push(config.file_id_field());
+            schema_builder.push(crate::delta_datafusion::file_id::file_id_field(Some(
+                file_id_column,
+            )));
             Arc::new(schema_builder.finish())
         } else {
             result_schema.clone()
@@ -234,8 +238,17 @@ impl DeltaScanConfig {
         crate::delta_datafusion::file_id::file_id_field(self.file_column_name.as_deref())
     }
 
-    pub(crate) fn retain_file_id(&self) -> bool {
-        self.file_column_name.is_some()
+    pub(crate) fn projected_file_id_column<'a>(
+        &'a self,
+        projection: Option<&Vec<usize>>,
+        result_schema: &Schema,
+    ) -> Option<&'a str> {
+        let name = self.file_column_name.as_deref()?;
+        let Some(projection) = projection else {
+            return Some(name);
+        };
+        let file_id_idx = result_schema.fields().len();
+        projection.iter().any(|&idx| idx == file_id_idx).then_some(name)
     }
 
     /// The physical arrow schema exposed by the table provider

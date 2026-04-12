@@ -42,9 +42,7 @@ use datafusion_datasource::{
     PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
-use datafusion_physical_expr_adapter::{
-    BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
-};
+use datafusion_physical_expr_adapter::{BatchAdapter, BatchAdapterFactory};
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
 };
@@ -63,7 +61,7 @@ use crate::{
     delta_datafusion::{
         DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
-        file_id::wrap_file_id_value,
+        file_id::{FILE_ID_COLUMN_DEFAULT, file_id_field, wrap_file_id_value},
         table_provider::next::DeletionVectorSelection,
     },
 };
@@ -88,7 +86,8 @@ pub(super) async fn execution_plan(
     let (files, transforms, dvs, metrics) =
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
-    let file_id_field = config.file_id_field();
+    let table_schema = config.table_schema(scan_plan.table_configuration())?;
+    let projected_file_id_column = config.projected_file_id_column(projection, table_schema.as_ref());
     if scan_plan.is_metadata_only() {
         let map_file = |f: &ScanFileContext| {
             Ok((
@@ -110,43 +109,18 @@ pub(super) async fn execution_plan(
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
-            let retain_file_ids = if let Some(proj) = projection {
-                let file_id_idx = config.file_column_name.as_ref().map(|_| {
-                    config
-                        .table_schema(scan_plan.table_configuration())
-                        .unwrap()
-                        .fields()
-                        .len()
-                });
-                proj.iter().any(|&idx| Some(idx) == file_id_idx)
-            } else {
-                config.retain_file_id()
-            };
-
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
-                retain_file_ids.then_some(file_id_field),
+                projected_file_id_column.map(|name| file_id_field(Some(name))),
                 metrics,
             );
             return Ok(Arc::new(exec) as _);
         }
     }
 
-    let retain_file_id = if let Some(proj) = projection {
-        let file_id_idx = config.file_column_name.as_ref().map(|_| {
-            config
-                .table_schema(scan_plan.table_configuration())
-                .unwrap()
-                .fields()
-                .len()
-        });
-        proj.iter().any(|&idx| Some(idx) == file_id_idx)
-    } else {
-        config.retain_file_id()
-    };
     get_data_scan_plan(
         session,
         scan_plan,
@@ -155,8 +129,7 @@ pub(super) async fn execution_plan(
         dvs,
         metrics,
         limit,
-        file_id_field,
-        retain_file_id,
+        projected_file_id_column,
     )
     .await
 }
@@ -327,8 +300,7 @@ async fn get_data_scan_plan(
     dvs: DashMap<String, Vec<bool>>,
     metrics: ExecutionPlanMetricsSet,
     limit: Option<usize>,
-    file_id_field: FieldRef,
-    retain_file_ids: bool,
+    projected_file_id_column: Option<&str>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -379,15 +351,13 @@ async fn get_data_scan_plan(
     } else {
         scan_plan.parquet_predicate.as_ref()
     };
-    let file_id_column = file_id_field.name().clone();
     let pq_plan = get_read_plan(
         session,
         files_by_store,
         &scan_plan.parquet_read_schema,
         limit,
-        &file_id_field,
+        &file_id_field(Some(FILE_ID_COLUMN_DEFAULT)),
         predicate,
-        Some(&scan_plan.result_schema),
     )
     .await?;
 
@@ -397,8 +367,7 @@ async fn get_data_scan_plan(
         Arc::new(transforms),
         Arc::new(dvs),
         partition_stats,
-        file_id_column,
-        retain_file_ids,
+        projected_file_id_column.map(ToOwned::to_owned),
         metrics,
     );
 
@@ -474,7 +443,6 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
-    logical_schema: Option<&SchemaRef>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
@@ -512,22 +480,9 @@ async fn get_read_plan(
         // interfere with other delta features like row ids.
         let has_selection_vectors = files.iter().any(|(_, sv)| sv.is_some());
         if !has_selection_vectors && let Some(pred) = predicate {
-            let df_schema_to_use = if let Some(ls) = logical_schema {
-                ls.clone().to_dfschema()?
-            } else {
-                full_read_df_schema.clone()
-            };
-
             // Predicate pushdown can reference the synthetic file-id partition column.
             // Use the full read schema (data columns + file-id) when planning.
-            let physical = state.create_physical_expr(pred.clone(), &df_schema_to_use)?;
-
-            let adapted_physical = if let Some(ls) = logical_schema {
-                let adapter = adapter_factory.create(ls.clone(), full_read_schema.clone())?;
-                adapter.rewrite(physical.clone()).unwrap_or(physical)
-            } else {
-                physical
-            };
+            let adapted_physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
 
             file_source = file_source
                 .with_predicate(adapted_physical)
@@ -955,7 +910,6 @@ mod tests {
             None,
             &file_id_field,
             None,
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -977,7 +931,6 @@ mod tests {
             &arrow_schema,
             Some(1),
             &file_id_field,
-            None,
             None,
         )
         .await?;
@@ -1003,7 +956,6 @@ mod tests {
             &arrow_schema_extended,
             Some(1),
             &file_id_field,
-            None,
             None,
         )
         .await?;
@@ -1079,7 +1031,6 @@ mod tests {
             None,
             &file_id_field,
             None,
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1114,7 +1065,6 @@ mod tests {
             &arrow_schema_extended,
             None,
             &file_id_field,
-            None,
             None,
         )
         .await?;
@@ -1211,7 +1161,6 @@ mod tests {
             None,
             &file_id_field,
             None,
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1276,7 +1225,6 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1350,7 +1298,6 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1424,7 +1371,6 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1500,7 +1446,6 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
-            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;

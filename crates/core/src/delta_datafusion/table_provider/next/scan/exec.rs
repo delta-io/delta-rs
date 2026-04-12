@@ -34,6 +34,7 @@ use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
 use super::plan::KernelScanPlan;
+use crate::delta_datafusion::file_id::{FILE_ID_COLUMN_DEFAULT, file_id_field};
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 
@@ -110,12 +111,10 @@ pub struct DeltaScanExec {
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Column name for the file id
-    file_id_column: String,
+    /// User-visible file-id column name when projected in the output.
+    file_id_column: Option<String>,
     /// plan properties
     properties: Arc<PlanProperties>,
-    /// Denotes if file ids should be returned as part of the output
-    retain_file_ids: bool,
     /// Aggregated partition column statistics
     partition_stats: HashMap<String, ColumnStatistics>,
 }
@@ -127,7 +126,11 @@ impl DisplayAs for DeltaScanExec {
             DisplayFormatType::Default
             | DisplayFormatType::Verbose
             | DisplayFormatType::TreeRender => {
-                write!(f, "DeltaScanExec: file_id_column={}", self.file_id_column)
+                write!(f, "DeltaScanExec")?;
+                if let Some(file_id_column) = &self.file_id_column {
+                    write!(f, ": file_id_column={file_id_column}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -140,11 +143,10 @@ impl DeltaScanExec {
         transforms: Arc<HashMap<String, ExpressionRef>>,
         selection_vectors: Arc<DashMap<String, Vec<bool>>>,
         partition_stats: HashMap<String, ColumnStatistics>,
-        file_id_column: String,
-        retain_file_ids: bool,
+        file_id_column: Option<String>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let output_schema = if retain_file_ids {
+        let output_schema = if file_id_column.is_some() {
             scan_plan.output_schema.clone()
         } else {
             scan_plan.result_schema.clone()
@@ -163,7 +165,6 @@ impl DeltaScanExec {
             partition_stats,
             metrics,
             file_id_column,
-            retain_file_ids,
             properties,
         }
     }
@@ -264,7 +265,6 @@ impl ExecutionPlan for DeltaScanExec {
             self.selection_vectors.clone(),
             self.partition_stats.clone(),
             self.file_id_column.clone(),
-            self.retain_file_ids,
             self.metrics.clone(),
         )))
     }
@@ -297,7 +297,6 @@ impl ExecutionPlan for DeltaScanExec {
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_column: self.file_id_column.clone(),
-            return_file_ids: self.retain_file_ids,
             pending: VecDeque::new(),
             schema_adapter: super::SchemaAdapter::new(Arc::clone(&self.scan_plan.result_schema)),
         }))
@@ -369,10 +368,8 @@ struct DeltaScanStream {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
-    /// Column name for the file id
-    file_id_column: String,
-    /// Denotes if file ids should be returned as part of the output
-    return_file_ids: bool,
+    /// User-visible file-id column name when projected in the output.
+    file_id_column: Option<String>,
     pending: VecDeque<RecordBatch>,
     /// Cached schema adapter for efficient batch adaptation across batches
     schema_adapter: super::SchemaAdapter,
@@ -391,7 +388,7 @@ impl DeltaScanStream {
             ))]);
         }
 
-        let file_id_idx = file_id_column_idx(&batch, &self.file_id_column)?;
+        let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
         let file_runs = split_by_file_id_runs(&batch, file_id_idx)?;
 
         let mut results = Vec::with_capacity(file_runs.len());
@@ -427,7 +424,6 @@ impl DeltaScanStream {
             batch
         };
 
-        let file_id_field = batch.schema_ref().field(file_id_idx).clone();
         let file_id_col = batch.remove_column(file_id_idx);
 
         let result = if let Some(transform) = self.transforms.get(&file_id) {
@@ -446,11 +442,14 @@ impl DeltaScanStream {
             batch
         };
 
-        if self.return_file_ids {
+        if let Some(file_id_column) = &self.file_id_column {
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,
-                Some((file_id_col, Arc::new(file_id_field))),
+                Some((
+                    file_id_col,
+                    file_id_field(Some(file_id_column)),
+                )),
                 &mut self.schema_adapter,
             )
         } else {
@@ -507,7 +506,7 @@ impl Stream for DeltaScanStream {
 
 impl RecordBatchStream for DeltaScanStream {
     fn schema(&self) -> SchemaRef {
-        if self.return_file_ids {
+        if self.file_id_column.is_some() {
             Arc::clone(&self.scan_plan.output_schema)
         } else {
             Arc::clone(&self.scan_plan.result_schema)
@@ -676,7 +675,7 @@ mod tests {
 
         let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some());
-        assert!(downcast.unwrap().retain_file_ids);
+        assert_eq!(downcast.unwrap().file_id_column.as_deref(), Some("file_id"));
 
         let data = collect_partitioned(scan, session.task_ctx())
             .await?
@@ -776,7 +775,7 @@ mod tests {
 
         let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some());
-        assert!(!downcast.unwrap().retain_file_ids);
+        assert!(downcast.unwrap().file_id_column.is_none());
 
         let data = collect_partitioned(scan, session.task_ctx())
             .await?
@@ -1178,7 +1177,7 @@ mod tests {
         kernel_type: KernelDataType,
         selection_vectors: Arc<DashMap<String, Vec<bool>>>,
         input_batches: Vec<RecordBatch>,
-        return_file_ids: bool,
+        file_id_column: Option<String>,
     ) -> DeltaScanStream {
         use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 
@@ -1200,8 +1199,7 @@ mod tests {
             baseline_metrics: BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
             transforms: Arc::new(HashMap::new()),
             selection_vectors,
-            file_id_column: FILE_ID_COLUMN_DEFAULT.to_string(),
-            return_file_ids,
+            file_id_column,
             pending: VecDeque::new(),
             schema_adapter,
         }
@@ -1231,7 +1229,7 @@ mod tests {
             kernel_type,
             selection_vectors,
             Vec::new(),
-            false,
+            None,
         );
 
         let outputs = stream.batch_project(batch)?;
@@ -1267,7 +1265,7 @@ mod tests {
             kernel_type,
             selection_vectors,
             vec![batch],
-            false,
+            None,
         );
 
         let batch1 = stream.next().await.transpose()?.expect("first batch");
@@ -1302,7 +1300,7 @@ mod tests {
             kernel_type,
             selection_vectors,
             Vec::new(),
-            false,
+            None,
         );
 
         let outputs = stream.batch_project(batch)?;
@@ -1428,8 +1426,13 @@ mod tests {
             false,
         )?;
 
-        let mut stream =
-            test_scan_stream(scan_plan, kernel_type, selection_vectors, vec![batch], true);
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            selection_vectors,
+            vec![batch],
+            Some(FILE_ID_COLUMN_DEFAULT.to_string()),
+        );
 
         let batch1 = stream.next().await.transpose()?.expect("first batch");
         let batch2 = stream.next().await.transpose()?.expect("second batch");
