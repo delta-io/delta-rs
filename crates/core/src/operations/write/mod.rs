@@ -409,6 +409,8 @@ impl WriteBuilder {
 
                 if self.schema_mode.is_none() {
                     PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                    #[cfg(feature = "nanosecond-timestamps")]
+                    PROTOCOL.check_can_write_timestamp_nanos(snapshot, &schema)?;
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {
@@ -2752,8 +2754,19 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "nanosecond-timestamps"))]
     #[tokio::test]
     async fn test_write_timestamp_ns_normalizes_to_us() {
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Microsecond).await;
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[tokio::test]
+    async fn test_write_timestamp_ns_stays_ns() {
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Nanosecond).await;
+    }
+
+    async fn test_write_timestamp_ns_maybe_normalization(unit: TimeUnit) {
         use arrow_array::TimestampNanosecondArray;
 
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -2785,7 +2798,7 @@ mod tests {
         let result_field = schema.field_with_name("ts").unwrap();
         assert_eq!(
             result_field.data_type(),
-            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            &DataType::Timestamp(unit, Some("UTC".into())),
         );
     }
 

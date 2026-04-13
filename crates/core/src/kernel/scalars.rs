@@ -76,6 +76,11 @@ impl ScalarExt for Scalar {
             Self::Float(f) => f.to_string(),
             Self::Double(d) => d.to_string(),
             Self::Boolean(b) => if *b { "true" } else { "false" }.to_string(),
+            #[cfg(feature = "nanosecond-timestamps")]
+            Self::TimestampNanos(ts) => {
+                let ts = Utc.timestamp_nanos(*ts);
+                ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string()
+            }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
@@ -231,6 +236,11 @@ impl ScalarExt for Scalar {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .map(|v| checked(v, index, Self::Timestamp(v.value(index)))),
+            #[cfg(feature = "nanosecond-timestamps")]
+            Timestamp(TimeUnit::Nanosecond, Some(tz)) if tz.eq_ignore_ascii_case("utc") => arr
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .map(|v| checked(v, index, Self::TimestampNanos(v.value(index)))),
             Struct(fields) => {
                 let struct_fields = fields
                     .iter()
@@ -312,6 +322,11 @@ impl ScalarExt for Scalar {
             Self::Float(f) => Value::Number(serde_json::Number::from_f64(*f as f64).unwrap()),
             Self::Double(d) => Value::Number(serde_json::Number::from_f64(*d).unwrap()),
             Self::Boolean(b) => Value::Bool(*b),
+            #[cfg(feature = "nanosecond-timestamps")]
+            Self::TimestampNanos(ts) => {
+                let ts = Utc.timestamp_nanos(*ts);
+                Value::String(ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string())
+            }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
                 Value::String(ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
@@ -454,6 +469,15 @@ mod tests {
         assert_eq!(scalar.serialize(), scalar_ntz.serialize());
     }
 
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[test]
+    fn test_scalar_serialize_timestamp_nanos() {
+        let timestamp_nanos = 1672574400000000456; // 2023-01-01 12:00:00.000000456 UTC
+        let scalar = Scalar::TimestampNanos(timestamp_nanos);
+        let serialized = scalar.serialize();
+        assert_eq!(serialized, "2023-01-01 12:00:00.000000456");
+    }
+
     #[test]
     fn test_scalar_serialize_date() {
         // Test date (days since epoch)
@@ -576,6 +600,19 @@ mod tests {
         assert!(scalar.is_null());
     }
 
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[test]
+    fn test_scalar_from_array_timestamp_nanos() {
+        let array = TimestampNanosecondArray::from(vec![Some(1672574400000000456), None])
+            .with_timezone("UTC");
+
+        let scalar = Scalar::from_array(&array, 0).unwrap();
+        assert_eq!(scalar, Scalar::TimestampNanos(1672574400000000456));
+
+        let scalar = Scalar::from_array(&array, 1).unwrap();
+        assert!(scalar.is_null());
+    }
+
     #[test]
     fn test_scalar_from_array_date() {
         let array = Date32Array::from(vec![Some(19358), None]); // 2023-01-01
@@ -635,6 +672,30 @@ mod tests {
         match json_val {
             serde_json::Value::String(s) => {
                 assert!(s.starts_with("2023-01-01 12:00:00"));
+            }
+            _ => panic!("Expected string value for timestamp"),
+        }
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[test]
+    fn test_scalar_to_json_timestamp_nanos() {
+        let timestamp_nanos = 1672574400000000000; // 2023-01-01 12:00:00 UTC
+        let scalar = Scalar::TimestampNanos(timestamp_nanos);
+        let json_val = scalar.to_json();
+
+        match json_val {
+            serde_json::Value::String(s) => {
+                assert_eq!(s, "2023-01-01 12:00:00.000000000");
+            }
+            _ => panic!("Expected string value for timestamp"),
+        }
+        let scalar = Scalar::TimestampNanos(timestamp_nanos + 123);
+        let json_val = scalar.to_json();
+
+        match json_val {
+            serde_json::Value::String(s) => {
+                assert_eq!(s, "2023-01-01 12:00:00.000000123");
             }
             _ => panic!("Expected string value for timestamp"),
         }
