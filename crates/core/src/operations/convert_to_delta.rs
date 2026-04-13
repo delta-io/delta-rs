@@ -1066,7 +1066,7 @@ mod tests {
                         | crate::kernel::DataType::Primitive(
                             crate::kernel::PrimitiveType::TimestampNtz
                         )
-                ) && maybe_nano(f.data_type())
+                ) || maybe_nano(f.data_type())
             })
             .collect();
 
