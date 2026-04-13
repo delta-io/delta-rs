@@ -123,6 +123,9 @@ cloud = ["object_store/cloud", "dep:humantime"]
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
 
+# Experimental support for nanosecond timestamps primitive type
+nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]
+
 integration_test = []
 
 [[test]]

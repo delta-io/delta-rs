@@ -47,9 +47,15 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
         ),
         (
             Schema(
-                fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
+                fields=[Field("foo", DataType.timestamp("us", tz="Europe/Amsterdam"))]
             ),
             Schema(fields=[Field("foo", DataType.timestamp("us", tz="UTC"))]),
+        ),
+        (
+            Schema(
+                fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
+            ),
+            Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
         ),
         # Nullability variations
         (
@@ -398,7 +404,7 @@ def test_merge_casting_table_provider(tmp_path):
         {
             "a": 1,
             "ts": pd.date_range(
-                "2021-01-01", "2021-01-02", freq="h", tz="America/Chicago"
+                "2021-01-01", "2021-01-02", freq="h", tz="America/Chicago", unit="us"
             ),
         }
     )
@@ -408,7 +414,7 @@ def test_merge_casting_table_provider(tmp_path):
         {
             "a": 2,
             "ts": pd.date_range(
-                "2021-01-01", "2021-01-03", freq="h", tz="America/Chicago"
+                "2021-01-01", "2021-01-03", freq="h", tz="America/Chicago", unit="us"
             ),
         }
     )

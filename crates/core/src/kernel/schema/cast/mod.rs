@@ -224,16 +224,23 @@ pub fn cast_record_batch(
 /// unsupported Arrow types to their Delta-compatible equivalents:
 ///
 /// - `Date64` -> `Date32` (day precision)
-/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone)
+/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone), unless the `nanosecond-timestamps` Cargo feature is enabled.
 ///
 /// Recursively normalizes nested types (Struct, List, Map, etc.).
 fn normalize_datatype(dt: &DataType) -> Option<DataType> {
     match dt {
         DataType::Date64 => Some(DataType::Date32),
         DataType::Timestamp(TimeUnit::Second, tz)
-        | DataType::Timestamp(TimeUnit::Millisecond, tz)
-        | DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+        | DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+        }
+        #[cfg(not(feature = "nanosecond-timestamps"))]
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+        }
+        #[cfg(feature = "nanosecond-timestamps")]
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            Some(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()))
         }
         DataType::Struct(fields) => {
             let mut changed = false;
@@ -266,6 +273,7 @@ fn normalize_field(field: &FieldRef) -> Option<FieldRef> {
         .map(|dt| Arc::new(field.as_ref().clone().with_data_type(dt)))
 }
 
+#[cfg(not(feature = "nanosecond-timestamps"))]
 fn has_nanosecond_timestamp(dt: &DataType) -> bool {
     match dt {
         DataType::Timestamp(TimeUnit::Nanosecond, _) => true,
@@ -296,12 +304,14 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
         .collect();
 
     if changed {
+        #[cfg(not(feature = "nanosecond-timestamps"))]
         let nanosecond_truncated_fields: Vec<&str> = schema
             .fields()
             .iter()
             .filter(|f| has_nanosecond_timestamp(f.data_type()))
             .map(|f| f.name().as_str())
             .collect();
+        #[cfg(not(feature = "nanosecond-timestamps"))]
         if !nanosecond_truncated_fields.is_empty() {
             tracing::warn!(
                 fields = ?nanosecond_truncated_fields,
@@ -892,10 +902,13 @@ mod tests {
 
         let result = normalize_for_delta(&schema);
 
-        assert_eq!(
-            result.field(0).data_type(),
-            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
+        let expected_ns_timestamp_dtype = if cfg!(feature = "nanosecond-timestamps") {
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+        } else {
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        };
+
+        assert_eq!(result.field(0).data_type(), &expected_ns_timestamp_dtype);
         assert_eq!(
             result.field(1).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -945,11 +958,13 @@ mod tests {
 
         let result = normalize_for_delta(&schema);
 
+        let expected_timestamp_dtype = if cfg!(feature = "nanosecond-timestamps") {
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+        } else {
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+        };
         if let DataType::Struct(fields) = result.field(0).data_type() {
-            assert_eq!(
-                fields[0].data_type(),
-                &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-            );
+            assert_eq!(fields[0].data_type(), &expected_timestamp_dtype,);
             if let DataType::List(inner) = fields[1].data_type() {
                 assert_eq!(inner.data_type(), &DataType::Date32);
             } else {

@@ -51,6 +51,8 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_timestamp(dtype):
             if dtype.tz is None:
                 return DataType.timestamp("us")
+            elif dtype.time_unit == "ns":
+                return DataType.timestamp("ns", tz="UTC")
             else:
                 return DataType.timestamp("us", tz="UTC")
         elif DataType.is_fixed_size_binary(dtype):
