@@ -47,7 +47,7 @@ aws-sdk-sts = { version = "1.98.0", default-features = false, features = [
     "rt-tokio",
 ] }
 backon = { version = "1", default-features = false, features = ["tokio-sleep"] }
-hyper-tls = { version = "0.5", optional = true }
+hyper-tls = { version = "0.6", optional = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
