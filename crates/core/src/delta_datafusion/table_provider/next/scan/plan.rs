@@ -231,6 +231,15 @@ impl KernelScanPlan {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
     }
+
+    // Projected schema depending on if execution preserves file column
+    pub(crate) fn effective_schema(&self, include_file_id: bool) -> SchemaRef {
+        if include_file_id {
+            self.output_schema.clone()
+        } else {
+            self.result_schema.clone()
+        }
+    }
 }
 
 impl DeltaScanConfig {
