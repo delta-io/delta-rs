@@ -1401,7 +1401,7 @@ mod tests {
     )> {
         let mut table =
             open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
-        table.load().await.unwrap();
+        table.load().await?;
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot().unwrap().snapshot().clone(),
@@ -1417,10 +1417,10 @@ mod tests {
         let (_table, provider) = provider_for_partitioned_table().await?;
 
         let ctx = create_session().into_inner();
-        ctx.register_table("test_table", provider).unwrap();
+        ctx.register_table("test_table", provider)?;
 
-        let df = ctx.sql("SELECT number FROM test_table").await.unwrap();
-        let batches = df.collect().await.unwrap();
+        let df = ctx.sql("SELECT number FROM test_table").await?;
+        let batches = df.collect().await?;
 
         assert_eq!(batches[0].columns().len(), 1);
         assert_eq!(
@@ -1436,12 +1436,11 @@ mod tests {
         let (_table, provider) = provider_for_partitioned_table().await?;
 
         let ctx = create_session().into_inner();
-        ctx.register_table("test_table", provider).unwrap();
+        ctx.register_table("test_table", provider)?;
 
         let df = ctx
             .sql("SELECT * FROM test_table WHERE number < '1970-01-01T00:00:00.007'")
-            .await
-            .unwrap();
+            .await?;
         let batches = df.collect().await?;
 
         assert_eq!(batches[0].num_rows(), 1);
@@ -1479,7 +1478,7 @@ mod tests {
 
         let table_dir = tempfile::tempdir()?;
         let table = CreateBuilder::new()
-            .with_location(table_dir.path().to_str().unwrap())
+            .with_location(table_dir.path().to_string_lossy())
             .with_columns(
                 StructType::try_new(vec![
                     StructField::new(
