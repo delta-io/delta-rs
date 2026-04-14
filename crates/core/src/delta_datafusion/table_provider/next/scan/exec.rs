@@ -423,9 +423,7 @@ impl DeltaScanStream {
         let _timer = elapsed.timer();
 
         if batch.num_rows() == 0 {
-            return Ok(vec![RecordBatch::new_empty(Arc::clone(
-                &self.scan_plan.output_schema,
-            ))]);
+            return Ok(vec![RecordBatch::new_empty(self.schema())]);
         }
 
         let file_id_idx = file_id_column_idx(&batch, FILE_ID_COLUMN_DEFAULT)?;
@@ -1350,6 +1348,34 @@ mod tests {
 
         assert_eq!(kept, vec![10, 21]);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_empty_batch_uses_result_schema_wo_file_id() -> TestResult {
+        use arrow::datatypes::Schema;
+
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let mut scan_plan = scan_plan.as_ref().clone();
+
+        // set any fake schema different to result_schema and no desired file_id
+        let output_schema = Arc::new(Schema::empty());
+        scan_plan.output_schema = output_schema.clone();
+        let mut stream = test_scan_stream(
+            Arc::new(scan_plan),
+            kernel_type,
+            Arc::new(DashMap::new()),
+            Vec::new(),
+            None,
+        );
+        let batches = stream.batch_project(RecordBatch::new_empty(output_schema))?;
+        let columns = batches[0].columns();
+
+        // test for original result_schema which does contain expected projection
+        // without files in this case
+        assert_eq!(columns.len(), 1);
+        assert_eq!(columns[0].data_type(), &DataType::Int32);
+        assert!(columns[0].is_empty());
         Ok(())
     }
 
