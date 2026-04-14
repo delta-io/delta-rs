@@ -65,6 +65,17 @@ impl ScanBuilder {
         self
     }
 
+    /// Skip parsing file-level statistics during kernel log replay.
+    ///
+    /// When `true`, per-file min/max/null stats are not parsed; `stats_parsed` in scan
+    /// output may be null. Partition-based filtering still applies. When combined with a
+    /// non-empty predicate, the kernel cannot use stats for data skipping; prefer `false`
+    /// when you need predicate-based file pruning from statistics.
+    pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
+        self.inner = self.inner.with_skip_stats(skip_stats);
+        self
+    }
+
     pub fn build(self) -> DeltaResult<Scan> {
         Ok(Scan::from(self.inner.build()?))
     }
