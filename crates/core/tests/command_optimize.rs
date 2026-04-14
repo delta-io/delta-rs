@@ -80,12 +80,12 @@ fn generate_random_batch<T: Into<String>>(
     let mut x_vec: Vec<i32> = Vec::with_capacity(rows);
     let mut y_vec: Vec<i32> = Vec::with_capacity(rows);
     let mut date_vec = Vec::with_capacity(rows);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let s = partition.into();
 
     for _ in 0..rows {
-        x_vec.push(rng.r#gen());
-        y_vec.push(rng.r#gen());
+        x_vec.push(rng.random());
+        y_vec.push(rng.random());
         date_vec.push(s.clone());
     }
 

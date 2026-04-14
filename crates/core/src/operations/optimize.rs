@@ -1593,7 +1593,8 @@ pub(super) mod zorder {
             use arrow_ord::sort::sort_to_indices;
             use arrow_schema::Field;
             use arrow_select::take::take;
-            use rand::Rng;
+            use rand::{Rng, RngExt};
+
             #[test]
             fn test_order() {
                 let int: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
@@ -1676,10 +1677,10 @@ pub(super) mod zorder {
                 }
             }
             fn shuffled_indices() -> [i32; 5] {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 let mut array = [0, 1, 2, 3, 4];
                 for i in (1..array.len()).rev() {
-                    let j = rng.gen_range(0..=i);
+                    let j = rng.random_range(0..=i);
                     array.swap(i, j);
                 }
                 array
