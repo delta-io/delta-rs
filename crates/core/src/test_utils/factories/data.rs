@@ -9,7 +9,7 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::file::properties::WriterProperties;
-use rand::distributions::{Alphanumeric, DistString, Distribution, Uniform};
+use rand::distr::{Alphanumeric, Distribution, SampleString, Uniform};
 
 use super::super::TestResult;
 use super::FileStats;
@@ -78,7 +78,7 @@ pub fn generate_random_array(
 ) -> TestResult<ArrayRef> {
     use DataType::*;
     use PrimitiveType::*;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     match data_type {
         Primitive(Integer) => {
@@ -89,7 +89,7 @@ pub fn generate_random_array(
                 .and_then(|max| Integer.parse_scalar(&max).ok())
                 .unwrap_or(Scalar::Integer(10));
             let between = match (min_val, max_val) {
-                (Scalar::Integer(min), Scalar::Integer(max)) => Uniform::from(min..=max),
+                (Scalar::Integer(min), Scalar::Integer(max)) => Uniform::try_from(min..=max)?,
                 _ => unreachable!(),
             };
             let arr = Int32Array::from(
@@ -107,7 +107,7 @@ pub fn generate_random_array(
                 .and_then(|max| Long.parse_scalar(&max).ok())
                 .unwrap_or(Scalar::Long(10));
             let between = match (min_val, max_val) {
-                (Scalar::Long(min), Scalar::Long(max)) => Uniform::from(min..=max),
+                (Scalar::Long(min), Scalar::Long(max)) => Uniform::try_from(min..=max)?,
                 _ => unreachable!(),
             };
             let arr = Int64Array::from(
@@ -125,7 +125,7 @@ pub fn generate_random_array(
                 .and_then(|max| Float.parse_scalar(&max).ok())
                 .unwrap_or(Scalar::Float(10.1));
             let between = match (min_val, max_val) {
-                (Scalar::Float(min), Scalar::Float(max)) => Uniform::from(min..=max),
+                (Scalar::Float(min), Scalar::Float(max)) => Uniform::try_from(min..=max)?,
                 _ => unreachable!(),
             };
             let arr = Float32Array::from(
@@ -143,7 +143,7 @@ pub fn generate_random_array(
                 .and_then(|max| Double.parse_scalar(&max).ok())
                 .unwrap_or(Scalar::Double(10.1));
             let between = match (min_val, max_val) {
-                (Scalar::Double(min), Scalar::Double(max)) => Uniform::from(min..=max),
+                (Scalar::Double(min), Scalar::Double(max)) => Uniform::try_from(min..=max)?,
                 _ => unreachable!(),
             };
             let arr = Float64Array::from(
