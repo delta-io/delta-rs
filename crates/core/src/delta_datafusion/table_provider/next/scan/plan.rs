@@ -520,8 +520,8 @@ fn process_predicate<'a>(
         };
     }
 
-    // Reject filters on filters that would be pushed down with wrong data type
-    // forom an overridden schema
+    // Reject filters that would be pushed down with wrong data type
+    // from an overridden schema
     if let (Some(override_schema), Ok(table_schema)) = (
         scan_config.schema.as_ref(),
         delta_kernel::engine::arrow_conversion::TryIntoArrow::<Schema>::try_into_arrow(
