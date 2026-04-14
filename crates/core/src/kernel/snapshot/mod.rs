@@ -370,7 +370,14 @@ impl Snapshot {
         engine: Arc<dyn Engine>,
         predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
-        let scan = match self.scan_builder().with_predicate(predicate).build() {
+        self.warn_if_skip_stats_with_predicate(&predicate);
+        let skip_stats = predicate.is_none() && self.config.skip_stats;
+        let scan = match self
+            .scan_builder()
+            .with_predicate(predicate)
+            .with_skip_stats(skip_stats)
+            .build()
+        {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
@@ -379,9 +386,20 @@ impl Snapshot {
             .scan_metadata(engine)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+        match ScanRowOutStream::try_new(self.inner.clone(), stream, skip_stats) {
             Ok(s) => s.boxed(),
             Err(err) => Box::pin(once(ready(Err(err)))),
+        }
+    }
+
+    fn warn_if_skip_stats_with_predicate(&self, predicate: &Option<PredicateRef>) {
+        if self.config.skip_stats && predicate.is_some() {
+            tracing::warn!(
+                "`DeltaTable` was opened with `skip_stats=true`, but this query has \
+                 a predicate. Every file in the table will be scanned. To avoid \
+                 this, open a separate `DeltaTable` without `skip_stats=true` for \
+                 query workloads."
+            );
         }
     }
 
@@ -393,7 +411,14 @@ impl Snapshot {
         existing_data: Box<T>,
         existing_predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
-        let scan = match self.scan_builder().with_predicate(predicate).build() {
+        self.warn_if_skip_stats_with_predicate(&predicate);
+        let skip_stats = predicate.is_none() && self.config.skip_stats;
+        let scan = match self
+            .scan_builder()
+            .with_predicate(predicate)
+            .with_skip_stats(skip_stats)
+            .build()
+        {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
@@ -402,7 +427,7 @@ impl Snapshot {
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        match ScanRowOutStream::try_new(self.inner.clone(), stream) {
+        match ScanRowOutStream::try_new(self.inner.clone(), stream, skip_stats) {
             Ok(s) => s.boxed(),
             Err(err) => Box::pin(once(ready(Err(err)))),
         }
@@ -1022,7 +1047,7 @@ mod tests {
     // use super::replay::tests::test_log_replay;
     use super::*;
     use crate::{
-        DeltaTable, checkpoints,
+        DeltaTable, DeltaTableConfig, checkpoints,
         kernel::transaction::CommitData,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, DataType, PrimitiveType, StructField, StructType},
@@ -1404,6 +1429,82 @@ mod tests {
             actual.log_data().num_files(),
             snapshot.log_data().num_files()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_views_skip_stats_same_paths() -> TestResult {
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let mut skip_cfg = DeltaTableConfig::default();
+        skip_cfg.skip_stats = true;
+        let with_skip = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
+        let full = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let mut paths_skip: Vec<String> = with_skip
+            .file_views(base.as_ref(), None)
+            .map_ok(|v| v.path().to_string())
+            .try_collect()
+            .await?;
+        let mut paths_full: Vec<String> = full
+            .file_views(base.as_ref(), None)
+            .map_ok(|v| v.path().to_string())
+            .try_collect()
+            .await?;
+        paths_skip.sort();
+        paths_full.sort();
+        assert_eq!(paths_skip, paths_full);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_skip_stats_leaves_stats_parsed_null() -> TestResult {
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+
+        let default_eager =
+            EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let default_stats: Vec<bool> = default_eager
+            .file_views(base.as_ref(), None)
+            .map_ok(|view| view.stats().is_some())
+            .try_collect()
+            .await?;
+        assert!(!default_stats.is_empty());
+        assert!(default_stats.iter().any(|b| *b));
+
+        let mut skip_cfg = DeltaTableConfig::default();
+        skip_cfg.skip_stats = true;
+        let skip_eager = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
+        let skip_stats: Vec<Option<String>> = skip_eager
+            .file_views(base.as_ref(), None)
+            .map_ok(|view| view.stats())
+            .try_collect()
+            .await?;
+        assert!(!skip_stats.is_empty());
+        assert!(skip_stats.iter().all(|s| s.is_none()));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_skip_stats_bypassed_when_predicate_present() -> TestResult {
+        use delta_kernel::expressions::Scalar;
+
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+
+        let mut skip_cfg = DeltaTableConfig::default();
+        skip_cfg.skip_stats = true;
+        let snapshot = Snapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
+
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["value"]).gt(Scalar::String("".to_string())));
+
+        let has_stats: Vec<bool> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .map_ok(|view| view.stats().is_some())
+            .try_collect()
+            .await?;
+
+        assert!(!has_stats.is_empty());
+        assert!(has_stats.iter().any(|b| *b));
 
         Ok(())
     }
