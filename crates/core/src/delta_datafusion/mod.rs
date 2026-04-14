@@ -83,6 +83,8 @@ pub(crate) use table_provider::{
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
+#[doc(hidden)]
+pub mod bench_support;
 pub mod cdf;
 mod data_validation;
 pub mod engine;

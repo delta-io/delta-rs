@@ -262,7 +262,7 @@ fn join_batches_with_add_actions(
         matching_files = field::Empty
     )
 )]
-async fn find_files_scan(
+pub(in crate::delta_datafusion) async fn find_files_scan(
     snapshot: &EagerSnapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
