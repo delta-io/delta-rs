@@ -346,6 +346,14 @@ impl Snapshot {
         log_store: &dyn LogStore,
         predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
+        // Avoid the `stats_parsed -> JSON -> stats_parsed` roundtrip that
+        // `scan_metadata_from` forces on a no-predicate cache replay.
+        if predicate.is_none()
+            && let Some(cached) = self.cached_parsed_batches()
+        {
+            return cached;
+        }
+
         match self
             .materialized_files()
             .and_then(|materialized_files| materialized_files.full_table_seed())
@@ -362,6 +370,22 @@ impl Snapshot {
                 )
             }
             None => self.files_with_engine(log_store.engine(None), predicate),
+        }
+    }
+
+    fn cached_parsed_batches(&self) -> Option<SendableRBStream> {
+        let materialized = self.materialized_files()?;
+        if materialized.existing_predicate.is_some() {
+            return None;
+        }
+        match materialized.scope {
+            MaterializedFilesScope::FullTable => {
+                let batches = Arc::clone(&materialized.batches);
+                Some(
+                    futures::stream::iter((0..batches.len()).map(move |i| Ok(batches[i].clone())))
+                        .boxed(),
+                )
+            }
         }
     }
 
@@ -1818,6 +1842,61 @@ mod tests {
                 .contains("Had a _last_checkpoint hint but didn't find any checkpoints"),
             "expected same-version checkpoint refresh to surface the kernel checkpoint error: {err}"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_cached_parsed_batches_short_circuit_guards() -> TestResult {
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+
+        let plain = Snapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        assert!(plain.cached_parsed_batches().is_none());
+
+        let eager = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let cached_stream = eager
+            .snapshot()
+            .cached_parsed_batches()
+            .expect("materialized full-table cache -> Some");
+        let cached_batches: Vec<_> = cached_stream.try_collect().await?;
+        let direct_batches = eager
+            .snapshot()
+            .materialized_files()
+            .expect("materialized cache present")
+            .batches
+            .clone();
+        assert_eq!(cached_batches.len(), direct_batches.len());
+        for (a, b) in cached_batches.iter().zip(direct_batches.iter()) {
+            assert_eq!(a.num_rows(), b.num_rows());
+            assert_eq!(a.schema(), b.schema());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_views_no_predicate_matches_fresh_replay() -> TestResult {
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+
+        let eager = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let eager_paths: Vec<String> = eager
+            .file_views(base.as_ref(), None)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect()
+            .await?;
+
+        let plain = Snapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let plain_paths: Vec<String> = plain
+            .file_views(base.as_ref(), None)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect()
+            .await?;
+
+        assert_eq!(
+            eager_paths, plain_paths,
+            "short-circuit cache replay must yield the same files in the same \
+             order as a fresh kernel replay with predicate = None",
+        );
+
         Ok(())
     }
 }
