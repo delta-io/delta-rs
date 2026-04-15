@@ -111,13 +111,13 @@ pub(super) async fn execution_plan(
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
-            let retain_file_id = scan_plan.contract.retain_file_id;
+            let scan_must_return_file_id = scan_plan.contract.scan_must_return_file_id;
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
-                retain_file_id.then_some(file_id_field),
+                scan_must_return_file_id.then_some(file_id_field),
                 metrics,
             );
             return Ok(Arc::new(exec) as _);

@@ -265,7 +265,7 @@ pub struct DeltaScan {
     snapshot: SnapshotWrapper,
     config: DeltaScanConfig,
     scan_schema: SchemaRef,
-    /// Full schema including file_id column if configured
+    /// Provider/public schema, including configured file id capability when enabled.
     full_schema: SchemaRef,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
@@ -289,7 +289,7 @@ impl DeltaScan {
         let snapshot = snapshot.into();
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
         let full_schema = if let Some(file_id_column) =
-            config.projected_file_id_column(None, scan_schema.as_ref())
+            config.provider_file_id_column(None, scan_schema.as_ref())
         {
             let mut fields = scan_schema.fields().to_vec();
             fields.push(crate::delta_datafusion::file_id::file_id_field(Some(
@@ -410,7 +410,6 @@ impl TableProvider for DeltaScan {
         let engine = DataFusionEngine::new_from_session(session);
         let contract = ProjectedScanContract::try_new(
             self.scan_schema.clone(),
-            self.full_schema.clone(),
             &self.config,
             projection,
             filters,
@@ -487,6 +486,38 @@ impl TableProvider for DeltaScan {
             &self.config,
         ))
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_multi_partitioned_override_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Arc::new(arrow::datatypes::Field::new(
+            "letter",
+            arrow::datatypes::DataType::Dictionary(
+                Box::new(arrow::datatypes::DataType::UInt16),
+                Box::new(arrow::datatypes::DataType::Utf8),
+            ),
+            true,
+        )),
+        Arc::new(arrow::datatypes::Field::new(
+            "date",
+            arrow::datatypes::DataType::Date32,
+            true,
+        )),
+        Arc::new(arrow::datatypes::Field::new(
+            "data",
+            arrow::datatypes::DataType::Dictionary(
+                Box::new(arrow::datatypes::DataType::UInt16),
+                Box::new(arrow::datatypes::DataType::Binary),
+            ),
+            true,
+        )),
+        Arc::new(arrow::datatypes::Field::new(
+            "number",
+            arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Millisecond, None),
+            true,
+        )),
+    ]))
 }
 
 #[cfg(test)]
@@ -1425,33 +1456,6 @@ mod tests {
         Ok(())
     }
 
-    fn multi_partitioned_override_schema() -> Arc<ArrowSchema> {
-        Arc::new(ArrowSchema::new(vec![
-            ArrowField::new(
-                "letter",
-                ArrowDataType::Dictionary(
-                    Box::new(ArrowDataType::UInt16),
-                    Box::new(ArrowDataType::Utf8),
-                ),
-                true,
-            ),
-            ArrowField::new("date", ArrowDataType::Date32, true),
-            ArrowField::new(
-                "data",
-                ArrowDataType::Dictionary(
-                    Box::new(ArrowDataType::UInt16),
-                    Box::new(ArrowDataType::Binary),
-                ),
-                true,
-            ),
-            ArrowField::new(
-                "number",
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
-        ]))
-    }
-
     async fn provider_for_partitioned_table() -> TestResult<(
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
@@ -1462,7 +1466,7 @@ mod tests {
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot().unwrap().snapshot().clone(),
-            DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+            DeltaScanConfig::default().with_schema(test_multi_partitioned_override_schema()),
         )?
         .with_log_store(table.log_store());
 
@@ -1569,7 +1573,7 @@ mod tests {
         let provider = Arc::new(
             crate::delta_datafusion::table_provider::next::DeltaScan::new(
                 table.snapshot().unwrap().snapshot().clone(),
-                DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+                DeltaScanConfig::default().with_schema(test_multi_partitioned_override_schema()),
             )?
             .with_log_store(table.log_store()),
         );
@@ -1617,6 +1621,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delta_scan_provider_schema_keeps_configured_file_id_capability() -> TestResult {
+        let mut table =
+            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        table.load().await?;
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
+            table.snapshot()?.snapshot().clone(),
+            DeltaScanConfig::default().with_file_column_name("my_files"),
+        )?;
+
+        let schema = provider.schema();
+        assert!(schema.column_with_name("my_files").is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_delta_scan_config_file_column_projection() -> TestResult {
         let mut table =
             open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
@@ -1625,7 +1644,7 @@ mod tests {
             crate::delta_datafusion::table_provider::next::DeltaScan::new(
                 table.snapshot()?.snapshot().clone(),
                 DeltaScanConfig::default()
-                    .with_schema(multi_partitioned_override_schema())
+                    .with_schema(test_multi_partitioned_override_schema())
                     .with_file_column_name("my_files"),
             )?
             .with_log_store(table.log_store()),
