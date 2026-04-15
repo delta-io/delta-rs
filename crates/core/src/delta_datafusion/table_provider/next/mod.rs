@@ -45,6 +45,7 @@ use url::Url;
 
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
+use self::scan::ProjectedScanContract;
 use super::data_sink::DeltaDataSink;
 use crate::DeltaTableError;
 use crate::delta_datafusion::DeltaScanConfig;
@@ -327,6 +328,14 @@ impl DeltaScan {
         self.log_store = Some(log_store.into());
         self
     }
+
+    fn ensure_read_session_ready(&self, session: &dyn Session) -> Result<()> {
+        if let Some(log_store) = &self.log_store {
+            super::update_datafusion_session(session, log_store.as_ref(), None)?;
+        }
+        Ok(())
+    }
+
     /// Materialize deletion vector keep masks for files in this scan.
     ///
     /// The result is sorted lexicographically by filepath for deterministic ordering and includes
@@ -337,6 +346,7 @@ impl DeltaScan {
         &self,
         session: &dyn Session,
     ) -> Result<Vec<DeletionVectorSelection>> {
+        self.ensure_read_session_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
 
         let scan_plan = KernelScanPlan::try_new(
@@ -396,24 +406,18 @@ impl TableProvider for DeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.ensure_read_session_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
-
-        // Filter out file_id column from projection if present
-        let file_id_idx = self
-            .config
-            .file_column_name
-            .as_ref()
-            .map(|_| self.scan_schema.fields().len());
-        let kernel_projection = projection.map(|proj| {
-            proj.iter()
-                .copied()
-                .filter(|&idx| Some(idx) != file_id_idx)
-                .collect::<Vec<_>>()
-        });
-
-        let scan_plan = KernelScanPlan::try_new(
+        let contract = ProjectedScanContract::try_new(
+            self.scan_schema.clone(),
+            self.full_schema.clone(),
+            &self.config,
+            projection,
+            filters,
+        )?;
+        let scan_plan = KernelScanPlan::try_new_with_contract(
             self.snapshot.snapshot(),
-            kernel_projection.as_ref(),
+            contract,
             filters,
             &self.config,
             self.file_skipping_predicate.clone(),
@@ -424,7 +428,6 @@ impl TableProvider for DeltaScan {
         scan::execution_plan(
             &self.config,
             session,
-            projection,
             scan_plan,
             stream,
             engine,
@@ -604,6 +607,21 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .await
+    }
+
+    async fn create_in_memory_id_table_with_rows(
+        values: Vec<i64>,
+    ) -> crate::DeltaResult<crate::DeltaTable> {
+        let table = create_in_memory_id_table().await?;
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![ArrowField::new(
+                "id",
+                ArrowDataType::Int64,
+                true,
+            )])),
+            vec![Arc::new(Int64Array::from(values))],
+        )?;
+        table.write(vec![batch]).await
     }
 
     async fn build_insert_input(
@@ -972,6 +990,28 @@ mod tests {
             "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
         ];
 
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_registers_log_store_for_fresh_session() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![11, 13]).await?;
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql("SELECT id FROM delta_table ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
         assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
@@ -1347,6 +1387,23 @@ mod tests {
 
         let deletion_vectors = provider.deletion_vectors(&state).await?;
 
+        assert!(deletion_vectors.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_registers_log_store_for_fresh_session() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![11, 13]).await?;
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert!(deletion_vectors.is_empty());
 
         Ok(())

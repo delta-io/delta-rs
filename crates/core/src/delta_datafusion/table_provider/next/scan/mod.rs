@@ -53,7 +53,7 @@ use url::Url;
 
 pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
-pub(crate) use self::plan::{KernelScanPlan, supports_filters_pushdown};
+pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
 use super::FileSelection;
 use crate::{
@@ -61,7 +61,7 @@ use crate::{
     delta_datafusion::{
         DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
-        file_id::{FILE_ID_COLUMN_DEFAULT, file_id_field, wrap_file_id_value},
+        file_id::wrap_file_id_value,
         table_provider::next::DeletionVectorSelection,
     },
 };
@@ -76,7 +76,6 @@ type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTa
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
-    projection: Option<&Vec<usize>>,
     scan_plan: KernelScanPlan,
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
@@ -86,9 +85,7 @@ pub(super) async fn execution_plan(
     let (files, transforms, dvs, metrics) =
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
-    let table_schema = config.table_schema(scan_plan.table_configuration())?;
-    let projected_file_id_column =
-        config.projected_file_id_column(projection, table_schema.as_ref());
+    let file_id_field = scan_plan.contract.file_id_field.clone();
     if scan_plan.is_metadata_only() {
         let map_file = |f: &ScanFileContext| {
             Ok((
@@ -110,29 +107,20 @@ pub(super) async fn execution_plan(
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
+            let retain_file_id = scan_plan.contract.retain_file_id;
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
-                projected_file_id_column.map(|name| file_id_field(Some(name))),
+                retain_file_id.then_some(file_id_field),
                 metrics,
             );
             return Ok(Arc::new(exec) as _);
         }
     }
 
-    get_data_scan_plan(
-        session,
-        scan_plan,
-        files,
-        transforms,
-        dvs,
-        metrics,
-        limit,
-        projected_file_id_column,
-    )
-    .await
+    get_data_scan_plan(session, scan_plan, files, transforms, dvs, metrics, limit).await
 }
 
 /// Materialize deletion vector keep masks for every file in the scan that has one.
@@ -301,7 +289,6 @@ async fn get_data_scan_plan(
     dvs: DashMap<String, Vec<bool>>,
     metrics: ExecutionPlanMetricsSet,
     limit: Option<usize>,
-    projected_file_id_column: Option<&str>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -352,12 +339,13 @@ async fn get_data_scan_plan(
     } else {
         scan_plan.parquet_predicate.as_ref()
     };
+    let file_id_field = scan_plan.contract.file_id_field.clone();
     let pq_plan = get_read_plan(
         session,
         files_by_store,
         &scan_plan.parquet_read_schema,
         limit,
-        &file_id_field(Some(FILE_ID_COLUMN_DEFAULT)),
+        &file_id_field,
         predicate,
     )
     .await?;
@@ -368,7 +356,6 @@ async fn get_data_scan_plan(
         Arc::new(transforms),
         Arc::new(dvs),
         partition_stats,
-        projected_file_id_column.map(ToOwned::to_owned),
         metrics,
     );
 
@@ -514,14 +501,14 @@ fn finalize_transformed_batch(
     file_id_col: Option<(ArrayRef, FieldRef)>,
     schema_adapter: &mut SchemaAdapter,
 ) -> Result<RecordBatch> {
-    let result = if let Some(projection) = scan_plan.result_projection.as_ref() {
+    let result = if let Some(projection) = scan_plan.contract.result_projection.as_ref() {
         batch.project(projection)?
     } else {
         batch
     };
     // NOTE: most data is read properly typed already, however columns added via
     // literals in the transformations may need to be cast to the physical expected type.
-    let result = if result.schema_ref().eq(&scan_plan.result_schema) {
+    let result = if result.schema_ref().eq(&scan_plan.contract.result_schema) {
         result
     } else {
         schema_adapter.adapt(result)?
