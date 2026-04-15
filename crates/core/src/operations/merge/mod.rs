@@ -2603,7 +2603,8 @@ mod tests {
     async fn test_merge_metrics_select_target_scan_when_source_is_delta_with_same_file_column_name()
     {
         let target_dir = tempfile::tempdir().unwrap();
-        let target_url = Url::from_directory_path(target_dir.path()).unwrap();
+        let target_path = std::fs::canonicalize(target_dir.path()).unwrap();
+        let target_url = Url::from_directory_path(&target_path).unwrap();
         let target_table = DeltaTable::try_from_url(target_url)
             .await
             .unwrap()
@@ -2615,7 +2616,8 @@ mod tests {
         assert_eq!(target_table.snapshot().unwrap().log_data().num_files(), 1);
 
         let source_dir = tempfile::tempdir().unwrap();
-        let source_url = Url::from_directory_path(source_dir.path()).unwrap();
+        let source_path = std::fs::canonicalize(source_dir.path()).unwrap();
+        let source_url = Url::from_directory_path(&source_path).unwrap();
         let source_table = DeltaTable::try_from_url(source_url)
             .await
             .unwrap()
@@ -2673,7 +2675,7 @@ mod tests {
             .await
             .unwrap();
 
-        let (_table, metrics) = target_table
+        let (table, metrics) = target_table
             .merge(source, col("target.id").eq(col("source.id")))
             .with_source_alias("source")
             .with_target_alias("target")
@@ -2694,6 +2696,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 0);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+
+        let actual = get_data_sorted(&table, "id, value, modified").await;
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 20    | 2021-03-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 30    | 2021-03-02 |",
+            "+----+-------+------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]

@@ -40,35 +40,149 @@ use crate::delta_datafusion::engine::{
 use crate::delta_datafusion::table_provider::next::FILE_ID_COLUMN_DEFAULT;
 use crate::kernel::{Scan, Snapshot};
 
+/// Query scoped contract between the provider, logical planner, and scan execs.
+///
+/// This centralizes all schema and file id visibility decisions for a single
+/// `TableProvider::scan` request so planning and execution do not rederive them independently.
+#[derive(Clone, Debug)]
+pub(crate) struct ProjectedScanContract {
+    /// Schema advertised by the provider for this table, including any public file id column.
+    #[allow(dead_code)]
+    pub(crate) provider_schema: SchemaRef,
+    /// Schema explicitly requested by the parent plan through the provider projection.
+    #[allow(dead_code)]
+    pub(crate) requested_schema: SchemaRef,
+    /// Logical data schema after removing temporary predicate only columns and internal metadata.
+    pub(crate) result_schema: SchemaRef,
+    /// Logical schema produced by the kernel scan before dropping filter only columns.
+    #[allow(dead_code)]
+    pub(crate) scan_schema: SchemaRef,
+    /// Actual schema the scan must return to its parent for this query.
+    pub(crate) output_schema: SchemaRef,
+    /// Projection against the logical table schema used to build the kernel scan.
+    pub(crate) kernel_projection: Option<Vec<usize>>,
+    /// Projection from the kernel scan result into [`result_schema`](Self::result_schema) when
+    /// filter only columns were added to the kernel projection.
+    pub(crate) result_projection: Option<Vec<usize>>,
+    /// Synthetic file id field used internally to correlate batches with their source files.
+    pub(crate) file_id_field: FieldRef,
+    /// Whether this particular scan must return the file id column to its parent plan.
+    pub(crate) retain_file_id: bool,
+}
+
+impl ProjectedScanContract {
+    pub(crate) fn try_new(
+        table_schema: SchemaRef,
+        provider_schema: SchemaRef,
+        config: &DeltaScanConfig,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+    ) -> Result<Self> {
+        let file_id_field = config.file_id_field();
+        let file_id_idx = config.has_file_id().then_some(table_schema.fields().len());
+
+        let requested_schema = match projection {
+            Some(projection) => Arc::new(provider_schema.project(projection)?),
+            None => provider_schema.clone(),
+        };
+
+        let retain_file_id = config.has_file_id()
+            && match projection {
+                None => true,
+                Some(projection) => {
+                    projection.iter().any(|idx| Some(*idx) == file_id_idx)
+                        || filters.iter().any(|filter| {
+                            filter
+                                .column_refs()
+                                .iter()
+                                .any(|column| column.name == file_id_field.name().as_str())
+                        })
+                }
+            };
+
+        let requested_data_projection = projection.map(|projection| {
+            projection
+                .iter()
+                .filter(|&&idx| Some(idx) != file_id_idx)
+                .copied()
+                .collect_vec()
+        });
+
+        let result_schema = match requested_data_projection.as_ref() {
+            Some(projection) => Arc::new(table_schema.project(projection)?),
+            None => table_schema.clone(),
+        };
+
+        let columns_in_filters: HashSet<String> = filters
+            .iter()
+            .flat_map(|f| f.column_refs().iter().map(|c| c.name.clone()).collect_vec())
+            .collect();
+        let columns_in_result: HashSet<String> = result_schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        let missing_columns: Vec<_> = columns_in_filters
+            .difference(&columns_in_result)
+            .filter(|column| column.as_str() != file_id_field.name().as_str())
+            .cloned()
+            .sorted()
+            .collect();
+
+        let kernel_projection = requested_data_projection
+            .as_ref()
+            .map(|projection| {
+                let mut projection = projection.clone();
+                for column in &missing_columns {
+                    projection.push(table_schema.index_of(column)?);
+                }
+                Ok::<_, datafusion::common::DataFusionError>(projection)
+            })
+            .transpose()?;
+
+        let scan_schema = match kernel_projection.as_ref() {
+            Some(projection) => Arc::new(table_schema.project(projection)?),
+            None => table_schema.clone(),
+        };
+
+        let result_projection = kernel_projection.as_ref().and_then(|projection| {
+            let projected_len = requested_data_projection.as_ref()?.len();
+            (projection.len() > projected_len).then(|| (0..projected_len).collect())
+        });
+
+        let output_schema = if retain_file_id {
+            let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
+            schema_builder.push(file_id_field.clone());
+            Arc::new(schema_builder.finish())
+        } else {
+            result_schema.clone()
+        };
+
+        Ok(Self {
+            provider_schema,
+            requested_schema,
+            result_schema,
+            scan_schema,
+            output_schema,
+            kernel_projection,
+            result_projection,
+            file_id_field,
+            retain_file_id,
+        })
+    }
+}
+
 /// Logical scan plan for Delta tables using Delta Kernel.
 ///
 /// This structure bridges DataFusion's query planning with Delta Kernel's scan capabilities.
-/// It handles schema projection, predicate translation, and determines which predicates can
+/// It finalizes the query scoped scan contract and determines which predicates can
 /// be pushed to kernel file skipping vs. Parquet readers.
-///
-/// # Schema Handling
-///
-/// Manages three schemas:
-/// - **result_schema**: Logical schema exposed to query after all transformations
-/// - **output_schema**: Final schema including metadata columns (e.g., file_id)
-/// - **parquet_read_schema**: Physical schema for Parquet reads + predicate evaluation
-///
-/// # Predicate Pushdown
-///
-/// Predicates are assigned to two levels:
-/// - Kernel scan: File-level skipping using table statistics (pushed to [`scan`])
-/// - Parquet scan: File/Row-level filtering within files ([`parquet_predicate`])
 #[derive(Clone, Debug)]
 pub(crate) struct KernelScanPlan {
     /// Wrapped kernel scan to produce logical file stream
     pub(crate) scan: Arc<Scan>,
-    /// The resulting schema exposed to the caller (used for expression evaluation)
-    pub(crate) result_schema: SchemaRef,
-    /// The final output schema (includes file_id column if configured)
-    pub(crate) output_schema: SchemaRef,
-    /// If set, indicates a projection to apply to the
-    /// scan output to obtain the result schema
-    pub(crate) result_projection: Option<Vec<usize>>,
+    /// Query scoped contract shared across planning and execution.
+    pub(crate) contract: ProjectedScanContract,
     /// Physical schema used for Parquet reads and predicate evaluation.
     pub(crate) parquet_read_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
@@ -83,9 +197,33 @@ impl KernelScanPlan {
         config: &DeltaScanConfig,
         skipping_predicate: Option<Vec<Expr>>,
     ) -> Result<Self> {
+        let table_schema = config.table_schema(snapshot.table_configuration())?;
+        let provider_schema = if config.has_file_id() {
+            let mut schema_builder = SchemaBuilder::from(table_schema.as_ref());
+            schema_builder.push(config.file_id_field());
+            Arc::new(schema_builder.finish())
+        } else {
+            table_schema.clone()
+        };
+        let contract = ProjectedScanContract::try_new(
+            table_schema,
+            provider_schema,
+            config,
+            projection,
+            filters,
+        )?;
+        Self::try_new_with_contract(snapshot, contract, filters, config, skipping_predicate)
+    }
+
+    pub(crate) fn try_new_with_contract(
+        snapshot: &Snapshot,
+        contract: ProjectedScanContract,
+        filters: &[Expr],
+        config: &DeltaScanConfig,
+        skipping_predicate: Option<Vec<Expr>>,
+    ) -> Result<Self> {
         let table_config = snapshot.table_configuration();
         let kernel_logical_schema = table_config.logical_schema();
-        let table_schema = config.table_schema(table_config)?;
 
         // At this point we should only have supported predicates, but we decide where
         // when can handle them (kernel scan and/or parquet scan)
@@ -110,101 +248,18 @@ impl KernelScanPlan {
             .scan_builder()
             .with_predicate(scan_predicate.clone());
 
-        let Some(projection) = projection else {
-            let scan = Arc::new(scan_builder.build()?);
-            return Self::try_new_with_scan(scan, config, table_schema, None, parquet_predicate);
-        };
-
-        // The table projection may not include all columns referenced in filters,
-        // Specifically, if a filter references a partition column that is not
-        // part of the projection, we need to add it to the scan projection.
-        // This is because may not include columns that are handled Exact by a provider.
-        let result_schema = Arc::new(table_schema.project(projection)?);
-        let columns_in_filters: HashSet<_> = filters
-            .iter()
-            .flat_map(|f| f.column_refs().iter().map(|c| c.name()).collect_vec())
-            .collect();
-        let columns_in_scan: HashSet<_> = result_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().as_str())
-            .collect();
-        let missing_columns: Vec<_> = columns_in_filters
-            .difference(&columns_in_scan)
-            .cloned()
-            .sorted() // Prevent non-deterministic ordering from HashSet
-            .collect();
-
-        let file_id_field = config.file_id_field();
-        let mut projection = projection.clone();
-        for col in missing_columns {
-            // the file id field is not part of the table schema here, as
-            // it is managed on the table provider level.
-            if col == file_id_field.name() {
-                continue;
-            }
-            projection.push(table_schema.index_of(col)?);
-        }
-
-        // With the updated projection, build the scan
-        let kernel_projection_names = projection
-            .iter()
-            .map(|idx| table_schema.field(*idx).name().as_str())
-            .collect_vec();
-        let kernel_scan_schema = kernel_logical_schema
-            .project(&kernel_projection_names)
-            .map_err(crate::DeltaTableError::from)?;
-        let scan = Arc::new(scan_builder.with_schema(kernel_scan_schema).build()?);
-
-        // We may have read columns in the scan that are purely for predicate processing.
-        // We need to project them out of the final result schema
-        let logical_columns: HashSet<_> = scan
-            .logical_schema()
-            .fields()
-            .map(|f| f.name().as_str())
-            .collect();
-        let excess_columns = logical_columns.difference(&columns_in_scan).collect_vec();
-        let result_projection = if !excess_columns.is_empty() {
-            let mut result_projection = Vec::with_capacity(result_schema.fields().len());
-            for (i, field) in scan.logical_schema().fields().enumerate() {
-                if columns_in_scan.contains(field.name().as_str()) {
-                    result_projection.push(i);
-                }
-            }
-            Some(result_projection)
+        let scan = if let Some(projection) = contract.kernel_projection.as_ref() {
+            let table_schema = config.table_schema(table_config)?;
+            let kernel_projection_names = projection
+                .iter()
+                .map(|idx| table_schema.field(*idx).name().as_str())
+                .collect_vec();
+            let kernel_scan_schema = kernel_logical_schema
+                .project(&kernel_projection_names)
+                .map_err(crate::DeltaTableError::from)?;
+            Arc::new(scan_builder.with_schema(kernel_scan_schema).build()?)
         } else {
-            None
-        };
-
-        drop(columns_in_scan);
-        drop(logical_columns);
-
-        Self::try_new_with_scan(
-            scan,
-            config,
-            result_schema,
-            result_projection,
-            parquet_predicate,
-        )
-    }
-
-    fn try_new_with_scan(
-        scan: Arc<Scan>,
-        config: &DeltaScanConfig,
-        result_schema: SchemaRef,
-        result_projection: Option<Vec<usize>>,
-        parquet_predicate: Option<Expr>,
-    ) -> Result<Self> {
-        let output_schema = if let Some(file_id_column) =
-            config.projected_file_id_column(None, result_schema.as_ref())
-        {
-            let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
-            schema_builder.push(crate::delta_datafusion::file_id::file_id_field(Some(
-                file_id_column,
-            )));
-            Arc::new(schema_builder.finish())
-        } else {
-            result_schema.clone()
+            Arc::new(scan_builder.build()?)
         };
         let parquet_read_schema = config.physical_arrow_schema(
             scan.snapshot().table_configuration(),
@@ -212,9 +267,7 @@ impl KernelScanPlan {
         )?;
         Ok(Self {
             scan,
-            result_schema,
-            output_schema,
-            result_projection,
+            contract,
             parquet_read_schema,
             parquet_predicate,
         })
@@ -235,9 +288,9 @@ impl KernelScanPlan {
     // Projected schema depending on if execution preserves file column
     pub(crate) fn effective_schema(&self, include_file_id: bool) -> SchemaRef {
         if include_file_id {
-            self.output_schema.clone()
+            self.contract.output_schema.clone()
         } else {
-            self.result_schema.clone()
+            self.contract.result_schema.clone()
         }
     }
 }
@@ -245,6 +298,10 @@ impl KernelScanPlan {
 impl DeltaScanConfig {
     pub(crate) fn file_id_field(&self) -> FieldRef {
         crate::delta_datafusion::file_id::file_id_field(self.file_column_name.as_deref())
+    }
+
+    pub(crate) fn has_file_id(&self) -> bool {
+        self.file_column_name.is_some()
     }
 
     pub(crate) fn projected_file_id_column<'a>(
@@ -766,10 +823,30 @@ mod tests {
 
         let snapshot = table.snapshot()?.snapshot().snapshot();
 
+        let override_schema = Arc::new(Schema::new(vec![
+            Arc::new(arrow_schema::Field::new(
+                "Company Very Short",
+                DataType::Utf8,
+                true,
+            )),
+            Arc::new(arrow_schema::Field::new("Super Name", DataType::Utf8, true)),
+        ]));
+        let config = DeltaScanConfig::default().with_schema(override_schema.clone());
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+        assert_eq!(
+            scan_plan.contract.result_schema.as_ref(),
+            override_schema.as_ref()
+        );
+        assert!(!schema_has_view_types(
+            scan_plan.contract.result_schema.as_ref()
+        ));
+
         let mut config = DeltaScanConfig::default();
         config.schema_force_view_types = true;
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
-        assert!(schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(schema_has_view_types(
+            scan_plan.contract.result_schema.as_ref()
+        ));
         assert!(schema_has_view_types(
             scan_plan.parquet_read_schema.as_ref()
         ));
@@ -800,6 +877,7 @@ mod tests {
         // Column-mapped tables use logical names in the result schema, but physical names for Parquet reads.
         assert!(
             scan_plan
+                .contract
                 .result_schema
                 .field_with_name("Super Name")
                 .is_ok()
@@ -827,7 +905,9 @@ mod tests {
         let mut config = DeltaScanConfig::default();
         config.schema_force_view_types = false;
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
-        assert!(!schema_has_view_types(scan_plan.result_schema.as_ref()));
+        assert!(!schema_has_view_types(
+            scan_plan.contract.result_schema.as_ref()
+        ));
         assert!(!schema_has_view_types(
             scan_plan.parquet_read_schema.as_ref()
         ));
@@ -864,6 +944,70 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_projected_scan_contract_tracks_internal_and_output_file_id_requirements() -> TestResult
+    {
+        let config = DeltaScanConfig::default().with_file_column_name("file_id");
+        let table_schema = Arc::new(Schema::new(vec![
+            Arc::new(arrow_schema::Field::new("data", DataType::Utf8, true)),
+            Arc::new(arrow_schema::Field::new("letter", DataType::Utf8, true)),
+        ]));
+
+        let mut provider_fields = table_schema.fields().to_vec();
+        provider_fields.push(config.file_id_field());
+        let provider_schema = Arc::new(Schema::new(provider_fields));
+
+        let projection = vec![0];
+        let filters = vec![
+            col("letter").eq(lit("b")),
+            col("file_id").eq(lit("file:///tmp/part-0000.parquet")),
+        ];
+        let contract = ProjectedScanContract::try_new(
+            table_schema.clone(),
+            provider_schema.clone(),
+            &config,
+            Some(&projection),
+            &filters,
+        )?;
+
+        assert_eq!(contract.provider_schema.as_ref(), provider_schema.as_ref());
+        assert_eq!(
+            contract.requested_schema.as_ref(),
+            &Schema::new(vec![Arc::new(arrow_schema::Field::new(
+                "data",
+                DataType::Utf8,
+                true,
+            ))])
+        );
+        assert_eq!(
+            contract.result_schema.as_ref(),
+            contract.requested_schema.as_ref()
+        );
+        assert_eq!(
+            contract
+                .scan_schema
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .collect_vec(),
+            vec!["data", "letter"]
+        );
+        assert_eq!(
+            contract
+                .output_schema
+                .fields()
+                .iter()
+                .map(|f| f.name())
+                .collect_vec(),
+            vec!["data", "file_id"]
+        );
+        assert_eq!(contract.kernel_projection, Some(vec![0, 1]));
+        assert_eq!(contract.result_projection, Some(vec![0]));
+        assert!(contract.retain_file_id);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_projected_scan_plan_preserves_column_mapping_annotations() -> TestResult {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
@@ -891,7 +1035,7 @@ mod tests {
             field.metadata().get("delta.columnMapping.physicalName"),
             Some(delta_kernel::schema::MetadataValue::String(_))
         ));
-        assert_eq!(scan_plan.result_projection, Some(vec![0]));
+        assert_eq!(scan_plan.contract.result_projection, Some(vec![0]));
 
         Ok(())
     }

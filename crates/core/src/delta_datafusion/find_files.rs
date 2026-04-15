@@ -300,7 +300,10 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
         .map(|column| logical_schema.index_of(&column.name))
         .try_collect()?;
     // Add path column
-    used_columns.push(logical_schema.index_of(&file_column_name)?);
+    let path_column_idx = logical_schema.index_of(&file_column_name)?;
+    if !used_columns.contains(&path_column_idx) {
+        used_columns.push(path_column_idx);
+    }
 
     let scan = DeltaScanBuilder::new(snapshot, log_store, session)
         .with_filter(Some(expression.clone()))
@@ -604,7 +607,7 @@ mod tests {
 
     use crate::{
         DeltaTable,
-        delta_datafusion::create_session,
+        delta_datafusion::{DeltaSessionExt as _, create_session},
         protocol::SaveMode,
         test_utils::{TestResult, multibatch_add_actions_for_partition, open_fs_path},
         writer::test_utils::{get_delta_schema, get_record_batch},
@@ -653,6 +656,64 @@ mod tests {
             !(plan_debug.contains("InList(") && plan_debug.contains(FILE_ID_COLUMN_DEFAULT)),
             "unexpected plan with file-id IN filter: {plan_debug}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_honors_data_and_file_column_predicate() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/simple_table");
+        table.load().await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+        session.ensure_log_store_registered(log_store.as_ref())?;
+
+        let by_id = find_files_scan(
+            &snapshot,
+            log_store.clone(),
+            &session,
+            col("id").eq(lit(7i64)),
+        )
+        .await?;
+        assert!(!by_id.is_empty());
+        let expected_path = by_id[0].path.clone();
+        let matched_paths = by_id.iter().map(|add| add.path.as_str()).collect_vec();
+
+        let matches = find_files_scan(
+            &snapshot,
+            log_store.clone(),
+            &session,
+            col("id")
+                .eq(lit(7i64))
+                .and(col(PATH_COLUMN).eq(lit(expected_path.clone()))),
+        )
+        .await?;
+        assert_eq!(
+            matches.iter().map(|add| add.path.as_str()).collect_vec(),
+            vec![expected_path.as_str()]
+        );
+
+        let other_path = snapshot
+            .log_data()
+            .iter()
+            .map(|add| add.path().to_string())
+            .find(|path| !matched_paths.contains(&path.as_str()))
+            .expect("expected a non-matching file path");
+        let no_matches = find_files_scan(
+            &snapshot,
+            log_store,
+            &session,
+            col("id")
+                .eq(lit(7i64))
+                .and(col(PATH_COLUMN).eq(lit(other_path))),
+        )
+        .await?;
+        assert!(no_matches.is_empty());
 
         Ok(())
     }
