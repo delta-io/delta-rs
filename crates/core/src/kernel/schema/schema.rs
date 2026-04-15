@@ -62,8 +62,6 @@ pub trait StructTypeExt {
     /// Get all identity columns in the schemas
     fn get_identity_columns(&self) -> Result<Vec<IdentityColumnInfo>, Error>;
 
-    /// Check if the schema has identity columns
-    fn has_identity_columns(&self) -> bool;
 }
 
 impl StructTypeExt for StructType {
@@ -194,6 +192,13 @@ impl StructTypeExt for StructType {
                 });
 
             if let (Some(start), Some(step), Some(allow)) = (start, step, allow) {
+                if step == 0 {
+                    return Err(Error::MetadataError(format!(
+                        "Identity column '{}' has step=0, which is not allowed by the Delta protocol",
+                        field.name
+                    )));
+                }
+
                 let hwm =
                     field
                         .metadata
@@ -215,10 +220,6 @@ impl StructTypeExt for StructType {
         }
 
         Ok(identity_columns)
-    }
-    fn has_identity_columns(&self) -> bool {
-        self.fields()
-            .any(|f| f.metadata.contains_key("delta.identity.start"))
     }
 }
 

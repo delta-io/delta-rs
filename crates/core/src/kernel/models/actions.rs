@@ -420,7 +420,8 @@ impl ProtocolInner {
             self = self.enable_invariants()
         }
 
-        if schema.has_identity_columns() {
+        let identity_cols = schema.get_identity_columns()?;
+        if !identity_cols.is_empty() {
             self = self.enable_identity_columns()
         }
 

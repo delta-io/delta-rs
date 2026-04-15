@@ -270,9 +270,6 @@ def test_explicit_insert_rejected_when_not_allowed(tmp_path):
         write_deltalake(dt, mode="append", data=data)
 
 
-@pytest.mark.xfail(
-    reason="step=0 should be rejected at table creation or write time, but no validation exists"
-)
 def test_step_zero_rejected(tmp_path):
     """Identity column step cannot be 0 per the Delta protocol spec."""
     schema = DeltaSchema(
