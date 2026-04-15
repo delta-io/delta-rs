@@ -507,11 +507,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 }
 
                 if let Some(snapshot) = &this.snapshot {
-                    if snapshot.schema().has_identity_columns() {
-                        source = with_identity_columns(
-                            source,
-                            &snapshot.schema().get_identity_columns()?,
-                        )?;
+                    let identity_columns = snapshot.schema().get_identity_columns()?;
+                    if !identity_columns.is_empty() {
+                        source = with_identity_columns(source, &identity_columns)?;
                     }
                 }
 

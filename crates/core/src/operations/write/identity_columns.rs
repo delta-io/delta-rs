@@ -1,18 +1,12 @@
 use crate::errors::DeltaResult;
 use crate::{kernel::EagerSnapshot, table::IdentityColumnInfo};
-use datafusion::catalog::Session;
+use datafusion::common::DataFusionError;
 use datafusion::common::Result;
 use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::{ExprSchemable, LogicalPlan, LogicalPlanBuilder, col};
 use datafusion::prelude::lit;
 use delta_kernel::schema::{MetadataValue, StructField, StructType};
 use delta_kernel::table_features::TableFeature;
-
-fn overflow_err(col_name: &str) -> datafusion::common::DataFusionError {
-    datafusion::common::DataFusionError::Plan(format!(
-        "identity column '{col_name}': start - step overflows i64"
-    ))
-}
 
 #[inline]
 pub fn identity_columns_enabled(snapshot: &EagerSnapshot) -> bool {
@@ -29,22 +23,27 @@ pub fn with_identity_columns(
         return Ok(plan);
     }
 
+    // Reject user-provided values for GENERATED ALWAYS columns
+    for c in identity_columns {
+        let present_in_plan = plan.schema().field_with_unqualified_name(&c.name).is_ok();
+        if !c.allow_explicit_insert && present_in_plan {
+            return Err(DataFusionError::Plan(format!(
+                "Cannot provide values for identity column '{}': \
+                 allowExplicitInsert is false (GENERATED ALWAYS)",
+                c.name
+            )));
+        }
+    }
+
     // Decide which identity columns need values generated:
-    //   - allowExplicitInsert=false → always generate, even if the column is present
-    //     (the planner may send a NULL placeholder for the column)
-    //   - allowExplicitInsert=true and column is present → skip (user supplied values)
-    //   - allowExplicitInsert=true and column is absent  → generate
+    //   - allowExplicitInsert=false -> always generate (user values rejected above)
+    //   - allowExplicitInsert=true and column is present -> skip (user supplied values)
+    //   - allowExplicitInsert=true and column is absent  -> generate
     let to_generate: Vec<&IdentityColumnInfo> = identity_columns
         .iter()
         .filter(|c| {
             let present_in_plan = plan.schema().field_with_unqualified_name(&c.name).is_ok();
-            if !c.allow_explicit_insert {
-                // Always generate — replace any placeholder the planner may have sent
-                true
-            } else {
-                // Only generate when user didn't supply values
-                !present_in_plan
-            }
+            !present_in_plan
         })
         .collect();
 
@@ -53,9 +52,7 @@ pub fn with_identity_columns(
     }
 
     // Step 1: add a __row_num__ column via window function
-    // row_number() is 1-based: row 1, row 2, row 3...
-    // row_number() already produces Expr::WindowFunction with an empty
-    // partition_by / order_by and a default ROWS UNBOUNDED frame.
+    // row_number() is 1-based
     let row_num_expr = row_number().alias("__row_num__");
 
     let plan = LogicalPlanBuilder::new(plan)
@@ -79,10 +76,12 @@ pub fn with_identity_columns(
         // so that row 1 → base + 1*step = hwm + step (first new value)
         let base: i64 = match id_col.high_water_mark {
             Some(hwm) => hwm,
-            None => id_col
-                .start
-                .checked_sub(id_col.step)
-                .ok_or_else(|| overflow_err(&id_col.name))?,
+            None => id_col.start.checked_sub(id_col.step).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "identity column '{}': start - step overflows i64",
+                    id_col.name
+                ))
+            })?,
         };
 
         // value = base + row_number * step

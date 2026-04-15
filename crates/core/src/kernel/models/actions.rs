@@ -581,6 +581,7 @@ impl ProtocolInner {
     }
 
     /// Enable identity columns
+    ///
     /// Identity columns are a v6 feature, but v6 also requires ColumnMapping
     /// which is not yet supported. So we go directly to v7 with feature flags.
     fn enable_identity_columns(mut self) -> Self {

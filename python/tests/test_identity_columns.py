@@ -236,9 +236,6 @@ def test_concurrent_writes_identity_conflict(tmp_path, experiment_table_schema):
     assert len(ids) == len(set(ids)), f"duplicate IDs found: {ids}"
 
 
-@pytest.mark.xfail(
-    reason="allowExplicitInsert=false should reject user-provided values, but currently silently overwrites them"
-)
 def test_explicit_insert_rejected_when_not_allowed(tmp_path):
     """When allowExplicitInsert=false, writes that include explicit values for
     the identity column must be rejected."""
@@ -501,3 +498,75 @@ def test_negative_step_generates_decreasing_values(tmp_path):
         .read_all()
     )
     assert result.column("id").to_pylist() == [-1, -2, -3]
+
+
+def test_explicit_insert_values_preserved(tmp_path):
+    """When allowExplicitInsert=true and user provides values, they should be kept."""
+    schema = DeltaSchema(
+        [
+            Field(
+                name="id",
+                type=PrimitiveType("long"),
+                nullable=False,
+                metadata={
+                    "delta.identity.start": "1",
+                    "delta.identity.step": "1",
+                    "delta.identity.highWaterMark": "0",
+                    "delta.identity.allowExplicitInsert": "true",
+                },
+            ),
+            Field(name="val", type=PrimitiveType("string"), nullable=False),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema=schema)
+
+    id_field = ArrowField("id", DataType.int64(), nullable=False)
+    val_field = ArrowField("val", DataType.string_view(), nullable=False)
+    data = Table.from_pydict(
+        {
+            "id": Array([100, 200], type=id_field),
+            "val": Array(["a", "b"], type=val_field),
+        }
+    )
+    write_deltalake(dt, mode="append", data=data)
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+    assert result.column("id").to_pylist() == [100, 200]
+
+
+def test_explicit_insert_column_absent_generates_values(tmp_path):
+    """When allowExplicitInsert=true but user omits the column, values are generated."""
+    schema = DeltaSchema(
+        [
+            Field(
+                name="id",
+                type=PrimitiveType("long"),
+                nullable=False,
+                metadata={
+                    "delta.identity.start": "1",
+                    "delta.identity.step": "1",
+                    "delta.identity.highWaterMark": "0",
+                    "delta.identity.allowExplicitInsert": "true",
+                },
+            ),
+            Field(name="val", type=PrimitiveType("string"), nullable=False),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema=schema)
+
+    val_field = ArrowField("val", DataType.string_view(), nullable=False)
+    data = Table.from_pydict({"val": Array(["a", "b"], type=val_field)})
+    write_deltalake(dt, mode="append", data=data)
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+    assert result.column("id").to_pylist() == [1, 2]
