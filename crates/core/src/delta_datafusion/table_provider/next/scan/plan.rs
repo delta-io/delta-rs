@@ -185,6 +185,9 @@ pub(crate) struct KernelScanPlan {
     pub(crate) contract: ProjectedScanContract,
     /// Physical schema used for Parquet reads and predicate evaluation.
     pub(crate) parquet_read_schema: SchemaRef,
+    /// Predicate binding schema used to plan Parquet pushdown, including the synthetic file id
+    /// column.
+    pub(crate) parquet_predicate_schema: SchemaRef,
     /// If set, indicates a predicate to apply at the Parquet scan level
     pub(crate) parquet_predicate: Option<Expr>,
 }
@@ -265,10 +268,13 @@ impl KernelScanPlan {
             scan.snapshot().table_configuration(),
             &scan.physical_schema().as_ref().try_into_arrow()?,
         )?;
+        let parquet_predicate_schema =
+            build_parquet_predicate_schema(&parquet_read_schema, &contract.file_id_field);
         Ok(Self {
             scan,
             contract,
             parquet_read_schema,
+            parquet_predicate_schema,
             parquet_predicate,
         })
     }
@@ -293,6 +299,15 @@ impl KernelScanPlan {
             self.contract.result_schema.clone()
         }
     }
+}
+
+pub(crate) fn build_parquet_predicate_schema(
+    predicate_schema: &SchemaRef,
+    file_id_field: &FieldRef,
+) -> SchemaRef {
+    let mut schema_builder = SchemaBuilder::from(predicate_schema.as_ref().clone());
+    schema_builder.push(file_id_field.as_ref().clone().with_nullable(true));
+    Arc::new(schema_builder.finish())
 }
 
 impl DeltaScanConfig {
@@ -661,6 +676,7 @@ mod tests {
     use datafusion::logical_expr::and;
     use datafusion::{
         assert_batches_sorted_eq,
+        common::ToDFSchema,
         physical_plan::collect,
         prelude::{col, lit},
         scalar::ScalarValue,
@@ -816,6 +832,32 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_column_mapping_direct_provider_scan_for_data_column_filter() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let provider = table.table_provider().await?;
+        let ctx = create_session().into_inner();
+
+        let filter =
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
+        let scan = provider.scan(&ctx.state(), None, &[filter], None).await?;
+        let batches = collect(scan, ctx.task_ctx()).await?;
+
+        let expected = vec![
+            "+--------------------+--------------+",
+            "| Company Very Short | Super Name   |",
+            "+--------------------+--------------+",
+            "| BME                | Timothy Lamb |",
+            "+--------------------+--------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_scan_schema_contract() -> TestResult {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
@@ -1004,6 +1046,46 @@ mod tests {
         assert_eq!(contract.kernel_projection, Some(vec![0, 1]));
         assert_eq!(contract.result_projection, Some(vec![0]));
         assert!(contract.retain_file_id);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_kernel_scan_plan_carries_explicit_parquet_predicate_schema() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+        let config = DeltaScanConfig::default().with_file_column_name("file_id");
+        let filter = col(r#""Super Name""#).eq(lit("Anthony Johnson"));
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[filter], &config, None)?;
+
+        assert!(
+            scan_plan
+                .parquet_predicate_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")
+                .is_ok()
+        );
+        assert!(
+            scan_plan
+                .parquet_predicate_schema
+                .field_with_name("file_id")
+                .is_ok()
+        );
+        assert!(
+            scan_plan
+                .parquet_predicate_schema
+                .field_with_name("Super Name")
+                .is_err()
+        );
+        let session = create_session().into_inner();
+        session.state().create_physical_expr(
+            scan_plan
+                .parquet_predicate
+                .clone()
+                .expect("expected parquet predicate for column-mapped filter"),
+            &scan_plan.parquet_predicate_schema.clone().to_dfschema()?,
+        )?;
 
         Ok(())
     }

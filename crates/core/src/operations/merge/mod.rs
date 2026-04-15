@@ -1855,7 +1855,7 @@ mod tests {
     use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
-    use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
@@ -1885,7 +1885,9 @@ mod tests {
     use std::sync::Arc;
     use url::Url;
 
-    use crate::delta_datafusion::{DataFusionMixins, PATH_COLUMN, resolve_file_column_name};
+    use crate::delta_datafusion::{
+        DataFusionMixins, DeltaScanNext, PATH_COLUMN, resolve_file_column_name,
+    };
 
     use super::MergeMetrics;
 
@@ -2713,6 +2715,49 @@ mod tests {
             "+----+-------+------------+",
         ];
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_target_scan_provider_exposes_resolved_file_column() {
+        let table = setup_table(None).await;
+        let table = write_data(table, &get_arrow_schema(&None)).await;
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let file_column_name =
+            resolve_file_column_name(snapshot.input_schema().as_ref(), None).unwrap();
+
+        let provider = DeltaScanNext::builder()
+            .with_eager_snapshot(snapshot.clone())
+            .with_log_store(table.log_store())
+            .with_file_column(file_column_name.as_str())
+            .await
+            .unwrap();
+
+        let provider_schema = provider.schema();
+        let input_schema = snapshot.input_schema();
+        let expected_names = input_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .chain(std::iter::once(file_column_name.as_str()))
+            .collect_vec();
+
+        assert_eq!(
+            provider_schema
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect_vec(),
+            expected_names
+        );
+        assert_eq!(
+            provider_schema.fields().len(),
+            input_schema.fields().len() + 1
+        );
+        assert!(
+            provider_schema
+                .column_with_name(&file_column_name)
+                .is_some()
+        );
     }
 
     #[tokio::test]
