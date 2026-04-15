@@ -153,7 +153,7 @@ impl DeltaScanExec {
         let input_file_id_column = scan_plan.contract.file_id_field.name().to_owned();
         let file_id_column = scan_plan
             .contract
-            .retain_file_id
+            .scan_must_return_file_id
             .then(|| scan_plan.contract.file_id_field.name().to_owned());
         let output_schema = scan_plan.effective_schema(file_id_column.is_some());
         let properties = Arc::new(PlanProperties::new(
@@ -655,7 +655,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::AsArray;
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::DataType;
     use arrow_array::Array;
     use arrow_array::ArrayAccessor;
     use datafusion::{
@@ -808,27 +808,6 @@ mod tests {
         Ok(())
     }
 
-    fn multi_partitioned_override_schema() -> Arc<Schema> {
-        Arc::new(Schema::new(vec![
-            Field::new(
-                "letter",
-                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
-                true,
-            ),
-            Field::new("date", DataType::Date32, true),
-            Field::new(
-                "data",
-                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Binary)),
-                true,
-            ),
-            Field::new(
-                "number",
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                true,
-            ),
-        ]))
-    }
-
     #[tokio::test]
     async fn test_gather_filters_for_pushdown_adapts_override_schema_predicates() -> TestResult {
         let mut table =
@@ -837,7 +816,9 @@ mod tests {
 
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
             table.snapshot()?.snapshot().clone(),
-            DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+            DeltaScanConfig::default().with_schema(
+                crate::delta_datafusion::table_provider::next::test_multi_partitioned_override_schema(),
+            ),
         )?
         .with_log_store(table.log_store());
 

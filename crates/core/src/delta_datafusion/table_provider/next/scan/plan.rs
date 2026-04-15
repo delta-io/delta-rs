@@ -46,17 +46,8 @@ use crate::kernel::{Scan, Snapshot};
 /// `TableProvider::scan` request so planning and execution do not rederive them independently.
 #[derive(Clone, Debug)]
 pub(crate) struct ProjectedScanContract {
-    /// Schema advertised by the provider for this table, including any public file id column.
-    #[allow(dead_code)]
-    pub(crate) provider_schema: SchemaRef,
-    /// Schema explicitly requested by the parent plan through the provider projection.
-    #[allow(dead_code)]
-    pub(crate) requested_schema: SchemaRef,
     /// Logical data schema after removing temporary predicate only columns and internal metadata.
     pub(crate) result_schema: SchemaRef,
-    /// Logical schema produced by the kernel scan before dropping filter only columns.
-    #[allow(dead_code)]
-    pub(crate) scan_schema: SchemaRef,
     /// Actual schema the scan must return to its parent for this query.
     pub(crate) output_schema: SchemaRef,
     /// Projection against the logical table schema used to build the kernel scan.
@@ -66,39 +57,37 @@ pub(crate) struct ProjectedScanContract {
     pub(crate) result_projection: Option<Vec<usize>>,
     /// Synthetic file id field used internally to correlate batches with their source files.
     pub(crate) file_id_field: FieldRef,
-    /// Whether this particular scan must return the file id column to its parent plan.
-    pub(crate) retain_file_id: bool,
+    /// Whether the scan must preserve file id in its output for projection or filter semantics.
+    pub(crate) scan_must_return_file_id: bool,
 }
 
 impl ProjectedScanContract {
     pub(crate) fn try_new(
         table_schema: SchemaRef,
-        provider_schema: SchemaRef,
         config: &DeltaScanConfig,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
     ) -> Result<Self> {
         let file_id_field = config.file_id_field();
-        let file_id_idx = config.has_file_id().then_some(table_schema.fields().len());
+        let provider_exposes_file_id = config.has_file_id();
+        let file_id_idx = provider_exposes_file_id.then_some(table_schema.fields().len());
 
-        let requested_schema = match projection {
-            Some(projection) => Arc::new(provider_schema.project(projection)?),
-            None => provider_schema.clone(),
+        let query_projects_file_id = if provider_exposes_file_id {
+            match projection {
+                None => true,
+                Some(projection) => projection.iter().any(|idx| Some(*idx) == file_id_idx),
+            }
+        } else {
+            false
         };
 
-        let retain_file_id = config.has_file_id()
-            && match projection {
-                None => true,
-                Some(projection) => {
-                    projection.iter().any(|idx| Some(*idx) == file_id_idx)
-                        || filters.iter().any(|filter| {
-                            filter
-                                .column_refs()
-                                .iter()
-                                .any(|column| column.name == file_id_field.name().as_str())
-                        })
-                }
-            };
+        let filters_reference_file_id = filters.iter().any(|filter| {
+            filter
+                .column_refs()
+                .iter()
+                .any(|column| column.name == file_id_field.name().as_str())
+        });
+        let scan_must_return_file_id = query_projects_file_id || filters_reference_file_id;
 
         let requested_data_projection = projection.map(|projection| {
             projection
@@ -140,17 +129,12 @@ impl ProjectedScanContract {
             })
             .transpose()?;
 
-        let scan_schema = match kernel_projection.as_ref() {
-            Some(projection) => Arc::new(table_schema.project(projection)?),
-            None => table_schema.clone(),
-        };
-
         let result_projection = kernel_projection.as_ref().and_then(|projection| {
             let projected_len = requested_data_projection.as_ref()?.len();
             (projection.len() > projected_len).then(|| (0..projected_len).collect())
         });
 
-        let output_schema = if retain_file_id {
+        let output_schema = if scan_must_return_file_id {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
             schema_builder.push(file_id_field.clone());
             Arc::new(schema_builder.finish())
@@ -159,15 +143,12 @@ impl ProjectedScanContract {
         };
 
         Ok(Self {
-            provider_schema,
-            requested_schema,
             result_schema,
-            scan_schema,
             output_schema,
             kernel_projection,
             result_projection,
             file_id_field,
-            retain_file_id,
+            scan_must_return_file_id,
         })
     }
 }
@@ -201,20 +182,7 @@ impl KernelScanPlan {
         skipping_predicate: Option<Vec<Expr>>,
     ) -> Result<Self> {
         let table_schema = config.table_schema(snapshot.table_configuration())?;
-        let provider_schema = if config.has_file_id() {
-            let mut schema_builder = SchemaBuilder::from(table_schema.as_ref());
-            schema_builder.push(config.file_id_field());
-            Arc::new(schema_builder.finish())
-        } else {
-            table_schema.clone()
-        };
-        let contract = ProjectedScanContract::try_new(
-            table_schema,
-            provider_schema,
-            config,
-            projection,
-            filters,
-        )?;
+        let contract = ProjectedScanContract::try_new(table_schema, config, projection, filters)?;
         Self::try_new_with_contract(snapshot, contract, filters, config, skipping_predicate)
     }
 
@@ -291,7 +259,7 @@ impl KernelScanPlan {
         self.scan.snapshot().table_configuration()
     }
 
-    // Projected schema depending on if execution preserves file column
+    // Scan output schema depends on whether execution must preserve file id for this request.
     pub(crate) fn effective_schema(&self, include_file_id: bool) -> SchemaRef {
         if include_file_id {
             self.contract.output_schema.clone()
@@ -319,7 +287,7 @@ impl DeltaScanConfig {
         self.file_column_name.is_some()
     }
 
-    pub(crate) fn projected_file_id_column<'a>(
+    pub(crate) fn provider_file_id_column<'a>(
         &'a self,
         projection: Option<&Vec<usize>>,
         result_schema: &Schema,
@@ -987,6 +955,58 @@ mod tests {
     }
 
     #[test]
+    fn test_projected_scan_contract_separates_provider_capability_from_scan_output_requirement()
+    -> TestResult {
+        let table_schema = Arc::new(Schema::new(vec![
+            Arc::new(arrow_schema::Field::new("data", DataType::Utf8, true)),
+            Arc::new(arrow_schema::Field::new("letter", DataType::Utf8, true)),
+        ]));
+        let config = DeltaScanConfig::default().with_file_column_name("file_id");
+        let projection = vec![0];
+
+        let contract =
+            ProjectedScanContract::try_new(table_schema, &config, Some(&projection), &[])?;
+
+        assert!(!contract.scan_must_return_file_id);
+        assert_eq!(
+            contract
+                .output_schema
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect_vec(),
+            vec!["data"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_projected_scan_contract_keeps_file_id_for_filter_only_queries() -> TestResult {
+        let table_schema = Arc::new(Schema::new(vec![
+            Arc::new(arrow_schema::Field::new("data", DataType::Utf8, true)),
+            Arc::new(arrow_schema::Field::new("letter", DataType::Utf8, true)),
+        ]));
+        let config = DeltaScanConfig::default().with_file_column_name("file_id");
+        let projection = vec![0];
+        let filters = vec![col("file_id").eq(lit("file:///tmp/part-0000.parquet"))];
+
+        let contract =
+            ProjectedScanContract::try_new(table_schema, &config, Some(&projection), &filters)?;
+
+        assert!(contract.scan_must_return_file_id);
+        assert_eq!(
+            contract
+                .output_schema
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect_vec(),
+            vec!["data", "file_id"]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_projected_scan_contract_tracks_internal_and_output_file_id_requirements() -> TestResult
     {
         let config = DeltaScanConfig::default().with_file_column_name("file_id");
@@ -994,46 +1014,20 @@ mod tests {
             Arc::new(arrow_schema::Field::new("data", DataType::Utf8, true)),
             Arc::new(arrow_schema::Field::new("letter", DataType::Utf8, true)),
         ]));
-
-        let mut provider_fields = table_schema.fields().to_vec();
-        provider_fields.push(config.file_id_field());
-        let provider_schema = Arc::new(Schema::new(provider_fields));
-
         let projection = vec![0];
         let filters = vec![
             col("letter").eq(lit("b")),
             col("file_id").eq(lit("file:///tmp/part-0000.parquet")),
         ];
-        let contract = ProjectedScanContract::try_new(
-            table_schema.clone(),
-            provider_schema.clone(),
-            &config,
-            Some(&projection),
-            &filters,
-        )?;
+        let contract =
+            ProjectedScanContract::try_new(table_schema, &config, Some(&projection), &filters)?;
+        let expected_result_schema = Schema::new(vec![Arc::new(arrow_schema::Field::new(
+            "data",
+            DataType::Utf8,
+            true,
+        ))]);
 
-        assert_eq!(contract.provider_schema.as_ref(), provider_schema.as_ref());
-        assert_eq!(
-            contract.requested_schema.as_ref(),
-            &Schema::new(vec![Arc::new(arrow_schema::Field::new(
-                "data",
-                DataType::Utf8,
-                true,
-            ))])
-        );
-        assert_eq!(
-            contract.result_schema.as_ref(),
-            contract.requested_schema.as_ref()
-        );
-        assert_eq!(
-            contract
-                .scan_schema
-                .fields()
-                .iter()
-                .map(|f| f.name())
-                .collect_vec(),
-            vec!["data", "letter"]
-        );
+        assert_eq!(contract.result_schema.as_ref(), &expected_result_schema);
         assert_eq!(
             contract
                 .output_schema
@@ -1045,7 +1039,7 @@ mod tests {
         );
         assert_eq!(contract.kernel_projection, Some(vec![0, 1]));
         assert_eq!(contract.result_projection, Some(vec![0]));
-        assert!(contract.retain_file_id);
+        assert!(contract.scan_must_return_file_id);
 
         Ok(())
     }
