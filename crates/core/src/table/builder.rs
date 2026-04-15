@@ -53,6 +53,15 @@ pub struct DeltaTableConfig {
     /// when processing record batches.
     pub log_batch_size: usize,
 
+    /// Skip parsing per-file statistics while opening the table.
+    /// This defaults to `false`.
+    ///
+    /// Use for workflows that never need file pruning (vacuum, filesystem check,
+    /// append-only writes). Any predicated query on this instance will scan every
+    /// file because the cache has no stats. Partition pruning is unaffected.
+    #[serde(default)]
+    pub skip_stats: bool,
+
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
@@ -65,6 +74,7 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            skip_stats: false,
             io_runtime: None,
         }
     }
@@ -75,6 +85,7 @@ impl PartialEq for DeltaTableConfig {
         self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
+            && self.skip_stats == other.skip_stats
     }
 }
 
@@ -126,6 +137,13 @@ impl DeltaTableBuilder {
     /// Sets `require_files=false` to the builder
     pub fn without_files(mut self) -> Self {
         self.table_config.require_files = false;
+        self
+    }
+
+    /// Sets `skip_stats` to the builder. See [`DeltaTableConfig::skip_stats`]
+    /// for the impact on predicated queries.
+    pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
+        self.table_config.skip_stats = skip_stats;
         self
     }
 
