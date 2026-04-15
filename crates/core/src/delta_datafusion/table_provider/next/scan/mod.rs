@@ -61,7 +61,7 @@ use crate::{
     delta_datafusion::{
         DeltaScanConfig,
         engine::{AsObjectStoreUrl as _, to_datafusion_scalar},
-        file_id::wrap_file_id_value,
+        file_id::{FILE_ID_COLUMN_DEFAULT, file_id_field, wrap_file_id_value},
         table_provider::next::DeletionVectorSelection,
     },
 };
@@ -76,6 +76,7 @@ type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTa
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
+    projection: Option<&Vec<usize>>,
     scan_plan: KernelScanPlan,
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
@@ -85,7 +86,9 @@ pub(super) async fn execution_plan(
     let (files, transforms, dvs, metrics) =
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
-    let file_id_field = config.file_id_field();
+    let table_schema = config.table_schema(scan_plan.table_configuration())?;
+    let projected_file_id_column =
+        config.projected_file_id_column(projection, table_schema.as_ref());
     if scan_plan.is_metadata_only() {
         let map_file = |f: &ScanFileContext| {
             Ok((
@@ -112,7 +115,7 @@ pub(super) async fn execution_plan(
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
-                config.retain_file_id().then_some(file_id_field),
+                projected_file_id_column.map(|name| file_id_field(Some(name))),
                 metrics,
             );
             return Ok(Arc::new(exec) as _);
@@ -127,8 +130,7 @@ pub(super) async fn execution_plan(
         dvs,
         metrics,
         limit,
-        file_id_field,
-        config.retain_file_id(),
+        projected_file_id_column,
     )
     .await
 }
@@ -299,8 +301,7 @@ async fn get_data_scan_plan(
     dvs: DashMap<String, Vec<bool>>,
     metrics: ExecutionPlanMetricsSet,
     limit: Option<usize>,
-    file_id_field: FieldRef,
-    retain_file_ids: bool,
+    projected_file_id_column: Option<&str>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut partition_stats = HashMap::new();
 
@@ -351,13 +352,12 @@ async fn get_data_scan_plan(
     } else {
         scan_plan.parquet_predicate.as_ref()
     };
-    let file_id_column = file_id_field.name().clone();
     let pq_plan = get_read_plan(
         session,
         files_by_store,
         &scan_plan.parquet_read_schema,
         limit,
-        &file_id_field,
+        &file_id_field(Some(FILE_ID_COLUMN_DEFAULT)),
         predicate,
     )
     .await?;
@@ -368,8 +368,7 @@ async fn get_data_scan_plan(
         Arc::new(transforms),
         Arc::new(dvs),
         partition_stats,
-        file_id_column,
-        retain_file_ids,
+        projected_file_id_column.map(ToOwned::to_owned),
         metrics,
     );
 
@@ -482,6 +481,7 @@ async fn get_read_plan(
             // Predicate pushdown can reference the synthetic file-id partition column.
             // Use the full read schema (data columns + file-id) when planning.
             let physical = state.create_physical_expr(pred.clone(), &full_read_df_schema)?;
+
             file_source = file_source
                 .with_predicate(physical)
                 .with_pushdown_filters(true);

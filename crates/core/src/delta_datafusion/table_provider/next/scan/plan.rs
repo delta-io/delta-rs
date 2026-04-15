@@ -195,9 +195,13 @@ impl KernelScanPlan {
         result_projection: Option<Vec<usize>>,
         parquet_predicate: Option<Expr>,
     ) -> Result<Self> {
-        let output_schema = if config.retain_file_id() {
+        let output_schema = if let Some(file_id_column) =
+            config.projected_file_id_column(None, result_schema.as_ref())
+        {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
-            schema_builder.push(config.file_id_field());
+            schema_builder.push(crate::delta_datafusion::file_id::file_id_field(Some(
+                file_id_column,
+            )));
             Arc::new(schema_builder.finish())
         } else {
             result_schema.clone()
@@ -227,6 +231,15 @@ impl KernelScanPlan {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
     }
+
+    // Projected schema depending on if execution preserves file column
+    pub(crate) fn effective_schema(&self, include_file_id: bool) -> SchemaRef {
+        if include_file_id {
+            self.output_schema.clone()
+        } else {
+            self.result_schema.clone()
+        }
+    }
 }
 
 impl DeltaScanConfig {
@@ -234,8 +247,20 @@ impl DeltaScanConfig {
         crate::delta_datafusion::file_id::file_id_field(self.file_column_name.as_deref())
     }
 
-    pub(crate) fn retain_file_id(&self) -> bool {
-        self.file_column_name.is_some()
+    pub(crate) fn projected_file_id_column<'a>(
+        &'a self,
+        projection: Option<&Vec<usize>>,
+        result_schema: &Schema,
+    ) -> Option<&'a str> {
+        let name = self.file_column_name.as_deref()?;
+        let Some(projection) = projection else {
+            return Some(name);
+        };
+        let file_id_idx = result_schema.fields().len();
+        projection
+            .iter()
+            .any(|&idx| idx == file_id_idx)
+            .then_some(name)
     }
 
     /// The physical arrow schema exposed by the table provider
@@ -244,6 +269,9 @@ impl DeltaScanConfig {
     /// such as dictionary encoding of partition columns or
     /// view types.
     pub(crate) fn table_schema(&self, table_config: &TableConfiguration) -> Result<SchemaRef> {
+        if let Some(schema) = &self.schema {
+            return Ok(schema.clone());
+        }
         let table_schema: Schema = table_config.logical_schema().as_ref().try_into_arrow()?;
         self.physical_arrow_schema(table_config, &table_schema)
     }
@@ -367,7 +395,16 @@ pub(crate) fn supports_filters_pushdown(
         && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     filter
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled).pushdown)
+        .map(|f| {
+            process_predicate(
+                f,
+                config,
+                scan_config,
+                file_id_field,
+                parquet_pushdown_enabled,
+            )
+            .pushdown
+        })
         .collect()
 }
 
@@ -395,7 +432,15 @@ fn process_filters(
         && !config.is_feature_enabled(&TableFeature::DeletionVectors);
     let (parquet, kernel): (Vec<_>, Vec<_>) = filters
         .iter()
-        .map(|f| process_predicate(f, config, file_id_field, parquet_pushdown_enabled))
+        .map(|f| {
+            process_predicate(
+                f,
+                config,
+                scan_config,
+                file_id_field,
+                parquet_pushdown_enabled,
+            )
+        })
         .map(|p| (p.parquet_predicate, p.kernel_predicate))
         .unzip();
     let parquet = if config.is_feature_enabled(&TableFeature::ColumnMapping) {
@@ -422,6 +467,7 @@ struct ProcessedPredicate<'a> {
 fn process_predicate<'a>(
     expr: &'a Expr,
     config: &TableConfiguration,
+    scan_config: &DeltaScanConfig,
     file_id_column: &str,
     parquet_pushdown_enabled: bool,
 ) -> ProcessedPredicate<'a> {
@@ -482,6 +528,33 @@ fn process_predicate<'a>(
             parquet_predicate: None,
         };
     }
+
+    // Reject filters that would be pushed down with wrong data type
+    // from an overridden schema
+    if let (Some(override_schema), Ok(table_schema)) = (
+        scan_config.schema.as_ref(),
+        delta_kernel::engine::arrow_conversion::TryIntoArrow::<Schema>::try_into_arrow(
+            config.physical_schema().as_ref(),
+        ),
+    ) {
+        let has_override_type_mismatch = expr.column_refs().iter().any(|c| {
+            if let (Ok(outer_field), Ok(table_field)) = (
+                table_schema.field_with_name(c.name.as_str()),
+                override_schema.field_with_name(&c.name),
+            ) {
+                outer_field.data_type() != table_field.data_type()
+            } else {
+                false
+            }
+        });
+        if has_override_type_mismatch {
+            return ProcessedPredicate {
+                pushdown: TableProviderFilterPushDown::Unsupported,
+                kernel_predicate: None,
+                parquet_predicate: None,
+            };
+        }
+    };
 
     ProcessedPredicate {
         pushdown: TableProviderFilterPushDown::Inexact,
