@@ -31,23 +31,21 @@ url = { workspace = true }
 
 # crates.io dependencies
 aws-smithy-runtime-api = { version = "1.11" }
-aws-smithy-runtime = { version = "1.10", optional = true }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
 aws-config = { version = "1.8", features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "1.105.0", default-features = false, features = [
+aws-sdk-dynamodb = { version = "1.110.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "1.98.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.101.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
 backon = { version = "1", default-features = false, features = ["tokio-sleep"] }
-hyper-tls = { version = "0.6", optional = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
@@ -65,8 +63,6 @@ integration_test = []
 native-tls = [
     "deltalake-core/native-tls",
     "aws-config/client-hyper",
-    "aws-smithy-runtime/connector-hyper-0-14-x",
-    "hyper-tls",
 ]
 rustls = [
     "deltalake-core/rustls",
