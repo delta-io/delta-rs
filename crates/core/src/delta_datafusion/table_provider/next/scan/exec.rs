@@ -17,18 +17,19 @@ use arrow_array::{Array, BooleanArray};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
-use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
-use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
+};
+use datafusion_physical_expr_adapter::{
+    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
 };
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
@@ -344,49 +345,42 @@ impl ExecutionPlan for DeltaScanExec {
         parent_filters: Vec<Arc<dyn PhysicalExpr>>,
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
-        // With schema overrides, DataFusion builds a FilterExec above DeltaScanExec and then
-        // re-pushes that physical predicate into the child scan. If an overridden column's
-        // output type differs from the child input type, simplification/coercion runs against
-        // incompatible physical types and the pushed-down predicate can fail to plan.
-        if parent_filters.iter().any(|filter| {
-            filter_references_type_mismatch(
-                filter,
-                &self.scan_plan.contract.result_schema,
-                &self.input.schema(),
-            )
-        }) {
+        // Parent filters are bound against the logical output schema. For column mapped tables
+        // the child parquet schema uses physical column names, so pushing the parent filter
+        // through this exec again can rewrite it against the wrong child field. Provider level
+        // predicate planning already handles the safe parquet pushdown path for these tables.
+        if self
+            .scan_plan
+            .table_configuration()
+            .is_feature_enabled(&TableFeature::ColumnMapping)
+        {
             return Ok(FilterDescription::all_unsupported(
                 &parent_filters,
                 &self.children(),
             ));
         }
 
-        // TODO(roeap): this will likely not do much for column mapping enabled tables
-        // since the default methods determines this based on existence of columns in child
-        // schemas. In the case of column mapping all columns will have a different name.
-        FilterDescription::from_children(parent_filters, &self.children())
-    }
-}
-
-fn filter_references_type_mismatch(
-    filter: &Arc<dyn PhysicalExpr>,
-    result_schema: &SchemaRef,
-    input_schema: &SchemaRef,
-) -> bool {
-    filter
-        .exists(|expr| {
-            Ok(
-                if let Some(column) = expr.as_any().downcast_ref::<Column>()
-                    && let Ok(result_field) = result_schema.field_with_name(column.name())
-                    && let Ok(input_field) = input_schema.field_with_name(column.name())
-                {
-                    result_field.data_type() != input_field.data_type()
-                } else {
-                    false
-                },
+        let adapter_factory = DefaultPhysicalExprAdapterFactory {};
+        let adapted_filters = adapter_factory
+            .create(
+                Arc::clone(&self.scan_plan.contract.result_schema),
+                self.input.schema(),
             )
-        })
-        .unwrap_or(false)
+            .and_then(|adapter| {
+                parent_filters
+                    .iter()
+                    .map(|filter| adapter.rewrite(Arc::clone(filter)))
+                    .collect::<Result<Vec<_>>>()
+            });
+
+        match adapted_filters {
+            Ok(filters) => FilterDescription::from_children(filters, &self.children()),
+            Err(_) => Ok(FilterDescription::all_unsupported(
+                &parent_filters,
+                &self.children(),
+            )),
+        }
+    }
 }
 
 /// Stream that produces logical RecordBatches from a Delta table scan.
@@ -661,19 +655,26 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::AsArray;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use arrow_array::Array;
     use arrow_array::ArrayAccessor;
     use datafusion::{
-        common::stats::Precision,
-        physical_plan::{collect, collect_partitioned},
+        common::{ToDFSchema, stats::Precision},
+        datasource::TableProvider,
+        physical_plan::{
+            collect, collect_partitioned,
+            filter_pushdown::{FilterPushdownPhase, PushedDown},
+        },
         prelude::{col, lit},
+        scalar::ScalarValue,
     };
 
     use super::*;
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::{session::create_session, table_provider::next::FILE_ID_COLUMN_DEFAULT},
+        delta_datafusion::{
+            DeltaScanConfig, session::create_session, table_provider::next::FILE_ID_COLUMN_DEFAULT,
+        },
         test_utils::{TestResult, TestTables, open_fs_path},
     };
 
@@ -773,6 +774,131 @@ mod tests {
         assert_eq!(data[0].num_columns(), 2);
         assert!(data[0].schema().column_with_name("data").is_some());
         assert!(data[0].schema().column_with_name("file_id").is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_id_provider_does_not_force_output_when_unprojected() -> TestResult
+    {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = Arc::new(create_session().into_inner());
+        let id_idx = provider.schema().index_of("id").unwrap();
+
+        let scan = provider
+            .scan(&session.state(), Some(&vec![id_idx]), &[], None)
+            .await?;
+
+        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        assert!(downcast.is_some());
+        assert!(downcast.unwrap().file_id_column.is_none());
+
+        let data = collect_partitioned(scan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+
+        assert!(!data.is_empty());
+        assert_eq!(data[0].num_columns(), 1);
+        assert!(data[0].schema().column_with_name("id").is_some());
+        assert!(data[0].schema().column_with_name("file_id").is_none());
+
+        Ok(())
+    }
+
+    fn multi_partitioned_override_schema() -> Arc<Schema> {
+        Arc::new(Schema::new(vec![
+            Field::new(
+                "letter",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("date", DataType::Date32, true),
+            Field::new(
+                "data",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Binary)),
+                true,
+            ),
+            Field::new(
+                "number",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                true,
+            ),
+        ]))
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_adapts_override_schema_predicates() -> TestResult {
+        let mut table =
+            open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        table.load().await?;
+
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::new(
+            table.snapshot()?.snapshot().clone(),
+            DeltaScanConfig::default().with_schema(multi_partitioned_override_schema()),
+        )?
+        .with_log_store(table.log_store());
+
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let filter = session.state().create_physical_expr(
+            col("number").lt(lit(ScalarValue::TimestampMillisecond(Some(7), None))),
+            &exec.schema().clone().to_dfschema()?,
+        )?;
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::Yes));
+
+        let input_batches = collect(Arc::clone(&exec.input), session.task_ctx()).await?;
+        assert!(!input_batches.is_empty());
+        child_filters[0][0].predicate.evaluate(&input_batches[0])?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_skips_column_mapping_parent_filters() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
+        table.load().await?;
+
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let filter = session.state().create_physical_expr(
+            col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string())))),
+            &exec.schema().clone().to_dfschema()?,
+        )?;
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Pre,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
 
         Ok(())
     }
