@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::kernel::error::Error;
 use crate::schema::DataCheck;
-use crate::table::GeneratedColumn;
+use crate::table::{GeneratedColumn, IdentityColumnInfo};
 
 /// Type alias for a top level schema
 pub type Schema = StructType;
@@ -58,6 +58,12 @@ pub trait StructTypeExt {
 
     /// Get all generated column expressions
     fn get_generated_columns(&self) -> Result<Vec<GeneratedColumn>, Error>;
+
+    /// Get all identity columns in the schemas
+    fn get_identity_columns(&self) -> Result<Vec<IdentityColumnInfo>, Error>;
+
+    /// Check if the schema has identity columns
+    fn has_identity_columns(&self) -> bool;
 }
 
 impl StructTypeExt for StructType {
@@ -153,6 +159,66 @@ impl StructTypeExt for StructType {
             }
         }
         Ok(invariants)
+    }
+    /// Get all identity columns in the schema
+    fn get_identity_columns(&self) -> Result<Vec<IdentityColumnInfo>, Error> {
+        let mut identity_columns: Vec<IdentityColumnInfo> = Vec::new();
+
+        for field in self.fields() {
+            // All 3 identity keys must be present together.
+            // Delta protocol stores field metadata as strings, so we parse from
+            // both String and native Number/Boolean variants.
+            let start = field
+                .metadata
+                .get("delta.identity.start")
+                .and_then(|v| match v {
+                    MetadataValue::Number(n) => Some(*n as i64),
+                    MetadataValue::String(s) => s.parse::<i64>().ok(),
+                    _ => None,
+                });
+            let step = field
+                .metadata
+                .get("delta.identity.step")
+                .and_then(|v| match v {
+                    MetadataValue::Number(n) => Some(*n as i64),
+                    MetadataValue::String(s) => s.parse::<i64>().ok(),
+                    _ => None,
+                });
+            let allow = field
+                .metadata
+                .get("delta.identity.allowExplicitInsert")
+                .and_then(|v| match v {
+                    MetadataValue::Boolean(b) => Some(*b),
+                    MetadataValue::String(s) => s.parse::<bool>().ok(),
+                    _ => None,
+                });
+
+            if let (Some(start), Some(step), Some(allow)) = (start, step, allow) {
+                let hwm =
+                    field
+                        .metadata
+                        .get("delta.identity.highWaterMark")
+                        .and_then(|v| match v {
+                            MetadataValue::Number(n) => Some(*n as i64),
+                            MetadataValue::String(s) => s.parse::<i64>().ok(),
+                            _ => None,
+                        });
+
+                identity_columns.push(IdentityColumnInfo {
+                    name: field.name.clone(),
+                    start,
+                    step,
+                    high_water_mark: hwm,
+                    allow_explicit_insert: allow,
+                });
+            }
+        }
+
+        Ok(identity_columns)
+    }
+    fn has_identity_columns(&self) -> bool {
+        self.fields()
+            .any(|f| f.metadata.contains_key("delta.identity.start"))
     }
 }
 
