@@ -39,7 +39,7 @@ use datafusion::{
     logical_expr::LogicalPlan,
     physical_plan::ExecutionPlan,
 };
-use delta_kernel::{Engine, table_configuration::TableConfiguration};
+use delta_kernel::{Engine, table_configuration::TableConfiguration, table_features::TableFeature};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -51,6 +51,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
+use crate::kernel::transaction::{PROTOCOL, TransactionError};
 use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::SaveMode;
@@ -329,7 +330,25 @@ impl DeltaScan {
         self
     }
 
-    fn ensure_read_session_ready(&self, session: &dyn Session) -> Result<()> {
+    fn ensure_supported_reader_features(&self) -> std::result::Result<(), TransactionError> {
+        match PROTOCOL.can_read_from_protocol(self.snapshot.snapshot().protocol()) {
+            Ok(()) => Ok(()),
+            Err(TransactionError::UnsupportedTableFeatures(features))
+                if features.as_slice() == [TableFeature::ColumnMapping]
+                    && self
+                        .snapshot
+                        .table_configuration()
+                        .is_feature_enabled(&TableFeature::ColumnMapping) =>
+            {
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn ensure_read_ready(&self, session: &dyn Session) -> Result<()> {
+        self.ensure_supported_reader_features()
+            .map_err(crate::DeltaTableError::from)?;
         if let Some(log_store) = &self.log_store {
             super::update_datafusion_session(session, log_store.as_ref(), None)?;
         }
@@ -346,7 +365,7 @@ impl DeltaScan {
         &self,
         session: &dyn Session,
     ) -> Result<Vec<DeletionVectorSelection>> {
-        self.ensure_read_session_ready(session)?;
+        self.ensure_read_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
 
         let scan_plan = KernelScanPlan::try_new(
@@ -406,10 +425,11 @@ impl TableProvider for DeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.ensure_read_session_ready(session)?;
+        self.ensure_read_ready(session)?;
         let engine = DataFusionEngine::new_from_session(session);
         let contract = ProjectedScanContract::try_new(
             self.scan_schema.clone(),
+            self.full_schema.clone(),
             &self.config,
             projection,
             filters,
@@ -554,7 +574,8 @@ mod tests {
         assert_batches_sorted_eq,
         delta_datafusion::{DeltaScanConfig, session::create_session},
         kernel::{
-            Action, DataType, EagerSnapshot, PrimitiveType, Snapshot, StructField, StructType,
+            Action, DataType, EagerSnapshot, PrimitiveType, ProtocolInner, Snapshot, StructField,
+            StructType,
         },
         logstore::get_actions,
         operations::create::CreateBuilder,
@@ -653,6 +674,23 @@ mod tests {
             vec![Arc::new(Int64Array::from(values))],
         )?;
         table.write(vec![batch]).await
+    }
+
+    async fn create_in_memory_id_table_with_reader_protocol(
+        min_reader_version: i32,
+    ) -> crate::DeltaResult<crate::DeltaTable> {
+        let schema = StructType::try_new(vec![StructField::new(
+            "id".to_string(),
+            DataType::Primitive(PrimitiveType::Long),
+            true,
+        )])?;
+        crate::DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_actions(vec![Action::Protocol(
+                ProtocolInner::new(min_reader_version, 2).as_kernel(),
+            )])
+            .await
     }
 
     async fn build_insert_input(
@@ -1049,6 +1087,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_direct_scan_with_log_store_registers_fresh_session() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![11, 13]).await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql("SELECT id FROM delta_table ORDER BY id")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec!["+----+", "| id |", "+----+", "| 11 |", "| 13 |", "+----+"];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_direct_scan_rejects_unsupported_reader_protocol() -> TestResult {
+        let table = create_in_memory_id_table_with_reader_protocol(2).await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let err = provider
+            .scan(&state, None, &[], None)
+            .await
+            .expect_err("unsupported reader protocol should fail before scan planning");
+        assert!(
+            err.to_string().contains("Unsupported"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
@@ -1436,6 +1519,28 @@ mod tests {
 
         let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert!(deletion_vectors.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_reject_unsupported_reader_protocol() -> TestResult {
+        let table = create_in_memory_id_table_with_reader_protocol(2).await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let err = provider
+            .deletion_vectors(&state)
+            .await
+            .expect_err("unsupported reader protocol should fail before deletion-vector reads");
+        assert!(
+            err.to_string().contains("Unsupported"),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }
