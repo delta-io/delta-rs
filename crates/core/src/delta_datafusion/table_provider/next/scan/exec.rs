@@ -153,7 +153,7 @@ impl DeltaScanExec {
         let input_file_id_column = scan_plan.contract.file_id_field.name().to_owned();
         let file_id_column = scan_plan
             .contract
-            .scan_must_return_file_id
+            .retain_file_id
             .then(|| scan_plan.contract.file_id_field.name().to_owned());
         let output_schema = scan_plan.effective_schema(file_id_column.is_some());
         let properties = Arc::new(PlanProperties::new(
