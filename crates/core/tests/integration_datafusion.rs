@@ -760,6 +760,12 @@ mod local {
                     .map(|x| Some(((x + offset) * 1_000_000) as i64))
                     .chain((0..null_rows).map(|_| None)),
             )),
+            #[cfg(feature = "nanosecond-timestamps")]
+            Arc::new(TimestampNanosecondArray::from_iter(
+                (0..not_null_rows)
+                    .map(|x| Some(((x + offset) * 1_000_000_000) as i64))
+                    .chain((0..null_rows).map(|_| None)),
+            )),
             Arc::new(Date32Array::from_iter(
                 (0..not_null_rows)
                     .map(|x| Some((x + offset) as i32))
@@ -781,6 +787,12 @@ mod local {
             ArrowField::new(
                 "timestamp",
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+            #[cfg(feature = "nanosecond-timestamps")]
+            ArrowField::new(
+                "timestamp_nanos",
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
                 true,
             ),
             ArrowField::new("date", ArrowDataType::Date32, true),
@@ -878,6 +890,10 @@ mod local {
             TestCase::new("timestamp", |value| {
                 lit(TimestampMicrosecond(Some(value * 1_000_000), None))
             }),
+            #[cfg(feature = "nanosecond-timestamps")]
+            TestCase::new("timestamp_nanos", |value| {
+                lit(TimestampNanosecond(Some(value * 1_000_000_000), None))
+            }),
             // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
             // not the proper string representation as specified by the precision and scale
             TestCase::new("decimal", |value| {
@@ -906,6 +922,7 @@ mod local {
                 || column == "date"
                 || column == "binary"
                 || column == "timestamp"
+                || (cfg!(feature = "nanosecond-timestamps") && column == "timestamp_nanos")
             {
                 continue;
             }
@@ -969,6 +986,10 @@ mod local {
             TestCase::new_wrapped("timestamp", |value| {
                 lit(TimestampMicrosecond(Some(value * 1_000_000), None))
             }),
+            #[cfg(feature = "nanosecond-timestamps")]
+            TestCase::new_wrapped("timestamp_nanos", |value| {
+                lit(TimestampNanosecond(Some(value * 1_000_000_000), None))
+            }),
             // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
             // not the proper string representation as specified by the precision and scale
             TestCase::new_wrapped("decimal", |value| {
@@ -1003,6 +1024,7 @@ mod local {
                 || column == "binary"
                 || column == "timestamp"
                 || column == "date"
+                || (cfg!(feature = "nanosecond-timestamps") && column == "timestamp_nanos")
             {
                 continue;
             }

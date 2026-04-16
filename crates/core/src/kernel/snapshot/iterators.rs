@@ -346,12 +346,12 @@ impl LogicalFileView {
 /// When delta.checkpoint.writeStatsAsStruct is enabled, microsecond timestamps are
 /// truncated to milliseconds. This function rounds up by 1ms to ensure correct
 /// range queries when stats are parsed on-the-fly.
-fn ceil_datetime(v: i64) -> i64 {
-    let remainder = v % 1000;
+fn ceil_datetime(v: i64, ratio: i64) -> i64 {
+    let remainder = v % ratio;
     if remainder == 0 {
         // if nanoseconds precision remainder is 0, we assume it was truncated
         // else we use the exact stats
-        ((v as f64 / 1000.0).floor() as i64 + 1) * 1000
+        ((v as f64 / ratio as f64).floor() as i64 + 1) * ratio
     } else {
         v
     }
@@ -360,11 +360,13 @@ fn ceil_datetime(v: i64) -> i64 {
 /// Recursively applies a rounding function to timestamp values in scalar data.
 fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
 where
-    F: Fn(i64) -> i64,
+    F: Fn(i64, i64) -> i64,
 {
     match value {
-        Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
-        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanos(v) => Scalar::TimestampNanos(func(v, 1_000_000)),
+        Scalar::Timestamp(v) => Scalar::Timestamp(func(v, 1_000)),
+        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v, 1_000)),
         Scalar::Struct(struct_data) => {
             let mut fields = Vec::with_capacity(struct_data.fields().len());
             let mut scalars = Vec::with_capacity(struct_data.values().len());
@@ -705,14 +707,20 @@ mod tests {
 
     #[test]
     fn test_ceil_datetime() {
+        // Microseconds
         // Test exact millisecond (should be rounded up)
-        assert_eq!(ceil_datetime(1609459200000), 1609459201000);
+        assert_eq!(ceil_datetime(1609459200000, 1000), 1609459201000);
 
         // Test with microsecond remainder (should stay the same)
-        assert_eq!(ceil_datetime(1609459200123), 1609459200123);
+        assert_eq!(ceil_datetime(1609459200123, 1000), 1609459200123);
 
         // Test zero
-        assert_eq!(ceil_datetime(0), 1000);
+        assert_eq!(ceil_datetime(0, 1000), 1000);
+
+        // Nanoseconds
+        assert_eq!(ceil_datetime(1609459200000000, 1000000), 1609459201000000);
+        assert_eq!(ceil_datetime(1609459200000123, 1000000), 1609459200000123);
+        assert_eq!(ceil_datetime(0, 1000000), 1000000);
     }
 
     #[test]
@@ -720,7 +728,7 @@ mod tests {
         use delta_kernel::expressions::{Scalar, StructData};
         use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 
-        let ceil_fn = |v: i64| v + 1000;
+        let ceil_fn = |v: i64, ratio: i64| v + ratio;
 
         // Test timestamp scalar
         let timestamp = Scalar::Timestamp(1609459200000);
@@ -731,6 +739,13 @@ mod tests {
         let timestamp_ntz = Scalar::TimestampNtz(1609459200000);
         let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
         assert_eq!(rounded, Scalar::TimestampNtz(1609459201000));
+
+        #[cfg(feture = "nanosecond-timestamps")]
+        {
+            let timestamp = Scalar::TimestampNanos(1609459200000000);
+            let rounded = round_ms_datetimes(timestamp, &ceil_fn);
+            assert_eq!(rounded, Scalar::TimestampNanos(1609459201000000));
+        }
 
         // Test non-timestamp scalar (should be unchanged)
         let string_scalar = Scalar::String("test".into());
