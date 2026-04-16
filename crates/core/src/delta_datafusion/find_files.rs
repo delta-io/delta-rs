@@ -354,9 +354,13 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
         .clone();
     let mut candidate_map: HashMap<_, _> = snapshot
         .file_views(log_store.as_ref(), None)
-        .map_ok(|view| view.to_add())
-        .try_fold(HashMap::new(), |mut candidate_map, add| {
-            let file_id = normalize_path_as_file_id(&add.path, &table_root, "find_files candidate");
+        .try_fold(HashMap::new(), |mut candidate_map, view| {
+            // The next-provider file-id column is derived from the raw log path representation.
+            // Key candidate lookup with that same representation, but keep decoded Add actions
+            // as values for downstream DML consumers.
+            let file_id =
+                normalize_path_as_file_id(view.path_raw(), &table_root, "find_files candidate");
+            let add = view.to_add();
 
             futures::future::ready(match file_id {
                 Ok(file_id) => {
@@ -595,8 +599,9 @@ pub(crate) async fn scan_files_where_matches(
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int64Array, StringArray};
     use arrow::record_batch::RecordBatch;
-    use arrow_schema::{DataType as ArrowDataType, Field};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::physical_plan::collect;
     use datafusion::prelude::{col, lit};
     use delta_kernel::schema::{DataType, PrimitiveType, StructField};
@@ -756,6 +761,50 @@ mod tests {
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].path.ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_matches_encoded_partition_paths_for_data_predicates() -> TestResult
+    {
+        let tmp_dir = tempfile::tempdir()?;
+        let table_path = std::fs::canonicalize(tmp_dir.path())?;
+        let table_url = url::Url::from_directory_path(&table_path)
+            .map_err(|_| DeltaTableError::InvalidTableLocation(table_path.display().to_string()))?;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("price", ArrowDataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1 2")])),
+                Arc::new(Int64Array::from(vec![Some(10)])),
+            ],
+        )?;
+
+        let table = DeltaTable::try_from_url(table_url)
+            .await?
+            .write(vec![batch])
+            .with_partition_columns(["id"])
+            .await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+
+        let matches =
+            find_files_scan(&snapshot, log_store, &session, col("price").eq(lit(10i64))).await?;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].partition_values.get("id"),
+            Some(&Some("1 2".to_string()))
+        );
 
         Ok(())
     }
