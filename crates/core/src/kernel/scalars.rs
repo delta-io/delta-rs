@@ -79,7 +79,8 @@ impl ScalarExt for Scalar {
             #[cfg(feature = "nanosecond-timestamps")]
             Self::TimestampNanos(ts) => {
                 let ts = Utc.timestamp_nanos(*ts);
-                ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string()
+                // Use the recommended ISO8601 representation.
+                ts.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string()
             }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
@@ -325,7 +326,8 @@ impl ScalarExt for Scalar {
             #[cfg(feature = "nanosecond-timestamps")]
             Self::TimestampNanos(ts) => {
                 let ts = Utc.timestamp_nanos(*ts);
-                Value::String(ts.format("%Y-%m-%d %H:%M:%S%.9f").to_string())
+                // Use the recommended ISO8601 representation.
+                Value::String(ts.format("%Y-%m-%dT%H:%M:%S%.9fZ").to_string())
             }
             Self::TimestampNtz(ts) | Self::Timestamp(ts) => {
                 let ts = Utc.timestamp_micros(*ts).single().unwrap();
@@ -475,7 +477,7 @@ mod tests {
         let timestamp_nanos = 1672574400000000456; // 2023-01-01 12:00:00.000000456 UTC
         let scalar = Scalar::TimestampNanos(timestamp_nanos);
         let serialized = scalar.serialize();
-        assert_eq!(serialized, "2023-01-01 12:00:00.000000456");
+        assert_eq!(serialized, "2023-01-01T12:00:00.000000456Z");
     }
 
     #[test]
@@ -686,7 +688,7 @@ mod tests {
 
         match json_val {
             serde_json::Value::String(s) => {
-                assert_eq!(s, "2023-01-01 12:00:00.000000000");
+                assert_eq!(s, "2023-01-01T12:00:00.000000000Z");
             }
             _ => panic!("Expected string value for timestamp"),
         }
@@ -695,7 +697,7 @@ mod tests {
 
         match json_val {
             serde_json::Value::String(s) => {
-                assert_eq!(s, "2023-01-01 12:00:00.000000123");
+                assert_eq!(s, "2023-01-01T12:00:00.000000123Z");
             }
             _ => panic!("Expected string value for timestamp"),
         }
