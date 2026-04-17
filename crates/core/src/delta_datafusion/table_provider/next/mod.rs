@@ -40,6 +40,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use delta_kernel::{Engine, table_configuration::TableConfiguration, table_features::TableFeature};
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
@@ -148,7 +149,14 @@ impl FileSelection {
         adds: impl IntoIterator<Item = crate::kernel::Add>,
         table_root_url: &Url,
     ) -> crate::DeltaResult<Self> {
-        Self::from_file_paths(adds.into_iter().map(|a| a.path), table_root_url)
+        Self::from_file_paths(
+            adds.into_iter()
+                // Add.path is URI-decoded once, while scan file IDs are keyed by the
+                // object-store/raw path form. Route through Path so literal '%' bytes in
+                // partition directories are escaped back to the canonical file-id form.
+                .map(|add| String::from(Path::from(add.path))),
+            table_root_url,
+        )
     }
 }
 
@@ -565,7 +573,7 @@ pub(crate) fn test_multi_partitioned_override_schema() -> SchemaRef {
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{Date32Array, Int64Array, TimestampMillisecondArray},
+        array::{Date32Array, Int32Array, Int64Array, StringArray, TimestampMillisecondArray},
         datatypes::{
             DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
         },
@@ -1362,6 +1370,78 @@ mod tests {
         let mut visitor = DeltaScanVisitor::default();
         visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
         assert_eq!(visitor.num_scanned, Some(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_selected_adds_reads_file_with_encoded_partition_path() -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("modified", ArrowDataType::Utf8, true),
+            ArrowField::new("country", ArrowDataType::Utf8, true),
+            ArrowField::new("value", ArrowDataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![
+                    "2021-02-01",
+                    "2021-02-01",
+                    "2021-02-02",
+                    "2021-02-02",
+                ])),
+                Arc::new(StringArray::from(vec![
+                    "Germany",
+                    "China",
+                    "Canada",
+                    "Dominican Republic",
+                ])),
+                Arc::new(Int32Array::from(vec![1, 10, 20, 100])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_partition_columns(vec!["country"])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .await?;
+        let log_store = table.log_store();
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+
+        let views = snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_collect::<Vec<_>>()
+            .await?;
+        let selected_add = views
+            .into_iter()
+            .find_map(|view| {
+                let add = view.to_add();
+                (add.partition_values.get("country") == Some(&Some("Dominican Republic".into())))
+                    .then_some(add)
+            })
+            .expect("expected a file in the Dominican Republic partition");
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_file_column(FILE_ID_COLUMN_DEFAULT)
+            .build()
+            .await?
+            .with_log_store(log_store)
+            .with_selected_adds([selected_add])?;
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        assert_eq!(visitor.num_scanned, Some(1));
+
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, 1);
 
         Ok(())
     }
