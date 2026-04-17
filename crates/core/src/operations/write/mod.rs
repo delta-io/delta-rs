@@ -492,9 +492,20 @@ impl std::future::IntoFuture for WriteBuilder {
                     &session,
                     this.mode,
                     &prepared_write,
-                    operation_id,
                 )
                 .await?;
+
+                if overwrite_plan.diagnostics.dropped_pruning_term_count > 0 {
+                    tracing::warn!(
+                        rewrite_kind = ?overwrite_plan.kind,
+                        matched_file_count = overwrite_plan.diagnostics.matched_file_count,
+                        translated_pruning_term_count =
+                            overwrite_plan.diagnostics.translated_pruning_term_count,
+                        dropped_pruning_term_count =
+                            overwrite_plan.diagnostics.dropped_pruning_term_count,
+                        "overwrite rewrite predicate was only partially translated for pruning; exact validation remains enabled"
+                    );
+                }
 
                 let plan::PreparedWrite {
                     schema_delta,
@@ -505,7 +516,6 @@ impl std::future::IntoFuture for WriteBuilder {
                 actions.extend(schema_delta.into_actions());
 
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
-                actions.extend(overwrite_plan.actions);
 
                 let plan::WriteExecOptions {
                     partition_columns,
@@ -515,9 +525,9 @@ impl std::future::IntoFuture for WriteBuilder {
                     writer_stats_config,
                 } = exec_options;
                 let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
-                let source_plan = session
-                    .create_physical_plan(&overwrite_plan.sink_plan)
-                    .await?;
+                let (sink_plan, contains_cdc, contains_insert_marker) =
+                    overwrite_plan.build_sink_plan()?;
+                let source_plan = session.create_physical_plan(&sink_plan).await?;
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
@@ -531,9 +541,16 @@ impl std::future::IntoFuture for WriteBuilder {
                     writer_properties,
                     writer_stats_config,
                     exact_validation,
-                    overwrite_plan.contains_cdc,
+                    contains_cdc,
+                    contains_insert_marker,
                 )
                 .await?;
+
+                actions.extend(
+                    overwrite_plan
+                        .matched_existing
+                        .into_actions(overwrite_plan.deletion_timestamp)?,
+                );
 
                 let source_count =
                     find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
@@ -1555,6 +1572,230 @@ mod tests {
 
         let table = DeltaTable::new_with_state(table_logstore, table_state);
         assert_eq!(table.get_latest_version().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_write_preserves_user_insert_marker_column_outside_rewrite() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new(
+                super::plan::WRITE_INSERT_MARKER_COLUMN,
+                DataType::Boolean,
+                true,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let actual = get_data_sorted(
+            &table,
+            format!(
+                "id,value,modified,{}",
+                super::plan::WRITE_INSERT_MARKER_COLUMN
+            )
+            .as_str(),
+        )
+        .await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------------------+",
+                "| id | value | modified   | __delta_rs_write_insert |",
+                "+----+-------+------------+-------------------------+",
+                "| A  | 1     | 2021-02-02 | false                   |",
+                "| B  | 2     | 2021-02-03 | true                    |",
+                "| C  | 3     | 2021-02-04 | false                   |",
+                "+----+-------+------------+-------------------------+",
+            ],
+            &actual
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_rejects_insert_marker_column_collision() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new(
+                super::plan::WRITE_INSERT_MARKER_COLUMN,
+                DataType::Boolean,
+                true,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let replacement_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("2023-01-01")])),
+                Arc::new(arrow::array::BooleanArray::from(vec![Some(false)])),
+            ],
+        )
+        .unwrap();
+
+        let err = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("value").eq(lit(3)))
+            .await
+            .expect_err("replaceWhere should reject internal marker column collisions");
+
+        assert!(
+            err.to_string()
+                .contains("internal write marker column '__delta_rs_write_insert'"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_merge_schema_rescues_existing_rows() -> TestResult {
+        let base_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ]));
+        let base_batch = RecordBatch::try_new(
+            Arc::clone(&base_schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![base_batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let merge_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new("inserted_by", DataType::Utf8, true),
+        ]));
+        let replacement_batch = RecordBatch::try_new(
+            merge_schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("2023-01-01")])),
+                Arc::new(StringArray::from(vec![Some("rewrite")])),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Merge)
+            .with_replace_where(col("value").eq(lit(3)))
+            .await?;
+
+        let actual = get_data_sorted(&table, "id,value,modified,inserted_by").await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------+",
+                "| id | value | modified   | inserted_by |",
+                "+----+-------+------------+-------------+",
+                "| A  | 1     | 2021-02-02 |             |",
+                "| B  | 2     | 2021-02-03 |             |",
+                "| C  | 3     | 2023-01-01 | rewrite     |",
+                "+----+-------+------------+-------------+",
+            ],
+            &actual
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_without_files_is_rejected() -> TestResult {
+        let temp_dir = tempfile::tempdir()?;
+        let table_path = temp_dir.path().join("without_files_overwrite");
+        std::fs::create_dir(&table_path)?;
+        let table_uri = ensure_table_uri(table_path.to_str().unwrap())?;
+
+        DeltaTable::try_from_url(table_uri.clone())
+            .await?
+            .write(vec![get_record_batch(None, false)])
+            .await?;
+
+        let table = crate::DeltaTableBuilder::from_url(table_uri)?
+            .without_files()
+            .load()
+            .await?;
+
+        assert_eq!(table.version(), Some(0));
+
+        // Phase 3 now routes overwrite planning through matched-file discovery, so this guard
+        // stays covered here to ensure we still fail before any rewrite planning starts.
+        let err = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .expect_err("overwrite should fail when table was loaded without files");
+
+        assert!(matches!(
+            err,
+            DeltaTableError::NotInitializedWithFiles(operation) if operation == "WRITE"
+        ));
+
+        Ok(())
     }
 
     #[tokio::test]
