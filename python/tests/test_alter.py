@@ -410,18 +410,23 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
 
 
 def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
-    check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", "timestampNtz")
+    check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", {"timestampNtz"})
 
 
 @pytest.mark.skipif(
     not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
 )
 def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
-    check_timestamp_column(tmp_path, sample_table, "timestamp_nanos", "timestampNanos")
+    check_timestamp_column(
+        tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}
+    )
 
 
 def check_timestamp_column(
-    tmp_path: pathlib.Path, sample_table: Table, primitive_type: str, rw_feature: str
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    primitive_type: str,
+    rw_feature: set[str],
 ):
     write_deltalake(
         tmp_path,
@@ -442,8 +447,8 @@ def check_timestamp_column(
     )
     assert new_protocol.min_reader_version == 3
     assert new_protocol.min_writer_version == 7
-    assert new_protocol.reader_features == [rw_feature]
-    assert new_protocol.writer_features == [rw_feature]
+    assert set(new_protocol.reader_features) == rw_feature
+    assert set(new_protocol.writer_features) == rw_feature
 
 
 features = [

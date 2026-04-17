@@ -430,7 +430,10 @@ impl ProtocolInner {
 
         #[cfg(feature = "nanosecond-timestamps")]
         if contains_timestamp_nanos {
-            self = self.enable_timestamp_nanos()
+            // Per the protocol RFC, non-timezone timestamps need to be required
+            // too, since there will eventually be a
+            // nanoseconds-without-timezones primitive type too.
+            self = self.enable_timestamp_nanos().enable_timestamp_ntz()
         }
 
         if !generated_cols.is_empty() {
