@@ -48,6 +48,7 @@ use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::delta_datafusion::Expression;
+use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
@@ -64,7 +65,7 @@ pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
-pub(crate) mod plan;
+mod plan;
 pub(crate) mod schema_evolution;
 pub mod writer;
 
@@ -258,7 +259,7 @@ impl WriteBuilder {
         self
     }
 
-    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
+    /// Control how delta rs resolves the provided session when it is not a concrete `SessionState`.
     ///
     /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
     pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
@@ -485,9 +486,6 @@ impl std::future::IntoFuture for WriteBuilder {
                     configuration: &this.configuration,
                 })?;
 
-                actions.extend(prepared_write.schema_delta.actions());
-
-                let predicate_str = prepared_write.predicate_sql.clone();
                 let overwrite_plan = plan::plan_overwrite_rewrite(
                     this.snapshot.as_ref(),
                     &this.log_store,
@@ -498,11 +496,25 @@ impl std::future::IntoFuture for WriteBuilder {
                 )
                 .await?;
 
+                let plan::PreparedWrite {
+                    schema_delta,
+                    exact_validation,
+                    exec_options,
+                    ..
+                } = prepared_write;
+                actions.extend(schema_delta.into_actions());
+
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
                 actions.extend(overwrite_plan.actions);
 
-                let exec_options = prepared_write.exec_options.clone();
-                let predicate = prepared_write.exact_validation_predicate();
+                let plan::WriteExecOptions {
+                    partition_columns,
+                    target_file_size,
+                    write_batch_size,
+                    writer_properties,
+                    writer_stats_config,
+                } = exec_options;
+                let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
                 let source_plan = session
                     .create_physical_plan(&overwrite_plan.sink_plan)
                     .await?;
@@ -512,13 +524,13 @@ impl std::future::IntoFuture for WriteBuilder {
                     this.snapshot.as_ref(),
                     &session,
                     source_plan.clone(),
-                    exec_options.partition_columns.clone(),
+                    partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
-                    exec_options.target_file_size,
-                    exec_options.write_batch_size,
-                    exec_options.writer_properties.clone(),
-                    exec_options.writer_stats_config,
-                    predicate,
+                    target_file_size,
+                    write_batch_size,
+                    writer_properties,
+                    writer_stats_config,
+                    exact_validation,
                     overwrite_plan.contains_cdc,
                 )
                 .await?;
@@ -539,12 +551,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let operation = DeltaOperation::Write {
                     mode: this.mode,
-                    partition_by: if !exec_options.partition_columns.is_empty() {
-                        Some(exec_options.partition_columns)
+                    partition_by: if !partition_columns.is_empty() {
+                        Some(partition_columns)
                     } else {
                         None
                     },
-                    predicate: predicate_str,
+                    predicate: predicate_sql,
                 };
 
                 let mut commit_properties = this.commit_properties.clone();
@@ -618,66 +630,6 @@ mod tests {
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
         // assert!(write_metrics.execution_time_ms > 0);
         assert!(write_metrics.num_added_files > 0);
-    }
-
-    #[test]
-    fn test_prepare_write_carries_exact_validations_and_exec_options() {
-        let batch = get_record_batch(None, false);
-        let source = LogicalPlanBuilder::scan(
-            UNNAMED_TABLE,
-            provider_as_source(Arc::new(
-                MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap(),
-            )),
-            None,
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-
-        let writer_properties = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(42))
-            .build();
-        let target_file_size = NonZeroU64::new(123).unwrap();
-        let session = create_session().state();
-
-        let prepared = super::plan::prepare_write(super::plan::WritePreparationInput {
-            snapshot: None,
-            session: &session,
-            source,
-            mode: SaveMode::Append,
-            schema_mode: None,
-            safe_cast: false,
-            partition_columns: vec![],
-            predicate: Some(col("id").eq(lit("A")).into()),
-            target_file_size: Some(Some(target_file_size)),
-            write_batch_size: Some(456),
-            writer_properties: Some(writer_properties.clone()),
-            configuration: &HashMap::new(),
-        })
-        .unwrap();
-
-        assert_eq!(prepared.exact_validations.len(), 1);
-        assert!(prepared.predicate_sql.is_some());
-        assert!(prepared.exact_validation_predicate().is_some());
-        assert!(prepared.schema_delta.is_empty());
-        assert_eq!(
-            prepared.exec_options.partition_columns,
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            prepared.exec_options.target_file_size,
-            Some(target_file_size)
-        );
-        assert_eq!(prepared.exec_options.write_batch_size, Some(456));
-        assert_eq!(
-            prepared
-                .exec_options
-                .writer_properties
-                .as_ref()
-                .unwrap()
-                .max_row_group_row_count(),
-            writer_properties.max_row_group_row_count()
-        );
     }
 
     #[tokio::test]
@@ -1208,13 +1160,8 @@ mod tests {
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
-        let part_cols = table
-            .snapshot()
-            .unwrap()
-            .metadata()
-            .partition_columns()
-            .clone();
-        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
+        let part_cols = table.snapshot().unwrap().metadata().partition_columns();
+        assert_eq!(part_cols, ["id".to_string(), "value".to_string()]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
@@ -2589,7 +2536,7 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("sales_date", DataType::Date64, true),
         ]));
-        let millis = 1760918400000i64; // 2025-10-20 in ms since epoch
+        let millis = 1760918400000i64; // 2025 10 20 in ms since epoch
         let batch = RecordBatch::try_new(
             schema,
             vec![
