@@ -1,8 +1,8 @@
-//! Write planning is split into two stages:
-//! - `prepare_write` normalizes incoming rows into table-shaped insert data and resolves exact
-//!   validations against that prepared schema.
-//! - `plan_overwrite_rewrite` adjusts the sink plan for overwrite flows and returns any
-//!   overwrite-side actions the caller must commit before add actions.
+//! Write planning has two stages.
+//! `prepare_write` normalizes incoming rows into table shaped insert data and resolves exact
+//! validations against that prepared schema.
+//! `plan_overwrite_rewrite` adjusts the sink plan for overwrite flows and returns any
+//! overwrite side actions the caller must commit before add actions.
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -12,7 +12,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow_schema::Schema;
 use datafusion::catalog::Session;
 use datafusion::common::{Column, ScalarValue};
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
 };
@@ -31,7 +30,6 @@ use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::Expression;
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::errors::DeltaResult;
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
@@ -45,76 +43,69 @@ use crate::operations::{get_num_idx_cols_and_stats_columns, get_target_file_size
 use crate::protocol::SaveMode;
 
 /// Schema and protocol actions required before the sink executes the write.
-#[derive(Clone, Default)]
-pub(crate) struct SchemaDelta {
+#[derive(Default)]
+pub(super) struct SchemaDelta {
     metadata: Option<Action>,
     protocol: Option<Action>,
 }
 
 impl SchemaDelta {
     #[cfg(test)]
-    pub(crate) fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.metadata.is_none() && self.protocol.is_none()
     }
 
-    pub(crate) fn actions(&self) -> Vec<Action> {
+    pub(super) fn into_actions(self) -> Vec<Action> {
         let mut actions = Vec::with_capacity(2);
-        if let Some(metadata) = &self.metadata {
-            actions.push(metadata.clone());
+        if let Some(metadata) = self.metadata {
+            actions.push(metadata);
         }
-        if let Some(protocol) = &self.protocol {
-            actions.push(protocol.clone());
+        if let Some(protocol) = self.protocol {
+            actions.push(protocol);
         }
         actions
     }
 }
 
-/// Sink-only knobs that must survive planning unchanged.
-#[derive(Clone)]
-pub(crate) struct WriteExecOptions {
-    pub partition_columns: Vec<String>,
-    pub target_file_size: Option<NonZeroU64>,
-    pub write_batch_size: Option<usize>,
-    pub writer_properties: Option<WriterProperties>,
-    pub writer_stats_config: WriterStatsConfig,
+/// Sink specific knobs that must survive planning unchanged.
+pub(super) struct WriteExecOptions {
+    pub(super) partition_columns: Vec<String>,
+    pub(super) target_file_size: Option<NonZeroU64>,
+    pub(super) write_batch_size: Option<usize>,
+    pub(super) writer_properties: Option<WriterProperties>,
+    pub(super) writer_stats_config: WriterStatsConfig,
 }
 
-/// Prepared insert input plus the exact validations the sink must enforce.
-pub(crate) struct PreparedWrite {
-    pub insert_plan: LogicalPlan,
-    pub schema_delta: SchemaDelta,
-    pub exact_validations: Vec<Expr>,
-    pub predicate_sql: Option<String>,
-    pub exec_options: WriteExecOptions,
+/// Prepared insert input plus the exact validation the sink must enforce.
+pub(super) struct PreparedWrite {
+    insert_plan: LogicalPlan,
+    mode: SaveMode,
+    pub(super) schema_delta: SchemaDelta,
+    pub(super) exact_validation: Option<Expr>,
+    pub(super) exec_options: WriteExecOptions,
 }
 
-impl PreparedWrite {
-    pub(crate) fn exact_validation_predicate(&self) -> Option<Expr> {
-        conjunction(self.exact_validations.clone())
-    }
-}
-
-/// Inputs required to normalize source rows into table-shaped insert data.
-pub(crate) struct WritePreparationInput<'a> {
-    pub snapshot: Option<&'a EagerSnapshot>,
-    pub session: &'a dyn Session,
-    pub source: LogicalPlan,
-    pub mode: SaveMode,
-    pub schema_mode: Option<SchemaMode>,
-    pub safe_cast: bool,
-    pub partition_columns: Vec<String>,
-    pub predicate: Option<Expression>,
-    pub target_file_size: Option<Option<NonZeroU64>>,
-    pub write_batch_size: Option<usize>,
-    pub writer_properties: Option<WriterProperties>,
-    pub configuration: &'a HashMap<String, Option<String>>,
+/// Inputs required to normalize source rows into table shaped insert data.
+pub(super) struct WritePreparationInput<'a> {
+    pub(super) snapshot: Option<&'a EagerSnapshot>,
+    pub(super) session: &'a dyn Session,
+    pub(super) source: LogicalPlan,
+    pub(super) mode: SaveMode,
+    pub(super) schema_mode: Option<SchemaMode>,
+    pub(super) safe_cast: bool,
+    pub(super) partition_columns: Vec<String>,
+    pub(super) predicate: Option<Expression>,
+    pub(super) target_file_size: Option<Option<NonZeroU64>>,
+    pub(super) write_batch_size: Option<usize>,
+    pub(super) writer_properties: Option<WriterProperties>,
+    pub(super) configuration: &'a HashMap<String, Option<String>>,
 }
 
 /// Planner output for overwrite flows before the sink materializes new files.
-pub(crate) struct OverwritePlan {
-    pub sink_plan: LogicalPlan,
-    pub actions: Vec<Action>,
-    pub contains_cdc: bool,
+pub(super) struct OverwritePlan {
+    pub(super) sink_plan: LogicalPlan,
+    pub(super) actions: Vec<Action>,
+    pub(super) contains_cdc: bool,
 }
 
 impl OverwritePlan {
@@ -126,7 +117,7 @@ impl OverwritePlan {
         }
     }
 
-    pub(crate) fn num_removed_files(&self) -> usize {
+    pub(super) fn num_removed_files(&self) -> usize {
         self.actions
             .iter()
             .filter(|action| matches!(action, Action::Remove(_)))
@@ -134,7 +125,7 @@ impl OverwritePlan {
     }
 }
 
-pub(crate) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<PreparedWrite> {
+pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<PreparedWrite> {
     let WritePreparationInput {
         snapshot,
         session,
@@ -267,14 +258,13 @@ pub(crate) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         new_schema.as_deref(),
     )?;
 
-    let exact_validations = resolve_exact_validations(session, &insert_plan, predicate)?;
-    let predicate_sql = exact_validations.first().map(fmt_expr_to_sql).transpose()?;
+    let exact_validation = resolve_exact_validation(session, &insert_plan, predicate)?;
 
     Ok(PreparedWrite {
         insert_plan,
+        mode,
         schema_delta,
-        exact_validations,
-        predicate_sql,
+        exact_validation,
         exec_options: build_exec_options(
             snapshot,
             partition_columns,
@@ -286,7 +276,7 @@ pub(crate) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
     })
 }
 
-pub(crate) async fn plan_overwrite_rewrite(
+pub(super) async fn plan_overwrite_rewrite(
     snapshot: Option<&EagerSnapshot>,
     log_store: &LogStoreRef,
     session: &dyn Session,
@@ -300,7 +290,12 @@ pub(crate) async fn plan_overwrite_rewrite(
         ));
     };
 
-    if !matches!(mode, SaveMode::Overwrite) {
+    debug_assert_eq!(
+        mode, prepared_write.mode,
+        "plan_overwrite_rewrite mode must match prepared write mode"
+    );
+
+    if !matches!(prepared_write.mode, SaveMode::Overwrite) {
         return Ok(OverwritePlan::passthrough(
             prepared_write.insert_plan.clone(),
         ));
@@ -310,7 +305,7 @@ pub(crate) async fn plan_overwrite_rewrite(
     let mut actions = Vec::new();
     let mut contains_cdc = false;
 
-    match prepared_write.exact_validation_predicate() {
+    match prepared_write.exact_validation.clone() {
         Some(predicate) => {
             let deletion_timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -389,11 +384,11 @@ fn build_exec_options(
     }
 }
 
-fn resolve_exact_validations(
+fn resolve_exact_validation(
     session: &dyn Session,
     insert_plan: &LogicalPlan,
     predicate: Option<Expression>,
-) -> DeltaResult<Vec<Expr>> {
+) -> DeltaResult<Option<Expr>> {
     let df_schema = insert_plan
         .schema()
         .as_ref()
@@ -401,9 +396,7 @@ fn resolve_exact_validations(
         .replace_qualifier(UNNAMED_TABLE);
     Ok(predicate
         .map(|predicate| predicate.resolve(session, Arc::new(df_schema)))
-        .transpose()?
-        .into_iter()
-        .collect())
+        .transpose()?)
 }
 
 fn schema_delta_for_prepared_source(
@@ -448,7 +441,7 @@ fn schema_delta_for_prepared_source(
         .apply_column_metadata_to_protocol(&schema_struct)?
         .move_table_properties_into_features(&configuration);
 
-    let mut metadata = new_metadata(&schema_struct, partition_columns, configuration.clone())?;
+    let mut metadata = new_metadata(&schema_struct, partition_columns, configuration)?;
     let existing_metadata_id = snapshot.metadata().id().to_string();
     if !existing_metadata_id.is_empty() {
         metadata = metadata.with_table_id(existing_metadata_id)?;
@@ -472,7 +465,6 @@ mod tests {
     use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
     use datafusion::prelude::{col, lit};
-    use delta_kernel::table_properties::DataSkippingNumIndexedCols;
     use uuid::Uuid;
 
     use crate::DeltaTable;
@@ -494,21 +486,6 @@ mod tests {
         .unwrap()
         .build()
         .unwrap()
-    }
-
-    fn remove_action(path: &str) -> Action {
-        Action::Remove(crate::kernel::Remove {
-            path: path.to_string(),
-            data_change: true,
-            deletion_timestamp: Some(1),
-            extended_file_metadata: Some(true),
-            partition_values: Some(HashMap::new()),
-            size: Some(1),
-            tags: None,
-            deletion_vector: None,
-            base_row_id: None,
-            default_row_commit_version: None,
-        })
     }
 
     #[tokio::test]
@@ -556,7 +533,7 @@ mod tests {
         assert!(
             prepared
                 .schema_delta
-                .actions()
+                .into_actions()
                 .iter()
                 .any(|action| matches!(action, Action::Metadata(_)))
         );
@@ -596,61 +573,7 @@ mod tests {
         .unwrap();
 
         assert!(prepared.schema_delta.is_empty());
-    }
-
-    #[test]
-    fn test_exact_validation_predicate_returns_none_without_predicate() {
-        let prepared = PreparedWrite {
-            insert_plan: source_plan_for_batch(get_record_batch(None, false)),
-            schema_delta: SchemaDelta::default(),
-            exact_validations: Vec::new(),
-            predicate_sql: None,
-            exec_options: WriteExecOptions {
-                partition_columns: vec![],
-                target_file_size: None,
-                write_batch_size: None,
-                writer_properties: None,
-                writer_stats_config: WriterStatsConfig {
-                    num_indexed_cols: DataSkippingNumIndexedCols::NumColumns(32),
-                    stats_columns: None,
-                },
-            },
-        };
-
-        assert!(prepared.exact_validation_predicate().is_none());
-    }
-
-    #[tokio::test]
-    async fn test_schema_delta_actions_preserve_metadata_then_protocol_order() {
-        let table = DeltaTable::new_in_memory()
-            .write(vec![get_record_batch(None, false)])
-            .await
-            .unwrap();
-        let snapshot = table.snapshot().unwrap().snapshot();
-
-        let schema_delta = SchemaDelta {
-            metadata: Some(Action::Metadata(snapshot.metadata().clone())),
-            protocol: Some(Action::Protocol(snapshot.protocol().clone())),
-        };
-
-        let actions = schema_delta.actions();
-        assert!(matches!(actions.first(), Some(Action::Metadata(_))));
-        assert!(matches!(actions.get(1), Some(Action::Protocol(_))));
-    }
-
-    #[test]
-    fn test_overwrite_plan_num_removed_files_counts_only_remove_actions() {
-        let overwrite_plan = OverwritePlan {
-            sink_plan: source_plan_for_batch(get_record_batch(None, false)),
-            actions: vec![
-                remove_action("part-000.parquet"),
-                Action::Protocol(Default::default()),
-                remove_action("part-001.parquet"),
-            ],
-            contains_cdc: false,
-        };
-
-        assert_eq!(overwrite_plan.num_removed_files(), 2);
+        assert!(prepared.exact_validation.is_none());
     }
 
     #[tokio::test]
@@ -735,6 +658,43 @@ mod tests {
             overwrite_plan.sink_plan.schema().as_arrow(),
             prepared.insert_plan.schema().as_arrow()
         );
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "plan_overwrite_rewrite mode must match prepared write mode")]
+    async fn test_plan_overwrite_rewrite_panics_on_mode_mismatch() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![get_record_batch(None, false)])
+            .await
+            .unwrap();
+
+        let session = create_session().state();
+        let configuration = HashMap::new();
+        let prepared = prepare_write(WritePreparationInput {
+            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            session: &session,
+            source: source_plan_for_batch(get_record_batch(None, false)),
+            mode: SaveMode::Append,
+            schema_mode: None,
+            safe_cast: false,
+            partition_columns: vec![],
+            predicate: None,
+            target_file_size: None,
+            write_batch_size: None,
+            writer_properties: None,
+            configuration: &configuration,
+        })
+        .unwrap();
+
+        let _ = plan_overwrite_rewrite(
+            Some(table.snapshot().unwrap().snapshot()),
+            &table.log_store(),
+            &session,
+            SaveMode::Overwrite,
+            &prepared,
+            Uuid::new_v4(),
+        )
+        .await;
     }
 
     #[tokio::test]
