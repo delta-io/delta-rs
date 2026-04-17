@@ -2101,8 +2101,8 @@ def test_write_timestamp_nanos_nested(tmp_path: pathlib.Path, array):
     protocol = dt.protocol()
     assert protocol.min_reader_version == 3
     assert protocol.min_writer_version == 7
-    assert protocol.reader_features == ["timestampNanos"]
-    assert protocol.writer_features == ["timestampNanos"]
+    assert set(protocol.reader_features) == {"timestampNanos", "timestampNtz"}
+    assert set(protocol.writer_features) == {"timestampNanos", "timestampNtz"}
 
 
 def test_parse_stats_with_new_schema(tmp_path):
