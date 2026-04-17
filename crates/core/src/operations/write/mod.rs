@@ -27,50 +27,36 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use std::vec;
 
 use arrow::array::RecordBatch;
-use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, Result, ScalarValue};
+use datafusion::common::Result;
 use datafusion::datasource::{MemTable, provider_as_source};
-use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
-};
-use datafusion::prelude::col;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use futures::{TryStreamExt as _, future::BoxFuture};
-use itertools::Itertools as _;
+use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
 
 pub use self::configs::WriterStatsConfig;
-use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
-use self::generated_columns::{gc_is_enabled, with_generated_columns};
+use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
-use self::schema_evolution::try_cast_schema;
-use super::cdc::CDC_COLUMN_NAME;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::Expression;
-use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
     resolve_session_state, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
-    new_metadata,
-};
+use crate::kernel::{Action, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -78,6 +64,7 @@ pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
+pub(crate) mod plan;
 pub(crate) mod schema_evolution;
 pub mod writer;
 
@@ -465,7 +452,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let partition_columns = this.get_partition_columns()?;
 
-                let Some(mut source) = this.input.take() else {
+                let Some(source) = this.input.take() else {
                     return Err(WriteError::MissingData.into());
                 };
 
@@ -483,281 +470,56 @@ impl std::future::IntoFuture for WriteBuilder {
                 update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-                let mut schema_drift = false;
+                let prepared_write = plan::prepare_write(plan::WritePreparationInput {
+                    snapshot: this.snapshot.as_ref(),
+                    session: &session,
+                    source,
+                    mode: this.mode,
+                    schema_mode: this.schema_mode,
+                    safe_cast: this.safe_cast,
+                    partition_columns: partition_columns.clone(),
+                    predicate: this.predicate,
+                    target_file_size: this.target_file_size,
+                    write_batch_size: this.write_batch_size,
+                    writer_properties: this.writer_properties.clone(),
+                    configuration: &this.configuration,
+                })?;
 
-                let table_schema = if let Some(snapshot) = this.snapshot.as_ref() {
-                    snapshot.arrow_schema()
-                } else {
-                    normalize_for_delta(source.schema().inner())
-                };
+                actions.extend(prepared_write.schema_delta.actions());
 
-                if let Some(snapshot) = &this.snapshot
-                    && gc_is_enabled(snapshot)
-                {
-                    source = with_generated_columns(
-                        &session,
-                        source,
-                        &table_schema,
-                        &snapshot.schema().get_generated_columns()?,
-                    )?;
-                }
+                let predicate_str = prepared_write.predicate_sql.clone();
+                let overwrite_plan = plan::plan_overwrite_rewrite(
+                    this.snapshot.as_ref(),
+                    &this.log_store,
+                    &session,
+                    this.mode,
+                    &prepared_write,
+                    operation_id,
+                )
+                .await?;
 
-                let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
+                metrics.num_removed_files = overwrite_plan.num_removed_files();
+                actions.extend(overwrite_plan.actions);
 
-                if !Arc::ptr_eq(&source_schema, source.schema().inner()) {
-                    let original_schema = source.schema().inner();
-                    let cast_projection: Vec<Expr> = source_schema
-                        .fields()
-                        .iter()
-                        .zip(original_schema.fields().iter())
-                        .map(|(target, original)| {
-                            if target.data_type() != original.data_type() {
-                                let cast_fn = if this.safe_cast { try_cast } else { cast };
-                                cast_fn(
-                                    Expr::Column(Column::from_name(target.name())),
-                                    target.data_type().clone(),
-                                )
-                                .alias(target.name())
-                            } else {
-                                Expr::Column(Column::from_name(target.name()))
-                            }
-                        })
-                        .collect();
-                    source = LogicalPlanBuilder::new(source)
-                        .project(cast_projection)?
-                        .build()?;
-                }
-
-                // Schema merging code should be aware of columns that can be generated during write
-                // so they might be empty in the batch, but the will exist in the input_schema()
-                // in this case we have to insert the generated column and it's type in the schema of the batch
-                let mut new_schema = None;
-                if let Some(snapshot) = &this.snapshot {
-                    let table_schema = snapshot.input_schema();
-
-                    if let Err(schema_err) =
-                        try_cast_schema(source_schema.fields(), table_schema.fields())
-                    {
-                        schema_drift = true;
-                        if this.mode == SaveMode::Overwrite
-                            && this.schema_mode == Some(SchemaMode::Overwrite)
-                        {
-                            new_schema = None // we overwrite anyway, so no need to cast
-                        } else if this.schema_mode == Some(SchemaMode::Merge) {
-                            new_schema = Some(merge_arrow_schema(
-                                table_schema.clone(),
-                                source_schema.clone(),
-                                schema_drift,
-                            )?);
-                        } else {
-                            return Err(schema_err.into());
-                        }
-                    } else if this.mode == SaveMode::Overwrite
-                        && this.schema_mode == Some(SchemaMode::Overwrite)
-                    {
-                        new_schema = None // we overwrite anyway, so no need to cast
-                    } else {
-                        // Schema needs to be merged so that utf8/binary/list types are preserved from the batch side if both table
-                        // and batch contains such type. Other types are preserved from the table side.
-                        // At this stage it will never introduce more fields since try_cast_batch passed correctly.
-                        new_schema = Some(merge_arrow_schema(
-                            table_schema.clone(),
-                            source_schema.clone(),
-                            schema_drift,
-                        )?);
-                    }
-                }
-
-                if let Some(new_schema) = new_schema.as_ref() {
-                    let mut schema_evolution_projection =
-                        Vec::with_capacity(new_schema.fields().len());
-                    for field in new_schema.fields() {
-                        // If field exist in source data, we cast to new datatype
-                        if source_schema.index_of(field.name()).is_ok() {
-                            let cast_fn = if this.safe_cast { try_cast } else { cast };
-                            let cast_expr = cast_fn(
-                                Expr::Column(Column::from_name(field.name())),
-                                // col(field.name()),
-                                field.data_type().clone(),
-                            )
-                            .alias(field.name());
-                            schema_evolution_projection.push(cast_expr)
-                        // If field doesn't exist in source data, we insert the column
-                        // with null values
-                        } else {
-                            schema_evolution_projection.push(
-                                cast(
-                                    lit(ScalarValue::Null).alias(field.name()),
-                                    field.data_type().clone(),
-                                )
-                                .alias(field.name()),
-                            );
-                        }
-                    }
-                    source = LogicalPlanBuilder::new(source)
-                        .project(schema_evolution_projection)?
-                        .build()?;
-                }
-
-                let mut source = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MetricObserver {
-                        id: "write_source_count".into(),
-                        input: source,
-                        enable_pushdown: false,
-                    }),
-                });
-
-                // Maybe create schema action based on schema_mode
-                if let Some(snapshot) = &this.snapshot {
-                    let should_update_schema = match this.schema_mode {
-                        Some(SchemaMode::Merge) if schema_drift => true,
-                        Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
-                            let delta_schema: StructType =
-                                source.schema().as_arrow().try_into_kernel()?;
-                            &delta_schema != snapshot.schema().as_ref()
-                        }
-                        _ => false,
-                    };
-
-                    if should_update_schema {
-                        // Use the merged Arrow schema (not the DataFusion plan schema) when
-                        // performing schema evolution. DataFusion expressions do not reliably
-                        // preserve Arrow field metadata, which would otherwise strip column
-                        // metadata such as generated column expressions.
-                        let schema_struct: StructType =
-                            match (this.schema_mode, schema_drift, new_schema.as_deref()) {
-                                (Some(SchemaMode::Merge), true, Some(schema)) => {
-                                    schema.try_into_kernel()?
-                                }
-                                _ => source.schema().as_arrow().try_into_kernel()?,
-                            };
-                        // Verify if delta schema changed
-                        if &schema_struct != snapshot.schema().as_ref() {
-                            let current_protocol = snapshot.protocol();
-                            let configuration = snapshot.metadata().configuration().clone();
-                            let new_protocol = current_protocol
-                                .clone()
-                                .apply_column_metadata_to_protocol(&schema_struct)?
-                                .move_table_properties_into_features(&configuration);
-
-                            let mut metadata =
-                                new_metadata(&schema_struct, &partition_columns, configuration)?;
-                            let existing_metadata_id = snapshot.metadata().id().to_string();
-
-                            if !existing_metadata_id.is_empty() {
-                                metadata = metadata.with_table_id(existing_metadata_id)?;
-                            }
-                            let schema_action = Action::Metadata(metadata);
-                            actions.push(schema_action);
-                            if current_protocol != &new_protocol {
-                                actions.push(new_protocol.into())
-                            }
-                        }
-                    }
-                }
-
-                let df_schema = source
-                    .schema()
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(UNNAMED_TABLE);
-                let predicate = this
-                    .predicate
-                    .map(|p| p.resolve(&session, Arc::new(df_schema)))
-                    .transpose()?;
-                let predicate_str = predicate.as_ref().map(fmt_expr_to_sql).transpose()?;
-
-                let config = this
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.table_properties());
-
-                let target_file_size = this.target_file_size.unwrap_or_else(|| {
-                    Some(super::get_target_file_size(config, &this.configuration))
-                });
-
-                let (num_indexed_cols, stats_columns) =
-                    super::get_num_idx_cols_and_stats_columns(config, this.configuration);
-
-                let writer_stats_config = WriterStatsConfig {
-                    num_indexed_cols,
-                    stats_columns,
-                };
-
-                let mut contains_cdc = false;
-
-                // Collect remove actions if we are overwriting the table
-                if let Some(snapshot) = &this.snapshot {
-                    if matches!(this.mode, SaveMode::Overwrite) {
-                        let deletion_timestamp = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as i64;
-
-                        match &predicate {
-                            Some(pred) => {
-                                let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                                    pred.clone(),
-                                    this.log_store.clone(),
-                                    snapshot,
-                                    &session,
-                                    partition_columns.clone(),
-                                    this.writer_properties.clone(),
-                                    deletion_timestamp,
-                                    writer_stats_config.clone(),
-                                    operation_id,
-                                )
-                                .await?;
-
-                                if let Some(cdf_df) = cdf_df {
-                                    contains_cdc = true;
-                                    let mut projection = source
-                                        .schema()
-                                        .iter()
-                                        .map(|(_, field)| col(field.name()))
-                                        .collect_vec();
-                                    projection.push(lit("insert").alias(CDC_COLUMN_NAME));
-                                    source = LogicalPlanBuilder::new(source)
-                                        .project(projection)?
-                                        .union(cdf_df)?
-                                        .build()?;
-                                }
-
-                                if !predicate_actions.is_empty() {
-                                    actions.extend(predicate_actions);
-                                }
-                            }
-                            _ => {
-                                let remove_actions = snapshot
-                                    .file_views(&this.log_store, None)
-                                    .map_ok(|p| p.remove_action(true).into())
-                                    .try_collect::<Vec<_>>()
-                                    .await?;
-                                actions.extend(remove_actions);
-                            }
-                        };
-                    }
-                    metrics.num_removed_files = actions
-                        .iter()
-                        .filter(|a| matches!(a, Action::Remove(_)))
-                        .count();
-                }
-
-                let source_plan = session.create_physical_plan(&source).await?;
+                let exec_options = prepared_write.exec_options.clone();
+                let predicate = prepared_write.exact_validation_predicate();
+                let source_plan = session
+                    .create_physical_plan(&overwrite_plan.sink_plan)
+                    .await?;
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
                     &session,
                     source_plan.clone(),
-                    partition_columns.clone(),
+                    exec_options.partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
-                    target_file_size,
-                    this.write_batch_size,
-                    this.writer_properties,
-                    writer_stats_config.clone(),
-                    predicate.clone(),
-                    contains_cdc,
+                    exec_options.target_file_size,
+                    exec_options.write_batch_size,
+                    exec_options.writer_properties.clone(),
+                    exec_options.writer_stats_config,
+                    predicate,
+                    overwrite_plan.contains_cdc,
                 )
                 .await?;
 
@@ -777,8 +539,8 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let operation = DeltaOperation::Write {
                     mode: this.mode,
-                    partition_by: if !partition_columns.is_empty() {
-                        Some(partition_columns)
+                    partition_by: if !exec_options.partition_columns.is_empty() {
+                        Some(exec_options.partition_columns)
                     } else {
                         None
                     },
@@ -856,6 +618,66 @@ mod tests {
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
         // assert!(write_metrics.execution_time_ms > 0);
         assert!(write_metrics.num_added_files > 0);
+    }
+
+    #[test]
+    fn test_prepare_write_carries_exact_validations_and_exec_options() {
+        let batch = get_record_batch(None, false);
+        let source = LogicalPlanBuilder::scan(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(
+                MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap(),
+            )),
+            None,
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+        let writer_properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(42))
+            .build();
+        let target_file_size = NonZeroU64::new(123).unwrap();
+        let session = create_session().state();
+
+        let prepared = super::plan::prepare_write(super::plan::WritePreparationInput {
+            snapshot: None,
+            session: &session,
+            source,
+            mode: SaveMode::Append,
+            schema_mode: None,
+            safe_cast: false,
+            partition_columns: vec![],
+            predicate: Some(col("id").eq(lit("A")).into()),
+            target_file_size: Some(Some(target_file_size)),
+            write_batch_size: Some(456),
+            writer_properties: Some(writer_properties.clone()),
+            configuration: &HashMap::new(),
+        })
+        .unwrap();
+
+        assert_eq!(prepared.exact_validations.len(), 1);
+        assert!(prepared.predicate_sql.is_some());
+        assert!(prepared.exact_validation_predicate().is_some());
+        assert!(prepared.schema_delta.is_empty());
+        assert_eq!(
+            prepared.exec_options.partition_columns,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            prepared.exec_options.target_file_size,
+            Some(target_file_size)
+        );
+        assert_eq!(prepared.exec_options.write_batch_size, Some(456));
+        assert_eq!(
+            prepared
+                .exec_options
+                .writer_properties
+                .as_ref()
+                .unwrap()
+                .max_row_group_row_count(),
+            writer_properties.max_row_group_row_count()
+        );
     }
 
     #[tokio::test]
@@ -1737,6 +1559,53 @@ mod tests {
         assert!(table.is_err());
 
         // Verify that table state hasn't changed
+        let table = DeltaTable::new_with_state(table_logstore, table_state);
+        assert_eq!(table.get_latest_version().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_no_matching_files_still_validates_input() {
+        let schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-03",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let table_logstore = table.log_store();
+        let table_state = table.state.clone().unwrap();
+
+        let batch_fail = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1000])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-01-01"])),
+            ],
+        )
+        .unwrap();
+
+        let result = table
+            .write(vec![batch_fail])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("Z")))
+            .await;
+        assert!(result.is_err());
+
         let table = DeltaTable::new_with_state(table_logstore, table_state);
         assert_eq!(table.get_latest_version().await.unwrap(), 0);
     }
