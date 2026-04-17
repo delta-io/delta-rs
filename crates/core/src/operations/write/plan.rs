@@ -1,8 +1,8 @@
 //! Write planning has two stages.
 //! `prepare_write` normalizes incoming rows into table shaped insert data and resolves exact
 //! validations against that prepared schema.
-//! `plan_overwrite_rewrite` adjusts the sink plan for overwrite flows and returns any
-//! overwrite side actions the caller must commit before add actions.
+//! `plan_overwrite_rewrite` builds a typed overwrite rewrite plan that keeps matched existing
+//! files, rescue planning, and CDC composition explicit until commit assembly.
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
@@ -13,32 +13,31 @@ use arrow_schema::Schema;
 use datafusion::catalog::Session;
 use datafusion::common::{Column, ScalarValue};
 use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
+    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast, when,
 };
 use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
-use uuid::Uuid;
 
 use super::SchemaMode;
 use super::configs::WriterStatsConfig;
-use super::execution::prepare_predicate_actions;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
-use crate::delta_datafusion::DataFusionMixins;
-use crate::delta_datafusion::Expression;
-use crate::delta_datafusion::logical::MetricObserver;
-use crate::errors::DeltaResult;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
+use crate::delta_datafusion::{
+    DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
+};
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
-    new_metadata,
+    Action, Add, DeletionVectorDescriptor, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
+    Remove, StructType, StructTypeExt, new_metadata,
 };
 use crate::logstore::LogStoreRef;
-use crate::operations::cdc::CDC_COLUMN_NAME;
+use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::{get_num_idx_cols_and_stats_columns, get_target_file_size};
 use crate::protocol::SaveMode;
 
@@ -101,27 +100,160 @@ pub(super) struct WritePreparationInput<'a> {
     pub(super) configuration: &'a HashMap<String, Option<String>>,
 }
 
-/// Planner output for overwrite flows before the sink materializes new files.
-pub(super) struct OverwritePlan {
-    pub(super) sink_plan: LogicalPlan,
-    pub(super) actions: Vec<Action>,
-    pub(super) contains_cdc: bool,
+pub(super) const WRITE_INSERT_MARKER_COLUMN: &str = "__delta_rs_write_insert";
+
+/// High-level rewrite strategy chosen for an overwrite flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RewriteKind {
+    Passthrough,
+    NoMatch,
+    FullTable,
+    PartitionOnly,
+    DataRescue,
 }
 
-impl OverwritePlan {
+/// Planner diagnostics for overwrite / replaceWhere rewrites.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct RewriteDiagnostics {
+    pub(super) matched_file_count: usize,
+    pub(super) translated_pruning_term_count: usize,
+    pub(super) dropped_pruning_term_count: usize,
+}
+
+/// A matched existing file kept as a typed removal candidate until commit assembly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MatchedExistingFile {
+    path: String,
+    partition_values: HashMap<String, Option<String>>,
+    size: i64,
+    deletion_vector: Option<DeletionVectorDescriptor>,
+    base_row_id: Option<i64>,
+    default_row_commit_version: Option<i64>,
+}
+
+impl From<Add> for MatchedExistingFile {
+    fn from(add: Add) -> Self {
+        Self {
+            path: add.path,
+            partition_values: add.partition_values,
+            size: add.size,
+            deletion_vector: add.deletion_vector,
+            base_row_id: add.base_row_id,
+            default_row_commit_version: add.default_row_commit_version,
+        }
+    }
+}
+
+impl MatchedExistingFile {
+    fn into_remove(self, deletion_timestamp: i64) -> Remove {
+        Remove {
+            path: self.path,
+            deletion_timestamp: Some(deletion_timestamp),
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(self.partition_values),
+            size: Some(self.size),
+            deletion_vector: self.deletion_vector,
+            tags: None,
+            base_row_id: self.base_row_id,
+            default_row_commit_version: self.default_row_commit_version,
+        }
+    }
+}
+
+/// The typed set of files that this overwrite will remove if the sink succeeds.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct MatchedExistingFiles {
+    files: Vec<MatchedExistingFile>,
+}
+
+impl MatchedExistingFiles {
+    fn new(files: Vec<MatchedExistingFile>) -> Self {
+        Self { files }
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    pub(super) fn num_files(&self) -> usize {
+        self.files.len()
+    }
+
+    pub(super) fn into_actions(self, deletion_timestamp: Option<i64>) -> DeltaResult<Vec<Action>> {
+        if self.files.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let deletion_timestamp = deletion_timestamp.ok_or_else(|| {
+            DeltaTableError::generic(
+                "Matched existing files are missing a planner-owned deletion timestamp",
+            )
+        })?;
+
+        Ok(self
+            .files
+            .into_iter()
+            .map(|file| Action::Remove(file.into_remove(deletion_timestamp)))
+            .collect())
+    }
+}
+
+/// Planner output for overwrite flows before the sink materializes new files.
+pub(super) struct MatchedFilesRewritePlan {
+    pub(super) kind: RewriteKind,
+    pub(super) deletion_timestamp: Option<i64>,
+    pub(super) matched_existing: MatchedExistingFiles,
+    pub(super) data_plan: LogicalPlan,
+    pub(super) cdc_plan: Option<LogicalPlan>,
+    pub(super) diagnostics: RewriteDiagnostics,
+}
+
+impl MatchedFilesRewritePlan {
     fn passthrough(insert_plan: LogicalPlan) -> Self {
         Self {
-            sink_plan: insert_plan,
-            actions: Vec::new(),
-            contains_cdc: false,
+            kind: RewriteKind::Passthrough,
+            deletion_timestamp: None,
+            matched_existing: MatchedExistingFiles::default(),
+            data_plan: insert_plan,
+            cdc_plan: None,
+            diagnostics: RewriteDiagnostics::default(),
         }
     }
 
     pub(super) fn num_removed_files(&self) -> usize {
-        self.actions
-            .iter()
-            .filter(|action| matches!(action, Action::Remove(_)))
-            .count()
+        self.matched_existing.num_files()
+    }
+
+    pub(super) fn build_sink_plan(&self) -> DeltaResult<(LogicalPlan, bool, bool)> {
+        let contains_insert_marker = matches!(self.kind, RewriteKind::DataRescue);
+        let data_plan = if self.cdc_plan.is_some() {
+            // Empty-string rows are rescued table data: they must bypass CDF output while still
+            // flowing through the normal parquet write path.
+            LogicalPlanBuilder::new(self.data_plan.clone())
+                .with_column(
+                    CDC_COLUMN_NAME,
+                    when(col(WRITE_INSERT_MARKER_COLUMN).eq(lit(true)), lit("insert"))
+                        .otherwise(lit(""))?,
+                )?
+                .build()?
+        } else {
+            self.data_plan.clone()
+        };
+
+        match self.cdc_plan.clone() {
+            Some(cdc_plan) => {
+                let cdc_plan = align_plan_to_schema(cdc_plan, &data_plan)?;
+                Ok((
+                    LogicalPlanBuilder::new(data_plan)
+                        .union(cdc_plan)?
+                        .build()?,
+                    true,
+                    contains_insert_marker,
+                ))
+            }
+            None => Ok((data_plan, false, contains_insert_marker)),
+        }
     }
 }
 
@@ -282,10 +414,9 @@ pub(super) async fn plan_overwrite_rewrite(
     session: &dyn Session,
     mode: SaveMode,
     prepared_write: &PreparedWrite,
-    operation_id: Uuid,
-) -> DeltaResult<OverwritePlan> {
+) -> DeltaResult<MatchedFilesRewritePlan> {
     let Some(snapshot) = snapshot else {
-        return Ok(OverwritePlan::passthrough(
+        return Ok(MatchedFilesRewritePlan::passthrough(
             prepared_write.insert_plan.clone(),
         ));
     };
@@ -296,66 +427,206 @@ pub(super) async fn plan_overwrite_rewrite(
     );
 
     if !matches!(prepared_write.mode, SaveMode::Overwrite) {
-        return Ok(OverwritePlan::passthrough(
+        return Ok(MatchedFilesRewritePlan::passthrough(
             prepared_write.insert_plan.clone(),
         ));
     }
 
-    let mut sink_plan = prepared_write.insert_plan.clone();
-    let mut actions = Vec::new();
-    let mut contains_cdc = false;
-
     match prepared_write.exact_validation.clone() {
         Some(predicate) => {
-            let deletion_timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as i64;
+            let analysis = analyze_predicate_for_find_files(
+                predicate.clone(),
+                &prepared_write.exec_options.partition_columns,
+            )?;
+            let mut diagnostics = RewriteDiagnostics {
+                matched_file_count: 0,
+                translated_pruning_term_count: analysis.translated_pruning_term_count,
+                dropped_pruning_term_count: analysis.dropped_pruning_term_count,
+            };
 
-            let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                predicate,
-                log_store.clone(),
-                snapshot,
-                session,
-                prepared_write.exec_options.partition_columns.clone(),
-                prepared_write.exec_options.writer_properties.clone(),
-                deletion_timestamp,
-                prepared_write.exec_options.writer_stats_config.clone(),
-                operation_id,
-            )
-            .await?;
+            let Some(files_scan) =
+                scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?
+            else {
+                return Ok(MatchedFilesRewritePlan {
+                    kind: RewriteKind::NoMatch,
+                    deletion_timestamp: None,
+                    matched_existing: MatchedExistingFiles::default(),
+                    data_plan: prepared_write.insert_plan.clone(),
+                    cdc_plan: None,
+                    diagnostics,
+                });
+            };
 
-            if let Some(cdf_df) = cdf_df {
-                contains_cdc = true;
-                let mut projection = sink_plan
-                    .schema()
-                    .iter()
-                    .map(|(_, field)| col(field.name()))
-                    .collect_vec();
-                projection.push(lit("insert").alias(CDC_COLUMN_NAME));
-                sink_plan = LogicalPlanBuilder::new(sink_plan)
-                    .project(projection)?
-                    .union(cdf_df)?
-                    .build()?;
+            let matched_existing =
+                collect_matched_existing_files(snapshot, log_store, &files_scan).await?;
+            diagnostics.matched_file_count = matched_existing.num_files();
+
+            if matched_existing.is_empty() {
+                return Err(DeltaTableError::Generic(
+                    "Matched-file scan returned rows but no existing files to rewrite".into(),
+                ));
             }
 
-            actions.extend(predicate_actions);
+            if analysis.partition_only {
+                return Ok(MatchedFilesRewritePlan {
+                    kind: RewriteKind::PartitionOnly,
+                    deletion_timestamp: Some(planned_deletion_timestamp_ms()),
+                    matched_existing,
+                    data_plan: prepared_write.insert_plan.clone(),
+                    cdc_plan: None,
+                    diagnostics,
+                });
+            }
+
+            ensure_internal_write_marker_available(&[
+                &prepared_write.insert_plan,
+                files_scan.scan(),
+            ])?;
+
+            let validated_inserts = mark_insert_rows(prepared_write.insert_plan.clone(), true)?;
+            let rescued_data = mark_insert_rows(
+                LogicalPlanBuilder::new(files_scan.scan().clone())
+                    // `IS NOT TRUE` keeps rows where the predicate is FALSE or NULL so nullable
+                    // predicate columns are rescued instead of being rewritten.
+                    .filter(files_scan.predicate.clone().is_not_true())?
+                    .build()?,
+                false,
+            )?;
+            let rescued_data = align_plan_to_schema(rescued_data, &validated_inserts)?;
+            let data_plan = LogicalPlanBuilder::new(validated_inserts)
+                .union(rescued_data)?
+                .build()?;
+
+            let cdc_plan = if should_write_cdc(snapshot)? {
+                Some(
+                    LogicalPlanBuilder::new(files_scan.scan().clone())
+                        .filter(files_scan.predicate.clone())?
+                        .with_column(WRITE_INSERT_MARKER_COLUMN, lit(false))?
+                        .with_column(CDC_COLUMN_NAME, lit("delete"))?
+                        .build()?,
+                )
+            } else {
+                None
+            };
+
+            Ok(MatchedFilesRewritePlan {
+                kind: RewriteKind::DataRescue,
+                deletion_timestamp: Some(planned_deletion_timestamp_ms()),
+                matched_existing,
+                data_plan,
+                cdc_plan,
+                diagnostics,
+            })
         }
         None => {
-            let remove_actions = snapshot
-                .file_views(log_store, None)
-                .map_ok(|file| file.remove_action(true).into())
-                .try_collect::<Vec<_>>()
-                .await?;
-            actions.extend(remove_actions);
+            let matched_existing = collect_all_existing_files(snapshot, log_store).await?;
+            let diagnostics = RewriteDiagnostics {
+                matched_file_count: matched_existing.num_files(),
+                ..RewriteDiagnostics::default()
+            };
+
+            Ok(MatchedFilesRewritePlan {
+                kind: RewriteKind::FullTable,
+                deletion_timestamp: (!matched_existing.is_empty())
+                    .then_some(planned_deletion_timestamp_ms()),
+                matched_existing,
+                data_plan: prepared_write.insert_plan.clone(),
+                cdc_plan: None,
+                diagnostics,
+            })
         }
     }
+}
 
-    Ok(OverwritePlan {
-        sink_plan,
-        actions,
-        contains_cdc,
-    })
+fn planned_deletion_timestamp_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+}
+
+async fn collect_all_existing_files(
+    snapshot: &EagerSnapshot,
+    log_store: &LogStoreRef,
+) -> DeltaResult<MatchedExistingFiles> {
+    Ok(MatchedExistingFiles::new(
+        snapshot
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|file| MatchedExistingFile::from(file.to_add()))
+            .try_collect()
+            .await?,
+    ))
+}
+
+async fn collect_matched_existing_files(
+    snapshot: &EagerSnapshot,
+    log_store: &LogStoreRef,
+    files_scan: &crate::delta_datafusion::MatchedFilesScan,
+) -> DeltaResult<MatchedExistingFiles> {
+    let table_root = Arc::new(snapshot.table_configuration().table_root().clone());
+    let valid_files = Arc::new(files_scan.files_set());
+    let files = snapshot
+        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .try_filter_map(|file| {
+            let table_root = Arc::clone(&table_root);
+            let valid_files = Arc::clone(&valid_files);
+            async move {
+                let file_url = table_root
+                    .join(file.path_raw())
+                    .map_err(|err| DeltaTableError::Generic(format!("{err}")))?;
+                Ok(valid_files
+                    .contains(file_url.as_ref())
+                    .then(|| MatchedExistingFile::from(file.to_add())))
+            }
+        })
+        .try_collect()
+        .await?;
+
+    Ok(MatchedExistingFiles::new(files))
+}
+
+fn mark_insert_rows(plan: LogicalPlan, is_insert: bool) -> DeltaResult<LogicalPlan> {
+    Ok(LogicalPlanBuilder::new(plan)
+        .with_column(WRITE_INSERT_MARKER_COLUMN, lit(is_insert))?
+        .build()?)
+}
+
+fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaResult<LogicalPlan> {
+    let source_schema = plan.schema();
+    let target_schema = target_plan.schema();
+    let projection = target_schema
+        .fields()
+        .iter()
+        .map(|target_field| {
+            let name = target_field.name();
+            let expr = match source_schema.field_with_unqualified_name(name) {
+                Ok(source_field) if source_field.data_type() != target_field.data_type() => {
+                    cast(col(name), target_field.data_type().clone()).alias(name)
+                }
+                Ok(_) => col(name).alias(name),
+                Err(_) => {
+                    cast(lit(ScalarValue::Null), target_field.data_type().clone()).alias(name)
+                }
+            };
+            Ok(expr)
+        })
+        .collect::<DeltaResult<Vec<_>>>()?;
+
+    Ok(LogicalPlanBuilder::new(plan).project(projection)?.build()?)
+}
+
+fn ensure_internal_write_marker_available(plans: &[&LogicalPlan]) -> DeltaResult<()> {
+    if plans.iter().any(|plan| {
+        plan.schema()
+            .iter()
+            .any(|(_, field)| field.name() == WRITE_INSERT_MARKER_COLUMN)
+    }) {
+        return Err(DeltaTableError::Generic(format!(
+            "Cannot execute overwrite rewrite because input or matched data contains internal write marker column '{WRITE_INSERT_MARKER_COLUMN}'"
+        )));
+    }
+
+    Ok(())
 }
 
 fn build_exec_options(
@@ -465,11 +736,11 @@ mod tests {
     use datafusion::datasource::{MemTable, provider_as_source};
     use datafusion::logical_expr::{LogicalPlanBuilder, UNNAMED_TABLE};
     use datafusion::prelude::{col, lit};
-    use uuid::Uuid;
 
     use crate::DeltaTable;
     use crate::TableProperty;
     use crate::delta_datafusion::create_session;
+    use crate::operations::cdc::CDC_COLUMN_NAME;
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::{
         get_arrow_schema, get_record_batch, setup_table_with_configuration,
@@ -603,15 +874,15 @@ mod tests {
             &session,
             SaveMode::Overwrite,
             &prepared,
-            Uuid::new_v4(),
         )
         .await
         .unwrap();
 
-        assert!(overwrite_plan.actions.is_empty());
-        assert!(!overwrite_plan.contains_cdc);
+        assert_eq!(overwrite_plan.kind, RewriteKind::Passthrough);
+        assert!(overwrite_plan.matched_existing.is_empty());
+        assert!(overwrite_plan.cdc_plan.is_none());
         assert_eq!(
-            overwrite_plan.sink_plan.schema().as_arrow(),
+            overwrite_plan.data_plan.schema().as_arrow(),
             prepared.insert_plan.schema().as_arrow()
         );
     }
@@ -647,15 +918,15 @@ mod tests {
             &session,
             SaveMode::Append,
             &prepared,
-            Uuid::new_v4(),
         )
         .await
         .unwrap();
 
-        assert!(overwrite_plan.actions.is_empty());
-        assert!(!overwrite_plan.contains_cdc);
+        assert_eq!(overwrite_plan.kind, RewriteKind::Passthrough);
+        assert!(overwrite_plan.matched_existing.is_empty());
+        assert!(overwrite_plan.cdc_plan.is_none());
         assert_eq!(
-            overwrite_plan.sink_plan.schema().as_arrow(),
+            overwrite_plan.data_plan.schema().as_arrow(),
             prepared.insert_plan.schema().as_arrow()
         );
     }
@@ -692,7 +963,6 @@ mod tests {
             &session,
             SaveMode::Overwrite,
             &prepared,
-            Uuid::new_v4(),
         )
         .await;
     }
@@ -738,21 +1008,87 @@ mod tests {
             &session,
             SaveMode::Overwrite,
             &prepared,
-            Uuid::new_v4(),
         )
         .await
         .unwrap();
 
-        assert!(overwrite_plan.actions.is_empty());
-        assert!(!overwrite_plan.contains_cdc);
+        assert_eq!(overwrite_plan.kind, RewriteKind::NoMatch);
+        assert!(overwrite_plan.matched_existing.is_empty());
+        assert!(overwrite_plan.cdc_plan.is_none());
         assert_eq!(
-            overwrite_plan.sink_plan.schema().as_arrow(),
+            overwrite_plan.data_plan.schema().as_arrow(),
             prepared.insert_plan.schema().as_arrow()
         );
     }
 
     #[tokio::test]
-    async fn test_plan_overwrite_rewrite_full_overwrite_collects_remove_actions() {
+    async fn test_plan_overwrite_rewrite_partition_only_avoids_rescue_scan() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![get_record_batch(None, false)])
+            .with_partition_columns(["id"])
+            .await
+            .unwrap();
+
+        let batch = RecordBatch::try_new(
+            get_arrow_schema(&None),
+            vec![
+                Arc::new(StringArray::from(vec![Some("A")])),
+                Arc::new(Int32Array::from(vec![Some(999)])),
+                Arc::new(StringArray::from(vec![Some("2026-04-16")])),
+            ],
+        )
+        .unwrap();
+
+        let session = create_session().state();
+        let configuration = HashMap::new();
+        let prepared = prepare_write(WritePreparationInput {
+            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            session: &session,
+            source: source_plan_for_batch(batch),
+            mode: SaveMode::Overwrite,
+            schema_mode: None,
+            safe_cast: false,
+            partition_columns: vec!["id".to_string()],
+            predicate: Some(col("id").eq(lit("A")).into()),
+            target_file_size: None,
+            write_batch_size: None,
+            writer_properties: None,
+            configuration: &configuration,
+        })
+        .unwrap();
+
+        let overwrite_plan = plan_overwrite_rewrite(
+            Some(table.snapshot().unwrap().snapshot()),
+            &table.log_store(),
+            &session,
+            SaveMode::Overwrite,
+            &prepared,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(overwrite_plan.kind, RewriteKind::PartitionOnly);
+        assert!(overwrite_plan.cdc_plan.is_none());
+        let (sink_plan, contains_cdc, contains_insert_marker) =
+            overwrite_plan.build_sink_plan().unwrap();
+        assert!(!contains_cdc);
+        assert!(!contains_insert_marker);
+        assert_eq!(
+            sink_plan.schema().as_arrow(),
+            prepared.insert_plan.schema().as_arrow()
+        );
+        assert!(
+            sink_plan
+                .schema()
+                .iter()
+                .all(|(_, field)| field.name() != CDC_COLUMN_NAME
+                    && field.name() != WRITE_INSERT_MARKER_COLUMN)
+        );
+        assert!(overwrite_plan.matched_existing.num_files() > 0);
+    }
+
+    #[tokio::test]
+    async fn test_plan_overwrite_rewrite_full_overwrite_collects_matched_existing_files() {
         let table = DeltaTable::new_in_memory()
             .write(vec![get_record_batch(None, false)])
             .await
@@ -792,17 +1128,21 @@ mod tests {
             &session,
             SaveMode::Overwrite,
             &prepared,
-            Uuid::new_v4(),
         )
         .await
         .unwrap();
 
-        assert!(!overwrite_plan.contains_cdc);
+        assert_eq!(overwrite_plan.kind, RewriteKind::FullTable);
+        assert!(overwrite_plan.cdc_plan.is_none());
+        assert!(overwrite_plan.deletion_timestamp.is_some());
         assert!(
             overwrite_plan
-                .actions
-                .iter()
-                .any(|action| matches!(action, Action::Remove(_)))
+                .matched_existing
+                .clone()
+                .into_actions(Some(1_713_398_400_000))
+                .unwrap()
+                .into_iter()
+                .all(|action| matches!(action, Action::Remove(_)))
         );
     }
 
@@ -849,18 +1189,19 @@ mod tests {
             &session,
             SaveMode::Overwrite,
             &prepared,
-            Uuid::new_v4(),
         )
         .await
         .unwrap();
 
-        assert!(overwrite_plan.contains_cdc);
+        assert_eq!(overwrite_plan.kind, RewriteKind::DataRescue);
+        assert!(overwrite_plan.matched_existing.num_files() > 0);
+        assert!(overwrite_plan.cdc_plan.is_some());
         assert!(
             overwrite_plan
-                .sink_plan
+                .data_plan
                 .schema()
                 .iter()
-                .any(|(_, field)| field.name() == CDC_COLUMN_NAME)
+                .all(|(_, field)| field.name() != CDC_COLUMN_NAME)
         );
     }
 }

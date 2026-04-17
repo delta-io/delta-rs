@@ -69,22 +69,16 @@ pub(crate) async fn find_files(
     session: &dyn Session,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata();
-
     match &predicate {
         Some(predicate) => {
-            // Validate the Predicate and determine if it only contains partition columns
-            let mut expr_properties = FindFilesExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns().to_vec(),
-                result: Ok(()),
-            };
+            let analysis = analyze_predicate_for_find_files(
+                predicate.to_owned(),
+                snapshot.metadata().partition_columns(),
+            )?;
+            let predicate = analysis.predicate();
 
-            TreeNode::visit(predicate, &mut expr_properties)?;
-            expr_properties.result?;
-
-            if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, predicate).await?;
+            if analysis.partition_only {
+                let candidates = scan_memory_table(snapshot, &predicate).await?;
                 let result = FindFiles {
                     candidates,
                     partition_scan: true,
@@ -93,8 +87,7 @@ pub(crate) async fn find_files(
                 Span::current().record("candidate_count", result.candidates.len());
                 Ok(result)
             } else {
-                let candidates =
-                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
+                let candidates = find_files_scan(snapshot, log_store, session, predicate).await?;
 
                 let result = FindFiles {
                     candidates,
@@ -135,6 +128,20 @@ impl Default for FindFilesExprProperties {
             partition_only: true,
             result: Ok(()),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FindFilesPredicateAnalysis {
+    simplified_terms: Vec<Expr>,
+    pub(crate) partition_only: bool,
+    pub(crate) translated_pruning_term_count: usize,
+    pub(crate) dropped_pruning_term_count: usize,
+}
+
+impl FindFilesPredicateAnalysis {
+    fn predicate(&self) -> Expr {
+        conjunction(self.simplified_terms.clone()).unwrap_or(lit(true))
     }
 }
 
@@ -200,6 +207,37 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     }
 }
 
+pub(crate) fn analyze_predicate_for_find_files(
+    predicate: Expr,
+    partition_columns: &[String],
+) -> DeltaResult<FindFilesPredicateAnalysis> {
+    let simplified_terms = simplify_predicates(split_conjunction_owned(predicate))?;
+    let mut visitor = FindFilesExprProperties {
+        partition_columns: partition_columns.to_vec(),
+        partition_only: true,
+        result: Ok(()),
+    };
+
+    for term in &simplified_terms {
+        term.visit(&mut visitor)?;
+        std::mem::replace(&mut visitor.result, Ok(()))?;
+    }
+
+    let translated_pruning_term_count = simplified_terms
+        .iter()
+        .filter(|term| to_delta_predicate(term).is_ok())
+        .count();
+
+    Ok(FindFilesPredicateAnalysis {
+        partition_only: visitor.partition_only,
+        translated_pruning_term_count,
+        dropped_pruning_term_count: simplified_terms
+            .len()
+            .saturating_sub(translated_pruning_term_count),
+        simplified_terms,
+    })
+}
+
 struct MatchingFilesScanSeed {
     valid_files: Vec<GenericByteViewArray<StringViewType>>,
     file_skipping_predicates: Vec<Expr>,
@@ -214,28 +252,20 @@ async fn collect_matching_files(
     predicate: Expr,
     file_column_name: &str,
 ) -> Result<Option<MatchingFilesScanSeed>> {
-    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate))?;
-
-    let partition_columns = snapshot
-        .table_configuration()
-        .metadata()
-        .partition_columns();
-    let mut visitor = FindFilesExprProperties {
-        partition_columns: partition_columns.to_vec(),
-        partition_only: true,
-        result: Ok(()),
-    };
-    for term in &skipping_pred {
-        term.visit(&mut visitor)?;
-        std::mem::replace(&mut visitor.result, Ok(()))?;
-    }
-
+    let analysis = analyze_predicate_for_find_files(
+        predicate,
+        snapshot
+            .table_configuration()
+            .metadata()
+            .partition_columns(),
+    )?;
+    let skipping_pred = analysis.simplified_terms.clone();
     let delta_predicate = Arc::new(Predicate::and_from(
         skipping_pred
             .iter()
             .flat_map(|term| to_delta_predicate(term).ok()),
     ));
-    let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
+    let predicate = analysis.predicate();
 
     let mut builder = DeltaScanNext::builder()
         .with_snapshot(snapshot.snapshot().clone())
@@ -603,7 +633,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::physical_plan::collect;
-    use datafusion::prelude::{col, lit};
+    use datafusion::prelude::{col, lit, when};
     use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 
     use crate::{
@@ -923,6 +953,21 @@ mod tests {
         assert!(!data.is_empty());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_analyze_predicate_for_find_files_counts_dropped_pruning_terms() {
+        let analysis = analyze_predicate_for_find_files(
+            when(lit(true), col("id").eq(lit("A")))
+                .otherwise(lit(false))
+                .unwrap(),
+            &["id".to_string()],
+        )
+        .unwrap();
+
+        assert!(analysis.partition_only);
+        assert_eq!(analysis.translated_pruning_term_count, 0);
+        assert_eq!(analysis.dropped_pruning_term_count, 1);
     }
 
     #[tokio::test]
