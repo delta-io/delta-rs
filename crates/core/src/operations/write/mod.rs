@@ -50,6 +50,9 @@ use url::Url;
 pub use self::configs::WriterStatsConfig;
 use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
 use self::generated_columns::{gc_is_enabled, with_generated_columns};
+use self::identity_columns::{
+    identity_columns_enabled, update_identity_column_hwm, with_identity_columns,
+};
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
 use self::schema_evolution::try_cast_schema;
 use super::cdc::CDC_COLUMN_NAME;
@@ -77,6 +80,7 @@ use crate::protocol::{DeltaOperation, SaveMode};
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
+pub(crate) mod identity_columns;
 pub(crate) mod metrics;
 pub(crate) mod schema_evolution;
 pub mod writer;
@@ -502,6 +506,13 @@ impl std::future::IntoFuture for WriteBuilder {
                     )?;
                 }
 
+                if let Some(snapshot) = &this.snapshot {
+                    let identity_columns = snapshot.schema().get_identity_columns()?;
+                    if !identity_columns.is_empty() {
+                        source = with_identity_columns(source, &identity_columns)?;
+                    }
+                }
+
                 let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
 
                 if !Arc::ptr_eq(&source_schema, source.schema().inner()) {
@@ -771,6 +782,22 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 metrics.num_added_files = add_actions.len();
                 actions.extend(add_actions);
+
+                // Update identity column high water marks after writing
+                if let Some(snapshot) = &this.snapshot
+                    && identity_columns_enabled(snapshot)
+                {
+                    let identity_cols = snapshot.schema().get_identity_columns()?;
+                    if !identity_cols.is_empty() && num_added_rows > 0 {
+                        let updated_schema = update_identity_column_hwm(
+                            &snapshot.schema(),
+                            &identity_cols,
+                            num_added_rows as usize,
+                        )?;
+                        let metadata = snapshot.metadata().clone().with_schema(&updated_schema)?;
+                        actions.push(Action::Metadata(metadata));
+                    }
+                }
 
                 metrics.execution_time_ms =
                     Instant::now().duration_since(exec_start).as_millis() as u64;

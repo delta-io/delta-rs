@@ -420,6 +420,11 @@ impl ProtocolInner {
             self = self.enable_invariants()
         }
 
+        let identity_cols = schema.get_identity_columns()?;
+        if !identity_cols.is_empty() {
+            self = self.enable_identity_columns()
+        }
+
         Ok(self)
     }
 
@@ -576,7 +581,19 @@ impl ProtocolInner {
         self
     }
 
-    /// Enabled generated columns
+    /// Enable identity columns
+    ///
+    /// Identity columns are a v6 feature, but v6 also requires ColumnMapping
+    /// which is not yet supported. So we go directly to v7 with feature flags.
+    fn enable_identity_columns(mut self) -> Self {
+        if self.min_writer_version < 7 {
+            self.min_writer_version = 7;
+        }
+        self = self.append_writer_features([TableFeature::IdentityColumns]);
+        self
+    }
+
+    /// Enable invariants
     fn enable_invariants(mut self) -> Self {
         if self.min_writer_version >= 7 {
             self = self.append_writer_features([TableFeature::Invariants]);
