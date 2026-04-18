@@ -251,6 +251,72 @@ async fn latest_commit_actions(table: &DeltaTable) -> Result<Vec<Action>, Box<dy
     Ok(get_actions(version, &commit_bytes)?)
 }
 
+struct DvSmallAppendedTable {
+    _tmp_dir: TempDir,
+    table: DeltaTable,
+    expected_values: Vec<i32>,
+}
+
+async fn setup_dv_small_with_appended_values() -> Result<DvSmallAppendedTable, Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    let table_dir = tmp_dir.path().join("table-with-dv-small");
+    fs_extra::dir::copy(
+        TestTables::WithDvSmall.as_path(),
+        tmp_dir.path(),
+        &Default::default(),
+    )?;
+    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
+
+    let mut table = open_table(table_url).await?;
+    assert_eq!(
+        sorted_int_values(&table).await?,
+        vec![1, 2, 3, 4, 5, 6, 7, 8]
+    );
+
+    let mut writer = RecordBatchWriter::for_table(&table)?;
+    write(&mut writer, &mut table, single_int_batch(vec![10, 11])?).await?;
+
+    let expected_values = vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
+    assert_eq!(sorted_int_values(&table).await?, expected_values);
+
+    Ok(DvSmallAppendedTable {
+        _tmp_dir: tmp_dir,
+        table,
+        expected_values,
+    })
+}
+
+async fn assert_optimize_preserves_live_rows_with_deletion_vectors(
+    optimize_type: OptimizeType,
+) -> Result<(), Box<dyn Error>> {
+    let DvSmallAppendedTable {
+        _tmp_dir,
+        table,
+        expected_values,
+    } = setup_dv_small_with_appended_values().await?;
+
+    let (optimized, metrics) = match optimize_type {
+        OptimizeType::Compact => {
+            table
+                .optimize()
+                .with_target_size(NonZeroU64::new(1_000_000).unwrap())
+                .await?
+        }
+        OptimizeType::ZOrder(columns) => {
+            table
+                .optimize()
+                .with_type(OptimizeType::ZOrder(columns))
+                .await?
+        }
+    };
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(sorted_int_values(&optimized).await?, expected_values);
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TrackedLogStoreCall {
     Object(Option<Uuid>),
@@ -669,52 +735,17 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
 #[tokio::test]
 async fn test_optimize_compaction_preserves_live_rows_with_deletion_vectors()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = tempfile::tempdir()?;
-    let table_dir = temp_dir.path().join("table-with-dv-small");
-    fs_extra::dir::copy(
-        TestTables::WithDvSmall.as_path(),
-        temp_dir.path(),
-        &Default::default(),
-    )?;
-    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
-
-    let mut dt = open_table(table_url).await?;
-    let initial_values = sorted_int_values(&dt).await?;
-    assert_eq!(initial_values, vec![1, 2, 3, 4, 5, 6, 7, 8]);
-
-    let mut writer = RecordBatchWriter::for_table(&dt)?;
-    write(&mut writer, &mut dt, single_int_batch(vec![10, 11])?).await?;
-
-    let expected_values = vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
-    assert_eq!(sorted_int_values(&dt).await?, expected_values);
-
-    let (dt, metrics) = dt
-        .optimize()
-        .with_target_size(NonZeroU64::new(1_000_000).unwrap())
-        .await?;
-
-    assert_eq!(metrics.num_files_added, 1);
-    assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(sorted_int_values(&dt).await?, expected_values);
-
-    Ok(())
+    assert_optimize_preserves_live_rows_with_deletion_vectors(OptimizeType::Compact).await
 }
 
 #[tokio::test]
 async fn test_optimize_compaction_tombstones_preserve_deletion_vector_metadata()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = tempfile::tempdir()?;
-    let table_dir = temp_dir.path().join("table-with-dv-small");
-    fs_extra::dir::copy(
-        TestTables::WithDvSmall.as_path(),
-        temp_dir.path(),
-        &Default::default(),
-    )?;
-    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
-
-    let mut dt = open_table(table_url).await?;
-    let mut writer = RecordBatchWriter::for_table(&dt)?;
-    write(&mut writer, &mut dt, single_int_batch(vec![10, 11])?).await?;
+    let DvSmallAppendedTable {
+        _tmp_dir,
+        table: dt,
+        expected_values: _expected_values,
+    } = setup_dv_small_with_appended_values().await?;
 
     let source_files = dt
         .get_active_add_actions_by_partitions(&[])
@@ -775,30 +806,10 @@ async fn test_optimize_compaction_tombstones_preserve_deletion_vector_metadata()
 #[tokio::test]
 async fn test_optimize_zorder_preserves_live_rows_with_deletion_vectors()
 -> Result<(), Box<dyn Error>> {
-    let temp_dir = tempfile::tempdir()?;
-    let table_dir = temp_dir.path().join("table-with-dv-small");
-    fs_extra::dir::copy(
-        TestTables::WithDvSmall.as_path(),
-        temp_dir.path(),
-        &Default::default(),
-    )?;
-    let table_url = url::Url::from_directory_path(table_dir.canonicalize()?).unwrap();
-
-    let mut dt = open_table(table_url).await?;
-    let mut writer = RecordBatchWriter::for_table(&dt)?;
-    write(&mut writer, &mut dt, single_int_batch(vec![10, 11])?).await?;
-
-    let expected_values = vec![1, 2, 3, 4, 5, 6, 7, 8, 10, 11];
-    let (dt, metrics) = dt
-        .optimize()
-        .with_type(OptimizeType::ZOrder(vec!["value".to_string()]))
-        .await?;
-
-    assert_eq!(metrics.num_files_added, 1);
-    assert_eq!(metrics.num_files_removed, 2);
-    assert_eq!(sorted_int_values(&dt).await?, expected_values);
-
-    Ok(())
+    assert_optimize_preserves_live_rows_with_deletion_vectors(OptimizeType::ZOrder(vec![
+        "value".to_string(),
+    ]))
+    .await
 }
 
 #[tokio::test]

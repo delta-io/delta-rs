@@ -259,7 +259,7 @@ impl WriteBuilder {
         self
     }
 
-    /// Control how delta rs resolves the provided session when it is not a concrete `SessionState`.
+    /// Control how delta-rs resolves the provided session when it is not a concrete `SessionState`.
     ///
     /// Defaults to `SessionFallbackPolicy::InternalDefaults` to preserve existing behavior.
     pub fn with_session_fallback_policy(mut self, policy: SessionFallbackPolicy) -> Self {
@@ -492,6 +492,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     &session,
                     this.mode,
                     &prepared_write,
+                    operation_id,
                 )
                 .await?;
 
@@ -525,7 +526,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     writer_stats_config,
                 } = exec_options;
                 let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
-                let (sink_plan, contains_cdc, contains_insert_marker) =
+                let (sink_plan, contains_cdc, insert_marker_column) =
                     overwrite_plan.build_sink_plan()?;
                 let source_plan = session.create_physical_plan(&sink_plan).await?;
 
@@ -542,7 +543,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     writer_stats_config,
                     exact_validation,
                     contains_cdc,
-                    contains_insert_marker,
+                    insert_marker_column,
                 )
                 .await?;
 
@@ -624,12 +625,16 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow_array::{
+        Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    };
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+    use delta_kernel::schema::MetadataValue;
+    use futures::TryStreamExt;
     use itertools::Itertools;
     use serde_json::{Value, json};
 
@@ -642,6 +647,86 @@ mod tests {
             .remove("operationMetrics")
             .unwrap();
         serde_json::from_value(metrics).unwrap()
+    }
+
+    async fn query_table(table: &DeltaTable, sql: &str) -> TestResult<Vec<RecordBatch>> {
+        let table = DeltaTable::new_with_state(
+            table.log_store.clone(),
+            table.state.as_ref().unwrap().clone(),
+        );
+        let ctx = SessionContext::new();
+        table.update_datafusion_session(&ctx.state()).unwrap();
+        ctx.register_table("test", table.table_provider().await.unwrap())
+            .unwrap();
+
+        Ok(ctx.sql(sql).await?.collect().await?)
+    }
+
+    async fn query_single_i64_row(table: &DeltaTable, sql: &str) -> TestResult<Vec<i64>> {
+        let batches = query_table(table, sql).await?;
+        let batch = batches
+            .first()
+            .expect("expected aggregate query to return a single batch");
+
+        Ok(batch
+            .columns()
+            .iter()
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("expected Int64 aggregate column")
+                    .value(0)
+            })
+            .collect())
+    }
+
+    async fn query_i32_rows(table: &DeltaTable, sql: &str, column: &str) -> TestResult<Vec<i32>> {
+        let mut values = Vec::new();
+        for batch in query_table(table, sql).await? {
+            let array = batch
+                .column_by_name(column)
+                .expect("expected query column")
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 query column");
+            values.extend(
+                array
+                    .iter()
+                    .map(|value| value.expect("expected non-null Int32 value")),
+            );
+        }
+        Ok(values)
+    }
+
+    async fn open_copied_table_fixture(
+        fixture_source: &std::path::Path,
+        table_dir_name: &str,
+    ) -> TestResult<(tempfile::TempDir, DeltaTable)> {
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(fixture_source, temp_dir.path(), &Default::default())?;
+        let table_url =
+            url::Url::from_directory_path(temp_dir.path().join(table_dir_name).canonicalize()?)
+                .unwrap();
+        Ok((temp_dir, crate::open_table(table_url).await?))
+    }
+
+    async fn latest_remove_actions(table: &DeltaTable) -> TestResult<Vec<crate::kernel::Remove>> {
+        let version = table
+            .version()
+            .expect("expected committed version for latest remove actions");
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(version)
+            .await?
+            .expect("failed to get snapshot bytes");
+        Ok(get_actions(version, &snapshot_bytes)?
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Remove(remove) => Some(remove),
+                _ => None,
+            })
+            .collect())
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -1185,6 +1270,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_schema_preserves_existing_field_metadata() {
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "string", "nullable": true, "metadata": {}},
+                {"name": "value", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"value < 12\"} }",
+                    "delta.userMetadata": "preserve-me"
+                }},
+                {"name": "modified", "type": "string", "nullable": true, "metadata": {}},
+            ]
+        }))
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap()
+            .write(vec![get_record_batch(None, false)])
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let evolved_schema = Arc::new(ArrowSchema::new(vec![
+            batch.schema().field(0).as_ref().clone(),
+            batch.schema().field(1).as_ref().clone(),
+            batch.schema().field(2).as_ref().clone(),
+            Field::new("inserted_by", DataType::Utf8, true),
+        ]));
+        let evolved_batch = RecordBatch::try_new(
+            evolved_schema,
+            vec![
+                batch.column(0).clone(),
+                batch.column(1).clone(),
+                batch.column(2).clone(),
+                Arc::new(StringArray::from(vec![
+                    Some("A1"),
+                    Some("B1"),
+                    None,
+                    Some("B2"),
+                    Some("A3"),
+                    Some("A4"),
+                    None,
+                    None,
+                    Some("B4"),
+                    Some("A5"),
+                    Some("A7"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![evolved_batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await
+            .unwrap();
+
+        let schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+        let value = schema.field("value").unwrap();
+        assert_eq!(
+            value.metadata.get("delta.invariants"),
+            Some(&MetadataValue::String(
+                "{\"expression\": { \"expression\": \"value < 12\"} }".to_string()
+            ))
+        );
+        assert_eq!(
+            value.metadata.get("delta.userMetadata"),
+            Some(&MetadataValue::String("preserve-me".to_string()))
+        );
+    }
+
+    #[tokio::test]
     async fn test_overwrite_schema() {
         let batch = get_record_batch(None, false);
         let table = DeltaTable::new_in_memory()
@@ -1636,7 +1797,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_where_rejects_insert_marker_column_collision() {
+    async fn test_replace_where_preserves_user_insert_marker_column() {
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
             Field::new("value", DataType::Int32, true),
@@ -1684,17 +1845,33 @@ mod tests {
         )
         .unwrap();
 
-        let err = table
+        let table = table
             .write(vec![replacement_batch])
             .with_save_mode(SaveMode::Overwrite)
             .with_replace_where(col("value").eq(lit(3)))
             .await
-            .expect_err("replaceWhere should reject internal marker column collisions");
+            .expect("replaceWhere should preserve user columns named like internal markers");
 
-        assert!(
-            err.to_string()
-                .contains("internal write marker column '__delta_rs_write_insert'"),
-            "unexpected error: {err:#}"
+        let actual = get_data_sorted(
+            &table,
+            format!(
+                "id,value,modified,{}",
+                super::plan::WRITE_INSERT_MARKER_COLUMN
+            )
+            .as_str(),
+        )
+        .await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------------------+",
+                "| id | value | modified   | __delta_rs_write_insert |",
+                "+----+-------+------------+-------------------------+",
+                "| A  | 1     | 2021-02-02 | false                   |",
+                "| B  | 2     | 2021-02-03 | false                   |",
+                "| C  | 3     | 2023-01-01 | false                   |",
+                "+----+-------+------------+-------------------------+",
+            ],
+            &actual
         );
     }
 
@@ -1758,6 +1935,246 @@ mod tests {
                 "+----+-------+------------+-------------+",
             ],
             &actual
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_preserves_live_rows_with_deletion_vectors() -> TestResult {
+        let (_temp_dir, table) = open_copied_table_fixture(
+            &crate::test_utils::TestTables::WithDvSmall.as_path(),
+            "table-with-dv-small",
+        )
+        .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 1);
+        let source_path = source_files[0].path().to_string();
+        let source_deletion_vector = source_files[0].deletion_vector_descriptor();
+        assert!(
+            source_deletion_vector.is_some(),
+            "expected DV-backed source file"
+        );
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
+        );
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(50)]))],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("value = 5 OR value = 50")
+            .await?;
+        assert_eq!(table.version(), Some(2));
+
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![1, 2, 3, 4, 6, 7, 8, 50]
+        );
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert_eq!(remove_actions.len(), 1);
+        let remove = &remove_actions[0];
+        assert_eq!(remove.path, source_path);
+        assert_eq!(remove.deletion_vector, source_deletion_vector);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_rewrites_multiple_files_with_deletion_vectors() -> TestResult {
+        let (_temp_dir, table) = open_copied_table_fixture(
+            &crate::test_utils::TestTables::WithDvSmall.as_path(),
+            "table-with-dv-small",
+        )
+        .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 1);
+        let dv_source = source_files
+            .into_iter()
+            .next()
+            .expect("expected DV-backed source file");
+        assert!(
+            dv_source.deletion_vector_descriptor().is_some(),
+            "expected DV-backed source file"
+        );
+
+        let append_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(0), Some(9)]))],
+        )?;
+
+        let table = table
+            .write(vec![append_batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 2);
+        let appended_source = source_files
+            .iter()
+            .find(|file| file.path() != dv_source.path())
+            .expect("expected appended source file");
+        assert!(
+            appended_source.deletion_vector_descriptor().is_none(),
+            "expected appended source without DV metadata"
+        );
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(50)]))],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("value >= 5")
+            .await?;
+        assert_eq!(table.version(), Some(3));
+
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![0, 1, 2, 3, 4, 50]
+        );
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert_eq!(remove_actions.len(), 2);
+        assert!(
+            remove_actions.iter().any(|remove| {
+                remove.path == dv_source.path().to_string()
+                    && remove.deletion_vector == dv_source.deletion_vector_descriptor()
+            }),
+            "expected tombstone for DV-backed source file"
+        );
+        assert!(
+            remove_actions.iter().any(|remove| {
+                remove.path == appended_source.path().to_string()
+                    && remove.deletion_vector.is_none()
+            }),
+            "expected tombstone for appended non-DV source file"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_real_world_deletion_logs_preserve_live_rows() -> TestResult {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_deletion_logs");
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_path, "table_with_deletion_logs").await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        let dv_sources = source_files
+            .iter()
+            .filter_map(|file| {
+                file.deletion_vector_descriptor()
+                    .map(|descriptor| (file.path().to_string(), descriptor))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(
+            !dv_sources.is_empty(),
+            "expected at least one active DV-backed source file"
+        );
+
+        let initial_counts = query_single_i64_row(
+            &table,
+            "SELECT \
+                SUM(CASE WHEN id < 100 THEN 1 ELSE 0 END) AS matching_rows, \
+                SUM(CASE WHEN id >= 100 THEN 1 ELSE 0 END) AS preserved_rows \
+             FROM test",
+        )
+        .await?;
+        let matching_rows = initial_counts[0];
+        let preserved_rows = initial_counts[1];
+        assert!(matching_rows > 0, "expected fixture rows matching id < 100");
+        assert!(preserved_rows > 0, "expected fixture rows with id >= 100");
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("address", DataType::Utf8, true),
+                Field::new("age", DataType::Float64, true),
+                Field::new("company", DataType::Utf8, true),
+                Field::new("id", DataType::Int64, true),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("nbr", DataType::Int64, true),
+                Field::new("phone_number", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("Replacement Ave")])),
+                Arc::new(Float64Array::from(vec![Some(42.0)])),
+                Arc::new(StringArray::from(vec![Some("delta-rs")])),
+                Arc::new(Int64Array::from(vec![Some(42)])),
+                Arc::new(StringArray::from(vec![Some("replacement")])),
+                Arc::new(Int64Array::from(vec![Some(4242)])),
+                Arc::new(StringArray::from(vec![Some("555-4242")])),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("id < 100")
+            .await?;
+
+        let final_counts = query_single_i64_row(
+            &table,
+            "SELECT \
+                COUNT(*) AS total_rows, \
+                SUM(CASE WHEN id < 100 THEN 1 ELSE 0 END) AS matching_rows, \
+                SUM(CASE WHEN id >= 100 THEN 1 ELSE 0 END) AS preserved_rows, \
+                SUM(CASE WHEN id = 42 AND name = 'replacement' THEN 1 ELSE 0 END) AS replacement_rows \
+             FROM test",
+        )
+        .await?;
+
+        assert_eq!(final_counts[0], preserved_rows + 1);
+        assert_eq!(final_counts[1], 1);
+        assert_eq!(final_counts[2], preserved_rows);
+        assert_eq!(final_counts[3], 1);
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert!(
+            remove_actions.iter().any(|remove| {
+                dv_sources
+                    .get(&remove.path)
+                    .is_some_and(|descriptor| remove.deletion_vector.as_ref() == Some(descriptor))
+            }),
+            "expected at least one DV-backed tombstone preserving its deletion vector"
         );
 
         Ok(())
