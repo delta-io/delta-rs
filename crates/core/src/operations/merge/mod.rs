@@ -1558,7 +1558,7 @@ async fn execute(
         writer_stats_config.clone(),
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
-        false,
+        None,
     )
     .await?;
     if let Some(schema_metadata) = schema_action {

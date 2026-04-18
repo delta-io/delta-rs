@@ -25,7 +25,6 @@ use tokio::task::JoinSet;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::plan::WRITE_INSERT_MARKER_COLUMN;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
@@ -358,7 +357,7 @@ pub(crate) async fn write_execution_plan(
         writer_stats_config,
         None,
         false,
-        false,
+        None,
     )
     .await?;
     Ok(actions)
@@ -377,7 +376,7 @@ pub(crate) async fn write_execution_plan_v2(
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
-    contains_insert_marker: bool,
+    insert_marker_column: Option<String>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -398,9 +397,10 @@ pub(crate) async fn write_execution_plan_v2(
     };
 
     if let Some(mut pred) = predicate {
-        if contains_insert_marker {
-            pred =
-                when(col(WRITE_INSERT_MARKER_COLUMN).eq(lit(true)), pred).otherwise(lit(true))?;
+        // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
+        // A rewrite plan never needs both paths at once.
+        if let Some(insert_marker_column) = insert_marker_column.as_ref() {
+            pred = when(col(insert_marker_column).eq(lit(true)), pred).otherwise(lit(true))?;
         } else if contains_cdc {
             pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
         }
@@ -408,8 +408,8 @@ pub(crate) async fn write_execution_plan_v2(
     }
 
     let mut plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
-    if contains_insert_marker {
-        plan = drop_internal_column(plan, WRITE_INSERT_MARKER_COLUMN)?;
+    if let Some(insert_marker_column) = insert_marker_column.as_ref() {
+        plan = drop_internal_column(plan, insert_marker_column)?;
     }
 
     let sink_config = WriteSinkConfig {
