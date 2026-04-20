@@ -2867,3 +2867,101 @@ def test_write_timestamp_ntz_ns_normalizes_to_us(tmp_path: pathlib.Path):
     result = dt.to_pyarrow_table()
     assert result.num_rows == 1
     assert result.schema.field("ts_ntz").type == pa.timestamp("us")
+
+
+def test_writing_with_generator(tmp_path):
+    """
+    Validate that a generator can be passed for a write_deltalake
+    <https://github.com/delta-io/delta-rs/issues/3961>
+    """
+    from collections.abc import Sequence
+
+    table = Table.from_pydict(
+        {
+            "id": Array(["1 2", "2 3", "3 5", "44", "55"], DataType.string()),
+            "price": Array(list(range(5)), DataType.int64()),
+        },
+        schema=ArrowSchema(
+            fields=[
+                ArrowField("id", type=DataType.string(), nullable=True),
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+    class WrapGeneratorAsSequence(Sequence):
+        """Wrap a generator as a Sequence supporting only iteration and `wrapped_object[0]`"""
+
+        def __init__(self, batches):
+            self._batches = batches
+            self._current_index = 0
+            try:
+                self._current_value = next(batches)
+                self.done = False
+            except StopIteration:
+                self.done = True
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.done:
+                raise StopIteration
+            value = self._current_value
+            try:
+                self._current_value = next(self._batches)
+                self._current_index += 1
+            except StopIteration:
+                self.done = True
+            return value
+
+        def __getitem__(self, index):
+            if index != self._current_index:
+                raise NotImplementedError(
+                    "Indexing on anything but the current index is not supported"
+                )
+            # return this instead to patch the misused `RecordBatchReader.from_batches(data[0],data)`  call
+            # return self._current_value.schema
+            return self._current_value
+
+        def __len__(self):
+            raise NotImplementedError("Indexing not supported")
+            # return len(self._batches)
+
+    my_sequence = WrapGeneratorAsSequence(iter(table.to_batches()))
+    write_deltalake(tmp_path, my_sequence)
+
+
+@pytest.mark.skip(
+    reason="Should be re-enabled when column mapping can come in properly"
+)
+@pytest.mark.pyarrow
+def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/3936>
+    enabling column mapping
+    """
+    import pyarrow as pa
+
+    from deltalake import write_deltalake
+
+    line_size = 12
+    field_with_metadata = pa.field(
+        "value",
+        pa.int32(),
+    )
+    single_column_data_v2 = pa.table(
+        [pa.array(range(line_size), type=pa.int32())],
+        schema=pa.schema([field_with_metadata]),
+    )
+
+    write_deltalake(
+        table_or_uri=tmp_path,
+        data=single_column_data_v2,
+        mode="overwrite",
+        configuration={
+            "delta.columnMapping.mode": "name",
+            "delta.minReaderVersion": "2",
+            "delta.minWriterVersion": "5",
+        },
+    )

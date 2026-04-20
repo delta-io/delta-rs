@@ -5,7 +5,7 @@ resolver = "3"
 
 [workspace.package]
 authors = ["Qingping Hou <dave2008713@gmail.com>", "R Tyler Croy <rtyler@brokenco.de>"]
-rust-version = "1.91"
+rust-version = "1.91.1"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
 edition = "2024"
@@ -35,15 +35,15 @@ arrow-ord = { version = "58" }
 arrow-row = { version = "58" }
 arrow-schema = { version = "58" }
 arrow-select = { version = "58" }
-object_store = { version = "0.13.1" }
+object_store = { version = "0.13.2" }
 parquet = { version = "58" }
 
 # datafusion 53
-datafusion = { version = "53.0.0" }
-datafusion-datasource = { version = "53.0.0" }
-datafusion-physical-expr-adapter = { version = "53.0.0" }
-datafusion-ffi = { version = "53.0.0" }
-datafusion-proto = { version = "53.0.0" }
+datafusion = { version = "53.1.0" }
+datafusion-datasource = { version = "53.1.0" }
+datafusion-physical-expr-adapter = { version = "53.1.0" }
+datafusion-ffi = { version = "53.1.0" }
+datafusion-proto = { version = "53.1.0" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }

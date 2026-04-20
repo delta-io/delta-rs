@@ -7,8 +7,6 @@ pub mod constants;
 mod credentials;
 pub mod errors;
 pub mod logstore;
-#[cfg(feature = "native-tls")]
-mod native;
 pub mod storage;
 
 use aws_config::Region;

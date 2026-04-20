@@ -67,6 +67,11 @@ jobs:
           source python/venv/bin/activate
           pip install -r docs/requirements.txt
 
+      - name: Get changelog for docs
+        run: |
+          cd .github/scripts/
+          ./docs_changelog.sh
+
       - name: Build
         run: |
           source python/venv/bin/activate

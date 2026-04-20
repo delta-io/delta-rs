@@ -1,3 +1,4 @@
+import json
 import pathlib
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,19 @@ from deltalake.table import DeltaTable
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+
+def _strip_add_stats(table_path: pathlib.Path) -> None:
+    # Simulates a writer that elided optional Add.stats per Delta spec.
+    log_path = table_path / "_delta_log" / "00000000000000000000.json"
+    rewritten_lines = []
+    for line in log_path.read_text().splitlines():
+        payload = json.loads(line)
+        if "add" in payload:
+            payload["add"].pop("stats", None)
+        rewritten_lines.append(json.dumps(payload, separators=(",", ":")))
+
+    log_path.write_text("\n".join(rewritten_lines) + "\n")
 
 
 def test_delete_no_predicates(existing_sample_table: DeltaTable):
@@ -52,6 +66,57 @@ def test_delete_a_partition(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Tab
     table = dt.to_pyarrow_table()
     assert table.equals(expected_table)
     assert len(dt.file_uris()) == 1
+
+
+@pytest.mark.pyarrow
+def test_delete_partition_only_reports_deleted_rows_when_stats_exist(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "part": pa.array(["a", "a", "a", "b"]),
+                "value": pa.array([1, 2, 3, 4], pa.int64()),
+            }
+        ),
+        partition_by=["part"],
+    )
+
+    dt = DeltaTable(tmp_path)
+    metrics = dt.delete(predicate="part = 'a'")
+
+    assert metrics["num_removed_files"] == 1
+    assert metrics["num_deleted_rows"] == 3
+    assert metrics["num_copied_rows"] == 0
+
+
+@pytest.mark.pyarrow
+def test_delete_partition_only_omits_deleted_rows_when_stats_missing(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    write_deltalake(
+        tmp_path,
+        pa.table(
+            {
+                "part": pa.array(["a", "a", "a", "b"]),
+                "value": pa.array([1, 2, 3, 4], pa.int64()),
+            }
+        ),
+        partition_by=["part"],
+    )
+    _strip_add_stats(tmp_path)
+
+    dt = DeltaTable(tmp_path)
+    metrics = dt.delete(predicate="part = 'a'")
+
+    assert metrics["num_removed_files"] == 1
+    assert "num_deleted_rows" not in metrics
+    assert metrics["num_copied_rows"] == 0
 
 
 @pytest.mark.pyarrow

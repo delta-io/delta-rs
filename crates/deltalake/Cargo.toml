@@ -34,7 +34,7 @@ deltalake-lakefs = { version = "0.15.0", path = "../lakefs", optional = true }
 deltalake-catalog-glue = { version = "0.16.0", path = "../catalog-glue", optional = true }
 deltalake-catalog-unity = { version = "0.16.0", path = "../catalog-unity", optional = true }
 delta_kernel = { workspace = true }
-ctor = "0.6"
+ctor = "0.10"
 
 [features]
 # All of these features are just reflected into the core crate until that

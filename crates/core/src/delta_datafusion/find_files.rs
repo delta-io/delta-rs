@@ -5,7 +5,7 @@ use std::sync::Arc;
 use arrow::array::AsArray;
 use arrow::datatypes::StringViewType;
 use arrow_array::{Array, GenericByteViewArray, RecordBatch, StringArray};
-use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion, TreeNodeVisitor};
 use datafusion::common::{HashSet, Result};
@@ -14,9 +14,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility, col};
 use datafusion::optimizer::simplify_expressions::simplify_predicates;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::{ExecutionPlan, collect_partitioned};
+use datafusion::physical_plan::collect_partitioned;
 use datafusion::prelude::{cast, lit};
 use delta_kernel::Predicate;
 use futures::TryStreamExt as _;
@@ -28,8 +26,8 @@ use crate::delta_datafusion::engine::to_delta_predicate;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
 use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
 use crate::delta_datafusion::{
-    DataFusionMixins as _, DeltaScanBuilder, DeltaScanConfigBuilder, DeltaScanNext,
-    FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
+    DataFusionMixins as _, DeltaScanNext, FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
+    normalize_path_as_file_id, resolve_file_column_name,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot};
@@ -71,22 +69,16 @@ pub(crate) async fn find_files(
     session: &dyn Session,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
-    let current_metadata = snapshot.metadata();
-
     match &predicate {
         Some(predicate) => {
-            // Validate the Predicate and determine if it only contains partition columns
-            let mut expr_properties = FindFilesExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns().to_vec(),
-                result: Ok(()),
-            };
+            let analysis = analyze_predicate_for_find_files(
+                predicate.to_owned(),
+                snapshot.metadata().partition_columns(),
+            )?;
+            let predicate = analysis.predicate();
 
-            TreeNode::visit(predicate, &mut expr_properties)?;
-            expr_properties.result?;
-
-            if expr_properties.partition_only {
-                let candidates = scan_memory_table(snapshot, predicate).await?;
+            if analysis.partition_only {
+                let candidates = scan_memory_table(snapshot, &predicate).await?;
                 let result = FindFiles {
                     candidates,
                     partition_scan: true,
@@ -95,8 +87,7 @@ pub(crate) async fn find_files(
                 Span::current().record("candidate_count", result.candidates.len());
                 Ok(result)
             } else {
-                let candidates =
-                    find_files_scan(snapshot, log_store, session, predicate.to_owned()).await?;
+                let candidates = find_files_scan(snapshot, log_store, session, predicate).await?;
 
                 let result = FindFiles {
                     candidates,
@@ -137,6 +128,20 @@ impl Default for FindFilesExprProperties {
             partition_only: true,
             result: Ok(()),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct FindFilesPredicateAnalysis {
+    simplified_terms: Vec<Expr>,
+    pub(crate) partition_only: bool,
+    pub(crate) translated_pruning_term_count: usize,
+    pub(crate) dropped_pruning_term_count: usize,
+}
+
+impl FindFilesPredicateAnalysis {
+    fn predicate(&self) -> Expr {
+        conjunction(self.simplified_terms.clone()).unwrap_or(lit(true))
     }
 }
 
@@ -200,6 +205,108 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
 
         Ok(TreeNodeRecursion::Continue)
     }
+}
+
+pub(crate) fn analyze_predicate_for_find_files(
+    predicate: Expr,
+    partition_columns: &[String],
+) -> DeltaResult<FindFilesPredicateAnalysis> {
+    let simplified_terms = simplify_predicates(split_conjunction_owned(predicate))?;
+    let mut visitor = FindFilesExprProperties {
+        partition_columns: partition_columns.to_vec(),
+        partition_only: true,
+        result: Ok(()),
+    };
+
+    for term in &simplified_terms {
+        term.visit(&mut visitor)?;
+        std::mem::replace(&mut visitor.result, Ok(()))?;
+    }
+
+    let translated_pruning_term_count = simplified_terms
+        .iter()
+        .filter(|term| to_delta_predicate(term).is_ok())
+        .count();
+
+    Ok(FindFilesPredicateAnalysis {
+        partition_only: visitor.partition_only,
+        translated_pruning_term_count,
+        dropped_pruning_term_count: simplified_terms
+            .len()
+            .saturating_sub(translated_pruning_term_count),
+        simplified_terms,
+    })
+}
+
+struct MatchingFilesScanSeed {
+    valid_files: Vec<GenericByteViewArray<StringViewType>>,
+    file_skipping_predicates: Vec<Expr>,
+    predicate: Expr,
+    delta_predicate: Arc<Predicate>,
+}
+
+async fn collect_matching_files(
+    session: &dyn Session,
+    snapshot: &EagerSnapshot,
+    log_store: Option<&LogStoreRef>,
+    predicate: Expr,
+    file_column_name: &str,
+) -> Result<Option<MatchingFilesScanSeed>> {
+    let analysis = analyze_predicate_for_find_files(
+        predicate,
+        snapshot
+            .table_configuration()
+            .metadata()
+            .partition_columns(),
+    )?;
+    let skipping_pred = analysis.simplified_terms.clone();
+    let delta_predicate = Arc::new(Predicate::and_from(
+        skipping_pred
+            .iter()
+            .flat_map(|term| to_delta_predicate(term).ok()),
+    ));
+    let predicate = analysis.predicate();
+
+    let mut builder = DeltaScanNext::builder()
+        .with_snapshot(snapshot.snapshot().clone())
+        .with_file_skipping_predicates(skipping_pred.clone())
+        .with_file_column(file_column_name);
+    if let Some(log_store) = log_store {
+        builder = builder.with_log_store(log_store.clone());
+    }
+    let table_source = provider_as_source(builder.await?);
+
+    let files_plan = LogicalPlanBuilder::scan("files_scan", table_source, None)?
+        .filter(predicate.clone())?
+        .project([cast(col(file_column_name), DataType::Utf8View).alias(file_column_name)])?
+        .distinct()?
+        .build()?;
+
+    let files_exec = session.create_physical_plan(&files_plan).await?;
+    let files_data = collect_partitioned(files_exec, session.task_ctx()).await?;
+    let files_count = files_data
+        .iter()
+        .flat_map(|batches| batches.iter().map(|batch| batch.num_rows()))
+        .sum::<usize>();
+    if files_count == 0 {
+        return Ok(None);
+    }
+
+    let valid_files = files_data
+        .iter()
+        .flat_map(|batches| {
+            batches
+                .iter()
+                .map(|batch| batch.column(0).as_string_view().clone())
+        })
+        .collect_vec();
+
+    Ok(Some(MatchingFilesScanSeed {
+        valid_files,
+        file_skipping_predicates: skipping_pred,
+        predicate,
+        delta_predicate,
+    }))
 }
 
 fn join_batches_with_add_actions(
@@ -268,60 +375,61 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
     session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
-    // let kernel_predicate = to_predicate(&expression).ok().map(Arc::new);
-    let candidate_map: HashMap<_, _> = snapshot
-        .file_views(&log_store, None)
-        .map_ok(|f| {
-            let add = f.to_add();
-            (add.path.clone(), add)
+    let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
+    let table_root = snapshot
+        .snapshot()
+        .scan_builder()
+        .build()?
+        .table_root()
+        .clone();
+    let mut candidate_map: HashMap<_, _> = snapshot
+        .file_views(log_store.as_ref(), None)
+        .try_fold(HashMap::new(), |mut candidate_map, view| {
+            // The next-provider file-id column is derived from the raw log path representation.
+            // Key candidate lookup with that same representation, but keep decoded Add actions
+            // as values for downstream DML consumers.
+            let file_id =
+                normalize_path_as_file_id(view.path_raw(), &table_root, "find_files candidate");
+            let add = view.to_add();
+
+            futures::future::ready(match file_id {
+                Ok(file_id) => {
+                    candidate_map.insert(file_id, add);
+                    Ok(candidate_map)
+                }
+                Err(err) => Err(err),
+            })
         })
-        .try_collect()
         .await?;
 
     Span::current().record("total_files", candidate_map.len());
 
-    let scan_config = DeltaScanConfigBuilder::default()
-        .with_file_column(true)
-        .build(snapshot)?;
-    let file_column_name = scan_config
-        .file_column_name
-        .as_ref()
-        .ok_or(DeltaTableError::Generic(
-            "File column name must be set in scan config".to_string(),
-        ))?
-        .clone();
+    let Some(matches) = collect_matching_files(
+        session,
+        snapshot,
+        Some(&log_store),
+        expression,
+        &file_column_name,
+    )
+    .await?
+    else {
+        Span::current().record("matching_files", 0);
+        return Ok(vec![]);
+    };
 
-    let logical_schema = df_logical_schema(snapshot, &file_column_name)?;
-
-    // Identify which columns we need to project
-    let mut used_columns: Vec<_> = expression
-        .column_refs()
-        .into_iter()
-        .map(|column| logical_schema.index_of(&column.name))
-        .try_collect()?;
-    // Add path column
-    used_columns.push(logical_schema.index_of(&file_column_name)?);
-
-    let scan = DeltaScanBuilder::new(snapshot, log_store, session)
-        .with_filter(Some(expression.clone()))
-        .with_projection(Some(&used_columns))
-        .with_scan_config(scan_config)
-        .build()
-        .await?;
-    let scan = Arc::new(scan);
-
-    let input_dfschema = scan.logical_schema.as_ref().to_owned().try_into()?;
-    let predicate_expr = session
-        .create_physical_expr(Expr::IsTrue(Box::new(expression.clone())), &input_dfschema)?;
-
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
-
-    let path_batches = datafusion::physical_plan::collect(limit, session.task_ctx()).await?;
-
-    let result =
-        join_batches_with_add_actions(path_batches, candidate_map, &file_column_name, true, false)?;
+    let mut result = Vec::new();
+    for file_id in matches
+        .valid_files
+        .iter()
+        .flat_map(|arr| arr.iter().flatten().map(str::to_owned))
+    {
+        let add = candidate_map.remove(&file_id).ok_or_else(|| {
+            DeltaTableError::Generic(format!(
+                "Unable to map matched file id back to Add action: {file_id}"
+            ))
+        })?;
+        result.push(add);
+    }
 
     Span::current().record("matching_files", result.len());
     Ok(result)
@@ -411,37 +519,6 @@ async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaR
     join_batches_with_add_actions(batches, map, PATH_COLUMN, false, true)
 }
 
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
-fn df_logical_schema(
-    snapshot: &EagerSnapshot,
-    file_column_name: &String,
-) -> DeltaResult<SchemaRef> {
-    let input_schema = snapshot.input_schema();
-    let table_partition_cols = snapshot.metadata().partition_columns();
-
-    let mut fields: Vec<_> = input_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-
-    fields.push(Arc::new(Field::new(file_column_name, DataType::Utf8, true)));
-
-    Ok(Arc::new(Schema::new(fields)))
-}
-
 pub(crate) struct MatchedFilesScan {
     /// A logical plan to perform a scan over all matched filed
     plan: LogicalPlan,
@@ -492,74 +569,26 @@ impl MatchedFilesScan {
 pub(crate) async fn scan_files_where_matches(
     session: &dyn Session,
     snapshot: &EagerSnapshot,
+    log_store: LogStoreRef,
     predicate: Expr,
 ) -> Result<Option<MatchedFilesScan>> {
-    let skipping_pred = simplify_predicates(split_conjunction_owned(predicate))?;
-
-    let partition_columns = snapshot
-        .table_configuration()
-        .metadata()
-        .partition_columns();
-    // validate that the expressions contain no illegal variants
-    // that are not eligible for file skipping, e.g. volatile functions.
-    let mut visitor = FindFilesExprProperties {
-        partition_columns: partition_columns.to_vec(),
-        partition_only: true,
-        result: Ok(()),
-    };
-    for term in &skipping_pred {
-        term.visit(&mut visitor)?;
-        std::mem::replace(&mut visitor.result, Ok(()))?;
-    }
-
-    // convert to a delta predicate that can be applied to kernel scans.
-    // This is a best effort predicate and downstream code needs to also
-    // apply the explicit file selection so we can ignore errors in the
-    // conversion.
-    let delta_predicate = Arc::new(Predicate::and_from(
-        skipping_pred
-            .iter()
-            .flat_map(|p| to_delta_predicate(p).ok()),
-    ));
-
-    let predicate = conjunction(skipping_pred.clone()).unwrap_or(lit(true));
-
-    // Scan the delta table with a dedicated predicate applied for file skipping
-    // and with the source file path exposed as column.
-    let table_source = provider_as_source(
-        DeltaScanNext::builder()
-            .with_snapshot(snapshot.snapshot().clone())
-            .with_file_skipping_predicates(skipping_pred.clone())
-            .with_file_column(FILE_ID_COLUMN_DEFAULT)
-            .await?,
-    );
-
-    // the kernel scan only provides a best effort file skipping, in this case
-    // we want to determine the file we certainly need to rewrite. For this
-    // we perform an initial aggregate scan to see if we can quickly find
-    // at least one matching record in the files.
-    let files_plan = LogicalPlanBuilder::scan("files_scan", table_source.clone(), None)?
-        .filter(predicate.clone())?
-        .project([
-            cast(col(FILE_ID_COLUMN_DEFAULT), DataType::Utf8View).alias(FILE_ID_COLUMN_DEFAULT)
-        ])?
-        .distinct()?
-        .build()?;
-
-    let files_exec = session.create_physical_plan(&files_plan).await?;
-    let files_data = collect_partitioned(files_exec, session.task_ctx()).await?;
-    let files_count = files_data
-        .iter()
-        .flat_map(|batches| batches.iter().map(|b| b.num_rows()))
-        .sum::<usize>();
-    if files_count == 0 {
+    let Some(matches) = collect_matching_files(
+        session,
+        snapshot,
+        Some(&log_store),
+        predicate,
+        FILE_ID_COLUMN_DEFAULT,
+    )
+    .await?
+    else {
         return Ok(None);
-    }
-
-    let valid_files = files_data
-        .iter()
-        .flat_map(|batches| batches.iter().map(|b| b.column(0).as_string_view().clone()))
-        .collect_vec();
+    };
+    let MatchingFilesScanSeed {
+        valid_files,
+        file_skipping_predicates,
+        predicate,
+        delta_predicate,
+    } = matches;
 
     // Create a table scan limited to the matched files by forwarding an explicit
     // file selection into the table provider.
@@ -578,8 +607,9 @@ pub(crate) async fn scan_files_where_matches(
     .with_missing_file_policy(MissingFilePolicy::Ignore);
     let selected_provider = DeltaScanNext::builder()
         .with_snapshot(snapshot.snapshot().clone())
-        .with_file_skipping_predicates(skipping_pred)
+        .with_file_skipping_predicates(file_skipping_predicates)
         .with_file_column(FILE_ID_COLUMN_DEFAULT)
+        .with_log_store(log_store)
         .build()
         .await?
         .with_file_selection(file_selection);
@@ -599,12 +629,18 @@ pub(crate) async fn scan_files_where_matches(
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::{Int64Array, StringArray};
+    use arrow::record_batch::RecordBatch;
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::physical_plan::collect;
-    use datafusion::prelude::{col, lit};
+    use datafusion::prelude::{col, lit, when};
+    use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 
     use crate::{
-        DeltaTable,
-        delta_datafusion::create_session,
+        DeltaTable, DeltaTableBuilder,
+        delta_datafusion::{
+            DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
+        },
         protocol::SaveMode,
         test_utils::{TestResult, multibatch_add_actions_for_partition, open_fs_path},
         writer::test_utils::{get_delta_schema, get_record_batch},
@@ -619,11 +655,12 @@ mod tests {
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
-        table.update_datafusion_session(&session)?;
-
         let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
         let predicate = col("id").gt(lit(-1i64));
-        let Some(scan) = scan_files_where_matches(&session, &snapshot, predicate).await? else {
+        let Some(scan) =
+            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
+        else {
             panic!("Expected at least one matching file");
         };
 
@@ -640,11 +677,12 @@ mod tests {
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
-        table.update_datafusion_session(&session)?;
-
         let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
         let predicate = col("id").gt(lit(-1i64));
-        let Some(scan) = scan_files_where_matches(&session, &snapshot, predicate).await? else {
+        let Some(scan) =
+            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
+        else {
             panic!("Expected at least one matching file");
         };
 
@@ -655,6 +693,281 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_honors_data_and_file_column_predicate() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/simple_table");
+        table.load().await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+        session.ensure_log_store_registered(log_store.as_ref())?;
+        let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
+
+        let by_id = find_files_scan(
+            &snapshot,
+            log_store.clone(),
+            &session,
+            col("id").eq(lit(7i64)),
+        )
+        .await?;
+        assert!(!by_id.is_empty());
+        let expected_path = by_id[0].path.clone();
+        let table_root = snapshot
+            .snapshot()
+            .scan_builder()
+            .build()?
+            .table_root()
+            .clone();
+        let expected_file_id = crate::delta_datafusion::normalize_path_as_file_id(
+            &expected_path,
+            &table_root,
+            "find_files test path",
+        )?;
+        let matched_paths = by_id.iter().map(|add| add.path.as_str()).collect_vec();
+
+        let matches = find_files_scan(
+            &snapshot,
+            log_store.clone(),
+            &session,
+            col("id")
+                .eq(lit(7i64))
+                .and(col(file_column_name.clone()).eq(lit(expected_file_id))),
+        )
+        .await?;
+        assert_eq!(
+            matches.iter().map(|add| add.path.as_str()).collect_vec(),
+            vec![expected_path.as_str()]
+        );
+
+        let other_path = snapshot
+            .log_data()
+            .iter()
+            .map(|add| add.path().to_string())
+            .find(|path| !matched_paths.contains(&path.as_str()))
+            .expect("expected a non-matching file path");
+        let other_file_id = crate::delta_datafusion::normalize_path_as_file_id(
+            &other_path,
+            &table_root,
+            "find_files test path",
+        )?;
+        let no_matches = find_files_scan(
+            &snapshot,
+            log_store,
+            &session,
+            col("id")
+                .eq(lit(7i64))
+                .and(col(file_column_name).eq(lit(other_file_id))),
+        )
+        .await?;
+        assert!(no_matches.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_prepares_fresh_session_and_snapshot_without_files() -> TestResult
+    {
+        let mut base = open_fs_path("../test/tests/data/simple_table");
+        base.load().await?;
+
+        let table = DeltaTableBuilder::from_url(base.table_url().clone())?
+            .without_files()
+            .load()
+            .await?;
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+
+        let matches =
+            find_files_scan(&snapshot, log_store, &session, col("id").eq(lit(7i64))).await?;
+
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].path.ends_with(".parquet"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_matches_encoded_partition_paths_for_data_predicates() -> TestResult
+    {
+        let tmp_dir = tempfile::tempdir()?;
+        let table_path = std::fs::canonicalize(tmp_dir.path())?;
+        let table_url = url::Url::from_directory_path(&table_path)
+            .map_err(|_| DeltaTableError::InvalidTableLocation(table_path.display().to_string()))?;
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("price", ArrowDataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("1 2")])),
+                Arc::new(Int64Array::from(vec![Some(10)])),
+            ],
+        )?;
+
+        let table = DeltaTable::try_from_url(table_url)
+            .await?
+            .write(vec![batch])
+            .with_partition_columns(["id"])
+            .await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+
+        let matches =
+            find_files_scan(&snapshot, log_store, &session, col("price").eq(lit(10i64))).await?;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].partition_values.get("id"),
+            Some(&Some("1 2".to_string()))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_scan_uses_collision_safe_file_column_namespace() -> TestResult {
+        let delta_schema = vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "modified".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                PATH_COLUMN.to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                format!("{PATH_COLUMN}_1"),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ];
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema)
+            .await?;
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, false),
+            Field::new("value", ArrowDataType::Int32, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+            Field::new(PATH_COLUMN, ArrowDataType::Utf8, true),
+            Field::new(format!("{PATH_COLUMN}_1"), ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![20])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-03-01"])),
+                Arc::new(arrow::array::StringArray::from(vec!["beta-src"])),
+                Arc::new(arrow::array::StringArray::from(vec!["beta-src-1"])),
+            ],
+        )?;
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+        table.update_datafusion_session(&session)?;
+
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+        session.ensure_log_store_registered(log_store.as_ref())?;
+
+        let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
+        assert_eq!(file_column_name, format!("{PATH_COLUMN}_2"));
+
+        let matches = find_files_scan(
+            &snapshot,
+            log_store,
+            &session,
+            col("id")
+                .eq(lit("B"))
+                .and(col(file_column_name).is_not_null()),
+        )
+        .await?;
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].path,
+            snapshot.log_data().iter().next().unwrap().path()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_files_where_matches_prepares_fresh_session_and_snapshot_without_files()
+    -> TestResult {
+        let mut base = open_fs_path("../test/tests/data/simple_table");
+        base.load().await?;
+
+        let table = DeltaTableBuilder::from_url(base.table_url().clone())?
+            .without_files()
+            .load()
+            .await?;
+        let snapshot = table.snapshot()?.snapshot().clone();
+        let log_store = table.log_store();
+
+        let ctx = create_session().into_inner();
+        let session = ctx.state();
+
+        let Some(scan) =
+            scan_files_where_matches(&session, &snapshot, log_store, col("id").eq(lit(7i64)))
+                .await?
+        else {
+            panic!("Expected at least one matching file");
+        };
+
+        let plan = session.create_physical_plan(scan.scan()).await?;
+        let data = collect(plan, session.task_ctx()).await?;
+        assert!(!data.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_analyze_predicate_for_find_files_counts_dropped_pruning_terms() {
+        let analysis = analyze_predicate_for_find_files(
+            when(lit(true), col("id").eq(lit("A")))
+                .otherwise(lit(false))
+                .unwrap(),
+            &["id".to_string()],
+        )
+        .unwrap();
+
+        assert!(analysis.partition_only);
+        assert_eq!(analysis.translated_pruning_term_count, 0);
+        assert_eq!(analysis.dropped_pruning_term_count, 1);
     }
 
     #[tokio::test]

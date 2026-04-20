@@ -748,6 +748,10 @@ the clause will remove all files from the table.
     table state to one where the deleted rows are no longer present. See
     `Vacuuming tables`_ for more information.
 
+    Row rewrite deletes include ``num_deleted_rows``. For metadata only
+    full file deletes, ``num_deleted_rows`` is included only when this library can
+    derive a count from file metadata; otherwise the key is omitted.
+
 
 Restoring tables
 ~~~~~~~~~~~~~~~~
