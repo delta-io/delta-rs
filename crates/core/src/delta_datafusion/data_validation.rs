@@ -45,7 +45,9 @@ use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
 use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
-use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::expr::{
+    parse_generated_column_expression, parse_predicate_expression,
+};
 use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
@@ -333,7 +335,7 @@ pub(crate) fn generated_columns_to_exprs<'a>(
     generated_columns
         .into_iter()
         .map(|gen_col| {
-            let expr = parse_predicate_expression(df_schema, &gen_col.generation_expr, session)?;
+            let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
             let col_expr = col(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
             Ok::<_, DataFusionError>(validation_expr)
