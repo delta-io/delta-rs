@@ -166,6 +166,7 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
     use arrow_array::RecordBatch;
+    use datafusion::assert_batches_eq;
     use datafusion::catalog::MemTable;
     use datafusion::datasource::provider_as_source;
     use datafusion::execution::SessionState;
@@ -316,6 +317,55 @@ mod tests {
                 .schema()
                 .field_with_unqualified_name("product")
                 .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generated_column_is_cast_back_to_target_type() {
+        let session = create_test_session();
+        let plan = create_test_plan();
+        let ctx = SessionContext::new();
+
+        let table_schema = Schema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, false),
+            ArrowField::new("value", ArrowDataType::Int32, false),
+            ArrowField::new("computed", ArrowDataType::Int64, false),
+        ]);
+
+        let generated_cols = vec![GeneratedColumn::new(
+            "computed",
+            "id + value",
+            &KernelDataType::LONG,
+        )];
+
+        let result = with_generated_columns(&session, plan, &table_schema, &generated_cols);
+        assert!(result.is_ok());
+
+        let result_plan = result.unwrap();
+        let computed = result_plan
+            .schema()
+            .field_with_unqualified_name("computed")
+            .unwrap();
+        assert_eq!(computed.data_type(), &ArrowDataType::Int64);
+
+        let actual = ctx
+            .execute_logical_plan(result_plan)
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        assert_batches_eq!(
+            &[
+                "+----+-------+----------+",
+                "| id | value | computed |",
+                "+----+-------+----------+",
+                "| 1  | 10    | 11       |",
+                "| 2  | 20    | 22       |",
+                "| 3  | 30    | 33       |",
+                "+----+-------+----------+",
+            ],
+            &actual
         );
     }
 

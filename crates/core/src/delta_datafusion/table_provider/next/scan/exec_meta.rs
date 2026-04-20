@@ -261,7 +261,9 @@ impl ExecutionPlan for DeltaScanMetaExec {
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_field: self.file_id_field.clone(),
-            schema_adapter: super::SchemaAdapter::new(Arc::clone(&self.scan_plan.result_schema)),
+            schema_adapter: super::SchemaAdapter::new(Arc::clone(
+                &self.scan_plan.contract.result_schema,
+            )),
         }))
     }
 

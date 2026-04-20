@@ -76,9 +76,7 @@ fn rewrite_in_list_expr_for_kernel(in_list: &InList) -> Option<Expr> {
 /// Converts a DataFusion expression to a Delta kernel expression.
 pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
     match expr {
-        Expr::Column(column) => Ok(Expression::Column(ColumnName::from_naive_str_split(
-            &column.name,
-        ))),
+        Expr::Column(column) => Ok(Expression::Column(ColumnName::new([column.name.as_str()]))),
         Expr::Literal(scalar, _meta) => {
             Ok(Expression::Literal(datafusion_scalar_to_scalar(scalar)?))
         }
@@ -198,7 +196,7 @@ pub(crate) fn to_delta_expression(expr: &Expr) -> Result<Expression> {
 
                 if let Expression::Column(ref col_name) = to_delta_expression(&scalar_fn.args[0])? {
                     return Ok(Expression::Column(
-                        col_name.join(&ColumnName::from_naive_str_split(field_name)),
+                        col_name.join(&ColumnName::new([field_name.as_str()])),
                     ));
                 }
             }
@@ -335,6 +333,7 @@ fn to_junction_op(op: Operator) -> JunctionPredicateOp {
 mod tests {
     use super::*;
     use datafusion::{
+        common::Column,
         functions::core::expr_ext::FieldAccessor,
         logical_expr::{col, lit},
     };
@@ -470,12 +469,12 @@ mod tests {
         let expr = col("a").field("b");
         assert_eq!(
             to_delta_expression(&expr).unwrap(),
-            Expression::Column(ColumnName::from_naive_str_split("a.b"))
+            Expression::Column(ColumnName::new(["a", "b"]))
         );
         let expr = col("a").field("b").field("c");
         assert_eq!(
             to_delta_expression(&expr).unwrap(),
-            Expression::Column(ColumnName::from_naive_str_split("a.b.c"))
+            Expression::Column(ColumnName::new(["a", "b", "c"]))
         );
 
         let expr = col("a").field("b").field("c").eq(lit(10));
@@ -611,6 +610,24 @@ mod tests {
             Expression::Column(name) => assert_eq!(&name.to_string(), "test_column"),
             _ => panic!("Expected Column expression, got {:?}", delta_expr),
         }
+    }
+
+    #[test]
+    fn test_column_expression_preserves_dots_in_name() {
+        let expr = Expr::Column(Column::from_name("a.b"));
+        assert_eq!(
+            to_delta_expression(&expr).unwrap(),
+            Expression::Column(ColumnName::new(["a.b"]))
+        );
+    }
+
+    #[test]
+    fn test_field_access_preserves_dots_in_field_name_segment() {
+        let expr = col("a").field("b.c");
+        assert_eq!(
+            to_delta_expression(&expr).unwrap(),
+            Expression::Column(ColumnName::new(["a", "b.c"]))
+        );
     }
 
     #[test]

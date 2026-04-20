@@ -81,7 +81,7 @@ pub async fn scan_files_where_matches(
     predicate: Expr,
 ) -> DataFusionResult<Option<MatchedFilesScan>> {
     prepare_session(session, &log_store)?;
-    super::scan_files_where_matches(session, snapshot, predicate)
+    super::scan_files_where_matches(session, snapshot, log_store, predicate)
         .await
         .map(|scan| scan.map(MatchedFilesScan))
 }

@@ -27,50 +27,37 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use std::vec;
 
 use arrow::array::RecordBatch;
-use arrow_schema::Schema;
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{Column, Result, ScalarValue};
+use datafusion::common::Result;
 use datafusion::datasource::{MemTable, provider_as_source};
-use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, cast, lit, try_cast,
-};
-use datafusion::prelude::col;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use futures::{TryStreamExt as _, future::BoxFuture};
-use itertools::Itertools as _;
+use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
 
 pub use self::configs::WriterStatsConfig;
-use self::execution::{prepare_predicate_actions, write_execution_plan_v2};
-use self::generated_columns::{gc_is_enabled, with_generated_columns};
+use self::execution::write_execution_plan_v2;
 use self::metrics::{SOURCE_COUNT_ID, SOURCE_COUNT_METRIC};
-use self::schema_evolution::try_cast_schema;
-use super::cdc::CDC_COLUMN_NAME;
 use super::{CreateBuilder, CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::delta_datafusion::DataFusionMixins;
 use crate::delta_datafusion::Expression;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
-use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{find_metric_node, get_metric};
 use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
     resolve_session_state, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{
-    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, StructType, StructTypeExt,
-    new_metadata,
-};
+use crate::kernel::{Action, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -78,6 +65,7 @@ pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
 pub(crate) mod metrics;
+mod plan;
 pub(crate) mod schema_evolution;
 pub mod writer;
 
@@ -465,7 +453,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 let partition_columns = this.get_partition_columns()?;
 
-                let Some(mut source) = this.input.take() else {
+                let Some(source) = this.input.take() else {
                     return Err(WriteError::MissingData.into());
                 };
 
@@ -483,267 +471,64 @@ impl std::future::IntoFuture for WriteBuilder {
                 update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
-                let mut schema_drift = false;
+                let prepared_write = plan::prepare_write(plan::WritePreparationInput {
+                    snapshot: this.snapshot.as_ref(),
+                    session: &session,
+                    source,
+                    mode: this.mode,
+                    schema_mode: this.schema_mode,
+                    safe_cast: this.safe_cast,
+                    partition_columns: partition_columns.clone(),
+                    predicate: this.predicate,
+                    target_file_size: this.target_file_size,
+                    write_batch_size: this.write_batch_size,
+                    writer_properties: this.writer_properties.clone(),
+                    configuration: &this.configuration,
+                })?;
 
-                let table_schema = if let Some(snapshot) = this.snapshot.as_ref() {
-                    snapshot.arrow_schema()
-                } else {
-                    normalize_for_delta(source.schema().inner())
-                };
+                let overwrite_plan = plan::plan_overwrite_rewrite(
+                    this.snapshot.as_ref(),
+                    &this.log_store,
+                    &session,
+                    this.mode,
+                    &prepared_write,
+                    operation_id,
+                )
+                .await?;
 
-                if let Some(snapshot) = &this.snapshot
-                    && gc_is_enabled(snapshot)
-                {
-                    source = with_generated_columns(
-                        &session,
-                        source,
-                        &table_schema,
-                        &snapshot.schema().get_generated_columns()?,
-                    )?;
+                if overwrite_plan.diagnostics.dropped_pruning_term_count > 0 {
+                    tracing::warn!(
+                        rewrite_kind = ?overwrite_plan.kind,
+                        matched_file_count = overwrite_plan.diagnostics.matched_file_count,
+                        translated_pruning_term_count =
+                            overwrite_plan.diagnostics.translated_pruning_term_count,
+                        dropped_pruning_term_count =
+                            overwrite_plan.diagnostics.dropped_pruning_term_count,
+                        "overwrite rewrite predicate was only partially translated for pruning; exact validation remains enabled"
+                    );
                 }
 
-                let source_schema: Arc<Schema> = normalize_for_delta(source.schema().inner());
+                let plan::PreparedWrite {
+                    schema_delta,
+                    exact_validation,
+                    exec_options,
+                    ..
+                } = prepared_write;
+                actions.extend(schema_delta.into_actions());
 
-                if !Arc::ptr_eq(&source_schema, source.schema().inner()) {
-                    let original_schema = source.schema().inner();
-                    let cast_projection: Vec<Expr> = source_schema
-                        .fields()
-                        .iter()
-                        .zip(original_schema.fields().iter())
-                        .map(|(target, original)| {
-                            if target.data_type() != original.data_type() {
-                                let cast_fn = if this.safe_cast { try_cast } else { cast };
-                                cast_fn(
-                                    Expr::Column(Column::from_name(target.name())),
-                                    target.data_type().clone(),
-                                )
-                                .alias(target.name())
-                            } else {
-                                Expr::Column(Column::from_name(target.name()))
-                            }
-                        })
-                        .collect();
-                    source = LogicalPlanBuilder::new(source)
-                        .project(cast_projection)?
-                        .build()?;
-                }
+                metrics.num_removed_files = overwrite_plan.num_removed_files();
 
-                // Schema merging code should be aware of columns that can be generated during write
-                // so they might be empty in the batch, but the will exist in the input_schema()
-                // in this case we have to insert the generated column and it's type in the schema of the batch
-                let mut new_schema = None;
-                if let Some(snapshot) = &this.snapshot {
-                    let table_schema = snapshot.input_schema();
-
-                    if let Err(schema_err) =
-                        try_cast_schema(source_schema.fields(), table_schema.fields())
-                    {
-                        schema_drift = true;
-                        if this.mode == SaveMode::Overwrite
-                            && this.schema_mode == Some(SchemaMode::Overwrite)
-                        {
-                            new_schema = None // we overwrite anyway, so no need to cast
-                        } else if this.schema_mode == Some(SchemaMode::Merge) {
-                            new_schema = Some(merge_arrow_schema(
-                                table_schema.clone(),
-                                source_schema.clone(),
-                                schema_drift,
-                            )?);
-                        } else {
-                            return Err(schema_err.into());
-                        }
-                    } else if this.mode == SaveMode::Overwrite
-                        && this.schema_mode == Some(SchemaMode::Overwrite)
-                    {
-                        new_schema = None // we overwrite anyway, so no need to cast
-                    } else {
-                        // Schema needs to be merged so that utf8/binary/list types are preserved from the batch side if both table
-                        // and batch contains such type. Other types are preserved from the table side.
-                        // At this stage it will never introduce more fields since try_cast_batch passed correctly.
-                        new_schema = Some(merge_arrow_schema(
-                            table_schema.clone(),
-                            source_schema.clone(),
-                            schema_drift,
-                        )?);
-                    }
-                }
-
-                if let Some(new_schema) = new_schema.as_ref() {
-                    let mut schema_evolution_projection =
-                        Vec::with_capacity(new_schema.fields().len());
-                    for field in new_schema.fields() {
-                        // If field exist in source data, we cast to new datatype
-                        if source_schema.index_of(field.name()).is_ok() {
-                            let cast_fn = if this.safe_cast { try_cast } else { cast };
-                            let cast_expr = cast_fn(
-                                Expr::Column(Column::from_name(field.name())),
-                                // col(field.name()),
-                                field.data_type().clone(),
-                            )
-                            .alias(field.name());
-                            schema_evolution_projection.push(cast_expr)
-                        // If field doesn't exist in source data, we insert the column
-                        // with null values
-                        } else {
-                            schema_evolution_projection.push(
-                                cast(
-                                    lit(ScalarValue::Null).alias(field.name()),
-                                    field.data_type().clone(),
-                                )
-                                .alias(field.name()),
-                            );
-                        }
-                    }
-                    source = LogicalPlanBuilder::new(source)
-                        .project(schema_evolution_projection)?
-                        .build()?;
-                }
-
-                let mut source = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MetricObserver {
-                        id: "write_source_count".into(),
-                        input: source,
-                        enable_pushdown: false,
-                    }),
-                });
-
-                // Maybe create schema action based on schema_mode
-                if let Some(snapshot) = &this.snapshot {
-                    let should_update_schema = match this.schema_mode {
-                        Some(SchemaMode::Merge) if schema_drift => true,
-                        Some(SchemaMode::Overwrite) if this.mode == SaveMode::Overwrite => {
-                            let delta_schema: StructType =
-                                source.schema().as_arrow().try_into_kernel()?;
-                            &delta_schema != snapshot.schema().as_ref()
-                        }
-                        _ => false,
-                    };
-
-                    if should_update_schema {
-                        // Use the merged Arrow schema (not the DataFusion plan schema) when
-                        // performing schema evolution. DataFusion expressions do not reliably
-                        // preserve Arrow field metadata, which would otherwise strip column
-                        // metadata such as generated column expressions.
-                        let schema_struct: StructType =
-                            match (this.schema_mode, schema_drift, new_schema.as_deref()) {
-                                (Some(SchemaMode::Merge), true, Some(schema)) => {
-                                    schema.try_into_kernel()?
-                                }
-                                _ => source.schema().as_arrow().try_into_kernel()?,
-                            };
-                        // Verify if delta schema changed
-                        if &schema_struct != snapshot.schema().as_ref() {
-                            let current_protocol = snapshot.protocol();
-                            let configuration = snapshot.metadata().configuration().clone();
-                            let new_protocol = current_protocol
-                                .clone()
-                                .apply_column_metadata_to_protocol(&schema_struct)?
-                                .move_table_properties_into_features(&configuration);
-
-                            let mut metadata =
-                                new_metadata(&schema_struct, &partition_columns, configuration)?;
-                            let existing_metadata_id = snapshot.metadata().id().to_string();
-
-                            if !existing_metadata_id.is_empty() {
-                                metadata = metadata.with_table_id(existing_metadata_id)?;
-                            }
-                            let schema_action = Action::Metadata(metadata);
-                            actions.push(schema_action);
-                            if current_protocol != &new_protocol {
-                                actions.push(new_protocol.into())
-                            }
-                        }
-                    }
-                }
-
-                let df_schema = source
-                    .schema()
-                    .as_ref()
-                    .clone()
-                    .replace_qualifier(UNNAMED_TABLE);
-                let predicate = this
-                    .predicate
-                    .map(|p| p.resolve(&session, Arc::new(df_schema)))
-                    .transpose()?;
-                let predicate_str = predicate.as_ref().map(fmt_expr_to_sql).transpose()?;
-
-                let config = this
-                    .snapshot
-                    .as_ref()
-                    .map(|snapshot| snapshot.table_properties());
-
-                let target_file_size = this.target_file_size.unwrap_or_else(|| {
-                    Some(super::get_target_file_size(config, &this.configuration))
-                });
-
-                let (num_indexed_cols, stats_columns) =
-                    super::get_num_idx_cols_and_stats_columns(config, this.configuration);
-
-                let writer_stats_config = WriterStatsConfig {
-                    num_indexed_cols,
-                    stats_columns,
-                };
-
-                let mut contains_cdc = false;
-
-                // Collect remove actions if we are overwriting the table
-                if let Some(snapshot) = &this.snapshot {
-                    if matches!(this.mode, SaveMode::Overwrite) {
-                        let deletion_timestamp = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_millis() as i64;
-
-                        match &predicate {
-                            Some(pred) => {
-                                let (predicate_actions, cdf_df) = prepare_predicate_actions(
-                                    pred.clone(),
-                                    this.log_store.clone(),
-                                    snapshot,
-                                    &session,
-                                    partition_columns.clone(),
-                                    this.writer_properties.clone(),
-                                    deletion_timestamp,
-                                    writer_stats_config.clone(),
-                                    operation_id,
-                                )
-                                .await?;
-
-                                if let Some(cdf_df) = cdf_df {
-                                    contains_cdc = true;
-                                    let mut projection = source
-                                        .schema()
-                                        .iter()
-                                        .map(|(_, field)| col(field.name()))
-                                        .collect_vec();
-                                    projection.push(lit("insert").alias(CDC_COLUMN_NAME));
-                                    source = LogicalPlanBuilder::new(source)
-                                        .project(projection)?
-                                        .union(cdf_df)?
-                                        .build()?;
-                                }
-
-                                if !predicate_actions.is_empty() {
-                                    actions.extend(predicate_actions);
-                                }
-                            }
-                            _ => {
-                                let remove_actions = snapshot
-                                    .file_views(&this.log_store, None)
-                                    .map_ok(|p| p.remove_action(true).into())
-                                    .try_collect::<Vec<_>>()
-                                    .await?;
-                                actions.extend(remove_actions);
-                            }
-                        };
-                    }
-                    metrics.num_removed_files = actions
-                        .iter()
-                        .filter(|a| matches!(a, Action::Remove(_)))
-                        .count();
-                }
-
-                let source_plan = session.create_physical_plan(&source).await?;
+                let plan::WriteExecOptions {
+                    partition_columns,
+                    target_file_size,
+                    write_batch_size,
+                    writer_properties,
+                    writer_stats_config,
+                } = exec_options;
+                let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
+                let (sink_plan, contains_cdc, insert_marker_column) =
+                    overwrite_plan.build_sink_plan()?;
+                let source_plan = session.create_physical_plan(&sink_plan).await?;
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
@@ -753,13 +538,20 @@ impl std::future::IntoFuture for WriteBuilder {
                     partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
                     target_file_size,
-                    this.write_batch_size,
-                    this.writer_properties,
-                    writer_stats_config.clone(),
-                    predicate.clone(),
+                    write_batch_size,
+                    writer_properties,
+                    writer_stats_config,
+                    exact_validation,
                     contains_cdc,
+                    insert_marker_column,
                 )
                 .await?;
+
+                actions.extend(
+                    overwrite_plan
+                        .matched_existing
+                        .into_actions(overwrite_plan.deletion_timestamp)?,
+                );
 
                 let source_count =
                     find_metric_node(SOURCE_COUNT_ID, &source_plan).ok_or_else(|| {
@@ -782,7 +574,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     } else {
                         None
                     },
-                    predicate: predicate_str,
+                    predicate: predicate_sql,
                 };
 
                 let mut commit_properties = this.commit_properties.clone();
@@ -833,12 +625,16 @@ mod tests {
         get_arrow_schema, get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
         get_record_batch_with_nested_struct, setup_table_with_configuration,
     };
-    use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow_array::{
+        Float64Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    };
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use datafusion::physical_plan::collect;
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
+    use delta_kernel::schema::MetadataValue;
+    use futures::TryStreamExt;
     use itertools::Itertools;
     use serde_json::{Value, json};
 
@@ -851,6 +647,86 @@ mod tests {
             .remove("operationMetrics")
             .unwrap();
         serde_json::from_value(metrics).unwrap()
+    }
+
+    async fn query_table(table: &DeltaTable, sql: &str) -> TestResult<Vec<RecordBatch>> {
+        let table = DeltaTable::new_with_state(
+            table.log_store.clone(),
+            table.state.as_ref().unwrap().clone(),
+        );
+        let ctx = SessionContext::new();
+        table.update_datafusion_session(&ctx.state()).unwrap();
+        ctx.register_table("test", table.table_provider().await.unwrap())
+            .unwrap();
+
+        Ok(ctx.sql(sql).await?.collect().await?)
+    }
+
+    async fn query_single_i64_row(table: &DeltaTable, sql: &str) -> TestResult<Vec<i64>> {
+        let batches = query_table(table, sql).await?;
+        let batch = batches
+            .first()
+            .expect("expected aggregate query to return a single batch");
+
+        Ok(batch
+            .columns()
+            .iter()
+            .map(|column| {
+                column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("expected Int64 aggregate column")
+                    .value(0)
+            })
+            .collect())
+    }
+
+    async fn query_i32_rows(table: &DeltaTable, sql: &str, column: &str) -> TestResult<Vec<i32>> {
+        let mut values = Vec::new();
+        for batch in query_table(table, sql).await? {
+            let array = batch
+                .column_by_name(column)
+                .expect("expected query column")
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .expect("expected Int32 query column");
+            values.extend(
+                array
+                    .iter()
+                    .map(|value| value.expect("expected non-null Int32 value")),
+            );
+        }
+        Ok(values)
+    }
+
+    async fn open_copied_table_fixture(
+        fixture_source: &std::path::Path,
+        table_dir_name: &str,
+    ) -> TestResult<(tempfile::TempDir, DeltaTable)> {
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(fixture_source, temp_dir.path(), &Default::default())?;
+        let table_url =
+            url::Url::from_directory_path(temp_dir.path().join(table_dir_name).canonicalize()?)
+                .unwrap();
+        Ok((temp_dir, crate::open_table(table_url).await?))
+    }
+
+    async fn latest_remove_actions(table: &DeltaTable) -> TestResult<Vec<crate::kernel::Remove>> {
+        let version = table
+            .version()
+            .expect("expected committed version for latest remove actions");
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(version)
+            .await?
+            .expect("failed to get snapshot bytes");
+        Ok(get_actions(version, &snapshot_bytes)?
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Remove(remove) => Some(remove),
+                _ => None,
+            })
+            .collect())
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -1386,16 +1262,87 @@ mod tests {
         let mut names = fields.map(|f| f.name()).collect::<Vec<_>>();
         names.sort();
         assert_eq!(names, vec!["id", "inserted_by", "modified", "value"]);
-        let part_cols = table
-            .snapshot()
-            .unwrap()
-            .metadata()
-            .partition_columns()
-            .clone();
-        assert_eq!(part_cols, vec!["id", "value"]); // we want to preserve partitions
+        let part_cols = table.snapshot().unwrap().metadata().partition_columns();
+        assert_eq!(part_cols, ["id".to_string(), "value".to_string()]); // we want to preserve partitions
 
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_preserves_existing_field_metadata() {
+        let schema: StructType = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "string", "nullable": true, "metadata": {}},
+                {"name": "value", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"value < 12\"} }",
+                    "delta.userMetadata": "preserve-me"
+                }},
+                {"name": "modified", "type": "string", "nullable": true, "metadata": {}},
+            ]
+        }))
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap()
+            .write(vec![get_record_batch(None, false)])
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let evolved_schema = Arc::new(ArrowSchema::new(vec![
+            batch.schema().field(0).as_ref().clone(),
+            batch.schema().field(1).as_ref().clone(),
+            batch.schema().field(2).as_ref().clone(),
+            Field::new("inserted_by", DataType::Utf8, true),
+        ]));
+        let evolved_batch = RecordBatch::try_new(
+            evolved_schema,
+            vec![
+                batch.column(0).clone(),
+                batch.column(1).clone(),
+                batch.column(2).clone(),
+                Arc::new(StringArray::from(vec![
+                    Some("A1"),
+                    Some("B1"),
+                    None,
+                    Some("B2"),
+                    Some("A3"),
+                    Some("A4"),
+                    None,
+                    None,
+                    Some("B4"),
+                    Some("A5"),
+                    Some("A7"),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![evolved_batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await
+            .unwrap();
+
+        let schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+        let value = schema.field("value").unwrap();
+        assert_eq!(
+            value.metadata.get("delta.invariants"),
+            Some(&MetadataValue::String(
+                "{\"expression\": { \"expression\": \"value < 12\"} }".to_string()
+            ))
+        );
+        assert_eq!(
+            value.metadata.get("delta.userMetadata"),
+            Some(&MetadataValue::String("preserve-me".to_string()))
+        );
     }
 
     #[tokio::test]
@@ -1739,6 +1686,533 @@ mod tests {
         // Verify that table state hasn't changed
         let table = DeltaTable::new_with_state(table_logstore, table_state);
         assert_eq!(table.get_latest_version().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_no_matching_files_still_validates_input() {
+        let schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2021-02-03",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+
+        let table_logstore = table.log_store();
+        let table_state = table.state.clone().unwrap();
+
+        let batch_fail = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1000])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-01-01"])),
+            ],
+        )
+        .unwrap();
+
+        let result = table
+            .write(vec![batch_fail])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("id").eq(lit("Z")))
+            .await;
+        assert!(result.is_err());
+
+        let table = DeltaTable::new_with_state(table_logstore, table_state);
+        assert_eq!(table.get_latest_version().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_write_preserves_user_insert_marker_column_outside_rewrite() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new(
+                super::plan::WRITE_INSERT_MARKER_COLUMN,
+                DataType::Boolean,
+                true,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let actual = get_data_sorted(
+            &table,
+            format!(
+                "id,value,modified,{}",
+                super::plan::WRITE_INSERT_MARKER_COLUMN
+            )
+            .as_str(),
+        )
+        .await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------------------+",
+                "| id | value | modified   | __delta_rs_write_insert |",
+                "+----+-------+------------+-------------------------+",
+                "| A  | 1     | 2021-02-02 | false                   |",
+                "| B  | 2     | 2021-02-03 | true                    |",
+                "| C  | 3     | 2021-02-04 | false                   |",
+                "+----+-------+------------+-------------------------+",
+            ],
+            &actual
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_preserves_user_insert_marker_column() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new(
+                super::plan::WRITE_INSERT_MARKER_COLUMN,
+                DataType::Boolean,
+                true,
+            ),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+                Arc::new(arrow::array::BooleanArray::from(vec![
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                ])),
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let replacement_batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("2023-01-01")])),
+                Arc::new(arrow::array::BooleanArray::from(vec![Some(false)])),
+            ],
+        )
+        .unwrap();
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(col("value").eq(lit(3)))
+            .await
+            .expect("replaceWhere should preserve user columns named like internal markers");
+
+        let actual = get_data_sorted(
+            &table,
+            format!(
+                "id,value,modified,{}",
+                super::plan::WRITE_INSERT_MARKER_COLUMN
+            )
+            .as_str(),
+        )
+        .await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------------------+",
+                "| id | value | modified   | __delta_rs_write_insert |",
+                "+----+-------+------------+-------------------------+",
+                "| A  | 1     | 2021-02-02 | false                   |",
+                "| B  | 2     | 2021-02-03 | false                   |",
+                "| C  | 3     | 2023-01-01 | false                   |",
+                "+----+-------+------------+-------------------------+",
+            ],
+            &actual
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_merge_schema_rescues_existing_rows() -> TestResult {
+        let base_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ]));
+        let base_batch = RecordBatch::try_new(
+            Arc::clone(&base_schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("A"), Some("B"), Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+                Arc::new(StringArray::from(vec![
+                    Some("2021-02-02"),
+                    Some("2021-02-03"),
+                    Some("2021-02-04"),
+                ])),
+            ],
+        )?;
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![base_batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let merge_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new("inserted_by", DataType::Utf8, true),
+        ]));
+        let replacement_batch = RecordBatch::try_new(
+            merge_schema,
+            vec![
+                Arc::new(StringArray::from(vec![Some("C")])),
+                Arc::new(Int32Array::from(vec![Some(3)])),
+                Arc::new(StringArray::from(vec![Some("2023-01-01")])),
+                Arc::new(StringArray::from(vec![Some("rewrite")])),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Merge)
+            .with_replace_where(col("value").eq(lit(3)))
+            .await?;
+
+        let actual = get_data_sorted(&table, "id,value,modified,inserted_by").await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----+-------+------------+-------------+",
+                "| id | value | modified   | inserted_by |",
+                "+----+-------+------------+-------------+",
+                "| A  | 1     | 2021-02-02 |             |",
+                "| B  | 2     | 2021-02-03 |             |",
+                "| C  | 3     | 2023-01-01 | rewrite     |",
+                "+----+-------+------------+-------------+",
+            ],
+            &actual
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_preserves_live_rows_with_deletion_vectors() -> TestResult {
+        let (_temp_dir, table) = open_copied_table_fixture(
+            &crate::test_utils::TestTables::WithDvSmall.as_path(),
+            "table-with-dv-small",
+        )
+        .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 1);
+        let source_path = source_files[0].path().to_string();
+        let source_deletion_vector = source_files[0].deletion_vector_descriptor();
+        assert!(
+            source_deletion_vector.is_some(),
+            "expected DV-backed source file"
+        );
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![1, 2, 3, 4, 5, 6, 7, 8]
+        );
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(50)]))],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("value = 5 OR value = 50")
+            .await?;
+        assert_eq!(table.version(), Some(2));
+
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![1, 2, 3, 4, 6, 7, 8, 50]
+        );
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert_eq!(remove_actions.len(), 1);
+        let remove = &remove_actions[0];
+        assert_eq!(remove.path, source_path);
+        assert_eq!(remove.deletion_vector, source_deletion_vector);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_rewrites_multiple_files_with_deletion_vectors() -> TestResult {
+        let (_temp_dir, table) = open_copied_table_fixture(
+            &crate::test_utils::TestTables::WithDvSmall.as_path(),
+            "table-with-dv-small",
+        )
+        .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 1);
+        let dv_source = source_files
+            .into_iter()
+            .next()
+            .expect("expected DV-backed source file");
+        assert!(
+            dv_source.deletion_vector_descriptor().is_some(),
+            "expected DV-backed source file"
+        );
+
+        let append_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(0), Some(9)]))],
+        )?;
+
+        let table = table
+            .write(vec![append_batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        assert_eq!(source_files.len(), 2);
+        let appended_source = source_files
+            .iter()
+            .find(|file| file.path() != dv_source.path())
+            .expect("expected appended source file");
+        assert!(
+            appended_source.deletion_vector_descriptor().is_none(),
+            "expected appended source without DV metadata"
+        );
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(50)]))],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("value >= 5")
+            .await?;
+        assert_eq!(table.version(), Some(3));
+
+        assert_eq!(
+            query_i32_rows(&table, "SELECT value FROM test ORDER BY value", "value").await?,
+            vec![0, 1, 2, 3, 4, 50]
+        );
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert_eq!(remove_actions.len(), 2);
+        assert!(
+            remove_actions.iter().any(|remove| {
+                remove.path == dv_source.path().to_string()
+                    && remove.deletion_vector == dv_source.deletion_vector_descriptor()
+            }),
+            "expected tombstone for DV-backed source file"
+        );
+        assert!(
+            remove_actions.iter().any(|remove| {
+                remove.path == appended_source.path().to_string()
+                    && remove.deletion_vector.is_none()
+            }),
+            "expected tombstone for appended non-DV source file"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_real_world_deletion_logs_preserve_live_rows() -> TestResult {
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_deletion_logs");
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_path, "table_with_deletion_logs").await?;
+
+        let source_files = table
+            .get_active_add_actions_by_partitions(&[])
+            .try_collect::<Vec<_>>()
+            .await?;
+        let dv_sources = source_files
+            .iter()
+            .filter_map(|file| {
+                file.deletion_vector_descriptor()
+                    .map(|descriptor| (file.path().to_string(), descriptor))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        assert!(
+            !dv_sources.is_empty(),
+            "expected at least one active DV-backed source file"
+        );
+
+        let initial_counts = query_single_i64_row(
+            &table,
+            "SELECT \
+                SUM(CASE WHEN id < 100 THEN 1 ELSE 0 END) AS matching_rows, \
+                SUM(CASE WHEN id >= 100 THEN 1 ELSE 0 END) AS preserved_rows \
+             FROM test",
+        )
+        .await?;
+        let matching_rows = initial_counts[0];
+        let preserved_rows = initial_counts[1];
+        assert!(matching_rows > 0, "expected fixture rows matching id < 100");
+        assert!(preserved_rows > 0, "expected fixture rows with id >= 100");
+
+        let replacement_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("address", DataType::Utf8, true),
+                Field::new("age", DataType::Float64, true),
+                Field::new("company", DataType::Utf8, true),
+                Field::new("id", DataType::Int64, true),
+                Field::new("name", DataType::Utf8, true),
+                Field::new("nbr", DataType::Int64, true),
+                Field::new("phone_number", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("Replacement Ave")])),
+                Arc::new(Float64Array::from(vec![Some(42.0)])),
+                Arc::new(StringArray::from(vec![Some("delta-rs")])),
+                Arc::new(Int64Array::from(vec![Some(42)])),
+                Arc::new(StringArray::from(vec![Some("replacement")])),
+                Arc::new(Int64Array::from(vec![Some(4242)])),
+                Arc::new(StringArray::from(vec![Some("555-4242")])),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("id < 100")
+            .await?;
+
+        let final_counts = query_single_i64_row(
+            &table,
+            "SELECT \
+                COUNT(*) AS total_rows, \
+                SUM(CASE WHEN id < 100 THEN 1 ELSE 0 END) AS matching_rows, \
+                SUM(CASE WHEN id >= 100 THEN 1 ELSE 0 END) AS preserved_rows, \
+                SUM(CASE WHEN id = 42 AND name = 'replacement' THEN 1 ELSE 0 END) AS replacement_rows \
+             FROM test",
+        )
+        .await?;
+
+        assert_eq!(final_counts[0], preserved_rows + 1);
+        assert_eq!(final_counts[1], 1);
+        assert_eq!(final_counts[2], preserved_rows);
+        assert_eq!(final_counts[3], 1);
+
+        let remove_actions = latest_remove_actions(&table).await?;
+
+        assert!(
+            remove_actions.iter().any(|remove| {
+                dv_sources
+                    .get(&remove.path)
+                    .is_some_and(|descriptor| remove.deletion_vector.as_ref() == Some(descriptor))
+            }),
+            "expected at least one DV-backed tombstone preserving its deletion vector"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_without_files_is_rejected() -> TestResult {
+        let temp_dir = tempfile::tempdir()?;
+        let table_path = temp_dir.path().join("without_files_overwrite");
+        std::fs::create_dir(&table_path)?;
+        let table_uri = ensure_table_uri(table_path.to_str().unwrap())?;
+
+        DeltaTable::try_from_url(table_uri.clone())
+            .await?
+            .write(vec![get_record_batch(None, false)])
+            .await?;
+
+        let table = crate::DeltaTableBuilder::from_url(table_uri)?
+            .without_files()
+            .load()
+            .await?;
+
+        assert_eq!(table.version(), Some(0));
+
+        // Phase 3 now routes overwrite planning through matched-file discovery, so this guard
+        // stays covered here to ensure we still fail before any rewrite planning starts.
+        let err = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .expect_err("overwrite should fail when table was loaded without files");
+
+        assert!(matches!(
+            err,
+            DeltaTableError::NotInitializedWithFiles(operation) if operation == "WRITE"
+        ));
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -2720,7 +3194,7 @@ mod tests {
             Field::new("id", DataType::Int32, false),
             Field::new("sales_date", DataType::Date64, true),
         ]));
-        let millis = 1760918400000i64; // 2025-10-20 in ms since epoch
+        let millis = 1760918400000i64; // 2025 10 20 in ms since epoch
         let batch = RecordBatch::try_new(
             schema,
             vec![
