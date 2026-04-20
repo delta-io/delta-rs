@@ -2,7 +2,7 @@ use chrono::Utc;
 use deltalake_aws::constants;
 use deltalake_aws::register_handlers;
 use deltalake_test::utils::*;
-use rand::RngCore;
+use rand::prelude::*;
 use rand::random;
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -14,7 +14,7 @@ pub struct S3Integration {
 impl Default for S3Integration {
     fn default() -> Self {
         register_handlers(None);
-        let task_id = format!("{}", rand::thread_rng().next_u64());
+        let task_id = format!("{}", rand::rng().next_u64());
         Self {
             bucket_name: format!("delta-table-{}-{task_id}", Utc::now().timestamp()),
         }

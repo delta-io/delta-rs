@@ -38,7 +38,7 @@ tmp/partitioned-table/
 
 ### Filtering by partition columns
 
-Because partition columns are part of the storage path, queries that filter on those columns can skip reading unneeded partitions. You can specify partition filters when reading data with [DeltaTable.to_pandas()](../../delta_table/#deltalake.DeltaTable.to_pandas).
+Because partition columns are part of the storage path, queries that filter on those columns can skip reading unneeded partitions. You can specify partition filters when reading data with [DeltaTable.to_pandas()](../api/delta_table/index.md#deltalake.DeltaTable.to_pandas).
 
 In this example we restrict our query to the `country="US"` partition.
 
@@ -209,7 +209,7 @@ This command logically deletes the data by creating a new transaction.
 
 ### Optimize & Vacuum
 
-Partitioned tables can accumulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../../delta_table/#deltalake.DeltaTable.optimize).
+Partitioned tables can accumulate many small files if a partition is frequently appended to. You can compact these into larger files on a specific partition with [`optimize.compact`](../api/delta_table/index.md#deltalake.DeltaTable.optimize).
 
 If we want to target compaction at specific partitions we can include partition filters.
 
@@ -217,7 +217,7 @@ If we want to target compaction at specific partitions we can include partition 
  dt.optimize.compact(partition_filters=[("country", "=", "CA")])
 ```
 
-Then optionally [`vacuum`](../../delta_table/#deltalake.DeltaTable.vacuum) the table to remove older, unreferenced files.
+Then optionally [`vacuum`](../api/delta_table/index.md#deltalake.DeltaTable.vacuum) the table to remove older, unreferenced files.
 
 ### Handling High-Cardinality Columns
 
