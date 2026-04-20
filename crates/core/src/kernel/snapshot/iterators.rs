@@ -218,12 +218,18 @@ impl LogicalFileView {
             .and_then(|col| col.as_struct_opt())
     }
 
-    /// Returns the number of records in this file.
+    /// Returns the raw file row count from Add-action statistics before deletion-vector filtering.
+    ///
+    /// Returns `None` when the stat is missing or invalid for the current platform.
     pub fn num_records(&self) -> Option<usize> {
         self.stats_parsed()
             .and_then(|stats| stats.column_by_name(STATS_FIELD_NUM_RECORDS))
             .and_then(|col| col.as_primitive_opt::<Int64Type>())
-            .and_then(|a| a.is_valid(self.index).then(|| a.value(self.index) as usize))
+            .and_then(|a| {
+                a.is_valid(self.index)
+                    .then(|| usize::try_from(a.value(self.index)).ok())
+                    .flatten()
+            })
     }
 
     /// Returns null counts for all columns in this file as structured data.

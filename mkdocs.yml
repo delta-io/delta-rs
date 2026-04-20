@@ -49,6 +49,7 @@ nav:
       - Home: index.md
       - Why Use Delta Lake: why-use-delta-lake.md
       - Delta Lake for big and small data: delta-lake-big-data-small-data.md
+      - Latest changes: latest.md
   - Usage:
       - Installation: usage/installation.md
       - Overview: usage/overview.md
