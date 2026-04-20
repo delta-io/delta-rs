@@ -1558,6 +1558,7 @@ async fn execute(
         writer_stats_config.clone(),
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
+        None,
     )
     .await?;
     if let Some(schema_metadata) = schema_action {
@@ -2614,6 +2615,17 @@ mod tests {
             .unwrap();
         let target_table = write_data(target_table, &get_arrow_schema(&None)).await;
         assert_eq!(target_table.snapshot().unwrap().log_data().num_files(), 1);
+        let target_file_column = resolve_file_column_name(
+            target_table
+                .snapshot()
+                .unwrap()
+                .snapshot()
+                .input_schema()
+                .as_ref(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(target_file_column, PATH_COLUMN);
 
         let source_dir = tempfile::tempdir().unwrap();
         let source_path = std::fs::canonicalize(source_dir.path()).unwrap();
