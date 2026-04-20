@@ -5,6 +5,10 @@
 //! that contain records that satisfy the predicate. Once files are determined
 //! they are rewritten without the records.
 //!
+//! `DeleteMetrics::num_deleted_rows` is optional. Row rewrite deletes derive the
+//! count from execution metrics, while metadata only full file deletes return
+//! `None` when this library cannot derive the count from file metadata.
+//!
 //! Predicates MUST be deterministic otherwise undefined behaviour may occur during the
 //! scanning and rewriting phase.
 //!
@@ -71,7 +75,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, LogicalFileView, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -122,8 +126,15 @@ pub struct DeleteMetrics {
     pub num_added_files: usize,
     /// Number of files removed
     pub num_removed_files: usize,
-    /// Number of rows removed
-    pub num_deleted_rows: usize,
+    /// Deleted row count when available from rewrite metrics or file metadata.
+    ///
+    /// This is `None` for metadata only full file deletes when this library cannot
+    /// derive an exact count from file metadata alone.
+    ///
+    /// Breaking change: this field is `Option<usize>` rather than `usize` so
+    /// callers must handle the unknown count case explicitly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_deleted_rows: Option<usize>,
     /// Number of rows copied in the process of deleting files
     pub num_copied_rows: usize,
     /// Time taken to execute the entire operation
@@ -132,6 +143,75 @@ pub struct DeleteMetrics {
     pub scan_time_ms: u64,
     /// Time taken to rewrite the matched files
     pub rewrite_time_ms: u64,
+}
+
+struct FullFileDeleteResult {
+    removes: Vec<Action>,
+    removed_files: usize,
+    deleted_rows: Option<usize>,
+}
+
+fn derive_live_row_count(view: &LogicalFileView) -> Option<usize> {
+    let Some(raw_rows) = view.num_records() else {
+        return None;
+    };
+
+    let deleted = match view.deletion_vector_descriptor() {
+        Some(dv) => match usize::try_from(dv.cardinality) {
+            Ok(cardinality) => Some(cardinality),
+            Err(_) => {
+                tracing::warn!(
+                    path = view.path_raw(),
+                    cardinality = dv.cardinality,
+                    "Delete metrics unavailable: deletion vector cardinality did not fit usize"
+                );
+                None
+            }
+        },
+        None => Some(0),
+    }?;
+
+    raw_rows.checked_sub(deleted).or_else(|| {
+        tracing::warn!(
+            path = view.path_raw(),
+            raw_rows,
+            deleted,
+            "Delete metrics unavailable: DV cardinality exceeded numRecords"
+        );
+        None
+    })
+}
+
+async fn collect_full_file_deletes(
+    mut file_views: futures::stream::BoxStream<'_, DeltaResult<LogicalFileView>>,
+) -> DeltaResult<FullFileDeleteResult> {
+    let mut removes = Vec::new();
+    let mut removed_files = 0;
+    let mut deleted_rows = Some(0usize);
+
+    while let Some(file_view) = file_views.try_next().await? {
+        removed_files += 1;
+        let live_rows = derive_live_row_count(&file_view);
+        removes.push(Action::Remove(file_view.remove_action(true)));
+        deleted_rows = match (deleted_rows, live_rows) {
+            (Some(total), Some(live_rows)) => total.checked_add(live_rows).or_else(|| {
+                tracing::warn!(
+                    path = file_view.path_raw(),
+                    total,
+                    live_rows,
+                    "Delete metrics unavailable: deleted row count overflowed usize"
+                );
+                None
+            }),
+            _ => None,
+        };
+    }
+
+    Ok(FullFileDeleteResult {
+        removes,
+        removed_files,
+        deleted_rows,
+    })
 }
 
 impl super::Operation for DeleteBuilder {
@@ -359,15 +439,13 @@ async fn execute(
     let Some(predicate) = predicate else {
         // no predicate, so we are just dropping all files.
         // we also don't need to write cdc actions if we are fropping all files.
-        let removes: Vec<_> = snapshot
-            .file_views(log_store.as_ref(), None)
-            .map_ok(|f| f.remove_action(true).into())
-            .try_collect()
-            .await?;
-        metrics.num_removed_files = removes.len();
+        let full_file =
+            collect_full_file_deletes(snapshot.file_views(log_store.as_ref(), None)).await?;
+        metrics.num_removed_files = full_file.removed_files;
+        metrics.num_deleted_rows = full_file.deleted_rows;
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
-        return Ok((removes, metrics));
+        return Ok((full_file.removes, metrics));
     };
 
     let skipping_pred = simplify_predicates(split_conjunction_owned(predicate.clone()))?;
@@ -388,7 +466,7 @@ async fn execute(
 
     if props.partition_only {
         let partition_predicate = conjunction(skipping_pred).unwrap_or(lit(true));
-        let removes: Vec<_> = match crate::delta_datafusion::engine::to_delta_predicate(
+        let full_file = match crate::delta_datafusion::engine::to_delta_predicate(
             &partition_predicate,
         ) {
             Ok(delta_predicate) => {
@@ -399,11 +477,10 @@ async fn execute(
                 // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
                 // a file either fully matches or does not. It is therefore safe to treat this as
                 // the authoritative match set for DELETE.
-                snapshot
-                    .file_views(log_store.as_ref(), Some(Arc::new(delta_predicate)))
-                    .map_ok(|f| f.remove_action(true).into())
-                    .try_collect()
-                    .await?
+                collect_full_file_deletes(
+                    snapshot.file_views(log_store.as_ref(), Some(Arc::new(delta_predicate))),
+                )
+                .await?
             }
             Err(err) => {
                 tracing::debug!(
@@ -419,26 +496,26 @@ async fn execute(
                     )
                     .await?,
                 );
-                snapshot
-                    .file_views(log_store.as_ref(), None)
-                    .try_filter_map(|f| {
-                        let matching_paths = Arc::clone(&matching_paths);
-                        async move {
-                            Ok(matching_paths
-                                .contains(f.path_raw())
-                                .then(|| f.remove_action(true).into()))
-                        }
-                    })
-                    .try_collect()
-                    .await?
+                collect_full_file_deletes(
+                    snapshot
+                        .file_views(log_store.as_ref(), None)
+                        .try_filter_map(|f| {
+                            let matching_paths = Arc::clone(&matching_paths);
+                            async move { Ok(matching_paths.contains(f.path_raw()).then_some(f)) }
+                        })
+                        // Box the filtered stream so it can share the helper with direct file_views.
+                        .boxed(),
+                )
+                .await?
             }
         };
 
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
-        metrics.num_removed_files = removes.len();
+        metrics.num_removed_files = full_file.removed_files;
+        metrics.num_deleted_rows = full_file.deleted_rows;
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-        return Ok((removes, metrics));
+        return Ok((full_file.removes, metrics));
     }
 
     let maybe_scan_plan = scan_files_where_matches(session, &snapshot, predicate).await?;
@@ -446,6 +523,7 @@ async fn execute(
 
     let Some(files_scan) = maybe_scan_plan else {
         // no files contain data matching the predicate, so nothing more todo.
+        metrics.num_deleted_rows = Some(0);
         metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
         return Ok((vec![], metrics));
     };
@@ -536,11 +614,12 @@ async fn execute(
     let rescued_records = get_metric(&rescued_count_metrics, SOURCE_COUNT_METRIC);
 
     metrics.num_copied_rows = rescued_records;
-    metrics.num_deleted_rows = read_records.checked_sub(rescued_records).ok_or_else(|| {
-        DeltaTableError::Generic(
-            "Delete metrics invariant violated: rescued rows exceeded source rows".into(),
-        )
-    })?;
+    metrics.num_deleted_rows =
+        Some(read_records.checked_sub(rescued_records).ok_or_else(|| {
+            DeltaTableError::Generic(
+                "Delete metrics invariant violated: rescued rows exceeded source rows".into(),
+            )
+        })?);
 
     metrics.num_added_files = actions.len();
     actions.extend(removes);
@@ -649,6 +728,98 @@ mod tests {
         table
     }
 
+    fn metadata_only_add_with_partitions(
+        path: &str,
+        partitions: &[(&str, &str)],
+        modification_time: i64,
+        num_records: Option<i64>,
+        deletion_vector_cardinality: Option<i64>,
+    ) -> crate::kernel::Add {
+        let mut add = crate::test_utils::make_test_add(path, partitions, modification_time);
+        add.stats = num_records.map(|num_records| json!({ "numRecords": num_records }).to_string());
+        add.deletion_vector = deletion_vector_cardinality.map(|cardinality| {
+            crate::kernel::DeletionVectorDescriptor {
+                storage_type: crate::kernel::StorageType::Inline,
+                path_or_inline_dv: "AAAA".to_string(),
+                offset: None,
+                size_in_bytes: 0,
+                cardinality,
+            }
+        });
+        add
+    }
+
+    fn metadata_only_add(
+        path: &str,
+        part: &str,
+        modification_time: i64,
+        num_records: Option<i64>,
+        deletion_vector_cardinality: Option<i64>,
+    ) -> crate::kernel::Add {
+        metadata_only_add_with_partitions(
+            path,
+            &[("part", part)],
+            modification_time,
+            num_records,
+            deletion_vector_cardinality,
+        )
+    }
+
+    async fn setup_metadata_only_table(
+        table_schema: crate::kernel::StructType,
+        partition_columns: Vec<&str>,
+        adds: Vec<crate::kernel::Add>,
+        enable_deletion_vectors: bool,
+    ) -> DeltaResult<DeltaTable> {
+        let mut builder = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(partition_columns);
+
+        if enable_deletion_vectors {
+            builder = builder
+                .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"));
+        }
+
+        builder
+            .with_actions(adds.into_iter().map(crate::kernel::Action::Add))
+            .await
+    }
+
+    async fn setup_metadata_only_partition_table(
+        adds: Vec<crate::kernel::Add>,
+        enable_deletion_vectors: bool,
+    ) -> DeltaResult<DeltaTable> {
+        let table_schema = crate::kernel::StructType::try_new(vec![
+            crate::kernel::StructField::new(
+                "part".to_string(),
+                DeltaDataType::Primitive(crate::kernel::PrimitiveType::String),
+                true,
+            ),
+            crate::kernel::StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(crate::kernel::PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        setup_metadata_only_table(table_schema, vec!["part"], adds, enable_deletion_vectors).await
+    }
+
+    async fn last_delete_operation_metrics(
+        table: &DeltaTable,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        table
+            .last_commit()
+            .await
+            .unwrap()
+            .info
+            .get("operationMetrics")
+            .and_then(|value| value.as_object())
+            .cloned()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn test_delete_on_empty_table() -> DeltaResult<()> {
         let table = setup_table(None).await;
@@ -717,16 +888,109 @@ mod tests {
         assert_eq!(state.log_data().num_files(), 0);
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, Some(4));
         assert_eq!(metrics.num_copied_rows, 0);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(4)));
 
         // Deletes with no changes to state must not commit
         let (table, metrics) = table.delete().await.unwrap();
         assert_eq!(table.version(), Some(2));
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 0);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, Some(0));
         assert_eq!(metrics.num_copied_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_delete_all_reports_deleted_rows_from_stats() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![metadata_only_add(
+                "part=a/file-a.parquet",
+                "a",
+                now_ms,
+                Some(4),
+                None,
+            )],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(4));
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 0);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(4)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_all_omits_deleted_rows_when_stats_missing() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![metadata_only_add(
+                "part=a/file-a.parquet",
+                "a",
+                now_ms,
+                None,
+                None,
+            )],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 0);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(!operation_metrics.contains_key("num_deleted_rows"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_all_omits_deleted_rows_when_num_records_is_negative() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![metadata_only_add(
+                "part=a/file-a.parquet",
+                "a",
+                now_ms,
+                Some(-1),
+                None,
+            )],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 0);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(!operation_metrics.contains_key("num_deleted_rows"));
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -800,7 +1064,7 @@ mod tests {
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
         assert!(metrics.scan_time_ms > 0);
-        assert_eq!(metrics.num_deleted_rows, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 3);
 
         let last_commit = table.last_commit().await.unwrap();
@@ -959,9 +1223,12 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, Some(2));
         assert_eq!(metrics.num_copied_rows, 0);
         assert!(metrics.scan_time_ms > 0);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(2)));
 
         let expected = vec![
             "+----+-------+------------+",
@@ -974,6 +1241,171 @@ mod tests {
 
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_reports_deleted_rows_from_stats() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, Some(3), None),
+                metadata_only_add("part=b/file-b.parquet", "b", now_ms, Some(2), None),
+            ],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().with_predicate("part = 'a'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(3));
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(3)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_reports_deleted_rows_with_dv_adjustment() -> DeltaResult<()>
+    {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, Some(10), Some(3)),
+                metadata_only_add("part=b/file-b.parquet", "b", now_ms, Some(2), None),
+            ],
+            true,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().with_predicate("part = 'a'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(7));
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(7)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_omits_deleted_rows_when_stats_missing() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, None, None),
+                metadata_only_add("part=b/file-b.parquet", "b", now_ms, Some(2), None),
+            ],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().with_predicate("part = 'a'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(!operation_metrics.contains_key("num_deleted_rows"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_omits_deleted_rows_when_any_matching_file_lacks_stats()
+    -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, Some(3), None),
+                metadata_only_add("part=a/file-b.parquet", "a", now_ms, None, None),
+                metadata_only_add("part=b/file-c.parquet", "b", now_ms, Some(2), None),
+            ],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().with_predicate("part = 'a'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 2);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(!operation_metrics.contains_key("num_deleted_rows"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_zero_match_reports_zero_deleted_rows() -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, Some(3), None),
+                metadata_only_add("part=b/file-b.parquet", "b", now_ms, Some(2), None),
+            ],
+            false,
+        )
+        .await?;
+        let original_version = table.version();
+
+        let (table, metrics) = table.delete().with_predicate("part = 'z'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(table.version(), original_version);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 0);
+        assert_eq!(metrics.num_deleted_rows, Some(0));
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_omits_deleted_rows_when_dv_metadata_is_invalid()
+    -> DeltaResult<()> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let table = setup_metadata_only_partition_table(
+            vec![
+                metadata_only_add("part=a/file-a.parquet", "a", now_ms, Some(2), Some(3)),
+                metadata_only_add("part=b/file-b.parquet", "b", now_ms, Some(1), None),
+            ],
+            true,
+        )
+        .await?;
+
+        let (table, metrics) = table.delete().with_predicate("part = 'a'").await?;
+        let state = table.snapshot()?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(!operation_metrics.contains_key("num_deleted_rows"));
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1113,7 +1545,7 @@ mod tests {
         // Correct behavior: both files in dt=2025-11-12 should be removed, even if one is empty.
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 2);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, 0);
 
         let state = table.snapshot()?;
@@ -1252,7 +1684,7 @@ mod tests {
         // should not be selected for deletion.
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, 0);
 
         let state = table.snapshot()?;
@@ -1331,7 +1763,7 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 2);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, 0);
 
         let state = table.snapshot()?;
@@ -1402,7 +1834,7 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, expected_removed);
-        assert_eq!(metrics.num_deleted_rows, 0);
+        assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, 0);
 
         let state = table.snapshot()?;
@@ -1410,6 +1842,82 @@ mod tests {
             state.log_data().num_files(),
             action_count - expected_removed
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_partition_only_fallback_reports_deleted_rows_from_stats() -> DeltaResult<()>
+    {
+        use chrono::Utc;
+
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "dt".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+            StructField::new(
+                "hour".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])?;
+
+        let now_ms = Utc::now().timestamp_millis();
+
+        let table = setup_metadata_only_table(
+            table_schema,
+            vec!["dt", "hour"],
+            vec![
+                metadata_only_add_with_partitions(
+                    "dt=2025-11-12/hour=10/file-a.parquet",
+                    &[("dt", "2025-11-12"), ("hour", "10")],
+                    now_ms,
+                    Some(4),
+                    None,
+                ),
+                metadata_only_add_with_partitions(
+                    "dt=2025-11-12/hour=11/file-b.parquet",
+                    &[("dt", "2025-11-12"), ("hour", "11")],
+                    now_ms,
+                    Some(2),
+                    None,
+                ),
+                metadata_only_add_with_partitions(
+                    "dt=2025-11-12/hour=20/file-c.parquet",
+                    &[("dt", "2025-11-12"), ("hour", "20")],
+                    now_ms,
+                    Some(1),
+                    None,
+                ),
+            ],
+            false,
+        )
+        .await?;
+
+        let (table, metrics) = table
+            .delete()
+            .with_predicate("CAST(hour AS STRING) LIKE '1%'")
+            .await?;
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 2);
+        assert_eq!(metrics.num_deleted_rows, Some(6));
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let state = table.snapshot()?;
+        assert_eq!(state.log_data().num_files(), 1);
+
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(6)));
 
         Ok(())
     }
@@ -1462,7 +1970,7 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 0);
         assert_eq!(metrics.num_removed_files, 1);
-        assert_eq!(metrics.num_deleted_rows, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 0);
         assert!(metrics.scan_time_ms > 0);
 
@@ -1853,7 +2361,7 @@ mod tests {
 
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_added_files, 2);
-        assert_eq!(metrics.num_deleted_rows, 1);
+        assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 2);
     }
 
@@ -1898,7 +2406,7 @@ mod tests {
 
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_added_files, 1);
-        assert_eq!(metrics.num_deleted_rows, 3);
+        assert_eq!(metrics.num_deleted_rows, Some(3));
         assert_eq!(metrics.num_copied_rows, 0);
     }
 
