@@ -71,7 +71,6 @@ jobs:
   test-datafusion:
     name: Python Build (Python 3.10 DataFusion integration)
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       # v6.0.2
@@ -84,35 +83,10 @@ jobs:
       - name: Build and install deltalake
         run: make develop
 
-      - name: Install DataFusion when available
-        id: datafusion
-        shell: bash
-        run: |
-          set +e
-          output="$(uv pip install 'datafusion>=53,<54' 2>&1)"
-          status=$?
-          set -e
-          printf '%s\n' "$output"
-
-          if [ "$status" -eq 0 ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if printf '%s\n' "$output" | grep -Eq "No matching distribution|No solution found|not found in the package registry"; then
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping Python DataFusion integration tests because no compatible DataFusion 53 distribution is available."
-            exit 0
-          fi
-
-          exit "$status"
-
       - name: Assert DataFusion major version
-        if: steps.datafusion.outputs.available == 'true'
         run: uv run --no-sync python -c "from importlib.metadata import version; v=version('datafusion'); assert v.split('.')[0]=='53', f'Expected 53.x, got {v}'"
 
       - name: Run DataFusion integration test
-        if: steps.datafusion.outputs.available == 'true'
         run: DELTALAKE_RUN_DATAFUSION_TESTS=1 uv run --no-sync pytest -v tests/test_datafusion.py -m datafusion
 
   test-lakefs:
