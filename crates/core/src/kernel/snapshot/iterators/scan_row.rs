@@ -366,6 +366,11 @@ pub(crate) fn parse_partitions(
                             }))
                             .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
                         ) as ArrayRef,
+                        PrimitiveType::Void => {
+                            return Err(DeltaTableError::generic(
+                                "void type cannot be used as a partition column",
+                            ))
+                        }
                     };
                     Ok(arr)
                 }

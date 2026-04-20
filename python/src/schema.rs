@@ -149,6 +149,10 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
+        // void maps to Arrow null type
+        if matches!(self.inner_type, DeltaPrimitive::Void) {
+            return Ok(ArrowDataType::Null.into());
+        }
         let inner_type = DataType::Primitive(self.inner_type.clone());
         let arrow_type: ArrowDataType = (&inner_type)
             .try_into_arrow()
@@ -168,6 +172,10 @@ impl PrimitiveType {
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
+        // void maps to Arrow null type
+        if matches!(self.inner_type, DeltaPrimitive::Void) {
+            return to_schema_pycapsule(py, ArrowDataType::Null);
+        }
         let inner_type = DataType::Primitive(self.inner_type.clone());
         let arrow_type: ArrowDataType = (&inner_type)
             .try_into_arrow()
@@ -571,6 +579,15 @@ impl Field {
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3Field> {
+        // void maps to Arrow null type
+        if matches!(self.inner.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+            let field = ArrowField::new(
+                self.inner.name().to_string(),
+                ArrowDataType::Null,
+                self.inner.is_nullable(),
+            );
+            return Ok(Arc::new(field).into());
+        }
         let inner_type = self.inner.clone();
         let field: ArrowField = (&inner_type)
             .try_into_arrow()
@@ -592,6 +609,15 @@ impl Field {
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
+        // void maps to Arrow null type
+        if matches!(self.inner.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+            let field = ArrowField::new(
+                self.inner.name().to_string(),
+                ArrowDataType::Null,
+                self.inner.is_nullable(),
+            );
+            return to_schema_pycapsule(py, field);
+        }
         let inner_type = self.inner.clone();
         let field: ArrowField = (&inner_type)
             .try_into_arrow()
@@ -803,9 +829,26 @@ impl PySchema {
     #[pyo3(signature = (as_large_types = false))]
     fn to_arrow(self_: PyRef<'_, Self>, as_large_types: bool) -> PyResult<Arro3Schema> {
         let super_ = self_.as_ref();
-        let res: ArrowSchema = (&super_.inner_type.clone())
-            .try_into_arrow()
-            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+        // Build field-by-field so void fields (unsupported by try_into_arrow) map to Arrow null.
+        let fields: Vec<ArrowFieldRef> = super_
+            .inner_type
+            .fields()
+            .map(|sf| -> Result<ArrowFieldRef, PyErr> {
+                if matches!(sf.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+                    return Ok(Arc::new(ArrowField::new(
+                        sf.name().to_string(),
+                        ArrowDataType::Null,
+                        sf.is_nullable(),
+                    )));
+                }
+                let sf_owned = sf.clone();
+                let f: ArrowField = (&sf_owned)
+                    .try_into_arrow()
+                    .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+                Ok(Arc::new(f))
+            })
+            .collect::<Result<_, _>>()?;
+        let res = ArrowSchema::new(fields);
 
         fn convert_to_large_type(field: ArrowFieldRef, dt: ArrowDataType) -> ArrowFieldRef {
             let field = field.as_ref().clone();
@@ -876,9 +919,25 @@ impl PySchema {
     ) -> PyArrowResult<Bound<'py, PyCapsule>> {
         let super_ = self_.as_ref();
 
-        let res: ArrowSchema = (&super_.inner_type.clone())
-            .try_into_arrow()
-            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+        let fields: Vec<ArrowFieldRef> = super_
+            .inner_type
+            .fields()
+            .map(|sf| -> Result<ArrowFieldRef, PyErr> {
+                if matches!(sf.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+                    return Ok(Arc::new(ArrowField::new(
+                        sf.name().to_string(),
+                        ArrowDataType::Null,
+                        sf.is_nullable(),
+                    )));
+                }
+                let sf_owned = sf.clone();
+                let f: ArrowField = (&sf_owned)
+                    .try_into_arrow()
+                    .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+                Ok(Arc::new(f))
+            })
+            .collect::<Result<_, _>>()?;
+        let res = ArrowSchema::new(fields);
         to_schema_pycapsule(py, res)
     }
 
