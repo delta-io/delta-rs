@@ -1240,7 +1240,9 @@ class DeltaTable:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            the metrics from delete.
+            A metrics dict. The ``num_deleted_rows`` key is omitted when this library
+            cannot determine the deleted row count without scanning data
+            files.
         """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
