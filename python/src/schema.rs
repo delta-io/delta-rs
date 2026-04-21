@@ -1068,3 +1068,131 @@ impl PySchema {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── PrimitiveType ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_primitive_type_void_new_sets_is_void() {
+        let pt = PrimitiveType::new("void".to_string()).unwrap();
+        assert!(pt.is_void);
+    }
+
+    #[test]
+    fn test_primitive_type_void_constructor() {
+        let pt = PrimitiveType::void();
+        assert!(pt.is_void);
+    }
+
+    #[test]
+    fn test_primitive_type_void_get_type() {
+        let pt = PrimitiveType::new("void".to_string()).unwrap();
+        assert_eq!(pt.get_type().unwrap(), "void");
+    }
+
+    #[test]
+    fn test_primitive_type_void_repr() {
+        let pt = PrimitiveType::new("void".to_string()).unwrap();
+        assert_eq!(pt.__repr__().unwrap(), "PrimitiveType(\"void\")");
+    }
+
+    #[test]
+    fn test_primitive_type_void_to_json() {
+        let pt = PrimitiveType::new("void".to_string()).unwrap();
+        assert_eq!(pt.to_json().unwrap(), "\"void\"");
+    }
+
+    #[test]
+    fn test_primitive_type_non_void_is_void_false() {
+        let pt = PrimitiveType::new("string".to_string()).unwrap();
+        assert!(!pt.is_void);
+        assert_eq!(pt.get_type().unwrap(), "string");
+    }
+
+    #[test]
+    fn test_primitive_type_void_eq_void() {
+        let v1 = PrimitiveType::new("void".to_string()).unwrap();
+        let v2 = PrimitiveType::new("void".to_string()).unwrap();
+        assert!(v1
+            .__richcmp__(v2, pyo3::basic::CompareOp::Eq)
+            .unwrap());
+    }
+
+    #[test]
+    fn test_primitive_type_void_ne_string() {
+        let void_pt = PrimitiveType::new("void".to_string()).unwrap();
+        let str_pt = PrimitiveType::new("string".to_string()).unwrap();
+        assert!(void_pt
+            .__richcmp__(str_pt, pyo3::basic::CompareOp::Ne)
+            .unwrap());
+    }
+
+    #[test]
+    fn test_primitive_type_invalid_returns_err() {
+        assert!(PrimitiveType::new("not_a_type".to_string()).is_err());
+    }
+
+    // ── Field ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_field_is_void_flag_stored() {
+        let inner =
+            StructField::new("void_col", DataType::Primitive(DeltaPrimitive::String), true);
+        let field = Field {
+            inner,
+            is_void: true,
+        };
+        assert!(field.is_void);
+        assert_eq!(field.name(), "void_col");
+    }
+
+    #[test]
+    fn test_field_non_void_is_void_false() {
+        let inner =
+            StructField::new("str_col", DataType::Primitive(DeltaPrimitive::String), false);
+        let field = Field {
+            inner,
+            is_void: false,
+        };
+        assert!(!field.is_void);
+    }
+
+    // ── StructType ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_struct_type_void_fields_set_tracked() {
+        let mut void_fields = HashSet::new();
+        void_fields.insert("void_col".to_string());
+
+        let struct_fields = vec![
+            StructField::new("void_col", DataType::Primitive(DeltaPrimitive::String), true),
+            StructField::new("str_col", DataType::Primitive(DeltaPrimitive::String), false),
+        ];
+        let inner_type = DeltaStructType::try_new(struct_fields).unwrap();
+        let st = StructType {
+            inner_type,
+            void_fields,
+        };
+
+        let fields = st.fields();
+        let void_field = fields.iter().find(|f| f.name() == "void_col").unwrap();
+        let str_field = fields.iter().find(|f| f.name() == "str_col").unwrap();
+        assert!(void_field.is_void);
+        assert!(!str_field.is_void);
+    }
+
+    #[test]
+    fn test_struct_type_from_kernel_has_empty_void_fields() {
+        let struct_fields = vec![StructField::new(
+            "col",
+            DataType::Primitive(DeltaPrimitive::Long),
+            true,
+        )];
+        let kernel_type = DeltaStructType::try_new(struct_fields).unwrap();
+        let st = StructType::from(kernel_type);
+        assert!(st.void_fields.is_empty());
+    }
+}
