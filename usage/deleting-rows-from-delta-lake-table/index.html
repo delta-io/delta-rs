@@ -436,6 +436,8 @@
       
         
       
+        
+      
     
     
     
@@ -521,6 +523,26 @@
 
               
             
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../latest/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Latest changes
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -537,6 +559,8 @@
   
     
     
+      
+        
       
         
       
@@ -826,6 +850,26 @@
   
   
   
+    <li class="md-nav__item">
+      <a href="../working-with-partitions/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Working with partitions
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
     
     
       
@@ -846,7 +890,7 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_12" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_13" >
         
           
           
@@ -862,14 +906,14 @@
             </a>
             
               
-              <label class="md-nav__link " for="__nav_2_12" id="__nav_2_12_label" tabindex="0">
+              <label class="md-nav__link " for="__nav_2_13" id="__nav_2_13_label" tabindex="0">
                 <span class="md-nav__icon md-icon"></span>
               </label>
             
           </div>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_12_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_12">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_13_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_13">
             <span class="md-nav__icon md-icon"></span>
             Writing a table
           </label>
@@ -978,10 +1022,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_15" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2_16" >
         
           
-          <label class="md-nav__link" for="__nav_2_15" id="__nav_2_15_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_2_16" id="__nav_2_16_label" tabindex="0">
             
   
   <span class="md-ellipsis">
@@ -992,8 +1036,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_15_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_2_15">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_2_16_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2_16">
             <span class="md-nav__icon md-icon"></span>
             Optimize
           </label>
@@ -2161,6 +2205,10 @@
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>+-------+----------+
 </span></code></pre></div>
 <p><code>dt.delete()</code> accepts any <code>SQL where</code> clause. If no predicate is provided, all rows will be deleted.</p>
+<p>In Rust, <code>delete_metrics.num_deleted_rows</code> is an <code>Option&lt;usize&gt;</code>. Row rewrite
+deletes report <code>Some(count)</code>. Metadata only full file deletes also report
+<code>Some(count)</code> when this library can derive it from file metadata, and <code>None</code>
+when the exact count is unavailable without scanning data files.</p>
 <p>Read more in the <a href="https://delta-io.github.io/delta-rs/api/delta_table/#deltalake.DeltaTable.delete">API docs</a></p>
 
 
