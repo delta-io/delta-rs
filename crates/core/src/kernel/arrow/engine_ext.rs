@@ -356,6 +356,7 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
             | &PrimitiveType::Long
             | &PrimitiveType::Float
             | &PrimitiveType::Double
+            | &PrimitiveType::Boolean
             | &PrimitiveType::Date
             | &PrimitiveType::Timestamp
             | &PrimitiveType::TimestampNtz
@@ -636,13 +637,19 @@ mod tests {
         assert_eq!(&expected, &stats_schema);
     }
 
+    /// Validate that the stats schema shows up with the fields that are needed
+    ///
+    /// The Delta Lake protocol does not specify that min/max fields should be dropped for any data
+    /// types but instead that timestamps and strings may be truncated
+    ///
+    /// [related issue](https://github.com/delta-io/delta-rs/issues/4224)
     #[test]
     fn test_stats_schema_different_fields_in_null_vs_minmax() {
         let properties: TableProperties = [("key", "value")].into();
 
         // Create a schema with fields that have different eligibility for min/max vs null count
         // - "id" (LONG) - eligible for both null count and min/max
-        // - "is_active" (BOOLEAN) - eligible for null count but NOT for min/max
+        // - "is_active" (BOOLEAN) - eligible for null count and for min/max
         // - "metadata" (BINARY) - eligible for null count but NOT for min/max
         let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
@@ -662,8 +669,11 @@ mod tests {
         .unwrap();
 
         // Expected minValues/maxValues schema: only eligible fields (no boolean, no binary)
-        let expected_min_max =
-            StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap();
+        let expected_min_max = StructType::try_new([
+            StructField::nullable("id", DataType::LONG),
+            StructField::nullable("is_active", DataType::BOOLEAN),
+        ])
+        .unwrap();
 
         let expected = StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
@@ -683,7 +693,7 @@ mod tests {
         // Create a nested schema where some nested fields are eligible for min/max and others aren't
         let user_struct = StructType::try_new([
             StructField::nullable("name", DataType::STRING), // eligible for min/max
-            StructField::nullable("is_admin", DataType::BOOLEAN), // NOT eligible for min/max
+            StructField::nullable("is_admin", DataType::BOOLEAN), // eligible for min/max
             StructField::nullable("age", DataType::INTEGER), // eligible for min/max
             StructField::nullable("profile_pic", DataType::BINARY), // NOT eligible for min/max
         ])
@@ -692,7 +702,7 @@ mod tests {
         let file_schema = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user", DataType::Struct(Box::new(user_struct.clone()))),
-            StructField::nullable("is_deleted", DataType::BOOLEAN), // NOT eligible for min/max
+            StructField::nullable("is_deleted", DataType::BOOLEAN), // eligible for min/max
         ])
         .unwrap();
 
@@ -716,12 +726,14 @@ mod tests {
         // Expected minValues/maxValues schema: only eligible fields
         let expected_minmax_user = StructType::try_new([
             StructField::nullable("name", DataType::STRING),
+            StructField::nullable("is_admin", DataType::BOOLEAN),
             StructField::nullable("age", DataType::INTEGER),
         ])
         .unwrap();
         let expected_min_max = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("user", DataType::Struct(Box::new(expected_minmax_user))),
+            StructField::nullable("is_deleted", DataType::BOOLEAN),
         ])
         .unwrap();
 
@@ -742,7 +754,6 @@ mod tests {
 
         // Create a schema with only fields that are NOT eligible for min/max skipping
         let file_schema = StructType::try_new([
-            StructField::nullable("is_active", DataType::BOOLEAN),
             StructField::nullable("metadata", DataType::BINARY),
             StructField::nullable(
                 "tags",
@@ -755,7 +766,6 @@ mod tests {
 
         // Expected nullCount schema: all fields converted to LONG
         let expected_null_count = StructType::try_new([
-            StructField::nullable("is_active", DataType::LONG),
             StructField::nullable("metadata", DataType::LONG),
             StructField::nullable("tags", DataType::LONG),
         ])
