@@ -40,4 +40,7 @@ maplit = "1"
 mockito =  { version = "1.6.1"}
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test_lakefs = []

@@ -35,4 +35,7 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = []
