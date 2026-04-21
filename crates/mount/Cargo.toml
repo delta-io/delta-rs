@@ -35,4 +35,7 @@ tempfile = { workspace = true }
 fs_extra = "1.3.0"
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = []
