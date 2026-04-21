@@ -1,5 +1,7 @@
 extern crate pyo3;
 
+use std::collections::HashSet;
+
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use deltalake::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, FieldRef as ArrowFieldRef,
@@ -57,6 +59,10 @@ fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Boun
 
 fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
     if let Ok(data_type) = ob.extract::<PrimitiveType>() {
+        // void has no kernel equivalent; use String as an inert placeholder
+        if data_type.is_void {
+            return Ok(DataType::Primitive(DeltaPrimitive::String));
+        }
         return Ok(DataType::Primitive(data_type.inner_type));
     }
     if let Ok(array_type) = ob.extract::<ArrayType>() {
@@ -70,8 +76,11 @@ fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
     }
     if let Ok(raw_primitive) = ob.extract::<String>() {
         // Pass through PrimitiveType::new() to do validation
-        return PrimitiveType::new(raw_primitive)
-            .map(|data_type| DataType::Primitive(data_type.inner_type));
+        let prim = PrimitiveType::new(raw_primitive)?;
+        if prim.is_void {
+            return Ok(DataType::Primitive(DeltaPrimitive::String));
+        }
+        return Ok(DataType::Primitive(prim.inner_type));
     }
     Err(PyValueError::new_err("Invalid data type"))
 }
@@ -80,6 +89,7 @@ fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
 #[derive(Clone)]
 pub struct PrimitiveType {
     inner_type: DeltaPrimitive,
+    is_void: bool,
 }
 
 impl TryFrom<DataType> for PrimitiveType {
@@ -92,11 +102,23 @@ impl TryFrom<DataType> for PrimitiveType {
     }
 }
 
+impl PrimitiveType {
+    fn void() -> Self {
+        Self {
+            inner_type: DeltaPrimitive::String, // inert kernel placeholder
+            is_void: true,
+        }
+    }
+}
+
 #[pymethods]
 impl PrimitiveType {
     #[new]
     #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
+        if data_type == "void" {
+            return Ok(Self::void());
+        }
         let data_type: DeltaPrimitive =
             serde_json::from_str(&format!("\"{data_type}\"")).map_err(|_| {
                 if data_type.starts_with("decimal") {
@@ -110,18 +132,24 @@ impl PrimitiveType {
 
         Ok(Self {
             inner_type: data_type,
+            is_void: false,
         })
     }
 
     #[getter]
     fn get_type(&self) -> PyResult<String> {
+        if self.is_void {
+            return Ok("void".to_string());
+        }
         Ok(self.inner_type.to_string())
     }
 
     fn __richcmp__(&self, other: PrimitiveType, cmp: pyo3::basic::CompareOp) -> PyResult<bool> {
         match cmp {
-            pyo3::basic::CompareOp::Eq => Ok(self.inner_type == other.inner_type),
-            pyo3::basic::CompareOp::Ne => Ok(self.inner_type != other.inner_type),
+            pyo3::basic::CompareOp::Eq => Ok(self.is_void == other.is_void
+                && (self.is_void || self.inner_type == other.inner_type)),
+            pyo3::basic::CompareOp::Ne => Ok(self.is_void != other.is_void
+                || (!self.is_void && self.inner_type != other.inner_type)),
             _ => Err(PyNotImplementedError::new_err(
                 "Only == and != are supported.",
             )),
@@ -129,11 +157,17 @@ impl PrimitiveType {
     }
 
     fn __repr__(&self) -> PyResult<String> {
+        if self.is_void {
+            return Ok("PrimitiveType(\"void\")".to_string());
+        }
         Ok(format!("PrimitiveType(\"{}\")", &self.inner_type))
     }
 
     #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
+        if self.is_void {
+            return Ok("\"void\"".to_string());
+        }
         let inner_type = DataType::Primitive(self.inner_type.clone());
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
@@ -149,8 +183,7 @@ impl PrimitiveType {
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3DataType> {
-        // void maps to Arrow null type
-        if matches!(self.inner_type, DeltaPrimitive::Void) {
+        if self.is_void {
             return Ok(ArrowDataType::Null.into());
         }
         let inner_type = DataType::Primitive(self.inner_type.clone());
@@ -172,8 +205,7 @@ impl PrimitiveType {
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
-        // void maps to Arrow null type
-        if matches!(self.inner_type, DeltaPrimitive::Void) {
+        if self.is_void {
             return to_schema_pycapsule(py, ArrowDataType::Null);
         }
         let inner_type = DataType::Primitive(self.inner_type.clone());
@@ -457,6 +489,7 @@ impl MapType {
 #[derive(Clone)]
 pub struct Field {
     pub inner: StructField,
+    is_void: bool,
 }
 
 #[pymethods]
@@ -470,6 +503,18 @@ impl Field {
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let py = r#type.py();
+
+        // Detect void before calling python_type_to_schema — void has no kernel equivalent
+        let is_void = r#type
+            .extract::<PrimitiveType>()
+            .map(|p| p.is_void)
+            .unwrap_or_else(|_| {
+                r#type
+                    .extract::<String>()
+                    .map(|s| s == "void")
+                    .unwrap_or(false)
+            });
+
         let ty = python_type_to_schema(r#type)?;
 
         // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
@@ -500,7 +545,7 @@ impl Field {
             )
         }));
 
-        Ok(Self { inner })
+        Ok(Self { inner, is_void })
     }
 
     #[getter]
@@ -574,13 +619,15 @@ impl Field {
         let field: StructField = serde_json::from_str(&field_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
 
-        Ok(Self { inner: field })
+        Ok(Self {
+            inner: field,
+            is_void: false,
+        })
     }
 
     #[pyo3(text_signature = "($self)")]
     fn to_arrow(&self) -> PyResult<Arro3Field> {
-        // void maps to Arrow null type
-        if matches!(self.inner.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+        if self.is_void {
             let field = ArrowField::new(
                 self.inner.name().to_string(),
                 ArrowDataType::Null,
@@ -605,12 +652,12 @@ impl Field {
             inner: (&field)
                 .try_into_kernel()
                 .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
+            is_void: false,
         })
     }
 
     fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
-        // void maps to Arrow null type
-        if matches!(self.inner.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+        if self.is_void {
             let field = ArrowField::new(
                 self.inner.name().to_string(),
                 ArrowDataType::Null,
@@ -630,11 +677,15 @@ impl Field {
 #[derive(Clone)]
 pub struct StructType {
     pub(crate) inner_type: DeltaStructType,
+    void_fields: HashSet<String>,
 }
 
 impl From<DeltaStructType> for StructType {
     fn from(inner_type: DeltaStructType) -> Self {
-        Self { inner_type }
+        Self {
+            inner_type,
+            void_fields: HashSet::new(),
+        }
     }
 }
 
@@ -650,6 +701,7 @@ impl TryFrom<DataType> for StructType {
         match value {
             DataType::Struct(inner_type) => Ok(Self {
                 inner_type: *inner_type,
+                void_fields: HashSet::new(),
             }),
             _ => Err(PyTypeError::new_err("Type is not a struct")),
         }
@@ -659,13 +711,21 @@ impl TryFrom<DataType> for StructType {
 impl StructType {
     #[new]
     fn new(fields: Vec<PyRef<Field>>) -> Self {
-        let fields: Vec<StructField> = fields
+        let void_fields: HashSet<String> = fields
+            .iter()
+            .filter(|f| f.is_void)
+            .map(|f| f.inner.name().to_string())
+            .collect();
+        let struct_fields: Vec<StructField> = fields
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
         let inner_type =
-            DeltaStructType::try_new(fields).expect("Failed to construct a StructType");
-        Self { inner_type }
+            DeltaStructType::try_new(struct_fields).expect("Failed to construct a StructType");
+        Self {
+            inner_type,
+            void_fields,
+        }
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
@@ -675,6 +735,7 @@ impl StructType {
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),
+                    is_void: self.void_fields.contains(field.name()),
                 };
                 field.__repr__(py)
             })
@@ -704,6 +765,7 @@ impl StructType {
             .fields()
             .map(|field| Field {
                 inner: field.clone(),
+                is_void: self.void_fields.contains(field.name()),
             })
             .collect::<Vec<Field>>()
     }
@@ -757,6 +819,7 @@ pub fn schema_to_pyobject(
 ) -> PyResult<Bound<'_, PyAny>> {
     let fields = schema.fields().map(|field| Field {
         inner: field.clone(),
+        is_void: false,
     });
 
     let py_schema = PyModule::import(py, "deltalake.schema")?.getattr("Schema")?;
@@ -788,13 +851,24 @@ impl PySchema {
     #[new]
     #[pyo3(signature = (fields))]
     fn new(fields: Vec<PyRef<Field>>) -> PyResult<(Self, StructType)> {
-        let fields: Vec<StructField> = fields
+        let void_fields: HashSet<String> = fields
+            .iter()
+            .filter(|f| f.is_void)
+            .map(|f| f.inner.name().to_string())
+            .collect();
+        let struct_fields: Vec<StructField> = fields
             .into_iter()
             .map(|field| field.inner.clone())
             .collect();
-        let inner_type = DeltaStructType::try_new(fields)
+        let inner_type = DeltaStructType::try_new(struct_fields)
             .map_err(|e| SchemaMismatchError::new_err(e.to_string()))?;
-        Ok((Self {}, StructType { inner_type }))
+        Ok((
+            Self {},
+            StructType {
+                inner_type,
+                void_fields,
+            },
+        ))
     }
 
     fn __repr__(self_: PyRef<'_, Self>, py: Python) -> PyResult<String> {
@@ -805,6 +879,7 @@ impl PySchema {
             .map(|field| {
                 let field = Field {
                     inner: field.clone(),
+                    is_void: super_.void_fields.contains(field.name()),
                 };
                 field.__repr__(py)
             })
@@ -829,12 +904,12 @@ impl PySchema {
     #[pyo3(signature = (as_large_types = false))]
     fn to_arrow(self_: PyRef<'_, Self>, as_large_types: bool) -> PyResult<Arro3Schema> {
         let super_ = self_.as_ref();
-        // Build field-by-field so void fields (unsupported by try_into_arrow) map to Arrow null.
+        // Build field-by-field so void fields map to Arrow null type.
         let fields: Vec<ArrowFieldRef> = super_
             .inner_type
             .fields()
             .map(|sf| -> Result<ArrowFieldRef, PyErr> {
-                if matches!(sf.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+                if super_.void_fields.contains(sf.name()) {
                     return Ok(Arc::new(ArrowField::new(
                         sf.name().to_string(),
                         ArrowDataType::Null,
@@ -923,7 +998,7 @@ impl PySchema {
             .inner_type
             .fields()
             .map(|sf| -> Result<ArrowFieldRef, PyErr> {
-                if matches!(sf.data_type(), DataType::Primitive(DeltaPrimitive::Void)) {
+                if super_.void_fields.contains(sf.name()) {
                     return Ok(Arc::new(ArrowField::new(
                         sf.name().to_string(),
                         ArrowDataType::Null,
@@ -971,6 +1046,7 @@ impl PySchema {
                     Self {},
                     StructType {
                         inner_type: *inner_type,
+                        void_fields: HashSet::new(),
                     },
                 ),
             )
