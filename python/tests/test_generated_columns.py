@@ -179,6 +179,7 @@ def test_write_to_table_generating_data(table_with_gc: DeltaTable):
     assert result.schema == expected_data.schema
 
 
+@pytest.mark.pyarrow
 def test_write_to_table_generating_data_with_spark_trunc_gc(tmp_path):
     import pyarrow as pa
 
@@ -206,6 +207,7 @@ def test_write_to_table_generating_data_with_spark_trunc_gc(tmp_path):
     }
 
 
+@pytest.mark.pyarrow
 def test_write_with_invalid_spark_trunc_gc_to_table(tmp_path):
     import pyarrow as pa
 
@@ -300,6 +302,7 @@ def test_merge_with_gc(table_with_gc: DeltaTable, data_without_gc):
     assert result == expected_data
 
 
+@pytest.mark.pyarrow
 def test_merge_with_spark_trunc_gc(tmp_path):
     import pyarrow as pa
 
