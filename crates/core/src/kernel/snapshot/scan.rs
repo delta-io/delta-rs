@@ -63,6 +63,16 @@ impl ScanBuilder {
         self
     }
 
+    /// Skip reading file statistics from checkpoint parquet files.
+    ///
+    /// When enabled, the stats column is not read from checkpoint files and data skipping
+    /// is disabled. This is useful when the caller handles data skipping externally or
+    /// doesn't need file statistics.
+    pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
+        self.inner = self.inner.with_skip_stats(skip_stats);
+        self
+    }
+
     pub fn build(self) -> DeltaResult<Scan> {
         Ok(Scan::from(self.inner.build()?))
     }

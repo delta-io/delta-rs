@@ -60,6 +60,12 @@ pub struct DeltaTableConfig {
 
     #[delta(skip)]
     pub log_size_limiter: Option<LogSizeLimiter>,
+
+    /// HSTACK: skip stats parsing during file listing. Runtime-only (not persisted).
+    /// Default `true` for performance; set to `false` when stats-based pruning helps the query.
+    #[serde(skip_serializing, skip_deserializing)]
+    #[delta(skip)]
+    pub skip_stats_in_file_listing: bool,
 }
 
 impl Default for DeltaTableConfig {
@@ -70,6 +76,7 @@ impl Default for DeltaTableConfig {
             log_batch_size: 1024,
             io_runtime: None,
             log_size_limiter: None,
+            skip_stats_in_file_listing: true,
         }
     }
 }
@@ -80,6 +87,7 @@ impl PartialEq for DeltaTableConfig {
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
             && self.log_size_limiter == other.log_size_limiter
+            && self.skip_stats_in_file_listing == other.skip_stats_in_file_listing
     }
 }
 
