@@ -13,7 +13,7 @@ pub mod error;
 pub mod models;
 pub mod scalars;
 pub mod schema;
-mod snapshot;
+pub(crate) mod snapshot;
 pub mod transaction;
 
 pub use arrow::engine_ext::StructDataExt;
@@ -22,7 +22,10 @@ pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;
 pub use schema::*;
+pub(crate) use snapshot::project_raw_scan_row;
 pub use snapshot::*;
+#[cfg(feature = "datafusion")]
+pub(crate) use transaction::AddContainer;
 
 pub(crate) static ARROW_HANDLER: LazyLock<Arc<ArrowEvaluationHandler>> =
     LazyLock::new(|| Arc::new(ArrowEvaluationHandler {}));

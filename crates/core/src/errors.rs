@@ -103,6 +103,12 @@ pub enum DeltaTableError {
         msg: String,
     },
 
+    #[error("Cannot build an Add action for `{path}` because the raw `stats` column is missing")]
+    MissingRawStatsColumn {
+        /// Path of the file missing the raw stats column.
+        path: String,
+    },
+
     /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError {
