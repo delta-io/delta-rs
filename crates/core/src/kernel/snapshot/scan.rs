@@ -102,6 +102,7 @@ impl From<Arc<KernelScan>> for Scan {
 
 impl Scan {
     /// Get a shared reference to the inner [`KernelScan`].
+    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn inner(&self) -> &Arc<KernelScan> {
         &self.inner
     }

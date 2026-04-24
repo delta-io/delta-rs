@@ -16,11 +16,14 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
+#[cfg(any(test, feature = "datafusion"))]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
 pub use self::tombstones::TombstoneView;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
+
+pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
 
 mod scan_row;
 mod tombstones;
@@ -124,10 +127,6 @@ impl LogicalFileView {
             self.index,
         )
         .unwrap()
-    }
-
-    fn has_raw_stats_column(&self) -> bool {
-        self.files.column_by_name(FIELD_NAME_STATS).is_some()
     }
 
     /// An object store [`Path`] to the file.
@@ -299,13 +298,8 @@ impl LogicalFileView {
     }
 
     /// Internal API
-    pub(crate) fn to_add(&self) -> DeltaResult<Add> {
-        if !self.has_raw_stats_column() {
-            return Err(DeltaTableError::MissingRawStatsColumn {
-                path: self.path().to_string(),
-            });
-        }
-        Ok(Add {
+    pub(crate) fn to_add(&self) -> Add {
+        Add {
             path: self.path().to_string(),
             partition_values: self.partition_values_map(),
             size: self.size(),
@@ -317,19 +311,16 @@ impl LogicalFileView {
             base_row_id: None,
             default_row_commit_version: None,
             clustering_provider: None,
-        })
+        }
     }
 
     /// Converts this file view into an Add action for log operations.
-    ///
-    /// Panics if the raw `stats` column is not present in the scan row.
     #[deprecated(
         since = "0.31.0",
         note = "Use Arrow arrays directly instead of converting to Add actions."
     )]
     pub fn add_action(&self) -> Add {
         self.to_add()
-            .expect("raw stats column missing; use a scan row that includes raw stats")
     }
 
     /// Converts this file view into a Remove action for log operations.
@@ -625,46 +616,6 @@ mod tests {
         logical_file_view_with_stats(None, full_stats)
     }
 
-    fn logical_file_view_without_stats_column() -> LogicalFileView {
-        let full_stats = StructArray::from(vec![(
-            Arc::new(arrow_schema::Field::new(
-                "numRecords",
-                ArrowDataType::Int64,
-                true,
-            )),
-            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
-        )]);
-
-        let base_schema: arrow_schema::Schema =
-            scan_row_schema().as_ref().try_into_arrow().unwrap();
-        let mut fields = Vec::new();
-        let mut columns = Vec::new();
-
-        for field in base_schema.fields() {
-            if field.name() == "stats" {
-                continue;
-            }
-
-            fields.push(field.clone());
-            columns.push(match field.name().as_str() {
-                "path" => Arc::new(StringArray::from(vec![Some("part-000.parquet")])) as ArrayRef,
-                "size" | "modificationTime" => Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-                _ => new_null_array(field.data_type(), 1),
-            });
-        }
-
-        fields.push(Arc::new(arrow_schema::Field::new(
-            "stats_parsed",
-            full_stats.data_type().to_owned(),
-            true,
-        )));
-        columns.push(Arc::new(full_stats));
-
-        let batch =
-            RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), columns).unwrap();
-        LogicalFileView::new(batch, 0)
-    }
-
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
         // Use existing test table with real Delta log data
@@ -698,7 +649,7 @@ mod tests {
         assert!(datetime.timestamp_millis() > 0);
 
         // Test action conversions
-        let add_action = view.to_add().unwrap();
+        let add_action = view.to_add();
         assert_eq!(add_action.path, view.path());
         assert_eq!(add_action.size, view.size());
         assert!(add_action.data_change);
@@ -853,22 +804,5 @@ mod tests {
                 "nullCount": {"value": 0}
             })
         );
-    }
-
-    #[test]
-    fn logical_file_view_to_add_errors_without_raw_stats_column() {
-        let view = logical_file_view_without_stats_column();
-        let err = view
-            .to_add()
-            .expect_err("expected a typed error when raw stats are missing");
-
-        assert!(matches!(err, DeltaTableError::MissingRawStatsColumn { .. }));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    #[should_panic(expected = "raw stats column missing; use a scan row that includes raw stats")]
-    fn logical_file_view_add_action_panics_with_user_facing_message_without_raw_stats() {
-        logical_file_view_without_stats_column().add_action();
     }
 }
