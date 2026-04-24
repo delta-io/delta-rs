@@ -22,10 +22,7 @@ pub use delta_kernel::engine;
 pub use error::*;
 pub use models::*;
 pub use schema::*;
-pub(crate) use snapshot::project_raw_scan_row;
 pub use snapshot::*;
-#[cfg(feature = "datafusion")]
-pub(crate) use transaction::AddContainer;
 
 pub(crate) static ARROW_HANDLER: LazyLock<Arc<ArrowEvaluationHandler>> =
     LazyLock::new(|| Arc::new(ArrowEvaluationHandler {}));

@@ -1,24 +1,116 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::pin::Pin;
+use std::sync::{Arc, LazyLock};
+use std::task::{Context, Poll};
 
 use arrow::array::{Array as _, *};
 use arrow_schema::{Field as ArrowField, Fields};
 use arrow_schema::{Field, Schema};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::PrimitiveType;
 use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
+use delta_kernel::{EvaluationHandler, Expression, ExpressionEvaluator};
+use futures::Stream;
+use pin_project_lite::pin_project;
 use tracing::log::*;
 
+use crate::kernel::ARROW_HANDLER;
 use crate::kernel::StructType;
 use crate::kernel::arrow::engine_ext::SnapshotExt;
 use crate::kernel::arrow::extract::{self as ex};
 use crate::{DeltaResult, DeltaTableError};
 
+pin_project! {
+    pub(crate) struct ScanRowOutStream<S> {
+        stats_schema: KernelSchemaRef,
+        partitions_schema: Option<KernelSchemaRef>,
+        column_mapping_mode: ColumnMappingMode,
+        skip_stats: bool,
+
+        #[pin]
+        stream: S,
+    }
+}
+
+impl<S> ScanRowOutStream<S> {
+    pub fn try_new(
+        snapshot: Arc<KernelSnapshot>,
+        stream: S,
+        skip_stats: bool,
+    ) -> DeltaResult<Self> {
+        let stats_schema = snapshot.stats_schema()?;
+        let partitions_schema = snapshot.partitions_schema()?;
+        let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+        Ok(Self {
+            stats_schema,
+            partitions_schema,
+            column_mapping_mode,
+            skip_stats,
+            stream,
+        })
+    }
+}
+
+impl<S> Stream for ScanRowOutStream<S>
+where
+    S: Stream<Item = DeltaResult<RecordBatch>>,
+{
+    type Item = DeltaResult<RecordBatch>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        match this.stream.poll_next(cx) {
+            Poll::Ready(Some(Ok(batch))) => {
+                let result = parse_stats_column_impl(
+                    &batch,
+                    this.stats_schema.clone(),
+                    this.partitions_schema.as_ref(),
+                    *this.column_mapping_mode,
+                    *this.skip_stats,
+                );
+                Poll::Ready(Some(result))
+            }
+            other => other,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
+    }
+}
+
+pub(crate) fn scan_row_in_eval(
+    snapshot: &KernelSnapshot,
+) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
+    static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
+        Expression::struct_from(
+            scan_row_schema()
+                .fields()
+                .map(|field| Expression::column([field.name.clone()])),
+        )
+        .into()
+    });
+    static OUT_TYPE: LazyLock<DataType> =
+        LazyLock::new(|| DataType::Struct(Box::new(scan_row_schema().as_ref().clone())));
+
+    let input_schema = snapshot.scan_row_parsed_schema_arrow()?;
+    let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+
+    Ok(ARROW_HANDLER.new_expression_evaluator(
+        input_schema,
+        EXPRESSION.clone(),
+        OUT_TYPE.clone(),
+    )?)
+}
+
+#[cfg(any(test, feature = "datafusion"))]
 pub(crate) fn parse_stats_column_with_schema(
     sn: &KernelSnapshot,
     batch: &RecordBatch,
@@ -321,13 +413,10 @@ mod tests {
     use arrow::datatypes::Field as ArrowField;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_schema::Field;
-    use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::scan::scan_row_schema;
     use delta_kernel::schema::{MapType, MetadataValue, SchemaRef, StructField};
-    use delta_kernel::{EvaluationHandler, Expression};
     use pretty_assertions::assert_eq;
 
-    use crate::kernel::ARROW_HANDLER;
     use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
     use crate::kernel::snapshot::Snapshot;
     use crate::test_utils::TestTables;
@@ -580,20 +669,7 @@ mod tests {
         )?;
         // Keep this guard so cached batches still pass through the kernel evaluator
         // without rebuilding raw `stats` from `ToJson`.
-        let expression = Arc::new(Expression::struct_from(scan_row_schema().fields().map(
-            |field| {
-                if field.name == "stats" {
-                    Expression::column(["stats"])
-                } else {
-                    Expression::column([field.name.clone()])
-                }
-            },
-        )));
-        let output_type = DataType::Struct(Box::new(scan_row_schema().as_ref().clone()));
-        let input_schema = snapshot.inner.scan_row_parsed_schema_arrow()?;
-        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
-        let evaluator =
-            ARROW_HANDLER.new_expression_evaluator(input_schema, expression, output_type)?;
+        let evaluator = scan_row_in_eval(snapshot.inner.as_ref())?;
         let reparsed = evaluator.evaluate_arrow(projected)?;
 
         assert_eq!(raw_stats_string(reparsed, 0), Some(raw_stats.to_string()));

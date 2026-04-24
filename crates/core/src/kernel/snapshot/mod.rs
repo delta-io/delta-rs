@@ -49,6 +49,7 @@ use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
+pub(crate) use self::stats_projection::StatsProjection;
 pub use iterators::*;
 pub use scan::*;
 pub use stream::*;
@@ -57,6 +58,7 @@ mod iterators;
 mod log_data;
 mod scan;
 mod serde;
+mod stats_projection;
 mod stream;
 
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> =
