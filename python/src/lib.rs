@@ -317,7 +317,7 @@ impl RawDeltaTable {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None, skip_stats = false))]
     fn new(
         py: Python,
         table_uri: &str,
@@ -325,6 +325,7 @@ impl RawDeltaTable {
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
         log_buffer_size: Option<usize>,
+        skip_stats: bool,
     ) -> PyResult<Self> {
         py.detach(|| {
             let table_url = deltalake::table::builder::parse_table_uri(table_uri)
@@ -341,6 +342,9 @@ impl RawDeltaTable {
             }
             if without_files {
                 builder = builder.without_files()
+            }
+            if skip_stats {
+                builder = builder.with_skip_stats(true)
             }
             if let Some(buf_size) = log_buffer_size {
                 builder = builder
@@ -396,11 +400,15 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
-    pub fn table_config(&self) -> PyResult<(bool, usize)> {
+    pub fn table_config(&self) -> PyResult<(bool, usize, bool)> {
         self.with_table(|t| {
             let config = t.config.clone();
             // Require_files inverted to reflect without_files
-            Ok((!config.require_files, config.log_buffer_size))
+            Ok((
+                !config.require_files,
+                config.log_buffer_size,
+                config.skip_stats,
+            ))
         })
     }
 

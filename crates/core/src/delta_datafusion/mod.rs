@@ -77,8 +77,7 @@ pub use table_provider::{
     next::DeltaScanExec,
 };
 pub(crate) use table_provider::{
-    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, resolve_file_column_name,
-    update_datafusion_session,
+    next::FILE_ID_COLUMN_DEFAULT, resolve_file_column_name, update_datafusion_session,
 };
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
@@ -292,7 +291,7 @@ pub(crate) fn get_path_column<'a>(
     let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
     batch
         .column_by_name(path_column)
-        .unwrap()
+        .ok_or_else(err)?
         .as_any()
         .downcast_ref::<DictionaryArray<UInt16Type>>()
         .ok_or_else(err)?
@@ -1282,7 +1281,7 @@ mod tests {
 
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let scan = DeltaScanBuilder::new(
+        let scan = table_provider::DeltaScanBuilder::new(
             table.snapshot().unwrap().snapshot(),
             table.log_store(),
             &state,
@@ -1311,17 +1310,18 @@ mod tests {
         let snapshot = table.snapshot().unwrap();
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let scan = DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-            .with_filter(Some(col("a").eq(lit("s"))))
-            .with_scan_config(
-                DeltaScanConfigBuilder::new()
-                    .with_parquet_pushdown(false)
-                    .build(snapshot.snapshot())
-                    .unwrap(),
-            )
-            .build()
-            .await
-            .unwrap();
+        let scan =
+            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
+                .with_filter(Some(col("a").eq(lit("s"))))
+                .with_scan_config(
+                    DeltaScanConfigBuilder::new()
+                        .with_parquet_pushdown(false)
+                        .build(snapshot.snapshot())
+                        .unwrap(),
+                )
+                .build()
+                .await
+                .unwrap();
 
         let mut visitor = ParquetVisitor::default();
         visit_execution_plan(&scan, &mut visitor).unwrap();
@@ -1346,10 +1346,11 @@ mod tests {
         let ctx = SessionContext::new_with_config(config);
         let state = ctx.state();
 
-        let scan = DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-            .build()
-            .await
-            .unwrap();
+        let scan =
+            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
+                .build()
+                .await
+                .unwrap();
 
         let mut visitor = ParquetVisitor::default();
         visit_execution_plan(&scan, &mut visitor).unwrap();

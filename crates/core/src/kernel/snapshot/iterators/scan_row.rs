@@ -33,6 +33,7 @@ pin_project! {
         stats_schema: KernelSchemaRef,
         partitions_schema: Option<KernelSchemaRef>,
         column_mapping_mode: ColumnMappingMode,
+        skip_stats: bool,
 
         #[pin]
         stream: S,
@@ -40,7 +41,11 @@ pin_project! {
 }
 
 impl<S> ScanRowOutStream<S> {
-    pub fn try_new(snapshot: Arc<KernelSnapshot>, stream: S) -> DeltaResult<Self> {
+    pub fn try_new(
+        snapshot: Arc<KernelSnapshot>,
+        stream: S,
+        skip_stats: bool,
+    ) -> DeltaResult<Self> {
         let stats_schema = snapshot.stats_schema()?;
         let partitions_schema = snapshot.partitions_schema()?;
         let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
@@ -48,6 +53,7 @@ impl<S> ScanRowOutStream<S> {
             stats_schema,
             partitions_schema,
             column_mapping_mode,
+            skip_stats,
             stream,
         })
     }
@@ -68,6 +74,7 @@ where
                     this.stats_schema.clone(),
                     this.partitions_schema.as_ref(),
                     *this.column_mapping_mode,
+                    *this.skip_stats,
                 );
                 Poll::Ready(Some(result))
             }
@@ -121,6 +128,7 @@ pub(crate) fn parse_stats_column_with_schema(
         stats_schema,
         partitions_schema.as_ref(),
         column_mapping_mode,
+        false,
     )
 }
 
@@ -129,6 +137,7 @@ fn parse_stats_column_impl(
     stats_schema: KernelSchemaRef,
     partitions_schema: Option<&KernelSchemaRef>,
     column_mapping_mode: ColumnMappingMode,
+    skip_stats: bool,
 ) -> DeltaResult<RecordBatch> {
     let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
         return Err(DeltaTableError::SchemaMismatch {
@@ -139,13 +148,24 @@ fn parse_stats_column_impl(
     let mut columns = batch.columns().to_vec();
     let mut fields = batch.schema().fields().to_vec();
 
-    let stats_batch = batch.project(&[stats_idx])?;
-    let stats_data = Box::new(ArrowEngineData::new(stats_batch));
+    let stats_array: Arc<StructArray> = if skip_stats {
+        // `parse_json` on a null `stats` column still runs the full JSON
+        // machinery and produces `{}` structs, not nulls: cancels the
+        // skip_stats win. Build the fully-null `StructArray` directly instead.
+        let arrow_struct: arrow_schema::Schema = stats_schema.as_ref().try_into_arrow()?;
+        Arc::new(StructArray::new_null(
+            arrow_struct.fields().clone(),
+            batch.num_rows(),
+        ))
+    } else {
+        let stats_batch = batch.project(&[stats_idx])?;
+        let stats_data = Box::new(ArrowEngineData::new(stats_batch));
 
-    let parsed = parse_json(stats_data, stats_schema)?;
-    let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+        let parsed = parse_json(stats_data, stats_schema)?;
+        let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
 
-    let stats_array: Arc<StructArray> = Arc::new(parsed.into());
+        Arc::new(parsed.into())
+    };
     fields[stats_idx] = Arc::new(Field::new(
         "stats_parsed",
         stats_array.data_type().to_owned(),

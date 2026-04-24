@@ -83,7 +83,7 @@ jobs:
           target: x86_64-unknown-linux-gnu
           command: publish
           container: off
-          args: --skip-existing -m python/Cargo.toml --zig --profile python-release
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release
           manylinux: "2_17"
 
   release-pypi-manylinux-228-aarch64:
@@ -112,7 +112,7 @@ jobs:
     steps:
       # v6.0.2
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-      - name: Publish musl to pypi x86_64 (with sdist)
+      - name: Publish musl to pypi x86_64 (without sdist)
         # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
         uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
         env:
@@ -122,6 +122,23 @@ jobs:
           command: publish
           args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release
 
+  release-pypi-musl-aarch64:
+    needs: validate-release-tag
+    name: PyPI release on Linux (aarch64-musl)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Publish musl to pypi aarch64 (without sdist)
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          target: aarch64-unknown-linux-musl
+          command: publish
+          args: --skip-existing --no-sdist -m python/Cargo.toml --zig --profile python-release-arm
+
   release-docs:
     needs:
       [
@@ -129,6 +146,7 @@ jobs:
         release-pypi-manylinux-x86-64,
         release-pypi-manylinux-228-aarch64,
         release-pypi-musl-x86-64,
+        release-pypi-musl-aarch64,
         release-pypi-mac,
         release-pypi-windows,
       ]
