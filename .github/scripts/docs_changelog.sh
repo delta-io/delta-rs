@@ -9,7 +9,7 @@ output="$(
   /^[[:space:]]*##[[:space:]]*\[rust-v/ {
     s|^[[:space:]]*##[[:space:]]*\[(rust-v)([0-9]+)\.([0-9]+)\.([0-9]+)\]\([^)]*\)[[:space:]]*\(([0-9-]+)\)|- [\1\2.\3.\4]('"$BASE_URL"'#rust-v\2\3\4-\5)|p
   }
-  ' "$FILE" | head -n 5
+  ' "$FILE" | sed -n '1,5p'
 )"
 
 # Fail CI if nothing was produced
