@@ -1940,6 +1940,68 @@ mod tests {
         Ok(())
     }
 
+    fn mixed_case_replace_where_batches() -> TestResult<(Arc<ArrowSchema>, RecordBatch, RecordBatch)>
+    {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("utcDate", DataType::Utf8, true),
+            Field::new("homeTeam", DataType::Utf8, true),
+            Field::new("score", DataType::Utf8, true),
+        ]));
+        let base_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("2008-08-16T15:00:00Z"),
+                    Some("2009-05-16T15:00:00Z"),
+                ])),
+                Arc::new(StringArray::from(vec![Some("Everton"), Some("Everton")])),
+                Arc::new(StringArray::from(vec![Some("0-1"), Some("3-1")])),
+            ],
+        )?;
+        let replacement_batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("2010-01-01T15:00:00Z")])),
+                Arc::new(StringArray::from(vec![Some("Everton")])),
+                Arc::new(StringArray::from(vec![Some("0-1")])),
+            ],
+        )?;
+
+        Ok((schema, base_batch, replacement_batch))
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_preserves_mixed_case_columns_when_rescuing_rows() -> TestResult {
+        let (_, base_batch, replacement_batch) = mixed_case_replace_where_batches()?;
+
+        let table = DeltaTable::new_in_memory()
+            .write(vec![base_batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_replace_where(col("score").eq(lit("0-1")))
+            .await?;
+
+        let actual = get_data_sorted(&table, r#""utcDate","homeTeam",score"#).await;
+        assert_batches_sorted_eq!(
+            &[
+                "+----------------------+----------+-------+",
+                "| utcDate              | homeTeam | score |",
+                "+----------------------+----------+-------+",
+                "| 2009-05-16T15:00:00Z | Everton  | 3-1   |",
+                "| 2010-01-01T15:00:00Z | Everton  | 0-1   |",
+                "+----------------------+----------+-------+",
+            ],
+            &actual
+        );
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_replace_where_preserves_live_rows_with_deletion_vectors() -> TestResult {
         let (_temp_dir, table) = open_copied_table_fixture(
@@ -2512,6 +2574,64 @@ mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(!cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_cdc_with_replace_where_preserves_mixed_case_columns() -> TestResult {
+        let (schema, base_batch, replacement_batch) = mixed_case_replace_where_batches()?;
+        let delta_schema: StructType = Arc::clone(&schema).try_into_kernel()?;
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(delta_schema.fields().cloned())
+            .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
+            .await?;
+        assert_eq!(table.version(), Some(0));
+
+        let table = table.write(vec![base_batch]).await?;
+        assert_eq!(table.version(), Some(1));
+
+        let table = table
+            .write(vec![replacement_batch])
+            .with_save_mode(crate::protocol::SaveMode::Overwrite)
+            .with_replace_where("score='0-1'")
+            .await?;
+        assert_eq!(table.version(), Some(2));
+
+        let ctx = SessionContext::new();
+        let cdf_scan = table
+            .clone()
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect("Failed to load CDF");
+        let mut batches = collect(cdf_scan, ctx.state().task_ctx())
+            .await
+            .expect("Failed to collect CDF batches");
+
+        let commit_timestamp_index = batches
+            .first()
+            .expect("expected CDF batches")
+            .schema()
+            .index_of("_commit_timestamp")
+            .expect("expected CDF commit timestamp column");
+        let _: Vec<_> = batches
+            .iter_mut()
+            .map(|batch| batch.remove_column(commit_timestamp_index))
+            .collect();
+
+        assert_batches_sorted_eq! {[
+            "+----------------------+----------+-------+--------------+-----------------+",
+            "| utcDate              | homeTeam | score | _change_type | _commit_version |",
+            "+----------------------+----------+-------+--------------+-----------------+",
+            "| 2008-08-16T15:00:00Z | Everton  | 0-1   | delete       | 2               |",
+            "| 2008-08-16T15:00:00Z | Everton  | 0-1   | insert       | 1               |",
+            "| 2009-05-16T15:00:00Z | Everton  | 3-1   | insert       | 1               |",
+            "| 2010-01-01T15:00:00Z | Everton  | 0-1   | insert       | 2               |",
+            "+----------------------+----------+-------+--------------+-----------------+",
+        ], &batches }
+
         Ok(())
     }
 
