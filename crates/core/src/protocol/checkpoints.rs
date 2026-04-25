@@ -722,4 +722,428 @@ mod tests {
             Ok(())
         }
     }
+
+    mod cleanup_expired_logs_for {
+        use std::collections::HashMap;
+        use std::ops::Range;
+        use std::sync::Arc;
+
+        use bytes::Bytes;
+        use futures::StreamExt;
+        use futures::stream::BoxStream;
+        use object_store::memory::InMemory;
+        use object_store::{
+            CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
+            ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+            path::Path,
+        };
+
+        use super::*;
+
+        use crate::logstore::{ObjectStoreRef, StorageConfig, logstore_with};
+
+        #[derive(Debug)]
+        struct MockObjectStoreWithMeta {
+            inner: ObjectStoreRef,
+            meta_overrides: HashMap<Path, ObjectMeta>,
+        }
+
+        impl MockObjectStoreWithMeta {
+            fn with_meta_map(inner: ObjectStoreRef, meta_map: HashMap<Path, ObjectMeta>) -> Self {
+                Self {
+                    inner,
+                    meta_overrides: meta_map,
+                }
+            }
+        }
+
+        impl std::fmt::Display for MockObjectStoreWithMeta {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                self.inner.fmt(f)
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl ObjectStore for MockObjectStoreWithMeta {
+            async fn put_opts(
+                &self,
+                location: &Path,
+                payload: PutPayload,
+                opts: PutOptions,
+            ) -> object_store::Result<PutResult> {
+                self.inner.put_opts(location, payload, opts).await
+            }
+
+            async fn put_multipart_opts(
+                &self,
+                location: &Path,
+                opts: PutMultipartOptions,
+            ) -> object_store::Result<Box<dyn MultipartUpload>> {
+                self.inner.put_multipart_opts(location, opts).await
+            }
+
+            async fn get_opts(
+                &self,
+                location: &Path,
+                options: GetOptions,
+            ) -> object_store::Result<GetResult> {
+                self.inner.get_opts(location, options).await
+            }
+
+            async fn get_ranges(
+                &self,
+                location: &Path,
+                ranges: &[Range<u64>],
+            ) -> object_store::Result<Vec<Bytes>> {
+                self.inner.get_ranges(location, ranges).await
+            }
+
+            fn delete_stream(
+                &self,
+                locations: BoxStream<'static, object_store::Result<Path>>,
+            ) -> BoxStream<'static, object_store::Result<Path>> {
+                self.inner.delete_stream(locations)
+            }
+
+            fn list(
+                &self,
+                prefix: Option<&Path>,
+            ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+                let overrides = self.meta_overrides.clone();
+                self.inner
+                    .list(prefix)
+                    .map(move |result| {
+                        result.map(|meta| overrides.get(&meta.location).cloned().unwrap_or(meta))
+                    })
+                    .boxed()
+            }
+
+            fn list_with_offset(
+                &self,
+                prefix: Option<&Path>,
+                offset: &Path,
+            ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+                self.inner.list_with_offset(prefix, offset)
+            }
+
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&Path>,
+            ) -> object_store::Result<ListResult> {
+                self.inner.list_with_delimiter(prefix).await
+            }
+
+            async fn copy_opts(
+                &self,
+                from: &Path,
+                to: &Path,
+                options: CopyOptions,
+            ) -> object_store::Result<()> {
+                self.inner.copy_opts(from, to, options).await
+            }
+
+            async fn rename_opts(
+                &self,
+                from: &Path,
+                to: &Path,
+                options: RenameOptions,
+            ) -> object_store::Result<()> {
+                self.inner.rename_opts(from, to, options).await
+            }
+        }
+
+        #[tokio::test]
+        async fn test_cleanup_expired_logs_for_when_cutoff_overrides_keep_version()
+        -> DeltaResult<()> {
+            let _ = pretty_env_logger::try_init();
+
+            // setup
+            let url = Url::parse("memory:///").unwrap();
+            let operation_id = None;
+
+            // Create some objects with dummy data
+            let base_store: ObjectStoreRef = Arc::new(InMemory::new());
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000000.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000001.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000003.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000004.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                    vec![].into(),
+                )
+                .await?;
+
+            // Create some object meta for dummy data
+            let mut meta_map = HashMap::new();
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000000.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000000.json"),
+                    last_modified: Utc.timestamp_millis_opt(100).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000001.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000001.json"),
+                    last_modified: Utc.timestamp_millis_opt(101).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                    last_modified: Utc.timestamp_millis_opt(102).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000003.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000003.json"),
+                    last_modified: Utc.timestamp_millis_opt(103).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000004.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000004.json"),
+                    last_modified: Utc.timestamp_millis_opt(104).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                    last_modified: Utc.timestamp_millis_opt(105).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+
+            let mock_store = Arc::new(MockObjectStoreWithMeta::with_meta_map(
+                base_store.clone(),
+                meta_map,
+            ));
+            let log_store =
+                logstore_with(mock_store as ObjectStoreRef, &url, StorageConfig::default())?;
+
+            // keep_version 4 is capped by min_retention_version 3 (oldest log with mtime >= cutoff 103).
+            // Safe checkpoint is v2, so commits before that checkpoint with mtime <= cutoff are removed.
+            let result = cleanup_expired_logs_for(4, &log_store, 103, operation_id).await?;
+
+            // validate that files were deleted
+            assert_eq!(result, 2);
+
+            // validate expected files were deleted
+            for path in [
+                "_delta_log/00000000000000000000.json",
+                "_delta_log/00000000000000000001.json",
+            ] {
+                let res = base_store.head(&Path::from(path)).await;
+                assert!(res.is_err(), "{}", path);
+            }
+
+            // validate expected files are present
+            for path in [
+                "_delta_log/00000000000000000002.checkpoint.parquet",
+                "_delta_log/00000000000000000003.json",
+                "_delta_log/00000000000000000004.json",
+                "_delta_log/00000000000000000005.checkpoint.parquet",
+            ] {
+                let res = base_store.head(&Path::from(path)).await;
+                assert!(res.is_ok(), "{}", path);
+            }
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_cleanup_expired_logs_for_when_cutoff_does_not_override_keep_version()
+        -> DeltaResult<()> {
+            let _ = pretty_env_logger::try_init();
+
+            // setup
+            let url = Url::parse("memory:///").unwrap();
+            let operation_id = None;
+
+            // Create some objects with dummy data
+            let base_store: ObjectStoreRef = Arc::new(InMemory::new());
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000000.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000001.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000003.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000004.json"),
+                    vec![].into(),
+                )
+                .await?;
+            base_store
+                .put(
+                    &Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                    vec![].into(),
+                )
+                .await?;
+
+            // Create some object meta for dummy data
+            let mut meta_map = HashMap::new();
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000000.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000000.json"),
+                    last_modified: Utc.timestamp_millis_opt(100).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000001.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000001.json"),
+                    last_modified: Utc.timestamp_millis_opt(101).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000002.checkpoint.parquet"),
+                    last_modified: Utc.timestamp_millis_opt(102).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000003.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000003.json"),
+                    last_modified: Utc.timestamp_millis_opt(103).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000004.json"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000004.json"),
+                    last_modified: Utc.timestamp_millis_opt(104).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+            meta_map.insert(
+                Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                ObjectMeta {
+                    location: Path::from("_delta_log/00000000000000000005.checkpoint.parquet"),
+                    last_modified: Utc.timestamp_millis_opt(105).unwrap(),
+                    size: 0,
+                    e_tag: None,
+                    version: None,
+                },
+            );
+
+            let mock_store = Arc::new(MockObjectStoreWithMeta::with_meta_map(
+                base_store.clone(),
+                meta_map,
+            ));
+            let log_store =
+                logstore_with(mock_store as ObjectStoreRef, &url, StorageConfig::default())?;
+
+            // No log has mtime >= cutoff 106, so keep_version stays 5. Safe checkpoint is v5;
+            // everything strictly before version 5 with mtime <= cutoff is eligible for deletion.
+            let result = cleanup_expired_logs_for(5, &log_store, 106, operation_id).await?;
+
+            // validate that files were deleted
+            assert_eq!(result, 5);
+
+            // validate expected files were deleted
+            for path in [
+                "_delta_log/00000000000000000000.json",
+                "_delta_log/00000000000000000001.json",
+                "_delta_log/00000000000000000002.checkpoint.parquet",
+                "_delta_log/00000000000000000003.json",
+                "_delta_log/00000000000000000004.json",
+            ] {
+                let res = base_store.head(&Path::from(path)).await;
+                assert!(res.is_err(), "{}", path);
+            }
+
+            // validate expected files are present
+            for path in ["_delta_log/00000000000000000005.checkpoint.parquet"] {
+                let res = base_store.head(&Path::from(path)).await;
+                assert!(res.is_ok(), "{}", path);
+            }
+
+            Ok(())
+        }
+    }
 }
