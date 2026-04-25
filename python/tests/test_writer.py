@@ -1931,6 +1931,54 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path):
     _check_stats(dt)
 
 
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        pytest.param(
+            {"delta.dataSkippingNumIndexedCols": "1"},
+            id="num_indexed_cols",
+        ),
+        pytest.param(
+            {"delta.dataSkippingStatsColumns": "p,a"},
+            id="stats_columns",
+        ),
+    ],
+)
+def test_get_add_actions_excludes_partition_columns_from_stats_schema(
+    tmp_path: pathlib.Path,
+    configuration: dict[str, str],
+):
+    data = Table(
+        {
+            "p": Array(
+                [10, 10, 20, 20],
+                ArrowField("p", type=DataType.int64(), nullable=False),
+            ),
+            "a": Array(
+                [1, 2, 3, 4],
+                ArrowField("a", type=DataType.int64(), nullable=False),
+            ),
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        partition_by=["p"],
+        configuration=configuration,
+    )
+
+    actions = DeltaTable(tmp_path).get_add_actions(flatten=True)
+    paths = actions["path"].to_pylist()
+    order = sorted(range(len(paths)), key=paths.__getitem__)
+
+    assert [actions.column("min.a")[idx].as_py() for idx in order] == [1, 3]
+    assert [actions.column("max.a")[idx].as_py() for idx in order] == [2, 4]
+
+    assert "min.p" not in actions.column_names
+
+
 def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
         add_actions_table = dt.get_add_actions(flatten=True)

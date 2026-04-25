@@ -30,6 +30,7 @@ use delta_kernel::{
         state::{DvInfo, ScanFile},
     },
     schema::{DataType, Schema, StructField},
+    table_configuration::TableConfiguration,
 };
 use futures::Stream;
 use itertools::Itertools;
@@ -41,7 +42,8 @@ use crate::{
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
         LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
-        arrow::engine_ext::stats_schema, parse_stats_column_with_schema,
+        arrow::engine_ext::{stats_inputs, stats_schema},
+        parse_stats_column_with_schema,
     },
 };
 
@@ -73,10 +75,10 @@ fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
 /// Create a stats schema containing only columns needed for predicate evaluation
 ///
 /// Returns:
-/// - If no predicate: Schema with just `numRecords`
-/// - If predicate exists: Schema with `numRecords` + stats for referenced columns only
+/// No predicate returns a schema with just `numRecords`.
+/// A predicate returns `numRecords` plus stats for referenced columns.
 fn create_minimal_stats_schema(
-    scan: &KernelScan,
+    table_configuration: &TableConfiguration,
     predicate_columns: Option<&HashSet<String>>,
 ) -> DeltaResult<Arc<Schema>> {
     let minimal_schema = || {
@@ -87,31 +89,31 @@ fn create_minimal_stats_schema(
 
     match predicate_columns {
         None => {
-            // No predicate - only need numRecords for file statistics
+            // No predicate. Only numRecords is needed for file statistics.
             minimal_schema()
         }
         Some(cols) if cols.is_empty() => {
-            // Empty predicate columns - minimal schema
+            // Empty predicate columns use the minimal schema.
             minimal_schema()
         }
         Some(cols) => {
-            // Filter physical schema to only referenced columns
-            let physical_schema = scan.physical_schema();
-            let filtered_fields: Vec<_> = physical_schema
+            let (stats_source_schema, table_properties) = stats_inputs(table_configuration)?;
+
+            let filtered_fields: Vec<_> = stats_source_schema
                 .fields()
                 .filter(|field| cols.contains(field.name()))
                 .cloned()
                 .collect();
 
             if filtered_fields.is_empty() {
-                // Predicate references only partition columns - minimal schema
+                // Predicates that only reference partition columns use the minimal schema.
                 minimal_schema()
             } else {
                 // Create stats schema for filtered fields
                 let filtered_schema = Schema::try_new(filtered_fields)?;
                 Ok(Arc::new(stats_schema(
                     &filtered_schema,
-                    scan.snapshot().table_properties(),
+                    table_properties.as_ref(),
                 )))
             }
         }
@@ -234,7 +236,7 @@ where
 
                 // Create minimal stats schema based on predicate columns
                 let stats_schema = match create_minimal_stats_schema(
-                    this.kernel_scan.as_ref(),
+                    this.kernel_scan.snapshot().table_configuration(),
                     predicate_columns.as_ref(),
                 ) {
                     Ok(schema) => schema,
@@ -569,12 +571,14 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
+    use crate::test_utils::{build_test_table_configuration, column_mapping_test_field};
     use delta_kernel::scan::state::{DvInfo, ScanFile};
+    use delta_kernel::schema::{DataType, StructField, StructType};
     use url::Url;
 
-    use super::{ScanContext, visit_scan_file};
+    use super::{ScanContext, create_minimal_stats_schema, visit_scan_file};
 
     fn scan_file(path: impl Into<String>) -> ScanFile {
         ScanFile {
@@ -586,6 +590,77 @@ mod tests {
             transform: None,
             partition_values: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn test_minimal_stats_schema_uses_stats_source_for_partitioned_tables() {
+        for configuration in [
+            HashMap::from([(
+                "delta.dataSkippingNumIndexedCols".to_string(),
+                "1".to_string(),
+            )]),
+            HashMap::from([(
+                "delta.dataSkippingStatsColumns".to_string(),
+                "p,a".to_string(),
+            )]),
+        ] {
+            let table_configuration = build_test_table_configuration(
+                StructType::try_new([
+                    StructField::nullable("p", DataType::INTEGER),
+                    StructField::nullable("a", DataType::INTEGER),
+                    StructField::nullable("b", DataType::INTEGER),
+                ])
+                .unwrap(),
+                vec!["p".to_string()],
+                configuration,
+            );
+            let predicate_columns = HashSet::from(["p".to_string(), "a".to_string()]);
+
+            let stats_schema =
+                create_minimal_stats_schema(&table_configuration, Some(&predicate_columns))
+                    .unwrap();
+
+            let min_values = match stats_schema.field("minValues").unwrap().data_type() {
+                DataType::Struct(fields) => fields,
+                other => panic!("expected minValues struct, got {other:?}"),
+            };
+            assert!(min_values.field("a").is_some());
+            assert!(min_values.field("p").is_none());
+            assert!(min_values.field("b").is_none());
+        }
+    }
+
+    #[test]
+    fn test_minimal_stats_schema_translates_stats_columns_for_column_mapping() {
+        let table_configuration = build_test_table_configuration(
+            StructType::try_new([
+                column_mapping_test_field("p", "col_p", 1),
+                column_mapping_test_field("a", "col_a", 2),
+                column_mapping_test_field("b", "col_b", 3),
+            ])
+            .unwrap(),
+            vec!["p".to_string()],
+            HashMap::from([
+                ("delta.columnMapping.mode".to_string(), "name".to_string()),
+                (
+                    "delta.dataSkippingStatsColumns".to_string(),
+                    "a".to_string(),
+                ),
+            ]),
+        );
+        let predicate_columns = HashSet::from(["col_p".to_string(), "col_a".to_string()]);
+
+        let stats_schema =
+            create_minimal_stats_schema(&table_configuration, Some(&predicate_columns)).unwrap();
+
+        let min_values = match stats_schema.field("minValues").unwrap().data_type() {
+            DataType::Struct(fields) => fields,
+            other => panic!("expected minValues struct, got {other:?}"),
+        };
+        assert!(min_values.field("col_a").is_some());
+        assert!(min_values.field("a").is_none());
+        assert!(min_values.field("col_p").is_none());
+        assert!(min_values.field("col_b").is_none());
     }
 
     #[test]

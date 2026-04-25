@@ -18,6 +18,7 @@ use delta_kernel::schema::{
 };
 use delta_kernel::snapshot::Snapshot;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use delta_kernel::transforms::SchemaTransform;
 use delta_kernel::{DeltaResult, ExpressionEvaluator};
@@ -45,9 +46,10 @@ pub(crate) trait SnapshotExt {
 
 impl SnapshotExt for TableConfiguration {
     fn stats_schema(&self) -> DeltaResult<SchemaRef> {
+        let (source_schema, table_properties) = stats_inputs(self)?;
         Ok(Arc::new(stats_schema(
-            self.physical_schema().as_ref(),
-            self.table_properties(),
+            &source_schema,
+            table_properties.as_ref(),
         )))
     }
 
@@ -122,14 +124,107 @@ fn partitions_schema(
     )?))
 }
 
-/// Generates the expected schema for file statistics.
+/// Returns the schema and table properties used to parse `Add.stats`.
 ///
-/// The base stats schema is dependent on the current table configuration and derived via:
-/// - only fields present in data files are included (use physical names, no partition columns)
-/// - if `dataSkippingStatsColumns` is set, include only those columns.
-///   Column names may refer to struct fields in which case all child fields are included.
-/// - otherwise the first `dataSkippingNumIndexedCols` (default 32) leaf fields are included.
-/// - all fields are made nullable.
+/// Partition columns are excluded from the returned schema; see [`stats_source_schema`].
+pub(crate) fn stats_inputs(
+    table_configuration: &TableConfiguration,
+) -> DeltaResult<(StructType, Cow<'_, TableProperties>)> {
+    let source_schema = stats_source_schema(
+        table_configuration.logical_schema().as_ref(),
+        table_configuration.metadata().partition_columns(),
+        table_configuration.column_mapping_mode(),
+    )?;
+    let table_properties = stats_table_properties(
+        table_configuration.logical_schema().as_ref(),
+        table_configuration.table_properties(),
+        table_configuration.column_mapping_mode(),
+    );
+    Ok((source_schema, table_properties))
+}
+
+/// Returns the schema of columns that may legally appear inside `Add.stats`.
+///
+/// Partition columns are excluded intentionally: their stats belong in
+/// `Add.partitionValues`, not `Add.stats`, even when table features materialize them in
+/// parquet files. When column mapping is disabled, fields retain their logical names.
+/// When column mapping is enabled (`Name` or `Id`), fields use their physical names.
+fn stats_source_schema(
+    logical_schema: &StructType,
+    partition_columns: &[String],
+    column_mapping_mode: ColumnMappingMode,
+) -> DeltaResult<StructType> {
+    let fields = logical_schema
+        .fields()
+        .filter(|field| !partition_columns.contains(field.name()))
+        .map(|field| field.make_physical(column_mapping_mode))
+        .collect::<DeltaResult<Vec<_>>>()?;
+    StructType::try_new(fields)
+}
+
+/// Translates `dataSkippingStatsColumns` from logical to physical names.
+///
+/// Columns that cannot be resolved against `logical_schema` are dropped.
+fn stats_table_properties<'a>(
+    logical_schema: &StructType,
+    table_properties: &'a TableProperties,
+    column_mapping_mode: ColumnMappingMode,
+) -> Cow<'a, TableProperties> {
+    if column_mapping_mode == ColumnMappingMode::None
+        || table_properties.data_skipping_stats_columns.is_none()
+    {
+        return Cow::Borrowed(table_properties);
+    }
+
+    let mut table_properties = table_properties.clone();
+    table_properties.data_skipping_stats_columns =
+        table_properties.data_skipping_stats_columns.map(|columns| {
+            columns
+                .iter()
+                .filter_map(|column| {
+                    physical_column_name(logical_schema, column, column_mapping_mode)
+                })
+                .collect()
+        });
+    Cow::Owned(table_properties)
+}
+
+/// Returns a physical column path, or `None` if the logical path cannot be resolved.
+fn physical_column_name(
+    logical_schema: &StructType,
+    column: &ColumnName,
+    column_mapping_mode: ColumnMappingMode,
+) -> Option<ColumnName> {
+    let mut path = column.path().iter().peekable();
+    let mut physical_path = Vec::with_capacity(column.path().len());
+    let mut current_struct = logical_schema;
+
+    while let Some(field_name) = path.next() {
+        let field = current_struct.field(field_name)?;
+        physical_path.push(field.physical_name(column_mapping_mode).to_string());
+
+        if path.peek().is_some() {
+            let DataType::Struct(inner) = field.data_type() else {
+                return None;
+            };
+            current_struct = inner;
+        }
+    }
+
+    Some(ColumnName::new(physical_path))
+}
+
+/// Generates the expected schema for parsing `Add.stats`.
+///
+/// The input schema must already represent only columns that may legally appear
+/// in `Add.stats`: use physical names when column mapping is enabled, and
+/// exclude partition columns even if data files materialize them.
+///
+/// The base stats schema follows the current table configuration.
+/// With `dataSkippingStatsColumns`, include only those columns. Column names may
+/// refer to struct fields, which includes all child fields.
+/// Without that setting, include the first `dataSkippingNumIndexedCols` leaf
+/// fields, defaulting to 32. All fields are made nullable.
 ///
 /// For the `nullCount` schema, we consider the whole base schema and convert all leaf fields
 /// to data type LONG. Maps, arrays, and variant are considered leaf fields in this case.
@@ -147,17 +242,15 @@ fn partitions_schema(
 /// }
 /// ```
 pub(crate) fn stats_schema(
-    physical_file_schema: &Schema,
+    stats_source_schema: &Schema,
     table_properties: &TableProperties,
 ) -> Schema {
     let mut fields = Vec::with_capacity(4);
     fields.push(StructField::nullable("numRecords", DataType::LONG));
 
-    // generate the base stats schema:
-    // - make all fields nullable
-    // - include fields according to table properties (num_indexed_cols, stats_coliumns, ...)
+    // Build the base stats schema by making fields nullable and applying table properties.
     let mut base_transform = BaseStatsTransform::new(table_properties);
-    if let Some(base_schema) = base_transform.transform_struct(physical_file_schema) {
+    if let Some(base_schema) = base_transform.transform_struct(stats_source_schema) {
         let base_schema = base_schema.into_owned();
 
         // convert all leaf fields to data type LONG for null count
@@ -433,9 +526,15 @@ impl StructDataExt for StructData {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use super::*;
+
+    use crate::test_utils::{
+        build_test_table_configuration, column_mapping_test_field,
+        column_mapping_test_field_with_type,
+    };
 
     use delta_kernel::EvaluationHandler;
     use delta_kernel::arrow::array::Int32Array;
@@ -610,6 +709,191 @@ mod tests {
         .unwrap();
 
         assert_eq!(&expected, &stats_schema);
+    }
+
+    #[test]
+    fn test_stats_source_schema_excludes_partition_columns() {
+        let logical_schema = StructType::try_new([
+            StructField::nullable("p", DataType::INTEGER),
+            StructField::nullable("a", DataType::INTEGER),
+        ])
+        .unwrap();
+
+        let stats_schema =
+            stats_source_schema(&logical_schema, &["p".to_string()], ColumnMappingMode::None)
+                .unwrap();
+
+        assert!(stats_schema.field("a").is_some());
+        assert!(stats_schema.field("p").is_none());
+    }
+
+    #[test]
+    fn test_stats_source_schema_applies_column_mapping_physical_names() {
+        let logical_schema = StructType::try_new([
+            column_mapping_test_field("p", "col_p", 1),
+            column_mapping_test_field("a", "col_a", 2),
+        ])
+        .unwrap();
+
+        for column_mapping_mode in [ColumnMappingMode::Name, ColumnMappingMode::Id] {
+            let stats_schema =
+                stats_source_schema(&logical_schema, &["p".to_string()], column_mapping_mode)
+                    .unwrap();
+
+            assert!(stats_schema.field("col_a").is_some());
+            assert!(stats_schema.field("a").is_none());
+            assert!(stats_schema.field("col_p").is_none());
+            assert!(stats_schema.field("p").is_none());
+        }
+    }
+
+    #[test]
+    fn test_table_configuration_stats_schema_translates_stats_columns_to_physical_names() {
+        // Use table property strings to exercise TableConfiguration parsing.
+        for column_mapping_mode in ["name", "id"] {
+            let logical_schema = StructType::try_new([
+                column_mapping_test_field("p", "col_p", 1),
+                column_mapping_test_field("a", "col_a", 2),
+                column_mapping_test_field("b", "col_b", 3),
+            ])
+            .unwrap();
+            let table_configuration = build_test_table_configuration(
+                logical_schema,
+                vec!["p".to_string()],
+                HashMap::from([
+                    (
+                        "delta.columnMapping.mode".to_string(),
+                        column_mapping_mode.to_string(),
+                    ),
+                    (
+                        "delta.dataSkippingStatsColumns".to_string(),
+                        "a".to_string(),
+                    ),
+                ]),
+            );
+
+            let stats_schema = table_configuration.stats_schema().unwrap();
+
+            let min_values = match stats_schema.field("minValues").unwrap().data_type() {
+                DataType::Struct(fields) => fields,
+                other => panic!("expected minValues struct, got {other:?}"),
+            };
+            assert!(min_values.field("col_a").is_some());
+            assert!(min_values.field("a").is_none());
+            assert!(min_values.field("col_p").is_none());
+            assert!(min_values.field("col_b").is_none());
+        }
+    }
+
+    #[test]
+    fn test_table_configuration_stats_schema_translates_nested_stats_columns_to_physical_names() {
+        // Use table property strings to exercise TableConfiguration parsing.
+        for column_mapping_mode in ["name", "id"] {
+            let nested_schema = StructType::try_new([
+                column_mapping_test_field("a", "col_a", 3),
+                column_mapping_test_field("b", "col_b", 4),
+            ])
+            .unwrap();
+            let logical_schema = StructType::try_new([
+                column_mapping_test_field("p", "col_p", 1),
+                column_mapping_test_field_with_type(
+                    "s",
+                    "col_s",
+                    2,
+                    DataType::Struct(Box::new(nested_schema)),
+                ),
+            ])
+            .unwrap();
+            let table_configuration = build_test_table_configuration(
+                logical_schema,
+                vec!["p".to_string()],
+                HashMap::from([
+                    (
+                        "delta.columnMapping.mode".to_string(),
+                        column_mapping_mode.to_string(),
+                    ),
+                    (
+                        "delta.dataSkippingStatsColumns".to_string(),
+                        "s.a".to_string(),
+                    ),
+                ]),
+            );
+
+            let stats_schema = table_configuration.stats_schema().unwrap();
+
+            let min_values = match stats_schema.field("minValues").unwrap().data_type() {
+                DataType::Struct(fields) => fields,
+                other => panic!("expected minValues struct, got {other:?}"),
+            };
+            let nested_min_values = match min_values.field("col_s").unwrap().data_type() {
+                DataType::Struct(fields) => fields,
+                other => panic!("expected nested minValues struct, got {other:?}"),
+            };
+            assert!(nested_min_values.field("col_a").is_some());
+            assert!(nested_min_values.field("a").is_none());
+            assert!(nested_min_values.field("col_b").is_none());
+            assert!(min_values.field("s").is_none());
+            assert!(min_values.field("col_p").is_none());
+        }
+    }
+
+    #[test]
+    fn test_table_configuration_stats_schema_drops_stats_columns_with_non_struct_intermediate() {
+        // Use table property strings to exercise TableConfiguration parsing.
+        for column_mapping_mode in ["name", "id"] {
+            let logical_schema = StructType::try_new([
+                column_mapping_test_field("p", "col_p", 1),
+                column_mapping_test_field("a", "col_a", 2),
+            ])
+            .unwrap();
+            let table_configuration = build_test_table_configuration(
+                logical_schema,
+                vec!["p".to_string()],
+                HashMap::from([
+                    (
+                        "delta.columnMapping.mode".to_string(),
+                        column_mapping_mode.to_string(),
+                    ),
+                    (
+                        "delta.dataSkippingStatsColumns".to_string(),
+                        "a.b".to_string(),
+                    ),
+                ]),
+            );
+
+            let stats_schema = table_configuration.stats_schema().unwrap();
+
+            assert!(stats_schema.field("nullCount").is_none());
+            assert!(stats_schema.field("minValues").is_none());
+            assert!(stats_schema.field("maxValues").is_none());
+        }
+    }
+
+    #[test]
+    fn test_table_configuration_stats_schema_num_indexed_cols_ignores_partition_columns() {
+        let logical_schema = StructType::try_new([
+            StructField::nullable("p", DataType::INTEGER),
+            StructField::nullable("a", DataType::INTEGER),
+        ])
+        .unwrap();
+        let table_configuration = build_test_table_configuration(
+            logical_schema,
+            vec!["p".to_string()],
+            HashMap::from([(
+                "delta.dataSkippingNumIndexedCols".to_string(),
+                "1".to_string(),
+            )]),
+        );
+
+        let stats_schema = table_configuration.stats_schema().unwrap();
+
+        let min_values = match stats_schema.field("minValues").unwrap().data_type() {
+            DataType::Struct(fields) => fields,
+            other => panic!("expected minValues struct, got {other:?}"),
+        };
+        assert!(min_values.field("a").is_some());
+        assert!(min_values.field("p").is_none());
+        assert_eq!(1, min_values.fields().count());
     }
 
     #[test]

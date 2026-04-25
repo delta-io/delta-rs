@@ -7,6 +7,12 @@ pub(crate) mod object_store;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
+#[cfg(test)]
+use delta_kernel::{
+    actions::{Metadata, Protocol},
+    schema::{ColumnMetadataKey, DataType, MetadataValue, StructField, StructType},
+    table_configuration::TableConfiguration,
+};
 use url::Url;
 
 pub use self::factories::*;
@@ -29,6 +35,59 @@ pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
     let url =
         url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
     DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_table_configuration(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    configuration: HashMap<String, String>,
+) -> TableConfiguration {
+    let metadata = Metadata::try_new(
+        None,
+        None,
+        std::sync::Arc::new(schema),
+        partition_columns,
+        0,
+        configuration,
+    )
+    .unwrap();
+    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+        "minReaderVersion": 2,
+        "minWriterVersion": 5,
+    }))
+    .unwrap();
+    TableConfiguration::try_new(
+        metadata,
+        protocol,
+        Url::parse("file:///tmp/table").unwrap(),
+        0,
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field_with_type(
+    name: &str,
+    physical_name: &str,
+    id: i64,
+    data_type: DataType,
+) -> StructField {
+    StructField::nullable(name, data_type).with_metadata([
+        (
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            MetadataValue::Number(id),
+        ),
+        (
+            ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+            MetadataValue::String(physical_name.to_string()),
+        ),
+    ])
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field(name: &str, physical_name: &str, id: i64) -> StructField {
+    column_mapping_test_field_with_type(name, physical_name, id, DataType::INTEGER)
 }
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
