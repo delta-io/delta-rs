@@ -147,6 +147,9 @@ pub enum CatalogType {
     ManagedCatalog,
     DeltasharingCatalog,
     SystemCatalog,
+    InternalCatalog,
+    ForeignCatalog,
+    ManagedOnlineCatalog,
 }
 
 /// A catalog within a metastore
