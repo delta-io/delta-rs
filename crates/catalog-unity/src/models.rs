@@ -192,6 +192,7 @@ pub struct ProvisioningInfo {
 }
 
 #[derive(Deserialize, Debug, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ProvisioningState {
     #[default]
     Provisioning,
@@ -199,6 +200,7 @@ pub enum ProvisioningState {
     Failed,
     Deleting,
     Updating,
+    Degraded,
 }
 
 #[derive(Deserialize, Default, Debug)]
