@@ -101,6 +101,94 @@ def test_primitive_delta_types():
 
 
 @pytest.mark.pyarrow
+def test_void_type_maps_to_pyarrow_null():
+    """
+    Regression test for: https://github.com/delta-io/delta-rs/issues/1947
+
+    Delta tables can contain columns with `void` data type (e.g. columns that
+    were created but never populated). When converting a Delta schema to PyArrow
+    via `DeltaTable.schema().to_pyarrow()`, `void` should map to `pyarrow.null()`
+    rather than raising a `Schema error: Invalid data type for Arrow: void`.
+
+    PyArrow's `null` type is the correct semantic equivalent:
+    https://arrow.apache.org/docs/python/generated/pyarrow.null.html
+    """
+    import pyarrow as pa
+
+    # Construct a schema containing a void-typed column via JSON
+    # (void columns appear in Delta tables that have been schema-evolved
+    # or where a column was added but never written to)
+    schema_json = json.dumps({
+        "type": "struct",
+        "fields": [
+            {
+                "name": "id",
+                "type": "long",
+                "nullable": False,
+                "metadata": {},
+            },
+            {
+                "name": "empty_col",
+                "type": "void",
+                "nullable": True,
+                "metadata": {},
+            },
+        ],
+    })
+
+    schema = Schema.from_json(schema_json)
+
+    # Prior to the fix this raised:
+    # Exception: Schema error: Invalid data type for Arrow: void
+    pa_schema = schema.to_arrow()
+
+    assert pa_schema.field("id").type == pa.int64()
+
+    # void in Delta should map to null in PyArrow — semantically equivalent:
+    # both represent the absence of a typed value
+    assert pa_schema.field("empty_col").type == pa.null(), (
+        f"Expected pa.null() for Delta 'void' type, got {pa_schema.field('empty_col').type}"
+    )
+    assert pa_schema.field("empty_col").nullable is True
+
+
+@pytest.mark.pyarrow
+def test_void_type_in_struct_field():
+    """
+    Regression test: void type nested inside a struct should also map correctly.
+    Covers the case where void columns appear in nested schemas.
+    """
+    import pyarrow as pa
+
+    schema_json = json.dumps({
+        "type": "struct",
+        "fields": [
+            {
+                "name": "nested",
+                "type": {
+                    "type": "struct",
+                    "fields": [
+                        {"name": "value", "type": "string", "nullable": True, "metadata": {}},
+                        {"name": "placeholder", "type": "void", "nullable": True, "metadata": {}},
+                    ],
+                },
+                "nullable": True,
+                "metadata": {},
+            }
+        ],
+    })
+
+    schema = Schema.from_json(schema_json)
+    pa_schema = schema.to_arrow()
+
+    nested_field = pa_schema.field("nested")
+    assert isinstance(nested_field.type, pa.StructType)
+
+    placeholder_idx = nested_field.type.get_field_index("placeholder")
+    assert nested_field.type.field(placeholder_idx).type == pa.null()
+
+
+@pytest.mark.pyarrow
 def test_array_delta_types():
     init_values = [
         (PrimitiveType("string"), False),
