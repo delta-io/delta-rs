@@ -1262,6 +1262,52 @@ def test_replace_where_overwrite(
 
 
 @pytest.mark.pyarrow
+def test_replace_where_overwrite_preserves_mixed_case_columns(tmp_path: pathlib.Path):
+    """Regression test for issue 4404."""
+    import pyarrow as pa
+
+    initial = pa.table(
+        {
+            "utcDate": ["2008-08-16T15:00:00Z", "2009-05-16T15:00:00Z"],
+            "homeTeam": ["Everton", "Everton"],
+            "score": ["0-1", "3-1"],
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        initial,
+        mode="overwrite",
+        schema_mode="overwrite",
+    )
+
+    update = pa.table(
+        {
+            "utcDate": ["2010-01-01T15:00:00Z"],
+            "homeTeam": ["Everton"],
+            "score": ["0-1"],
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        update,
+        mode="overwrite",
+        schema_mode="overwrite",
+        predicate="score = '0-1'",
+    )
+
+    expected = pa.table(
+        {
+            "utcDate": ["2009-05-16T15:00:00Z", "2010-01-01T15:00:00Z"],
+            "homeTeam": ["Everton", "Everton"],
+            "score": ["3-1", "0-1"],
+        }
+    )
+    actual = DeltaTable(tmp_path).to_pyarrow_table().sort_by("utcDate")
+    assert actual.schema.names == ["utcDate", "homeTeam", "score"]
+    assert actual == expected
+
+
+@pytest.mark.pyarrow
 @pytest.mark.parametrize(
     "func",
     [
