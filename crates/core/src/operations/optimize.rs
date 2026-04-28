@@ -53,7 +53,7 @@ use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
@@ -418,8 +418,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(DeltaTableError::Generic(
-                    "OPTIMIZE on column-mapped tables is not supported yet".to_string(),
+                return Err(unsupported_column_mapping_write(
+                    "OPTIMIZE",
+                    "rewritten optimized files do not preserve column mapping semantics yet",
                 ));
             }
 
@@ -1415,7 +1416,8 @@ mod compact_planner_tests {
 
         assert!(
             err.to_string()
-                .contains("OPTIMIZE on column-mapped tables is not supported yet")
+                .contains("Unsupported column mapping write for OPTIMIZE:"),
+            "unexpected error: {err}"
         );
         Ok(())
     }

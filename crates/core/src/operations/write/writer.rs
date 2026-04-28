@@ -25,11 +25,12 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::cast_record_batch;
 use crate::kernel::{Add, PartitionsExt, StructField, StructType};
 use crate::logstore::ObjectStoreRef;
 use crate::parquet_utils::default_writer_properties;
+use crate::table::config::TableProperty;
 use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -142,8 +143,14 @@ pub struct WriterConfig {
     partition_columns: Vec<String>,
     /// Mapping from logical partition column names to their physical names.
     physical_partition_columns: HashMap<String, String>,
+    /// Whether table metadata has column mapping enabled.
+    column_mapping_enabled: bool,
     /// Use randomized file prefixes instead of Hive-style partition directories.
     use_random_prefixes: bool,
+    /// Length of randomized file prefixes.
+    random_prefix_length: usize,
+    /// Preserve Hive-style partition directories for column-mapped tables.
+    preserve_column_mapping_hive_style_partitions: bool,
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk.
@@ -178,13 +185,26 @@ impl WriterConfig {
             physical_file_schema: None,
             partition_columns,
             physical_partition_columns: HashMap::new(),
+            column_mapping_enabled: false,
             use_random_prefixes: false,
+            random_prefix_length: 2,
+            preserve_column_mapping_hive_style_partitions: false,
             writer_properties,
             target_file_size,
             write_batch_size,
             num_indexed_cols,
             stats_columns,
         }
+    }
+
+    /// Preserve Hive-style partition directories for column-mapped tables.
+    ///
+    /// By default, column-mapped writes use randomized file prefixes, which matches Spark and
+    /// Databricks behavior. This opt-in keeps paths like `part=value/...` for integrations that
+    /// intentionally rely on that layout while still writing physical names to Parquet and the log.
+    pub fn with_preserve_column_mapping_hive_style_partitions(mut self, preserve: bool) -> Self {
+        self.preserve_column_mapping_hive_style_partitions = preserve;
+        self
     }
 
     /// Apply table-level write metadata such as column mapping.
@@ -196,12 +216,14 @@ impl WriterConfig {
         match table_config.column_mapping_mode() {
             ColumnMappingMode::None => return Ok(self),
             ColumnMappingMode::Id => {
-                return Err(DeltaTableError::Generic(
-                    "Writing to columnMapping.mode = id tables is not supported yet".to_string(),
+                return Err(unsupported_column_mapping_write(
+                    "columnMapping.mode = id",
+                    "Parquet field IDs are not handled end to end yet",
                 ));
             }
             ColumnMappingMode::Name => {}
         }
+        self.column_mapping_enabled = true;
 
         let table_logical_schema = table_config.logical_schema();
         let logical_schema = effective_schema.unwrap_or_else(|| table_logical_schema.as_ref());
@@ -210,9 +232,9 @@ impl WriterConfig {
             .fields()
             .any(|field| contains_nested_type(field.data_type()))
         {
-            return Err(DeltaTableError::Generic(
-                "Writing nested columns to columnMapping.mode = name tables is not supported yet"
-                    .to_string(),
+            return Err(unsupported_column_mapping_write(
+                "nested columns",
+                "recursive physical name rewrites are not implemented yet",
             ));
         }
 
@@ -244,19 +266,35 @@ impl WriterConfig {
             &physical_partition_columns,
         ));
         if let Some(stats_columns) = self.stats_columns.as_mut() {
+            // This shallow rewrite is safe while nested column-mapped writes are rejected above.
             for column in stats_columns {
                 if let Some(physical_name) = physical_columns.get(column) {
                     *column = physical_name.clone();
                 }
             }
         }
-        // Tables that enabled column mapping after they were already partitioned can keep
-        // partition physical names equal to their logical names. Preserve that layout so new
-        // writes land next to existing Hive-style partition directories.
-        self.use_random_prefixes = self
-            .physical_partition_columns
-            .iter()
-            .any(|(logical, physical)| logical != physical);
+        self.random_prefix_length = table_config
+            .metadata()
+            .configuration()
+            .get(TableProperty::RandomPrefixLength.as_ref())
+            .map(|value| {
+                let length = value.parse::<usize>().map_err(|err| {
+                    DeltaTableError::MetadataError(format!(
+                        "invalid delta.randomPrefixLength value `{value}`: {err}"
+                    ))
+                })?;
+                if !(1..=32).contains(&length) {
+                    return Err(DeltaTableError::MetadataError(format!(
+                        "invalid delta.randomPrefixLength value `{value}`: expected a value between 1 and 32"
+                    )));
+                }
+                Ok(length)
+            })
+            .transpose()?
+            .unwrap_or(2);
+        // Spark and Databricks write randomized prefixes for partitioned column-mapped tables.
+        // Keep Hive-style paths only when the caller explicitly opts into that layout.
+        self.use_random_prefixes = !self.preserve_column_mapping_hive_style_partitions;
 
         Ok(self)
     }
@@ -276,24 +314,30 @@ impl WriterConfig {
     fn physical_partition_values(
         &self,
         partition_values: &IndexMap<String, Scalar>,
-    ) -> IndexMap<String, Scalar> {
+    ) -> DeltaResult<IndexMap<String, Scalar>> {
         partition_values
             .iter()
             .map(|(logical_name, value)| {
-                (
-                    self.physical_partition_columns
-                        .get(logical_name)
-                        .cloned()
-                        .unwrap_or_else(|| logical_name.clone()),
-                    value.clone(),
-                )
+                let physical_name = self.physical_partition_columns.get(logical_name).cloned();
+                let physical_name = match (self.column_mapping_enabled, physical_name) {
+                    (_, Some(name)) => name,
+                    (false, None) => logical_name.clone(),
+                    (true, None) => {
+                        return Err(DeltaTableError::SchemaMismatch {
+                            msg: format!(
+                                "Missing physical partition column mapping for `{logical_name}`"
+                            ),
+                        });
+                    }
+                };
+                Ok((physical_name, value.clone()))
             })
             .collect()
     }
 
     fn partition_prefix(&self, partition_values: &IndexMap<String, Scalar>) -> DeltaResult<Path> {
         if self.use_random_prefixes {
-            Path::parse(random_prefix())
+            Path::parse(random_prefix(self.random_prefix_length))
         } else {
             Path::parse(partition_values.hive_partition_path())
         }
@@ -310,7 +354,7 @@ impl WriterConfig {
         if record_batch.num_columns() != logical_file_schema.fields().len() {
             return Err(WriteError::SchemaMismatch {
                 schema: record_batch.schema(),
-                expected_schema: file_schema,
+                expected_schema: logical_file_schema,
             }
             .into());
         }
@@ -332,11 +376,16 @@ impl WriterConfig {
     }
 }
 
-fn random_prefix() -> String {
-    uuid::Uuid::new_v4().simple().to_string()[..2].to_string()
+fn random_prefix(length: usize) -> String {
+    uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(length)
+        .collect()
 }
 
-fn contains_nested_type(data_type: &KernelDataType) -> bool {
+pub(crate) fn contains_nested_type(data_type: &KernelDataType) -> bool {
     match data_type {
         KernelDataType::Struct(_) => true,
         KernelDataType::Array(inner) => contains_nested_type(inner.element_type()),
@@ -353,6 +402,8 @@ fn physical_arrow_schema(logical_schema: &StructType) -> DeltaResult<ArrowSchema
         .fields()
         .zip(logical_arrow_schema.fields().iter())
         .map(|(delta_field, arrow_field)| {
+            // Preserve Arrow field metadata in the Parquet footer. Column mapping IDs remain
+            // available there as metadata, while name-mode readers resolve by physical name.
             ArrowField::new(
                 physical_name_for_field(delta_field),
                 arrow_field.data_type().clone(),
@@ -426,7 +477,7 @@ impl DeltaWriter {
         let record_batch =
             record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
         let record_batch = self.config.materialize_file_batch(record_batch)?;
-        let partition_values = self.config.physical_partition_values(partition_values);
+        let partition_values = self.config.physical_partition_values(partition_values)?;
         let prefix = self.config.partition_prefix(&partition_values)?;
 
         match self.partition_writers.get_mut(&partition_key) {
@@ -802,6 +853,34 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn column_mapping_partition_values_require_complete_physical_mapping() {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "partition_column",
+            DataType::Utf8,
+            false,
+        )]));
+        let mut config = WriterConfig::new(
+            schema,
+            vec!["partition_column".to_string()],
+            None,
+            None,
+            None,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        );
+        config.column_mapping_enabled = true;
+
+        let err = config
+            .physical_partition_values(&IndexMap::from([(
+                "partition_column".to_string(),
+                Scalar::String("partition-value".to_string()),
+            )]))
+            .expect_err("column mapping should require physical partition mapping");
+
+        assert!(matches!(err, DeltaTableError::SchemaMismatch { .. }));
     }
 
     fn assert_default_created_by(writer_properties: &WriterProperties) {

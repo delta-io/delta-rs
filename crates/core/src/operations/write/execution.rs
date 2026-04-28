@@ -31,7 +31,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, unsupported_column_mapping_write};
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -276,6 +276,7 @@ struct WriteSinkConfig {
     object_store: ObjectStoreRef,
     table_config: Option<TableConfiguration>,
     effective_schema: Option<StructType>,
+    preserve_column_mapping_hive_style_partitions: bool,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
@@ -362,6 +363,7 @@ pub(crate) async fn write_execution_plan(
         None,
         false,
         None,
+        false,
     )
     .await?;
     Ok(actions)
@@ -382,6 +384,7 @@ pub(crate) async fn write_execution_plan_v2(
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
+    preserve_column_mapping_hive_style_partitions: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -417,9 +420,9 @@ pub(crate) async fn write_execution_plan_v2(
             snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
         })
     {
-        return Err(DeltaTableError::Generic(
-            "Writing change data feed files for column-mapped tables is not supported yet"
-                .to_string(),
+        return Err(unsupported_column_mapping_write(
+            "change data feed",
+            "CDC file writes do not rewrite physical names for column-mapped tables yet",
         ));
     }
 
@@ -433,6 +436,7 @@ pub(crate) async fn write_execution_plan_v2(
         object_store,
         table_config: snapshot.map(|snapshot| snapshot.table_configuration().clone()),
         effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -491,6 +495,7 @@ pub(crate) async fn write_exec_plan(
         object_store,
         table_config: Some(table_config.clone()),
         effective_schema: None,
+        preserve_column_mapping_hive_style_partitions: false,
         target_file_size,
         write_batch_size: None,
         writer_properties: Some(writer_properties),
@@ -682,6 +687,7 @@ async fn write_data_plan(
         object_store,
         table_config,
         effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -697,9 +703,11 @@ async fn write_data_plan(
         writer_stats_config.stats_columns.clone(),
     );
     let config = match table_config.as_ref() {
-        Some(table_config) => {
-            config.with_table_configuration(table_config, effective_schema.as_ref())?
-        }
+        Some(table_config) => config
+            .with_preserve_column_mapping_hive_style_partitions(
+                preserve_column_mapping_hive_style_partitions,
+            )
+            .with_table_configuration(table_config, effective_schema.as_ref())?,
         None => config,
     };
 
@@ -785,6 +793,7 @@ async fn write_cdc_plan(
         object_store,
         table_config,
         effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -818,9 +827,11 @@ async fn write_cdc_plan(
         writer_stats_config.stats_columns.clone(),
     );
     let normal_config = match table_config.as_ref() {
-        Some(table_config) => {
-            normal_config.with_table_configuration(table_config, effective_schema.as_ref())?
-        }
+        Some(table_config) => normal_config
+            .with_preserve_column_mapping_hive_style_partitions(
+                preserve_column_mapping_hive_style_partitions,
+            )
+            .with_table_configuration(table_config, effective_schema.as_ref())?,
         None => normal_config,
     };
 

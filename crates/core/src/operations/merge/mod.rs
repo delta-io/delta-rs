@@ -86,6 +86,7 @@ use crate::delta_datafusion::{
     resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
@@ -848,8 +849,9 @@ async fn execute(
     if merge_schema
         && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
     {
-        return Err(DeltaTableError::Generic(
-            "Merge schema evolution for column-mapped tables is not supported yet".to_string(),
+        return Err(unsupported_column_mapping_write(
+            "merge schema evolution",
+            "schema evolution during MERGE is not implemented for column-mapped tables yet",
         ));
     }
 
@@ -1568,6 +1570,7 @@ async fn execute(
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
+        false,
     )
     .await?;
     if let Some(schema_metadata) = schema_action {

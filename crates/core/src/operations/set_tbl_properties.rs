@@ -8,6 +8,8 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::TableProperty;
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
 use crate::logstore::LogStoreRef;
@@ -95,6 +97,13 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let current_protocol = snapshot.protocol();
             let properties = this.properties;
 
+            if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
+                return Err(unsupported_column_mapping_write(
+                    "SET TBLPROPERTIES delta.columnMapping.mode",
+                    "enabling or changing column mapping through set_tbl_properties is not supported yet",
+                ));
+            }
+
             let new_protocol = current_protocol
                 .clone()
                 .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
@@ -134,6 +143,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 
 #[cfg(test)]
 pub mod tests {
+    use crate::TableProperty;
     use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -147,6 +157,32 @@ pub mod tests {
             ("delta.minWriterVersion".to_string(), "7".to_string()),
         ]);
         ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    pub async fn test_set_tbl_properties_rejects_column_mapping_mode() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+        let props = HashMap::from([(
+            TableProperty::ColumnMappingMode.as_ref().to_string(),
+            "name".to_string(),
+        )]);
+
+        let err = ops
+            .set_tbl_properties()
+            .with_raise_if_not_exists(false)
+            .with_properties(props)
+            .await
+            .expect_err("setting delta.columnMapping.mode should be rejected");
+
+        assert!(
+            err.to_string().contains(
+                "Unsupported column mapping write for SET TBLPROPERTIES delta.columnMapping.mode:"
+            ),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }

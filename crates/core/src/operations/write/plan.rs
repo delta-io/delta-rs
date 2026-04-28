@@ -29,11 +29,12 @@ use super::configs::WriterStatsConfig;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
+use super::writer::contains_nested_type;
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
     DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
     Action, Add, ArrayType, DataType as DeltaDataType, DeletionVectorDescriptor, EagerSnapshot,
@@ -750,10 +751,25 @@ fn schema_delta_for_prepared_source(
     let current_protocol = snapshot.protocol();
     let mut configuration = snapshot.metadata().configuration().clone();
     if snapshot.table_configuration().column_mapping_mode() == ColumnMappingMode::Name {
-        let mut max_column_id = configuration
-            .get("delta.columnMapping.maxColumnId")
-            .and_then(|value| value.parse::<i64>().ok())
-            .unwrap_or_else(|| max_column_mapping_id(snapshot.schema().as_ref()));
+        if schema_struct
+            .fields()
+            .any(|field| contains_nested_type(field.data_type()))
+        {
+            return Err(unsupported_column_mapping_write(
+                "nested columns",
+                "schema evolution for nested column-mapped fields is not implemented yet",
+            ));
+        }
+        let mut max_column_id = match configuration.get("delta.columnMapping.maxColumnId") {
+            Some(value) => value.parse::<i64>().map_err(|err| {
+                DeltaTableError::MetadataError(format!(
+                    "invalid delta.columnMapping.maxColumnId value `{value}`: {err}"
+                ))
+            })?,
+            None => max_column_mapping_id(snapshot.schema().as_ref()),
+        };
+        // Concurrent schema-merge writers may choose the same candidate IDs. The Delta conflict
+        // checker rejects the stale metadata commit, and the losing writer must retry.
         schema_struct = assign_column_mapping_to_new_fields(
             snapshot.schema().as_ref(),
             &schema_struct,
@@ -836,13 +852,24 @@ fn assign_column_mapping_to_existing_field(
     max_column_id: &mut i64,
 ) -> DeltaResult<StructField> {
     let mut field = next.clone();
-    field.metadata = previous.metadata().clone();
+    preserve_column_mapping_metadata(previous, &mut field);
     field.data_type = assign_column_mapping_to_existing_data_type(
         previous.data_type(),
         next.data_type(),
         max_column_id,
     )?;
     Ok(field)
+}
+
+fn preserve_column_mapping_metadata(previous: &StructField, next: &mut StructField) {
+    for key in [
+        ColumnMetadataKey::ColumnMappingId.as_ref(),
+        ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+    ] {
+        if let Some(value) = previous.metadata().get(key) {
+            next.metadata.insert(key.to_string(), value.clone());
+        }
+    }
 }
 
 fn assign_column_mapping_to_existing_data_type(

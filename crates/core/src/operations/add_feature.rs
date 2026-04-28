@@ -8,6 +8,7 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
@@ -102,6 +103,13 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             };
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
+
+            if name.contains(&TableFeatures::ColumnMapping) {
+                return Err(unsupported_column_mapping_write(
+                    "ADD FEATURE columnMapping",
+                    "enabling column mapping requires schema metadata migration and is not supported yet",
+                ));
+            }
 
             let (reader_features, writer_features): (
                 Vec<Option<TableFeature>>,
@@ -222,6 +230,25 @@ mod tests {
             .await;
 
         assert!(result.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn add_column_mapping_feature_is_rejected() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = create_bare_table().write(vec![batch]).await.unwrap();
+        let err = table
+            .add_feature()
+            .with_feature(TableFeatures::ColumnMapping)
+            .with_allow_protocol_versions_increase(true)
+            .await
+            .expect_err("columnMapping feature should not be enabled directly");
+
+        assert!(
+            err.to_string()
+                .contains("Unsupported column mapping write for ADD FEATURE columnMapping:"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 }
