@@ -64,6 +64,7 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
+use delta_kernel::table_features::ColumnMappingMode;
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -843,6 +844,13 @@ async fn execute(
 
     if should_cdc {
         debug!("Executing a merge and I should write CDC!");
+    }
+    if merge_schema
+        && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+    {
+        return Err(DeltaTableError::Generic(
+            "Merge schema evolution for column-mapped tables is not supported yet".to_string(),
+        ));
     }
 
     info!(cdc_enabled = should_cdc, "merge execution details");

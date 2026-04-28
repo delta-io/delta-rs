@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -409,6 +410,17 @@ pub(crate) async fn write_execution_plan_v2(
             pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
         }
         validations.push(pred);
+    }
+
+    if contains_cdc
+        && snapshot.is_some_and(|snapshot| {
+            snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+        })
+    {
+        return Err(DeltaTableError::Generic(
+            "Writing change data feed files for column-mapped tables is not supported yet"
+                .to_string(),
+        ));
     }
 
     let mut plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
