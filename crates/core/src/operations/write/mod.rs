@@ -729,6 +729,24 @@ mod tests {
             .collect())
     }
 
+    async fn latest_add_actions(table: &DeltaTable) -> TestResult<Vec<crate::kernel::Add>> {
+        let version = table
+            .version()
+            .expect("expected committed version for latest add actions");
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(version)
+            .await?
+            .expect("failed to get snapshot bytes");
+        Ok(get_actions(version, &snapshot_bytes)?
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .collect())
+    }
+
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
         // assert!(write_metrics.execution_time_ms > 0);
         assert!(write_metrics.num_added_files > 0);
@@ -2053,6 +2071,56 @@ mod tests {
         let remove = &remove_actions[0];
         assert_eq!(remove.path, source_path);
         assert_eq!(remove.deletion_vector, source_deletion_vector);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_column_mapping");
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Delta RS")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("DRS".to_string()))
+        );
+        assert!(!add.path.starts_with("Company Very Short="));
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Delta RS"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'DRS' AND "Super Name" = 'Delta RS'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
 
         Ok(())
     }

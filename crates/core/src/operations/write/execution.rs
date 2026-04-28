@@ -273,6 +273,7 @@ pub(crate) struct WriteExecutionPlanMetrics {
 struct WriteSinkConfig {
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
+    table_config: Option<TableConfiguration>,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
@@ -415,6 +416,7 @@ pub(crate) async fn write_execution_plan_v2(
     let sink_config = WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config: snapshot.map(|snapshot| snapshot.table_configuration().clone()),
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -471,6 +473,7 @@ pub(crate) async fn write_exec_plan(
     let sink_config = WriteSinkConfig {
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
+        table_config: Some(table_config.clone()),
         target_file_size,
         write_batch_size: None,
         writer_properties: Some(writer_properties),
@@ -660,6 +663,7 @@ async fn write_data_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -674,6 +678,10 @@ async fn write_data_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     );
+    let config = match table_config.as_ref() {
+        Some(table_config) => config.with_table_configuration(table_config)?,
+        None => config,
+    };
 
     // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
@@ -755,6 +763,7 @@ async fn write_cdc_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -787,6 +796,10 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     );
+    let normal_config = match table_config.as_ref() {
+        Some(table_config) => normal_config.with_table_configuration(table_config)?,
+        None => normal_config,
+    };
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),

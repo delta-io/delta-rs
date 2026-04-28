@@ -686,6 +686,7 @@ impl MergePlan {
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
+            None,
             Some(task_parameters.writer_properties.clone()),
             // Since we know the total size of the bin, we can set the target file size to None.
             if ignore_target_size {
