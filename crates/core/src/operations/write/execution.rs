@@ -274,6 +274,7 @@ struct WriteSinkConfig {
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
     table_config: Option<TableConfiguration>,
+    effective_schema: Option<StructType>,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
@@ -348,6 +349,7 @@ pub(crate) async fn write_execution_plan(
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         snapshot,
+        None,
         session,
         plan,
         partition_columns,
@@ -367,6 +369,7 @@ pub(crate) async fn write_execution_plan(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
+    effective_schema: Option<StructType>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -417,6 +420,7 @@ pub(crate) async fn write_execution_plan_v2(
         partition_columns,
         object_store,
         table_config: snapshot.map(|snapshot| snapshot.table_configuration().clone()),
+        effective_schema,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -474,6 +478,7 @@ pub(crate) async fn write_exec_plan(
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
         table_config: Some(table_config.clone()),
+        effective_schema: None,
         target_file_size,
         write_batch_size: None,
         writer_properties: Some(writer_properties),
@@ -664,6 +669,7 @@ async fn write_data_plan(
         partition_columns,
         object_store,
         table_config,
+        effective_schema,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -679,7 +685,9 @@ async fn write_data_plan(
         writer_stats_config.stats_columns.clone(),
     );
     let config = match table_config.as_ref() {
-        Some(table_config) => config.with_table_configuration(table_config)?,
+        Some(table_config) => {
+            config.with_table_configuration(table_config, effective_schema.as_ref())?
+        }
         None => config,
     };
 
@@ -764,6 +772,7 @@ async fn write_cdc_plan(
         partition_columns,
         object_store,
         table_config,
+        effective_schema,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -797,7 +806,9 @@ async fn write_cdc_plan(
         writer_stats_config.stats_columns.clone(),
     );
     let normal_config = match table_config.as_ref() {
-        Some(table_config) => normal_config.with_table_configuration(table_config)?,
+        Some(table_config) => {
+            normal_config.with_table_configuration(table_config, effective_schema.as_ref())?
+        }
         None => normal_config,
     };
 

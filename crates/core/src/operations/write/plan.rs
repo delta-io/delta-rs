@@ -17,6 +17,8 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -34,8 +36,9 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, Add, DeletionVectorDescriptor, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
-    Remove, StructType, StructTypeExt, new_metadata,
+    Action, Add, ArrayType, DataType as DeltaDataType, DeletionVectorDescriptor, EagerSnapshot,
+    MapType, MetadataExt as _, ProtocolExt as _, Remove, StructField, StructType, StructTypeExt,
+    new_metadata,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -47,6 +50,7 @@ use crate::protocol::SaveMode;
 pub(super) struct SchemaDelta {
     metadata: Option<Action>,
     protocol: Option<Action>,
+    pub(super) effective_schema: Option<StructType>,
 }
 
 impl SchemaDelta {
@@ -734,7 +738,7 @@ fn schema_delta_for_prepared_source(
         return Ok(SchemaDelta::default());
     }
 
-    let schema_struct: StructType = match (schema_mode, schema_drift, new_schema) {
+    let mut schema_struct: StructType = match (schema_mode, schema_drift, new_schema) {
         (Some(SchemaMode::Merge), true, Some(schema)) => schema.try_into_kernel()?,
         _ => insert_plan.schema().as_arrow().try_into_kernel()?,
     };
@@ -744,7 +748,22 @@ fn schema_delta_for_prepared_source(
     }
 
     let current_protocol = snapshot.protocol();
-    let configuration = snapshot.metadata().configuration().clone();
+    let mut configuration = snapshot.metadata().configuration().clone();
+    if snapshot.table_configuration().column_mapping_mode() == ColumnMappingMode::Name {
+        let mut max_column_id = configuration
+            .get("delta.columnMapping.maxColumnId")
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or_else(|| max_column_mapping_id(snapshot.schema().as_ref()));
+        schema_struct = assign_column_mapping_to_new_fields(
+            snapshot.schema().as_ref(),
+            &schema_struct,
+            &mut max_column_id,
+        )?;
+        configuration.insert(
+            "delta.columnMapping.maxColumnId".to_string(),
+            max_column_id.to_string(),
+        );
+    }
     let new_protocol = current_protocol
         .clone()
         .apply_column_metadata_to_protocol(&schema_struct)?
@@ -759,7 +778,174 @@ fn schema_delta_for_prepared_source(
     Ok(SchemaDelta {
         metadata: Some(metadata.into()),
         protocol: (current_protocol != &new_protocol).then_some(new_protocol.into()),
+        effective_schema: Some(schema_struct),
     })
+}
+
+fn max_column_mapping_id(schema: &StructType) -> i64 {
+    schema
+        .fields()
+        .map(max_column_mapping_id_for_field)
+        .max()
+        .unwrap_or_default()
+}
+
+fn max_column_mapping_id_for_field(field: &StructField) -> i64 {
+    let field_id = match field
+        .metadata()
+        .get(ColumnMetadataKey::ColumnMappingId.as_ref())
+    {
+        Some(MetadataValue::Number(id)) => *id,
+        _ => 0,
+    };
+
+    field_id.max(max_column_mapping_id_for_data_type(field.data_type()))
+}
+
+fn max_column_mapping_id_for_data_type(data_type: &DeltaDataType) -> i64 {
+    match data_type {
+        DeltaDataType::Struct(inner) => max_column_mapping_id(inner),
+        DeltaDataType::Array(inner) => max_column_mapping_id_for_data_type(inner.element_type()),
+        DeltaDataType::Map(inner) => max_column_mapping_id_for_data_type(inner.key_type())
+            .max(max_column_mapping_id_for_data_type(inner.value_type())),
+        _ => 0,
+    }
+}
+
+fn assign_column_mapping_to_new_fields(
+    previous: &StructType,
+    next: &StructType,
+    max_column_id: &mut i64,
+) -> DeltaResult<StructType> {
+    let fields = next
+        .fields()
+        .map(|field| match previous.field(field.name()) {
+            Some(previous_field) => {
+                assign_column_mapping_to_existing_field(previous_field, field, max_column_id)
+            }
+            None => assign_column_mapping_to_field(field, max_column_id),
+        })
+        .collect::<DeltaResult<Vec<_>>>()?;
+
+    Ok(StructType::try_new(fields)?)
+}
+
+fn assign_column_mapping_to_existing_field(
+    previous: &StructField,
+    next: &StructField,
+    max_column_id: &mut i64,
+) -> DeltaResult<StructField> {
+    let mut field = next.clone();
+    field.metadata = previous.metadata().clone();
+    field.data_type = assign_column_mapping_to_existing_data_type(
+        previous.data_type(),
+        next.data_type(),
+        max_column_id,
+    )?;
+    Ok(field)
+}
+
+fn assign_column_mapping_to_existing_data_type(
+    previous: &DeltaDataType,
+    next: &DeltaDataType,
+    max_column_id: &mut i64,
+) -> DeltaResult<DeltaDataType> {
+    match (previous, next) {
+        (DeltaDataType::Struct(previous_inner), DeltaDataType::Struct(next_inner)) => {
+            Ok(DeltaDataType::Struct(Box::new(
+                assign_column_mapping_to_new_fields(previous_inner, next_inner, max_column_id)?,
+            )))
+        }
+        (DeltaDataType::Array(previous_inner), DeltaDataType::Array(next_inner)) => {
+            Ok(DeltaDataType::Array(Box::new(ArrayType::new(
+                assign_column_mapping_to_existing_data_type(
+                    previous_inner.element_type(),
+                    next_inner.element_type(),
+                    max_column_id,
+                )?,
+                next_inner.contains_null(),
+            ))))
+        }
+        (DeltaDataType::Map(previous_inner), DeltaDataType::Map(next_inner)) => {
+            Ok(DeltaDataType::Map(Box::new(MapType::new(
+                assign_column_mapping_to_existing_data_type(
+                    previous_inner.key_type(),
+                    next_inner.key_type(),
+                    max_column_id,
+                )?,
+                assign_column_mapping_to_existing_data_type(
+                    previous_inner.value_type(),
+                    next_inner.value_type(),
+                    max_column_id,
+                )?,
+                next_inner.value_contains_null(),
+            ))))
+        }
+        _ => Ok(next.clone()),
+    }
+}
+
+fn assign_column_mapping_to_field(
+    field: &StructField,
+    max_column_id: &mut i64,
+) -> DeltaResult<StructField> {
+    let mut field = field.clone();
+    if !field
+        .metadata()
+        .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+    {
+        *max_column_id += 1;
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+            MetadataValue::Number(*max_column_id),
+        );
+    }
+    if !field
+        .metadata()
+        .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+    {
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String(format!("col-{}", Uuid::new_v4())),
+        );
+    }
+    field.data_type = assign_column_mapping_to_data_type(field.data_type(), max_column_id)?;
+    Ok(field)
+}
+
+fn assign_column_mapping_to_data_type(
+    data_type: &DeltaDataType,
+    max_column_id: &mut i64,
+) -> DeltaResult<DeltaDataType> {
+    match data_type {
+        DeltaDataType::Struct(inner) => Ok(DeltaDataType::Struct(Box::new(
+            assign_column_mapping_to_struct(inner, max_column_id)?,
+        ))),
+        DeltaDataType::Array(inner) => Ok(DeltaDataType::Array(Box::new(ArrayType::new(
+            assign_column_mapping_to_data_type(inner.element_type(), max_column_id)?,
+            inner.contains_null(),
+        )))),
+        DeltaDataType::Map(inner) => Ok(DeltaDataType::Map(Box::new(MapType::new(
+            assign_column_mapping_to_data_type(inner.key_type(), max_column_id)?,
+            assign_column_mapping_to_data_type(inner.value_type(), max_column_id)?,
+            inner.value_contains_null(),
+        )))),
+        _ => Ok(data_type.clone()),
+    }
+}
+
+fn assign_column_mapping_to_struct(
+    schema: &StructType,
+    max_column_id: &mut i64,
+) -> DeltaResult<StructType> {
+    let fields = schema
+        .fields()
+        .map(|field| assign_column_mapping_to_field(field, max_column_id))
+        .collect::<DeltaResult<Vec<_>>>()?;
+
+    Ok(StructType::try_new(fields)?)
 }
 
 #[cfg(test)]

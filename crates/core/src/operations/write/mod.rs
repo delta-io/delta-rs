@@ -406,6 +406,18 @@ impl WriteBuilder {
                 }
             }
             None => {
+                if matches!(
+                    self.configuration
+                        .get("delta.columnMapping.mode")
+                        .and_then(|value| value.as_deref()),
+                    Some("name" | "id")
+                ) {
+                    return Err(DeltaTableError::Generic(
+                        "Creating column-mapped tables through WriteBuilder is not supported yet"
+                            .to_string(),
+                    ));
+                }
+
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
@@ -514,6 +526,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     exec_options,
                     ..
                 } = prepared_write;
+                let effective_schema = schema_delta.effective_schema.clone();
                 actions.extend(schema_delta.into_actions());
 
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
@@ -533,6 +546,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
+                    effective_schema,
                     &session,
                     source_plan.clone(),
                     partition_columns.clone(),
@@ -633,7 +647,7 @@ mod tests {
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
-    use delta_kernel::schema::MetadataValue;
+    use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
     use futures::TryStreamExt;
     use itertools::Itertools;
     use serde_json::{Value, json};
@@ -745,6 +759,24 @@ mod tests {
                 _ => None,
             })
             .collect())
+    }
+
+    fn column_mapping_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_column_mapping")
+    }
+
+    fn column_mapping_physical_name(field: &crate::kernel::StructField) -> TestResult<String> {
+        match field
+            .metadata()
+            .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+        {
+            Some(MetadataValue::String(name)) => Ok(name.clone()),
+            other => Err(std::io::Error::other(format!(
+                "expected column mapping physical name, got {other:?}"
+            ))
+            .into()),
+        }
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -2077,8 +2109,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_column_mapping_name_table_writes_physical_names() -> TestResult {
-        let fixture_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../test/tests/data/table_with_column_mapping");
+        let fixture_source = column_mapping_fixture_path();
         let (_temp_dir, table) =
             open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
 
@@ -2122,6 +2153,251 @@ mod tests {
         .await?;
         assert_eq!(rows, vec![1]);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_schema_merge_assigns_physical_names()
+    -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+                Field::new("Extra Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Delta RS")])) as _,
+                Arc::new(StringArray::from(vec![Some("extra")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await?;
+
+        let schema = table.snapshot()?.schema();
+        let extra = schema
+            .field("Extra Name")
+            .expect("expected merged field in table schema");
+        assert!(matches!(
+            extra
+                .metadata()
+                .get(ColumnMetadataKey::ColumnMappingId.as_ref()),
+            Some(MetadataValue::Number(_))
+        ));
+        let physical_extra = column_mapping_physical_name(extra)?;
+
+        let max_column_id = table
+            .snapshot()?
+            .metadata()
+            .configuration()
+            .get("delta.columnMapping.maxColumnId")
+            .expect("expected max column id")
+            .parse::<i64>()?;
+        assert!(max_column_id >= 3);
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let stats: Value = serde_json::from_str(add_actions[0].stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_extra.as_str()], json!("extra"));
+        assert!(stats["minValues"]["Extra Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'DRS' AND "Extra Name" = 'extra'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("BME")])) as _,
+                Arc::new(StringArray::from(vec![Some("Replacement")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(r#""Company Very Short" = 'BME'"#)
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BME".to_string()))
+        );
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Replacement"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'BME' AND "Super Name" = 'Replacement'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_data_skipping_stats_columns_are_physical() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let table = table
+            .set_tbl_properties()
+            .with_raise_if_not_exists(false)
+            .with_properties(HashMap::from([(
+                TableProperty::DataSkippingStatsColumns.as_ref().to_string(),
+                "Super Name".to_string(),
+            )]))
+            .await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Stats Only")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let stats: Value = serde_json::from_str(add_actions[0].stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Stats Only"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+        assert!(stats["minValues"]["col-173b4db9-b5ad-427f-9e75-516aae37fbbb"].is_null());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let (table, _metrics) = table
+            .update()
+            .with_predicate(r#""Company Very Short" = 'BME'"#)
+            .with_update("Super Name", lit("Updated Lamb"))
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BME".to_string()))
+        );
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Updated Lamb"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'BME' AND "Super Name" = 'Updated Lamb'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_mapping_name_table_rewrite_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let (table, _metrics) = table
+            .delete()
+            .with_predicate(r#""Super Name" = 'Anthony Johnson'"#)
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BMS".to_string()))
+        );
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert!(!stats["minValues"][physical_data].is_null());
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Super Name" = 'Anthony Johnson'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![0]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_create_column_mapping_table_is_rejected() -> TestResult {
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Utf8,
+                true,
+            )])),
+            vec![Arc::new(StringArray::from(vec![Some("a")])) as _],
+        )?;
+
+        let err = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_configuration(HashMap::from([(
+                TableProperty::ColumnMappingMode.as_ref().to_string(),
+                Some("name".to_string()),
+            )]))
+            .await
+            .expect_err("column-mapped table creation through WriteBuilder should fail");
+
+        assert!(err.to_string().contains("Creating column-mapped tables"));
         Ok(())
     }
 

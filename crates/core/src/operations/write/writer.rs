@@ -5,9 +5,12 @@ use std::num::NonZeroU64;
 use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    ArrowError, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::schema::{ColumnMetadataKey, DataType as KernelDataType, MetadataValue};
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -23,7 +26,8 @@ use tokio::task::JoinSet;
 use tracing::*;
 
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, PartitionsExt};
+use crate::kernel::schema::cast::cast_record_batch;
+use crate::kernel::{Add, PartitionsExt, StructField, StructType};
 use crate::logstore::ObjectStoreRef;
 use crate::parquet_utils::default_writer_properties;
 use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
@@ -187,19 +191,38 @@ impl WriterConfig {
     pub fn with_table_configuration(
         mut self,
         table_config: &TableConfiguration,
+        effective_schema: Option<&StructType>,
     ) -> DeltaResult<Self> {
-        if table_config.column_mapping_mode() == ColumnMappingMode::None {
-            return Ok(self);
+        match table_config.column_mapping_mode() {
+            ColumnMappingMode::None => return Ok(self),
+            ColumnMappingMode::Id => {
+                return Err(DeltaTableError::Generic(
+                    "Writing to columnMapping.mode = id tables is not supported yet".to_string(),
+                ));
+            }
+            ColumnMappingMode::Name => {}
         }
 
-        let logical_schema = table_config.logical_schema();
-        let physical_schema = table_config.physical_schema();
+        let table_logical_schema = table_config.logical_schema();
+        let logical_schema = effective_schema.unwrap_or_else(|| table_logical_schema.as_ref());
+
+        if logical_schema
+            .fields()
+            .any(|field| contains_nested_type(field.data_type()))
+        {
+            return Err(DeltaTableError::Generic(
+                "Writing nested columns to columnMapping.mode = name tables is not supported yet"
+                    .to_string(),
+            ));
+        }
+
         let partition_columns = table_config.metadata().partition_columns();
+        let logical_arrow_schema: ArrowSchema = logical_schema.try_into_arrow()?;
+        self.table_schema = Arc::new(logical_arrow_schema);
 
         let physical_columns = logical_schema
             .fields()
-            .zip(physical_schema.fields())
-            .map(|(logical, physical)| (logical.name().clone(), physical.name().clone()))
+            .map(|field| (field.name().clone(), physical_name_for_field(field)))
             .collect::<HashMap<_, _>>();
 
         self.physical_partition_columns = physical_columns
@@ -210,8 +233,7 @@ impl WriterConfig {
                     .then(|| (logical.clone(), physical.clone()))
             })
             .collect();
-        let physical_arrow_schema: arrow_schema::Schema =
-            physical_schema.as_ref().try_into_arrow()?;
+        let physical_arrow_schema = physical_arrow_schema(logical_schema)?;
         let physical_partition_columns = self
             .physical_partition_columns
             .values()
@@ -278,12 +300,23 @@ impl WriterConfig {
             return Ok(record_batch);
         }
 
-        if record_batch.num_columns() != file_schema.fields().len() {
+        let logical_file_schema = self.logical_file_schema();
+        if record_batch.num_columns() != logical_file_schema.fields().len() {
             return Err(WriteError::SchemaMismatch {
                 schema: record_batch.schema(),
                 expected_schema: file_schema,
             }
             .into());
+        }
+
+        let record_batch = if record_batch.schema() == logical_file_schema {
+            record_batch
+        } else {
+            cast_record_batch(&record_batch, logical_file_schema, false, false)?
+        };
+
+        if record_batch.schema() == file_schema {
+            return Ok(record_batch);
         }
 
         Ok(RecordBatch::try_new(
@@ -295,6 +328,45 @@ impl WriterConfig {
 
 fn random_prefix() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..2].to_string()
+}
+
+fn contains_nested_type(data_type: &KernelDataType) -> bool {
+    match data_type {
+        KernelDataType::Struct(_) => true,
+        KernelDataType::Array(inner) => contains_nested_type(inner.element_type()),
+        KernelDataType::Map(inner) => {
+            contains_nested_type(inner.key_type()) || contains_nested_type(inner.value_type())
+        }
+        _ => false,
+    }
+}
+
+fn physical_arrow_schema(logical_schema: &StructType) -> DeltaResult<ArrowSchema> {
+    let logical_arrow_schema: ArrowSchema = logical_schema.try_into_arrow()?;
+    let fields = logical_schema
+        .fields()
+        .zip(logical_arrow_schema.fields().iter())
+        .map(|(delta_field, arrow_field)| {
+            ArrowField::new(
+                physical_name_for_field(delta_field),
+                arrow_field.data_type().clone(),
+                arrow_field.is_nullable(),
+            )
+            .with_metadata(arrow_field.metadata().clone())
+        })
+        .collect::<Vec<_>>();
+
+    Ok(ArrowSchema::new(fields))
+}
+
+fn physical_name_for_field(field: &StructField) -> String {
+    match field
+        .metadata()
+        .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+    {
+        Some(MetadataValue::String(name)) => name.clone(),
+        _ => field.name().clone(),
+    }
 }
 
 /// A parquet writer implementation tailored to the needs of writing data to a delta table.
@@ -385,7 +457,13 @@ impl DeltaWriter {
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
     pub async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
-        for result in self.divide_by_partition_values(batch)? {
+        let batch = if batch.schema() == self.config.table_schema {
+            batch.clone()
+        } else {
+            cast_record_batch(batch, self.config.table_schema.clone(), false, false)?
+        };
+
+        for result in self.divide_by_partition_values(&batch)? {
             self.write_partition(result.record_batch, &result.partition_values)
                 .await?;
         }

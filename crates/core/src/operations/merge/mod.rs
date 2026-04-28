@@ -1548,6 +1548,7 @@ async fn execute(
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
+        None,
         &state,
         write,
         table_partition_cols.to_vec(),
