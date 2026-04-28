@@ -784,16 +784,10 @@ mod tests {
                     Arc::new(array::Int64Array::from(vec![None, None])),
                 ),
                 (
-                    "null_count.k",
-                    Arc::new(array::Int64Array::from(vec![None, None])),
-                ),
-                (
                     "null_count.v",
                     Arc::new(array::Int64Array::from(vec![None, None])),
                 ),
-                ("min.k", Arc::new(array::StringArray::new_null(2))),
                 ("min.v", Arc::new(array::Int64Array::from(vec![None, None]))),
-                ("max.k", Arc::new(array::StringArray::new_null(2))),
                 ("max.v", Arc::new(array::Int64Array::from(vec![None, None]))),
                 (
                     "partition.k",
