@@ -250,7 +250,13 @@ impl WriterConfig {
                 }
             }
         }
-        self.use_random_prefixes = true;
+        // Tables that enabled column mapping after they were already partitioned can keep
+        // partition physical names equal to their logical names. Preserve that layout so new
+        // writes land next to existing Hive-style partition directories.
+        self.use_random_prefixes = self
+            .physical_partition_columns
+            .iter()
+            .any(|(logical, physical)| logical != physical);
 
         Ok(self)
     }

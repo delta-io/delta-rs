@@ -630,6 +630,7 @@ mod tests {
     use crate::TableProperty;
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
+    use crate::kernel::{DataType as DeltaDataType, PrimitiveType, Protocol, StructField};
     use crate::logstore::get_actions;
     use crate::operations::collect_sendable_stream;
     use crate::protocol::SaveMode;
@@ -777,6 +778,27 @@ mod tests {
             ))
             .into()),
         }
+    }
+
+    fn column_mapping_field(
+        name: &str,
+        primitive_type: PrimitiveType,
+        id: i64,
+        physical_name: &str,
+        nullable: bool,
+    ) -> StructField {
+        let mut field = StructField::new(name, DeltaDataType::Primitive(primitive_type), nullable);
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+            MetadataValue::Number(id),
+        );
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String(physical_name.to_string()),
+        );
+        field
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -2149,6 +2171,88 @@ mod tests {
         let rows = query_single_i64_row(
             &table,
             r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'DRS' AND "Super Name" = 'Delta RS'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_preserves_hive_partition_path_when_partition_physical_names_are_logical()
+    -> TestResult {
+        let protocol: Protocol = serde_json::from_value(json!({
+            "minReaderVersion": 2,
+            "minWriterVersion": 5
+        }))?;
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                column_mapping_field("id", PrimitiveType::Long, 1, "id", false),
+                column_mapping_field(
+                    "partition_column",
+                    PrimitiveType::String,
+                    2,
+                    "partition_column",
+                    false,
+                ),
+                column_mapping_field(
+                    "data_column",
+                    PrimitiveType::String,
+                    3,
+                    "col-data_column",
+                    true,
+                ),
+            ])
+            .with_partition_columns(["partition_column"])
+            .with_actions([Action::Protocol(protocol)])
+            .with_raise_if_key_not_exists(false)
+            .with_configuration([
+                (
+                    TableProperty::ColumnMappingMode.as_ref().to_string(),
+                    Some("name".to_string()),
+                ),
+                (
+                    "delta.columnMapping.maxColumnId".to_string(),
+                    Some("3".to_string()),
+                ),
+            ])
+            .await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("partition_column", DataType::Utf8, false),
+                Field::new("data_column", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![1])) as _,
+                Arc::new(StringArray::from(vec![Some("partition-value")])) as _,
+                Arc::new(StringArray::from(vec![Some("data-value")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get("partition_column"),
+            Some(&Some("partition-value".to_string()))
+        );
+        assert!(add.path.starts_with("partition_column=partition-value/"));
+
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"]["col-data_column"], json!("data-value"));
+        assert!(stats["minValues"]["data_column"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE partition_column = 'partition-value' AND data_column = 'data-value'",
         )
         .await?;
         assert_eq!(rows, vec![1]);
