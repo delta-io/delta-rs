@@ -1,5 +1,32 @@
 # Changelog
 
+## [rust-v0.32.1](https://github.com/delta-io/delta-rs/tree/rust-v0.32.1) (2026-04-28)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.32.0...rust-v0.32.1)
+
+**Closed issues:**
+
+- \[Bug\]: Regression in 1.5.1: schema\_mode='overwrite' with predicate fails for mixed-case column names \(utcDate\) [\#4404](https://github.com/delta-io/delta-rs/issues/4404)
+- \[Bug\]: update\_incremental\(\) and transaction\_version\(\) hold the GIL for the entire S3 round-trip [\#4402](https://github.com/delta-io/delta-rs/issues/4402)
+- \[Feature\]: Build Musl arm64 wheels [\#4392](https://github.com/delta-io/delta-rs/issues/4392)
+- \[Bug\]: deltalake\_catalog\_unity failes to list catalogs [\#4360](https://github.com/delta-io/delta-rs/issues/4360)
+- \[Bug\]: UnityCatalogFactory::parse\_url\_opts only allows unity-specific options [\#4225](https://github.com/delta-io/delta-rs/issues/4225)
+
+**Merged pull requests:**
+
+- chore: cap the upper range of the buoyant\_kernel for this release [\#4412](https://github.com/delta-io/delta-rs/pull/4412) ([rtyler](https://github.com/rtyler))
+- fix\(catalog-unity\): skip non-Unity keys in try\_with\_options [\#4410](https://github.com/delta-io/delta-rs/pull/4410) ([1fanwang](https://github.com/1fanwang))
+- fix: listing catalogs from Unity [\#4409](https://github.com/delta-io/delta-rs/pull/4409) ([hjohnss6](https://github.com/hjohnss6))
+- fix: preserve mixed case columns in replaceWhere writes [\#4407](https://github.com/delta-io/delta-rs/pull/4407) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: release GIL for DeltaTable update calls [\#4406](https://github.com/delta-io/delta-rs/pull/4406) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: add tests for cleanup\_expired\_logs\_for [\#4405](https://github.com/delta-io/delta-rs/pull/4405) ([mbkroese](https://github.com/mbkroese))
+- refactor: introduce selective stats projection primitives [\#4403](https://github.com/delta-io/delta-rs/pull/4403) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: regenerate updated changelog [\#4400](https://github.com/delta-io/delta-rs/pull/4400) ([rtyler](https://github.com/rtyler))
+- feat: add aarch64 musl wheel builds [\#4399](https://github.com/delta-io/delta-rs/pull/4399) ([Slyrc](https://github.com/Slyrc))
+- chore: next iteration of development [\#4396](https://github.com/delta-io/delta-rs/pull/4396) ([rtyler](https://github.com/rtyler))
+- fix: allow boolean to exist in our stats schema [\#4395](https://github.com/delta-io/delta-rs/pull/4395) ([rtyler](https://github.com/rtyler))
+- chore: bump python for next release [\#4393](https://github.com/delta-io/delta-rs/pull/4393) ([rtyler](https://github.com/rtyler))
+
 ## [rust-v0.32.0](https://github.com/delta-io/delta-rs/tree/rust-v0.32.0) (2026-04-21)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.31.1...rust-v0.32.0)
