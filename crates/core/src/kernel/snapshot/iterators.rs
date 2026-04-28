@@ -16,14 +16,14 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
-#[cfg(feature = "datafusion")]
+#[cfg(any(test, feature = "datafusion"))]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
+pub use self::tombstones::TombstoneView;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
 pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
-pub use self::tombstones::TombstoneView;
 
 mod scan_row;
 mod tombstones;
@@ -33,6 +33,7 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
 const FIELD_NAME_RAW_PARTITION_VALUES: &str = "partitionValues";
+const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
@@ -118,6 +119,7 @@ impl LogicalFileView {
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
+    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
         get_string_value(
             self.files
@@ -168,11 +170,17 @@ impl LogicalFileView {
 
     /// Returns the raw JSON statistics string for this file, if available.
     pub fn stats(&self) -> Option<String> {
-        let stats = self.stats_parsed()?.slice(self.index, 1);
-        let value = to_json(&stats)
-            .ok()
-            .map(|arr| arr.as_string::<i32>().value(0).to_string());
-        value.and_then(|v| (!v.is_empty()).then_some(v))
+        self.files
+            .column_by_name(FIELD_NAME_STATS)
+            .and_then(|col| get_string_value(col, self.index))
+            .map(ToString::to_string)
+            .or_else(|| {
+                let stats = self.stats_parsed()?.slice(self.index, 1);
+                let value = to_json(&stats)
+                    .ok()
+                    .map(|arr| arr.as_string::<i32>().value(0).to_string());
+                value.and_then(|v| (!v.is_empty()).then_some(v))
+            })
     }
 
     /// Returns the parsed partition values as structured data.
@@ -493,8 +501,120 @@ impl TryFrom<&LogicalFileView> for ObjectMeta {
 mod tests {
     use super::*;
     use crate::test_utils::TestTables;
+    use arrow::array::{ArrayRef, Int64Array, new_null_array};
     use chrono::DateTime;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+    use delta_kernel::scan::scan_row_schema;
     use futures::TryStreamExt;
+    use std::sync::Arc;
+
+    fn logical_file_view_with_stats(
+        raw_stats_json: Option<&str>,
+        stats_parsed: StructArray,
+    ) -> LogicalFileView {
+        let base_schema: arrow_schema::Schema =
+            scan_row_schema().as_ref().try_into_arrow().unwrap();
+        let mut columns: Vec<ArrayRef> = base_schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 1))
+            .collect();
+        columns[base_schema.index_of("path").unwrap()] =
+            Arc::new(StringArray::from(vec![Some("part-000.parquet")]));
+        columns[base_schema.index_of("size").unwrap()] = Arc::new(Int64Array::from(vec![1]));
+        columns[base_schema.index_of("modificationTime").unwrap()] =
+            Arc::new(Int64Array::from(vec![1]));
+        columns[base_schema.index_of("stats").unwrap()] =
+            Arc::new(StringArray::from(vec![raw_stats_json]));
+
+        let mut fields = base_schema.fields().to_vec();
+        fields.push(Arc::new(arrow_schema::Field::new(
+            "stats_parsed",
+            stats_parsed.data_type().to_owned(),
+            true,
+        )));
+        columns.push(Arc::new(stats_parsed));
+
+        let batch =
+            RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), columns).unwrap();
+        LogicalFileView::new(batch, 0)
+    }
+
+    fn logical_file_view_with_partial_stats(full_stats_json: &str) -> LogicalFileView {
+        let partial_stats = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "numRecords",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+        )]);
+
+        logical_file_view_with_stats(Some(full_stats_json), partial_stats)
+    }
+
+    fn logical_file_view_without_raw_stats() -> LogicalFileView {
+        let min_values = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+        )]);
+        let max_values = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(9)])) as ArrayRef,
+        )]);
+        let null_count = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef,
+        )]);
+        let full_stats = StructArray::from(vec![
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "numRecords",
+                    ArrowDataType::Int64,
+                    true,
+                )),
+                Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "minValues",
+                    min_values.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(min_values) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "maxValues",
+                    max_values.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(max_values) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "nullCount",
+                    null_count.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(null_count) as ArrayRef,
+            ),
+        ]);
+
+        logical_file_view_with_stats(None, full_stats)
+    }
 
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
@@ -646,5 +766,43 @@ mod tests {
         let valid_timestamp = 1609459200000; // 2021-01-01
         let result = DateTime::from_timestamp_millis(valid_timestamp);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn logical_file_view_stats_prefers_raw_stats_json() {
+        let full_stats_json = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let view = logical_file_view_with_partial_stats(full_stats_json);
+
+        assert_eq!(view.stats().as_deref(), Some(full_stats_json));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn logical_file_view_add_action_preserves_full_stats_when_stats_parsed_is_partial() {
+        let full_stats_json = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let view = logical_file_view_with_partial_stats(full_stats_json);
+
+        assert_eq!(view.add_action().stats.as_deref(), Some(full_stats_json));
+        assert_eq!(view.num_records(), Some(11));
+        assert!(view.min_values().is_none());
+    }
+
+    #[test]
+    fn logical_file_view_stats_falls_back_to_parsed_stats_when_raw_is_missing() {
+        let view = logical_file_view_without_raw_stats();
+        let stats = view
+            .stats()
+            .expect("stats fallback should rebuild JSON from stats_parsed");
+        let actual: serde_json::Value = serde_json::from_str(&stats).unwrap();
+
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "numRecords": 11,
+                "minValues": {"value": 1},
+                "maxValues": {"value": 9},
+                "nullCount": {"value": 0}
+            })
+        );
     }
 }

@@ -24,7 +24,7 @@ use delta_kernel::transforms::SchemaTransform;
 use delta_kernel::{DeltaResult, ExpressionEvaluator};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
-use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
+use crate::kernel::{SCAN_ROW_ARROW_SCHEMA, StatsProjection};
 
 /// Internal extension traits to the Kernel Snapshot.
 ///
@@ -39,33 +39,9 @@ pub(crate) trait SnapshotExt {
 
     /// The scheme expected for the data returned from a scan.
     ///
-    /// This is an extended version of the raw schema that includes additional
-    /// computations by delta-rs. Specifically the `stats_parsed` and
-    /// `partitionValues_parsed` fields are added.
-    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
-        let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
-        let stats_idx = SCAN_ROW_ARROW_SCHEMA.index_of("stats").unwrap();
-
-        let stats_schema = self.stats_schema()?;
-        let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
-        fields[stats_idx] = Arc::new(Field::new(
-            "stats_parsed",
-            ArrowDataType::Struct(stats_schema.fields().to_owned()),
-            true,
-        ));
-
-        if let Some(partition_schema) = self.partitions_schema()? {
-            let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
-            fields.push(Arc::new(Field::new(
-                "partitionValues_parsed",
-                ArrowDataType::Struct(partition_schema.fields().to_owned()),
-                false,
-            )));
-        }
-
-        let schema = Arc::new(ArrowSchema::new(fields));
-        Ok(schema)
-    }
+    /// This extends the raw schema. It keeps the raw `stats` JSON column and adds
+    /// `stats_parsed` and `partitionValues_parsed`.
+    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef>;
 }
 
 impl SnapshotExt for TableConfiguration {
@@ -84,6 +60,10 @@ impl SnapshotExt for TableConfiguration {
         )?
         .map(Arc::new))
     }
+
+    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
+        build_scan_row_parsed_schema_arrow(self.stats_schema()?, self.partitions_schema()?)
+    }
 }
 
 impl SnapshotExt for Snapshot {
@@ -94,6 +74,35 @@ impl SnapshotExt for Snapshot {
     fn partitions_schema(&self) -> DeltaResultLocal<Option<SchemaRef>> {
         self.table_configuration().partitions_schema()
     }
+
+    fn scan_row_parsed_schema_arrow(&self) -> DeltaResultLocal<ArrowSchemaRef> {
+        StatsProjection::Full.parsed_scan_row_schema_arrow(self)
+    }
+}
+
+fn build_scan_row_parsed_schema_arrow(
+    stats_schema: SchemaRef,
+    partition_schema: Option<SchemaRef>,
+) -> DeltaResultLocal<ArrowSchemaRef> {
+    let mut fields = SCAN_ROW_ARROW_SCHEMA.fields().to_vec();
+
+    let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
+    fields.push(Arc::new(Field::new(
+        "stats_parsed",
+        ArrowDataType::Struct(stats_schema.fields().to_owned()),
+        true,
+    )));
+
+    if let Some(partition_schema) = partition_schema {
+        let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
+        fields.push(Arc::new(Field::new(
+            "partitionValues_parsed",
+            ArrowDataType::Struct(partition_schema.fields().to_owned()),
+            false,
+        )));
+    }
+
+    Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
 fn partitions_schema(
