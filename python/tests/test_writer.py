@@ -14,12 +14,12 @@ from arro3.core import Schema as ArrowSchema
 
 from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
 from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS,
     CommitFailedError,
     Field,
     PrimitiveType,
     Schema,
     StructType,
-    _NANOSECOND_TIMESTAMPS,
 )
 from deltalake.exceptions import (
     DeltaError,
@@ -2182,7 +2182,6 @@ def test_predicate_out_of_bounds(tmp_path: pathlib.Path):
 @pytest.mark.pandas
 def test_write_timestampntz(tmp_path: pathlib.Path):
     import pandas as pd
-    from pandas.testing import assert_frame_equal
 
     data = [
         ("AAPL", "20240731", 100, 11.1),
