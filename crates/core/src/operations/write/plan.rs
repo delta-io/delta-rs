@@ -643,12 +643,20 @@ fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaRe
         .iter()
         .map(|target_field| {
             let name = target_field.name();
-            let expr = match source_schema.field_with_unqualified_name(name) {
-                Ok(source_field) if source_field.data_type() != target_field.data_type() => {
-                    cast(col(name), target_field.data_type().clone()).alias(name)
+            let expr = match source_schema.qualified_field_with_unqualified_name(name) {
+                Ok((qualifier, source_field)) => {
+                    // Use a direct column reference here. DataFusion col(name) treats the value
+                    // as SQL text and folds unquoted names to lowercase.
+                    let source_col =
+                        Expr::Column(Column::new(qualifier.cloned(), source_field.name().clone()));
+                    if source_field.data_type() != target_field.data_type() {
+                        cast(source_col, target_field.data_type().clone()).alias(name)
+                    } else {
+                        source_col.alias(name)
+                    }
                 }
-                Ok(_) => col(name).alias(name),
                 Err(_) => {
+                    // Keep alignment behavior for missing or ambiguous fields.
                     cast(lit(ScalarValue::Null), target_field.data_type().clone()).alias(name)
                 }
             };

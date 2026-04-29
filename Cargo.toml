@@ -16,8 +16,8 @@ documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
-#delta_kernel = { package = "buoyant_kernel", version = "0.21.103", features = [
-delta_kernel = { git = "https://github.com/itamarst/delta-kernel-rs.git", branch = "nanosecond-timestamps-squashed", features = [
+#delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
+delta_kernel = { package = "buoyant_kernel", version = "0.21.200, <0.21.300", features = [
     "arrow-58",
     "internal-api",
 ] }

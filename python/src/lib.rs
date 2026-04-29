@@ -1298,18 +1298,25 @@ impl RawDeltaTable {
             .collect())
     }
 
-    pub fn update_incremental(&self) -> PyResult<()> {
-        #[allow(clippy::await_holding_lock)]
-        #[allow(deprecated)]
-        Ok(rt()
-            .block_on(async {
+    /// Incrementally update the table snapshot to the latest committed version.
+    ///
+    /// Releases the Python GIL while the async table update runs.
+    pub fn update_incremental(&self, py: Python) -> PyResult<()> {
+        py.detach(|| {
+            // `DeltaTable::update_incremental` mutates the cached table in place, and the
+            // guard must live until the async update finishes.
+            #[allow(clippy::await_holding_lock)]
+            #[allow(deprecated)]
+            rt().block_on(async {
                 let mut table = self
                     ._table
                     .lock()
                     .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
                 (*table).update_incremental(None).await
             })
-            .map_err(PythonError::from)?)
+            .map_err(PythonError::from)
+            .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (schema, partition_filters=None))]
@@ -1980,13 +1987,18 @@ impl RawDeltaTable {
     /// Get the latest transaction version for the given application ID.
     ///
     /// Returns `None` if the application ID is not found.
-    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
-        // NOTE: this will simplify once we have moved logstore onto state.
-        let log_store = self.log_store()?;
-        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
-        Ok(rt()
-            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
-            .map_err(PythonError::from)?)
+    ///
+    /// Releases the Python GIL while the async transaction lookup runs.
+    pub fn transaction_version(&self, py: Python, app_id: String) -> PyResult<Option<i64>> {
+        py.detach(|| {
+            // NOTE: this will simplify once we have moved logstore onto state.
+            let log_store = self.log_store()?;
+            let snapshot =
+                self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+            rt().block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]

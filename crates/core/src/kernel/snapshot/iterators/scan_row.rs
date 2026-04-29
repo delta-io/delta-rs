@@ -11,7 +11,6 @@ use delta_kernel::engine::arrow_conversion::TryIntoKernel;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
 use delta_kernel::engine::parse_json;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::expressions::UnaryExpressionOp;
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::PrimitiveType;
 use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef};
@@ -91,16 +90,11 @@ pub(crate) fn scan_row_in_eval(
     snapshot: &KernelSnapshot,
 ) -> DeltaResult<Arc<dyn ExpressionEvaluator>> {
     static EXPRESSION: LazyLock<Arc<Expression>> = LazyLock::new(|| {
-        Expression::struct_from(scan_row_schema().fields().map(|field| {
-            if field.name == "stats" {
-                Expression::unary(
-                    UnaryExpressionOp::ToJson,
-                    Expression::column(["stats_parsed"]),
-                )
-            } else {
-                Expression::column([field.name.clone()])
-            }
-        }))
+        Expression::struct_from(
+            scan_row_schema()
+                .fields()
+                .map(|field| Expression::column([field.name.clone()])),
+        )
         .into()
     });
     static OUT_TYPE: LazyLock<DataType> =
@@ -116,6 +110,7 @@ pub(crate) fn scan_row_in_eval(
     )?)
 }
 
+#[cfg(any(test, feature = "datafusion"))]
 pub(crate) fn parse_stats_column_with_schema(
     sn: &KernelSnapshot,
     batch: &RecordBatch,
@@ -166,12 +161,12 @@ fn parse_stats_column_impl(
 
         Arc::new(parsed.into())
     };
-    fields[stats_idx] = Arc::new(Field::new(
+    fields.push(Arc::new(Field::new(
         "stats_parsed",
         stats_array.data_type().to_owned(),
         true,
-    ));
-    columns[stats_idx] = stats_array;
+    )));
+    columns.push(stats_array);
 
     if let Some(partition_schema) = partitions_schema {
         let partition_array = parse_partitions(
@@ -421,12 +416,42 @@ mod tests {
     use arrow::array::MapBuilder;
     use arrow::array::MapFieldNames;
     use arrow::array::StringBuilder;
+    use arrow::array::{ArrayRef, new_null_array};
     use arrow::datatypes::DataType as ArrowDataType;
     use arrow::datatypes::Field as ArrowField;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_schema::Field;
+    use delta_kernel::scan::scan_row_schema;
     use delta_kernel::schema::{MapType, MetadataValue, SchemaRef, StructField};
     use pretty_assertions::assert_eq;
+
+    use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
+    use crate::kernel::snapshot::Snapshot;
+    use crate::test_utils::TestTables;
+
+    fn scan_row_batch_with_stats(raw_stats: &str) -> RecordBatch {
+        let schema: ArrowSchema = scan_row_schema().as_ref().try_into_arrow().unwrap();
+        let mut columns: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 1))
+            .collect();
+        columns[schema.index_of("path").unwrap()] =
+            Arc::new(StringArray::from(vec![Some("part-000.parquet")]));
+        columns[schema.index_of("size").unwrap()] = Arc::new(Int64Array::from(vec![1]));
+        columns[schema.index_of("modificationTime").unwrap()] = Arc::new(Int64Array::from(vec![1]));
+        columns[schema.index_of("stats").unwrap()] =
+            Arc::new(StringArray::from(vec![Some(raw_stats)]));
+
+        RecordBatch::try_new(Arc::new(schema), columns).unwrap()
+    }
+
+    fn raw_stats_string(batch: RecordBatch, row: usize) -> Option<String> {
+        batch
+            .column_by_name("stats")
+            .and_then(|col| col.as_string_opt::<i32>())
+            .and_then(|col| col.is_valid(row).then(|| col.value(row).to_string()))
+    }
 
     #[test]
     fn test_physical_partition_name_mapping() -> DeltaResult<()> {
@@ -562,6 +587,101 @@ mod tests {
             partitions.column_by_name("Company Very Short"),
             "Should have found the renamed column"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_stats_column_impl_preserves_raw_stats_column() -> DeltaResult<()> {
+        let raw_stats = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let batch = scan_row_batch_with_stats(raw_stats);
+        let stats_schema = Arc::new(StructType::try_new([StructField::nullable(
+            "numRecords",
+            DataType::LONG,
+        )])?);
+
+        let projected =
+            parse_stats_column_impl(&batch, stats_schema, None, ColumnMappingMode::None, false)?;
+
+        assert!(projected.schema().column_with_name("stats").is_some());
+        assert!(
+            projected
+                .schema()
+                .column_with_name("stats_parsed")
+                .is_some()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_stats_column_impl_errors_on_malformed_stats_json() -> DeltaResult<()> {
+        let batch = scan_row_batch_with_stats(r#"{"numRecords":11"#);
+        let stats_schema = Arc::new(StructType::try_new([StructField::nullable(
+            "numRecords",
+            DataType::LONG,
+        )])?);
+
+        let err =
+            parse_stats_column_impl(&batch, stats_schema, None, ColumnMappingMode::None, false)
+                .expect_err("malformed stats JSON should fail parsing");
+
+        assert!(
+            err.to_string().contains("json") || err.to_string().contains("JSON"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parse_stats_column_with_schema_errors_on_malformed_stats_json_for_partial_projection()
+    -> DeltaResult<()> {
+        let batch = scan_row_batch_with_stats(
+            r#"{"numRecords":11,"minValues":{"value":1},"nullCount":{"value":0}"#,
+        );
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let stats_schema = Arc::new(StructType::try_new([
+            StructField::nullable("numRecords", DataType::LONG),
+            StructField::nullable(
+                "minValues",
+                StructType::try_new([StructField::nullable("value", DataType::INTEGER)])?,
+            ),
+            StructField::nullable(
+                "nullCount",
+                StructType::try_new([StructField::nullable("value", DataType::LONG)])?,
+            ),
+        ])?);
+
+        let err = parse_stats_column_with_schema(snapshot.inner.as_ref(), &batch, stats_schema)
+            .expect_err("malformed stats JSON should fail partial projection parsing");
+
+        assert!(
+            err.to_string().contains("json") || err.to_string().contains("JSON"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cached_batches_preserve_raw_stats_for_kernel_roundtrip() -> DeltaResult<()> {
+        let raw_stats = r#"{"maxValues":{"value":"z"},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":"a"}}"#;
+        let batch = scan_row_batch_with_stats(raw_stats);
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let projected = parse_stats_column_with_schema(
+            snapshot.inner.as_ref(),
+            &batch,
+            snapshot.inner.stats_schema()?,
+        )?;
+        // Keep this guard so cached batches still pass through the kernel evaluator
+        // without rebuilding raw `stats` from `ToJson`.
+        let evaluator = scan_row_in_eval(snapshot.inner.as_ref())?;
+        let reparsed = evaluator.evaluate_arrow(projected)?;
+
+        assert_eq!(raw_stats_string(reparsed, 0), Some(raw_stats.to_string()));
+
         Ok(())
     }
 }
