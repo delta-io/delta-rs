@@ -24,11 +24,11 @@ from arro3.core.types import (
 )
 
 from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS,
     DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
-    _NANOSECOND_TIMESTAMPS,
 )
 from deltalake._internal import create_deltalake as _create_deltalake
 from deltalake._util import deprecate_positional_commit_args, encode_partition_value
