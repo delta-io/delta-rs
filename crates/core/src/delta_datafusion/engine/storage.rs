@@ -54,12 +54,10 @@ impl DataFusionStorageHandler {
             RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-                None,
             )),
             RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioBackgroundExecutor::new()),
-                None,
             )),
             _ => panic!("unsupported runtime flavor"),
         };
