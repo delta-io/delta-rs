@@ -8,7 +8,6 @@ use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
@@ -103,13 +102,6 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             };
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
-
-            if name.contains(&TableFeatures::ColumnMapping) {
-                return Err(unsupported_column_mapping_write(
-                    "ADD FEATURE columnMapping",
-                    "enabling column mapping requires schema metadata migration and is not supported yet",
-                ));
-            }
 
             let (reader_features, writer_features): (
                 Vec<Option<TableFeature>>,
@@ -234,21 +226,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_column_mapping_feature_is_rejected() -> DeltaResult<()> {
+    async fn add_column_mapping_feature() -> DeltaResult<()> {
         let batch = get_record_batch(None, false);
         let table = create_bare_table().write(vec![batch]).await.unwrap();
-        let err = table
+        let result = table
             .add_feature()
             .with_feature(TableFeatures::ColumnMapping)
             .with_allow_protocol_versions_increase(true)
             .await
-            .expect_err("columnMapping feature should not be enabled directly");
+            .unwrap();
 
+        let current_protocol = result.snapshot().unwrap().protocol().clone();
         assert!(
-            err.to_string()
-                .contains("Unsupported column mapping write for ADD FEATURE columnMapping:"),
-            "unexpected error: {err}"
+            &current_protocol
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ColumnMapping)
         );
+        assert!(
+            &current_protocol
+                .reader_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ColumnMapping)
+        );
+
         Ok(())
     }
 }
