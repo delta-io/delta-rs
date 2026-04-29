@@ -7,7 +7,7 @@ authors = [
 ]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
-description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
+description = "Native Delta Lake Python binding based on delta-rs"
 readme = "README.md"
 edition = "2024"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
@@ -92,12 +92,12 @@ path = "../crates/deltalake"
 version = "0"
 features = [
     "azure",
-    "gcs",
-    "python",
     "datafusion",
-    "unity-experimental",
+    "gcs",
     "hdfs",
     "lakefs",
+    "python",
+    "unity-experimental",
 ]
 
 [features]

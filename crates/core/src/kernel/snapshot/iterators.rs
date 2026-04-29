@@ -740,7 +740,7 @@ mod tests {
         let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
         assert_eq!(rounded, Scalar::TimestampNtz(1609459201000));
 
-        #[cfg(feture = "nanosecond-timestamps")]
+        #[cfg(feature = "nanosecond-timestamps")]
         {
             let timestamp = Scalar::TimestampNanos(1609459200000000);
             let rounded = round_ms_datetimes(timestamp, &ceil_fn);
