@@ -14,6 +14,7 @@ from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
 from deltalake import DeltaTable, WriterProperties, write_deltalake
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -236,6 +237,12 @@ def sample_data_pyarrow() -> "pa.Table":
     nrows = 5
     import pyarrow as pa
 
+    extras = {}
+    if _NANOSECOND_TIMESTAMPS:
+        extras["timestamp_ns"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
+        )
+
     return pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
@@ -262,12 +269,23 @@ def sample_data_pyarrow() -> "pa.Table":
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
+        | extras
     )
 
 
 @pytest.fixture()
 def existing_table(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
     path = str(tmp_path)
+    write_deltalake(path, sample_data_pyarrow)
+    return DeltaTable(path)
+
+
+@pytest.fixture()
+def existing_table_without_nanos(
+    tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"
+):
+    path = str(tmp_path)
+    sample_data_pyarrow = sample_data_pyarrow.drop_columns(["timestamp_ns"])
     write_deltalake(path, sample_data_pyarrow)
     return DeltaTable(path)
 

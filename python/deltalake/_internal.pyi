@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         WriterProperties,
     )
 __version__: str
+_NANOSECOND_TIMESTAMPS: bool
 
 class TableFeatures(Enum):
     # Mapping of one column to another

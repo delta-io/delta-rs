@@ -688,6 +688,32 @@ impl fmt::Display for ScalarValueFormat<'_> {
                 )?,
                 None => write!(f, "NULL")?,
             },
+            #[cfg(feature = "nanosecond-timestamps")]
+            ScalarValue::TimestampNanosecond(e, tz) => match e {
+                Some(e) => match tz {
+                    Some(_tz) => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Nanosecond, Some(\"UTC\"))')",
+                        DateTime::from_timestamp(
+                            e.div_euclid(1_000_000_000),
+                            e.rem_euclid(1_000_000_000) as u32
+                        )
+                        .ok_or(Error)?
+                        .format("%Y-%m-%dT%H:%M:%S%.9f")
+                    )?,
+                    None => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Nanosecond, None)')",
+                        DateTime::from_timestamp(
+                            e.div_euclid(1_000_000_000),
+                            e.rem_euclid(1_000_000_000) as u32
+                        )
+                        .ok_or(Error)?
+                        .format("%Y-%m-%dT%H:%M:%S%.9f")
+                    )?,
+                },
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::TimestampMicrosecond(e, tz) => match e {
                 Some(e) => match tz {
                     Some(_tz) => write!(
@@ -819,6 +845,12 @@ mod test {
             StructField::new(
                 "_date".to_string(),
                 DataType::Primitive(PrimitiveType::Date),
+                true,
+            ),
+            #[cfg(feature = "nanosecond-timestamps")]
+            StructField::new(
+                "_timestamp_nanos".to_string(),
+                DataType::Primitive(PrimitiveType::TimestampNanos),
                 true,
             ),
             StructField::new(
@@ -1232,6 +1264,25 @@ mod test {
                             args: vec![
                                 lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000".into()))),
                                 lit(ScalarValue::Utf8(Some("Timestamp(Microsecond, Some(\"UTC\"))".into())))
+                            ]
+                        }
+                    )
+                )),
+            },
+            #[cfg(feature = "nanosecond-timestamps")]
+            ParseTest {
+                expr: col("_timestamp_nanos").gt(lit(ScalarValue::TimestampNanosecond(
+                    Some(1262304000000000123),
+                    Some("UTC".into())
+                ))),
+                expected: "_timestamp_nanos > arrow_cast('2010-01-01T00:00:00.000000123', 'Timestamp(Nanosecond, Some(\"UTC\"))')".to_string(),
+                override_expected_expr: Some(col("_timestamp_nanos").gt(
+                    datafusion::logical_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: arrow_cast(),
+                            args: vec![
+                                lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000123".into()))),
+                                lit(ScalarValue::Utf8(Some("Timestamp(Nanosecond, Some(\"UTC\"))".into())))
                             ]
                         }
                     )

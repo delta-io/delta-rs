@@ -4,6 +4,8 @@ use std::sync::LazyLock;
 use delta_kernel::table_features::TableFeature;
 
 use super::{TableReference, TransactionError};
+#[cfg(feature = "nanosecond-timestamps")]
+use crate::kernel::contains_timestamp_nanos;
 use crate::kernel::{
     Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
 };
@@ -95,14 +97,12 @@ impl ProtocolChecker {
         Ok(())
     }
 
-    /// Check can write_timestamp_ntz
-    pub fn check_can_write_timestamp_ntz(
+    fn check_can_write_feature(
         &self,
         snapshot: &EagerSnapshot,
-        schema: &Schema,
+        contains_feature: bool,
+        feature: TableFeature,
     ) -> Result<(), TransactionError> {
-        trace!("checking to see if {snapshot:?} can write timestampntz");
-        let contains_timestampntz = contains_timestampntz(schema.fields());
         let required_features: Option<&[TableFeature]> =
             match snapshot.protocol().min_writer_version() {
                 0..=6 => None,
@@ -110,19 +110,42 @@ impl ProtocolChecker {
             };
 
         if let Some(table_features) = required_features {
-            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
-                && contains_timestampntz
-            {
-                return Err(TransactionError::TableFeaturesRequired(
-                    TableFeature::TimestampWithoutTimezone,
-                ));
+            if !table_features.contains(&feature) && contains_feature {
+                return Err(TransactionError::TableFeaturesRequired(feature));
             }
-        } else if contains_timestampntz {
-            return Err(TransactionError::TableFeaturesRequired(
-                TableFeature::TimestampWithoutTimezone,
-            ));
+        } else if contains_feature {
+            return Err(TransactionError::TableFeaturesRequired(feature));
         }
         Ok(())
+    }
+
+    /// Check can write_timestamp_ntz
+    pub fn check_can_write_timestamp_ntz(
+        &self,
+        snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampntz");
+        self.check_can_write_feature(
+            snapshot,
+            contains_timestampntz(schema.fields()),
+            TableFeature::TimestampWithoutTimezone,
+        )
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// Check can write_timestamp_nanos
+    pub fn check_can_write_timestamp_nanos(
+        &self,
+        snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write timestampnanos");
+        self.check_can_write_feature(
+            snapshot,
+            contains_timestamp_nanos(schema.fields()),
+            TableFeature::TimestampNanos,
+        )
     }
 
     /// Check if delta-rs can read form the given delta table.
@@ -242,6 +265,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
+    #[cfg(feature = "nanosecond-timestamps")]
+    writer_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(TableFeature::ChangeDataFeed);

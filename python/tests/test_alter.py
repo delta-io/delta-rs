@@ -11,6 +11,7 @@ from deltalake import (
     TableFeatures,
     write_deltalake,
 )
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
@@ -409,6 +410,24 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
 
 
 def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", {"timestampNtz"})
+
+
+@pytest.mark.skipif(
+    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+)
+def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(
+        tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}
+    )
+
+
+def check_timestamp_column(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    primitive_type: str,
+    rw_feature: set[str],
+):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -417,7 +436,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     dt = DeltaTable(tmp_path)
     current_fields = dt.schema().fields
 
-    new_fields_to_add = DeltaField("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
+    new_fields_to_add = DeltaField("new_col", PrimitiveType(primitive_type))
 
     dt.alter.add_columns(new_fields_to_add)
     new_fields = dt.schema().fields
@@ -428,8 +447,8 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     )
     assert new_protocol.min_reader_version == 3
     assert new_protocol.min_writer_version == 7
-    assert new_protocol.reader_features == ["timestampNtz"]
-    assert new_protocol.writer_features == ["timestampNtz"]
+    assert set(new_protocol.reader_features) == rw_feature
+    assert set(new_protocol.writer_features) == rw_feature
 
 
 features = [
