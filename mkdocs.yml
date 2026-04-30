@@ -49,6 +49,7 @@ nav:
       - Home: index.md
       - Why Use Delta Lake: why-use-delta-lake.md
       - Delta Lake for big and small data: delta-lake-big-data-small-data.md
+      - Latest changes: latest.md
   - Usage:
       - Installation: usage/installation.md
       - Overview: usage/overview.md
@@ -61,6 +62,7 @@ nav:
       - Querying a table: usage/querying-delta-tables.md
       - Merging a table: usage/merging-tables.md
       - Managing a table: usage/managing-tables.md
+      - Working with partitions: usage/working-with-partitions.md
       - Writing a table:
           - usage/writing/index.md
           - usage/writing/writing-to-s3-with-locking-provider.md

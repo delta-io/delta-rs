@@ -131,7 +131,7 @@ impl DataSink for DeltaDataSink {
         };
         let config = WriterConfig::new(
             self.snapshot.read_schema(),
-            partition_columns.clone(),
+            partition_columns.to_vec(),
             None,
             Some(table_props.target_file_size()),
             None,
@@ -165,7 +165,7 @@ impl DataSink for DeltaDataSink {
             partition_by: if partition_columns.is_empty() {
                 None
             } else {
-                Some(partition_columns.clone())
+                Some(partition_columns.to_vec())
             },
             predicate: None,
         };

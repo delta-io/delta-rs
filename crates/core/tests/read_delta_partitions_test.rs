@@ -3,7 +3,7 @@ use url::Url;
 #[allow(dead_code)]
 mod fs_common;
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_null_partitions_from_checkpoint() {
     use deltalake_core::kernel::Add;
     use serde_json::json;

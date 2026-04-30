@@ -81,9 +81,10 @@ pub fn create_partition_values<F: FileAction>(
                     version: None,
                 },
                 partition_values: new_part_values.clone(),
-                extensions: None,
                 range: None,
                 statistics: None,
+                ordering: None,
+                extensions: None,
                 metadata_size_hint: None,
             };
 

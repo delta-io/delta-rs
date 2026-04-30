@@ -1,9 +1,8 @@
 use chrono::Utc;
 use deltalake_aws::constants;
 use deltalake_aws::register_handlers;
-use deltalake_aws::storage::*;
 use deltalake_test::utils::*;
-use rand::RngCore;
+use rand::prelude::*;
 use rand::random;
 use std::process::{Command, ExitStatus, Stdio};
 
@@ -15,7 +14,7 @@ pub struct S3Integration {
 impl Default for S3Integration {
     fn default() -> Self {
         register_handlers(None);
-        let task_id = format!("{}", rand::thread_rng().next_u64());
+        let task_id = format!("{}", rand::rng().next_u64());
         Self {
             bucket_name: format!("delta-table-{}-{task_id}", Utc::now().timestamp()),
         }
@@ -47,19 +46,19 @@ impl StorageIntegration for S3Integration {
             constants::LOCK_TABLE_KEY_NAME,
             format!("delta_log_it_{}", random::<u16>()),
         );
-        match std::env::var(s3_constants::AWS_ENDPOINT_URL).ok() {
+        match std::env::var(constants::AWS_ENDPOINT_URL).ok() {
             Some(endpoint_url) if endpoint_url.to_lowercase() == "none" => unsafe {
-                std::env::remove_var(s3_constants::AWS_ENDPOINT_URL)
+                std::env::remove_var(constants::AWS_ENDPOINT_URL)
             },
             Some(_) => (),
             None => unsafe {
-                std::env::set_var(s3_constants::AWS_ENDPOINT_URL, "http://localhost:4566")
+                std::env::set_var(constants::AWS_ENDPOINT_URL, "http://localhost:4566")
             },
         }
-        set_env_if_not_set(s3_constants::AWS_ACCESS_KEY_ID, "deltalake");
-        set_env_if_not_set(s3_constants::AWS_SECRET_ACCESS_KEY, "weloverust");
-        set_env_if_not_set(s3_constants::AWS_REGION, "us-east-1");
-        set_env_if_not_set(s3_constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+        set_env_if_not_set(constants::AWS_ACCESS_KEY_ID, "deltalake");
+        set_env_if_not_set(constants::AWS_SECRET_ACCESS_KEY, "weloverust");
+        set_env_if_not_set(constants::AWS_REGION, "us-east-1");
+        set_env_if_not_set(constants::AWS_S3_LOCKING_PROVIDER, "dynamodb");
     }
 
     /// copy directory

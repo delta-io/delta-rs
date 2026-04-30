@@ -137,6 +137,7 @@ class Metadata:
 class DeltaTableConfig(NamedTuple):
     without_files: bool
     log_buffer_size: int
+    skip_stats: bool = False
 
 
 class ProtocolVersions(NamedTuple):
@@ -157,6 +158,7 @@ class DeltaTable:
         storage_options: dict[str, str] | None = None,
         without_files: bool = False,
         log_buffer_size: int | None = None,
+        skip_stats: bool = False,
     ) -> None:
         """
         Create the Delta Table from a path with an optional version.
@@ -175,6 +177,10 @@ class DeltaTable:
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
                                 also be considered for optimal performance. Defaults to 4 * number of cpus.
+            skip_stats: If True, skip parsing per-file statistics while opening the table.
+                                Use for workflows that never need file pruning (vacuum, filesystem check, append-only writes).
+                                Any predicated query on this instance will scan every file because the cache has no stats.
+                                Partition pruning is unaffected. Defaults to False.
 
         """
         self._storage_options = storage_options
@@ -184,6 +190,7 @@ class DeltaTable:
             storage_options=storage_options,
             without_files=without_files,
             log_buffer_size=log_buffer_size,
+            skip_stats=skip_stats,
         )
 
     @property
@@ -1233,7 +1240,9 @@ class DeltaTable:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            the metrics from delete.
+            A metrics dict. The ``num_deleted_rows`` key is omitted when this library
+            cannot determine the deleted row count without scanning data
+            files.
         """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(

@@ -4,10 +4,11 @@ use arrow_schema::{DataType as ArrowDataType, Field};
 use chrono::DateTime;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::logstore::commit_uri_from_version;
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
@@ -67,11 +68,11 @@ async fn setup_test(table_uri: &str) -> Result<Context, Box<dyn Error>> {
 fn get_record_batch() -> RecordBatch {
     let mut id_vec: Vec<i32> = Vec::with_capacity(10);
     let mut value_vec: Vec<i32> = Vec::with_capacity(10);
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     for _ in 0..10 {
-        id_vec.push(rng.r#gen());
-        value_vec.push(rng.r#gen());
+        id_vec.push(rng.random());
+        value_vec.push(rng.random());
     }
 
     let schema = ArrowSchema::new(vec![

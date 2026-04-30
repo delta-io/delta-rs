@@ -10,7 +10,6 @@ mod tracing_otlp;
 mod utils;
 mod writer;
 
-use arrow::pyarrow::PyArrowType;
 use arrow_schema::{ArrowError, SchemaRef};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
@@ -27,6 +26,7 @@ use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{
     DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext,
 };
+use pyo3_arrow::PyDataType;
 
 use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
@@ -36,8 +36,7 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, StructDataExt as _, Transaction,
-    Version,
+    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, Transaction, Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -124,7 +123,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 52;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 53;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
@@ -225,30 +224,15 @@ fn datafusion_task_context_provider_from_session(
     let task_ctx_provider_obj = session
         .getattr("__datafusion_task_context_provider__")?
         .call0()?;
-    let task_ctx_provider = task_ctx_provider_obj.downcast::<PyCapsule>()?;
+    let task_ctx_provider = task_ctx_provider_obj.cast::<PyCapsule>()?;
 
-    let capsule_name = task_ctx_provider.name()?;
-    if capsule_name.is_none() {
-        return Err(PyValueError::new_err(
-            "Expected datafusion_task_context_provider PyCapsule to have name set.",
-        ));
-    }
-    let capsule_name = capsule_name.unwrap().to_str().map_err(|err| {
-        PyValueError::new_err(format!(
-            "Invalid datafusion_task_context_provider capsule name: {err}"
-        ))
-    })?;
-    if capsule_name != "datafusion_task_context_provider" {
-        return Err(PyValueError::new_err(format!(
-            "Expected PyCapsule name datafusion_task_context_provider, got {capsule_name}",
-        )));
-    }
+    let ptr = task_ctx_provider.pointer_checked(Some(c"datafusion_task_context_provider"))?;
 
-    // SAFETY: `task_ctx_provider` is a `PyCapsule` (downcast above) and we verify its
-    // capsule name is exactly `datafusion_task_context_provider` before taking a typed
-    // reference, matching the producer side DataFusion capsule contract.
+    // SAFETY: pointer_checked validated the capsule name and non-null pointer.
+    // The capsule contains an FFI_TaskContextProvider per the producer-side contract.
     let task_ctx_provider = unsafe {
-        task_ctx_provider.reference::<datafusion_ffi::execution::FFI_TaskContextProvider>()
+        ptr.cast::<datafusion_ffi::execution::FFI_TaskContextProvider>()
+            .as_ref()
     };
     Ok(Some(task_ctx_provider.clone()))
 }
@@ -333,7 +317,7 @@ impl RawDeltaTable {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None, skip_stats = false))]
     fn new(
         py: Python,
         table_uri: &str,
@@ -341,6 +325,7 @@ impl RawDeltaTable {
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
         log_buffer_size: Option<usize>,
+        skip_stats: bool,
     ) -> PyResult<Self> {
         py.detach(|| {
             let table_url = deltalake::table::builder::parse_table_uri(table_uri)
@@ -357,6 +342,9 @@ impl RawDeltaTable {
             }
             if without_files {
                 builder = builder.without_files()
+            }
+            if skip_stats {
+                builder = builder.with_skip_stats(true)
             }
             if let Some(buf_size) = log_buffer_size {
                 builder = builder
@@ -412,11 +400,15 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.config.require_files))
     }
 
-    pub fn table_config(&self) -> PyResult<(bool, usize)> {
+    pub fn table_config(&self) -> PyResult<(bool, usize, bool)> {
         self.with_table(|t| {
             let config = t.config.clone();
             // Require_files inverted to reflect without_files
-            Ok((!config.require_files, config.log_buffer_size))
+            Ok((
+                !config.require_files,
+                config.log_buffer_size,
+                config.skip_stats,
+            ))
         })
     }
 
@@ -432,7 +424,7 @@ impl RawDeltaTable {
             id: metadata.id().to_string(),
             name: metadata.name().map(String::from),
             description: metadata.description().map(String::from),
-            partition_columns: metadata.partition_columns().clone(),
+            partition_columns: metadata.partition_columns().to_vec(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
         })
@@ -1306,18 +1298,25 @@ impl RawDeltaTable {
             .collect())
     }
 
-    pub fn update_incremental(&self) -> PyResult<()> {
-        #[allow(clippy::await_holding_lock)]
-        #[allow(deprecated)]
-        Ok(rt()
-            .block_on(async {
+    /// Incrementally update the table snapshot to the latest committed version.
+    ///
+    /// Releases the Python GIL while the async table update runs.
+    pub fn update_incremental(&self, py: Python) -> PyResult<()> {
+        py.detach(|| {
+            // `DeltaTable::update_incremental` mutates the cached table in place, and the
+            // guard must live until the async update finishes.
+            #[allow(clippy::await_holding_lock)]
+            #[allow(deprecated)]
+            rt().block_on(async {
                 let mut table = self
                     ._table
                     .lock()
                     .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
                 (*table).update_incremental(None).await
             })
-            .map_err(PythonError::from)?)
+            .map_err(PythonError::from)
+            .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (schema, partition_filters=None))]
@@ -1439,6 +1438,24 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
+        let partition_column_keys: Vec<(&str, String)> = partition_columns
+            .iter()
+            .map(|col| {
+                let physical_name = schema
+                    .field(col)
+                    .and_then(|field| {
+                        field
+                            .metadata()
+                            .get("delta.columnMapping.physicalName")
+                            .and_then(|value| match value {
+                                MetadataValue::String(name) => Some(name.clone()),
+                                _ => None,
+                            })
+                    })
+                    .unwrap_or_else(|| (*col).to_string());
+                (*col, physical_name)
+            })
+            .collect();
 
         let state = self.cloned_state()?;
         let log_store = self.log_store()?;
@@ -1450,21 +1467,21 @@ impl RawDeltaTable {
                     .await
             })
             .map_err(PythonError::from)?;
-        let _active_partitions: HashSet<Vec<(&str, Option<String>)>> = HashSet::new();
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
             .flat_map(|add| {
+                #[allow(deprecated)]
+                let partition_values = add.add_action().partition_values;
                 Ok::<_, PythonError>(
-                    partition_columns
+                    partition_column_keys
                         .iter()
-                        .map(|col| {
+                        .map(|(logical_name, physical_name)| {
                             (
-                                *col,
-                                add.partition_values()
-                                    .and_then(|v| {
-                                        v.index_of(col).and_then(|idx| v.value(idx).cloned())
-                                    })
-                                    .map(|v| v.serialize()),
+                                *logical_name,
+                                partition_values
+                                    .get(physical_name.as_str())
+                                    .cloned()
+                                    .flatten(),
                             )
                         })
                         .collect(),
@@ -1970,13 +1987,18 @@ impl RawDeltaTable {
     /// Get the latest transaction version for the given application ID.
     ///
     /// Returns `None` if the application ID is not found.
-    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
-        // NOTE: this will simplify once we have moved logstore onto state.
-        let log_store = self.log_store()?;
-        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
-        Ok(rt()
-            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
-            .map_err(PythonError::from)?)
+    ///
+    /// Releases the Python GIL while the async transaction lookup runs.
+    pub fn transaction_version(&self, py: Python, app_id: String) -> PyResult<Option<i64>> {
+        py.detach(|| {
+            // NOTE: this will simplify once we have moved logstore onto state.
+            let log_store = self.log_store()?;
+            let snapshot =
+                self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+            rt().block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
@@ -2452,7 +2474,7 @@ fn filestats_to_expression_next<'py>(
             })?
             .data_type()
             .clone();
-        let column_type = PyArrowType(column_type).into_pyobject(py)?;
+        let column_type = PyDataType::new(column_type).into_pyarrow(py)?;
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
@@ -2649,7 +2671,12 @@ pub struct PyPostCommitHookProperties {
 }
 
 #[derive(Clone)]
-#[pyclass(name = "Transaction", module = "deltalake._internal", get_all)]
+#[pyclass(
+    name = "Transaction",
+    module = "deltalake._internal",
+    get_all,
+    from_py_object
+)]
 pub struct PyTransaction {
     app_id: String,
     version: i64,
@@ -3008,7 +3035,7 @@ fn convert_to_deltalake(
     })
 }
 
-#[pymodule]
+#[pymodule(gil_used = true)]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     use crate::error::{CommitFailedError, DeltaError, SchemaMismatchError, TableNotFoundError};

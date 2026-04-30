@@ -1,5 +1,238 @@
 # Changelog
 
+## [rust-v0.32.1](https://github.com/delta-io/delta-rs/tree/rust-v0.32.1) (2026-04-28)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.32.0...rust-v0.32.1)
+
+**Closed issues:**
+
+- \[Bug\]: Regression in 1.5.1: schema\_mode='overwrite' with predicate fails for mixed-case column names \(utcDate\) [\#4404](https://github.com/delta-io/delta-rs/issues/4404)
+- \[Bug\]: update\_incremental\(\) and transaction\_version\(\) hold the GIL for the entire S3 round-trip [\#4402](https://github.com/delta-io/delta-rs/issues/4402)
+- \[Feature\]: Build Musl arm64 wheels [\#4392](https://github.com/delta-io/delta-rs/issues/4392)
+- \[Bug\]: deltalake\_catalog\_unity failes to list catalogs [\#4360](https://github.com/delta-io/delta-rs/issues/4360)
+- \[Bug\]: UnityCatalogFactory::parse\_url\_opts only allows unity-specific options [\#4225](https://github.com/delta-io/delta-rs/issues/4225)
+
+**Merged pull requests:**
+
+- chore: cap the upper range of the buoyant\_kernel for this release [\#4412](https://github.com/delta-io/delta-rs/pull/4412) ([rtyler](https://github.com/rtyler))
+- fix\(catalog-unity\): skip non-Unity keys in try\_with\_options [\#4410](https://github.com/delta-io/delta-rs/pull/4410) ([1fanwang](https://github.com/1fanwang))
+- fix: listing catalogs from Unity [\#4409](https://github.com/delta-io/delta-rs/pull/4409) ([hjohnss6](https://github.com/hjohnss6))
+- fix: preserve mixed case columns in replaceWhere writes [\#4407](https://github.com/delta-io/delta-rs/pull/4407) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: release GIL for DeltaTable update calls [\#4406](https://github.com/delta-io/delta-rs/pull/4406) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: add tests for cleanup\_expired\_logs\_for [\#4405](https://github.com/delta-io/delta-rs/pull/4405) ([mbkroese](https://github.com/mbkroese))
+- refactor: introduce selective stats projection primitives [\#4403](https://github.com/delta-io/delta-rs/pull/4403) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: regenerate updated changelog [\#4400](https://github.com/delta-io/delta-rs/pull/4400) ([rtyler](https://github.com/rtyler))
+- feat: add aarch64 musl wheel builds [\#4399](https://github.com/delta-io/delta-rs/pull/4399) ([Slyrc](https://github.com/Slyrc))
+- chore: next iteration of development [\#4396](https://github.com/delta-io/delta-rs/pull/4396) ([rtyler](https://github.com/rtyler))
+- fix: allow boolean to exist in our stats schema [\#4395](https://github.com/delta-io/delta-rs/pull/4395) ([rtyler](https://github.com/rtyler))
+- chore: bump python for next release [\#4393](https://github.com/delta-io/delta-rs/pull/4393) ([rtyler](https://github.com/rtyler))
+
+## [rust-v0.32.0](https://github.com/delta-io/delta-rs/tree/rust-v0.32.0) (2026-04-21)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.31.1...rust-v0.32.0)
+
+**Implemented enhancements:**
+
+- feature: Add post\_commithook\_properties to DeltaTable.restore [\#4251](https://github.com/delta-io/delta-rs/issues/4251)
+- Create deltalake-engine crate based off arrow engine [\#4133](https://github.com/delta-io/delta-rs/issues/4133)
+
+**Fixed bugs:**
+
+- \[Bug\]: DeltaScan ignores DeltaScanConfig::schema unlike old DeltaTableProvider [\#4306](https://github.com/delta-io/delta-rs/issues/4306)
+- bug: Streamed merge loses file pruning for string partition IN \(...\) predicates [\#4301](https://github.com/delta-io/delta-rs/issues/4301)
+
+**Closed issues:**
+
+- \[Bug\]: append fails when generated column uses `TRUNC` [\#4386](https://github.com/delta-io/delta-rs/issues/4386)
+- \[Bug\]: num\_deleted\_rows is 0 for partition-only DELETEs [\#4379](https://github.com/delta-io/delta-rs/issues/4379)
+- \[Bug\]: DeltaTable.to\_pyarrow\_dataset\(\) hangs indefinitely with moto S3 mock \(regression in 1.3.2\) [\#4362](https://github.com/delta-io/delta-rs/issues/4362)
+- \[Bug\]: Number of deleted rows incorrect when table had "enableChageDataFeed" set to true [\#4353](https://github.com/delta-io/delta-rs/issues/4353)
+- \[Bug\]: MERGE on partitioned table produces duplicate rows when partition value contains a space [\#4352](https://github.com/delta-io/delta-rs/issues/4352)
+- Datafusion/Arrow/Delta Kernel Upgrade [\#4344](https://github.com/delta-io/delta-rs/issues/4344)
+- \[Bug\]: intermittent S3 integration test failures in CI [\#4332](https://github.com/delta-io/delta-rs/issues/4332)
+- \[Bug\]: az:// URL scheme causes path inconsistency between log store and kernel, leading to 'version already exists' errors on Azure [\#4320](https://github.com/delta-io/delta-rs/issues/4320)
+- Documentation for Remove::data\_change does not match spec [\#4317](https://github.com/delta-io/delta-rs/issues/4317)
+- \[Bug\]: Wrong log store registry for file:// schema [\#4316](https://github.com/delta-io/delta-rs/issues/4316)
+- \[Bug\]: Insertion Order not maintained when compacting [\#4310](https://github.com/delta-io/delta-rs/issues/4310)
+- \[Bug\]: DeltaScan scan includes file column although it's not projected [\#4307](https://github.com/delta-io/delta-rs/issues/4307)
+- \[Bug\]: Unable to write on GCP bucket in S3 compatibility mode [\#4303](https://github.com/delta-io/delta-rs/issues/4303)
+- \[Bug\]: merge\_schema=True fails on first merge into fresh table partitioned by string column [\#4298](https://github.com/delta-io/delta-rs/issues/4298)
+- Deduplicate \_last\_checkpoint parsing in deltalake-core [\#4294](https://github.com/delta-io/delta-rs/issues/4294)
+- Inconsistent i64/u64 usage for defining versions [\#4293](https://github.com/delta-io/delta-rs/issues/4293)
+- \[Bug\]: 1.5.0 regression a partitioned Delta table with existing data and a merge into it with `merge_schema: True` [\#4292](https://github.com/delta-io/delta-rs/issues/4292)
+- \[Bug\]: Vacuuming FULL after compaction potentially removes data files preventing time travel [\#4290](https://github.com/delta-io/delta-rs/issues/4290)
+- \[Bug\]: Vacuuming with `keep_versions` requires versions to be in sorted order [\#4286](https://github.com/delta-io/delta-rs/issues/4286)
+- bug: same version snapshot update doesn't adopt checkpoint written later [\#4280](https://github.com/delta-io/delta-rs/issues/4280)
+- Re-use stored state in EagerSnapshot [\#4269](https://github.com/delta-io/delta-rs/issues/4269)
+- \[Bug\]: Datafusion not reading all partitions on Linux machine [\#4268](https://github.com/delta-io/delta-rs/issues/4268)
+- \[Feature\]: CommitData::new should respect "clientVersion" from app\_metadata [\#4263](https://github.com/delta-io/delta-rs/issues/4263)
+- delta\_kernel 0.20 upgrade [\#4256](https://github.com/delta-io/delta-rs/issues/4256)
+- \[Feature\]: add some changelog content to the docs [\#4253](https://github.com/delta-io/delta-rs/issues/4253)
+- feature: make commit control args keyword only across mutating APIs [\#4252](https://github.com/delta-io/delta-rs/issues/4252)
+- Passing cert file in python storage\_options [\#4246](https://github.com/delta-io/delta-rs/issues/4246)
+- \[Bug\]: After lazy writes, writing large files fails [\#4229](https://github.com/delta-io/delta-rs/issues/4229)
+- \[Bug\]: deltalake `get_add_actions` not exposing bool min/max [\#4224](https://github.com/delta-io/delta-rs/issues/4224)
+- \[Bug\]: slack link in issue [\#4214](https://github.com/delta-io/delta-rs/issues/4214)
+
+## [rust-v0.31.1](https://github.com/delta-io/delta-rs/tree/rust-v0.31.1) (2026-03-15)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.31.0...rust-v0.31.1)
+
+**Implemented enhancements:**
+
+- Use batched delete in DeltaStorageHandler.delete\_dir [\#4243](https://github.com/delta-io/delta-rs/issues/4243)
+- \[Feature\]: refactor DeltaDataSink to go through delta writer builder [\#4189](https://github.com/delta-io/delta-rs/issues/4189)
+
+**Fixed bugs:**
+
+- \[Bug\]: Read delta table from s3 directory bucket [\#4136](https://github.com/delta-io/delta-rs/issues/4136)
+
+**Closed issues:**
+
+- \[Bug\]: update\_incremental is not incremental [\#4276](https://github.com/delta-io/delta-rs/issues/4276)
+- \[Bug\]: pub fn create\_add signature includes types that are not pub use [\#4273](https://github.com/delta-io/delta-rs/issues/4273)
+- \[Feature\]: Support for Writing to Delta Tables with Identity Columns in delta-rs [\#4237](https://github.com/delta-io/delta-rs/issues/4237)
+- \[Bug\]: Python `delection_vectors()` truncates bool list. [\#4235](https://github.com/delta-io/delta-rs/issues/4235)
+- \[Feature\]: Vacuum Lite to avoid unnecessary file listing [\#4228](https://github.com/delta-io/delta-rs/issues/4228)
+- \[Feature\]: Write incrementally to table when merging [\#4217](https://github.com/delta-io/delta-rs/issues/4217)
+- \[Feature\]: change existing table's `enableChangeDataFeed` configuration to be updated to `True` [\#4216](https://github.com/delta-io/delta-rs/issues/4216)
+- \[Bug\]: Contributing guide could be improved [\#4213](https://github.com/delta-io/delta-rs/issues/4213)
+- \[Docs\]: usage/appending-overwriting-delta-lake-table has broken language tabs [\#4200](https://github.com/delta-io/delta-rs/issues/4200)
+- \[Bug\]: `s3-native-tls` feature still brings `aws-lc-rs` dependency [\#4170](https://github.com/delta-io/delta-rs/issues/4170)
+- bug: generated column expr fails when SchemaMode::Merge would add referenced column [\#4169](https://github.com/delta-io/delta-rs/issues/4169)
+- \[Bug\]: `create_write_transaction` no longer overwrites partitions [\#4126](https://github.com/delta-io/delta-rs/issues/4126)
+
+## [rust-v0.31.0](https://github.com/delta-io/delta-rs/tree/rust-v0.31.0) (2026-02-17)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.30.2...rust-v0.31.0)
+
+**Implemented enhancements:**
+
+- update\_datafusion\_session has the wrong order of arguments [\#4139](https://github.com/delta-io/delta-rs/issues/4139)
+- \[Feature\]: Matched file filtering via IN \(...\) doesn't scale for large file sets [\#4113](https://github.com/delta-io/delta-rs/issues/4113)
+
+**Fixed bugs:**
+
+- with\_session\_state silently falls back when Session isn't SessionState [\#4081](https://github.com/delta-io/delta-rs/issues/4081)
+
+**Closed issues:**
+
+- \[Bug\]: `write_deltalake` with `schema_mode="merge"` drops generated column metadata [\#4186](https://github.com/delta-io/delta-rs/issues/4186)
+- \[Bug\]: is\_deltatable creates paths for non existing delta table location [\#4175](https://github.com/delta-io/delta-rs/issues/4175)
+- \[Bug\]: Rust CdfLoadBuilder.build function is crate private and prohibits using feature [\#4160](https://github.com/delta-io/delta-rs/issues/4160)
+- Expose deletion vectors information to Python  [\#4159](https://github.com/delta-io/delta-rs/issues/4159)
+- \[Bug\]: polars.DataFrame.write\_delta\(\) failing for unknown argument 'schema' [\#4157](https://github.com/delta-io/delta-rs/issues/4157)
+- \[Bug\]: Delete regression in 1.4.0: partition‑only predicate removes too few files [\#4149](https://github.com/delta-io/delta-rs/issues/4149)
+- \[Bug\]: Unity Catalog Azure credentials error [\#4129](https://github.com/delta-io/delta-rs/issues/4129)
+- \[Bug\]: Merge fails on camelCase columns with `nullable=False` [\#4082](https://github.com/delta-io/delta-rs/issues/4082)
+
+**Merged pull requests:**
+
+- chore: enable snappy compression on checkpoints [\#4209](https://github.com/delta-io/delta-rs/pull/4209) ([rtyler](https://github.com/rtyler))
+- chore: set compression for partition optimization as well [\#4208](https://github.com/delta-io/delta-rs/pull/4208) ([rtyler](https://github.com/rtyler))
+- chore: change the versions for the next "majorish" release of :crab: [\#4207](https://github.com/delta-io/delta-rs/pull/4207) ([rtyler](https://github.com/rtyler))
+- fix: enforce file-id filter semantics in scan planning [\#4206](https://github.com/delta-io/delta-rs/pull/4206) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor\(python\): get add action return arrow table [\#4204](https://github.com/delta-io/delta-rs/pull/4204) ([vsmanish1772](https://github.com/vsmanish1772))
+- fix: propagate session config through Delta factory path [\#4202](https://github.com/delta-io/delta-rs/pull/4202) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: drop unused ReceiverStreamBuilder spawn [\#4201](https://github.com/delta-io/delta-rs/pull/4201) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: harden scan adapter caching and DV mask edge cases [\#4199](https://github.com/delta-io/delta-rs/pull/4199) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix\(datafusion\): avoid overflow when scanning add actions [\#4197](https://github.com/delta-io/delta-rs/pull/4197) ([vsmanish1772](https://github.com/vsmanish1772))
+- fix: clarify vacuum command documentation for DeltaTable [\#4196](https://github.com/delta-io/delta-rs/pull/4196) ([khalidmammadov](https://github.com/khalidmammadov))
+- refactor: use BatchAdapterFactory for scan adaptation [\#4195](https://github.com/delta-io/delta-rs/pull/4195) ([ethan-tyler](https://github.com/ethan-tyler))
+- perf: parallel partition writers via per-stream JoinSet [\#4193](https://github.com/delta-io/delta-rs/pull/4193) ([fvaleye](https://github.com/fvaleye))
+- fix: make session the first argument of update\_datafusion\_session [\#4192](https://github.com/delta-io/delta-rs/pull/4192) ([pauldouane](https://github.com/pauldouane))
+- fix: preserve generated column metadata during schema merge [\#4191](https://github.com/delta-io/delta-rs/pull/4191) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor: use FileSelection for matched file scans [\#4188](https://github.com/delta-io/delta-rs/pull/4188) ([ethan-tyler](https://github.com/ethan-tyler))
+- feat: add DeltaScan insert\_into with runtime log\_store [\#4187](https://github.com/delta-io/delta-rs/pull/4187) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: bump version from 1.4.1 to 1.4.2 [\#4182](https://github.com/delta-io/delta-rs/pull/4182) ([ion-elgreco](https://github.com/ion-elgreco))
+- fix: is\_deltatable must not to create paths for not existing tables paths [\#4176](https://github.com/delta-io/delta-rs/pull/4176) ([khalidmammadov](https://github.com/khalidmammadov))
+- refactor: remove table level stats on TableProvider [\#4174](https://github.com/delta-io/delta-rs/pull/4174) ([roeap](https://github.com/roeap))
+- docs: add storage backend configuration reference tables [\#4173](https://github.com/delta-io/delta-rs/pull/4173) ([immohamedadhil](https://github.com/immohamedadhil))
+- refactor: add FileSelection to next provider for DeltaTableProvider removal [\#4172](https://github.com/delta-io/delta-rs/pull/4172) ([ethan-tyler](https://github.com/ethan-tyler))
+- feat: expose DV metadata and payloads as Arrow streams [\#4168](https://github.com/delta-io/delta-rs/pull/4168) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: align file\_id with DataFusion UInt16 dictionary [\#4167](https://github.com/delta-io/delta-rs/pull/4167) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: add the unity catalog dependency back [\#4165](https://github.com/delta-io/delta-rs/pull/4165) ([hntd187](https://github.com/hntd187))
+- fix: preserve kernel column segments [\#4164](https://github.com/delta-io/delta-rs/pull/4164) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: use `default-https-client` for aws sdk to avoid deps on hyper 0.14 [\#4163](https://github.com/delta-io/delta-rs/pull/4163) ([BugenZhao](https://github.com/BugenZhao))
+- fix: unblock schema merge appends with generated columns [\#4162](https://github.com/delta-io/delta-rs/pull/4162) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix\(cdf\): make cdf builders build function accessible [\#4161](https://github.com/delta-io/delta-rs/pull/4161) ([khalidmammadov](https://github.com/khalidmammadov))
+- fix\(docs\): open\_table examples to use URLs instead of str [\#4154](https://github.com/delta-io/delta-rs/pull/4154) ([khalidmammadov](https://github.com/khalidmammadov))
+- perf: cache schema per stream instead of per batch [\#4152](https://github.com/delta-io/delta-rs/pull/4152) ([fvaleye](https://github.com/fvaleye))
+- refactor: avoid mutable updates of inner snapshot [\#4151](https://github.com/delta-io/delta-rs/pull/4151) ([roeap](https://github.com/roeap))
+- fix\(delete\): use Add metadata for partition only DELETE [\#4150](https://github.com/delta-io/delta-rs/pull/4150) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: nested runtimes in stream adapter [\#4148](https://github.com/delta-io/delta-rs/pull/4148) ([ion-elgreco](https://github.com/ion-elgreco))
+- feat: session-first DataFusion integration + session resolution policies [\#4145](https://github.com/delta-io/delta-rs/pull/4145) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: align stats to view typed schema + harden parquet predicate pushdown [\#4144](https://github.com/delta-io/delta-rs/pull/4144) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix\(python\): guard DataFusion FFI export on datafusion major version [\#4142](https://github.com/delta-io/delta-rs/pull/4142) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: upgrade python version for a patch release [\#4141](https://github.com/delta-io/delta-rs/pull/4141) ([rtyler](https://github.com/rtyler))
+- feat: update asserted nullability in DataValidation output schema [\#4132](https://github.com/delta-io/delta-rs/pull/4132) ([roeap](https://github.com/roeap))
+- docs: incorporate some AI guidance for contributors [\#4131](https://github.com/delta-io/delta-rs/pull/4131) ([rtyler](https://github.com/rtyler))
+- fix\(core\): align file stats with parquet read schema [\#4130](https://github.com/delta-io/delta-rs/pull/4130) ([roeap](https://github.com/roeap))
+- fix\(datafusion\): resolve DML predicates against execution scan schema [\#4127](https://github.com/delta-io/delta-rs/pull/4127) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: upgrade python version for the next release [\#4124](https://github.com/delta-io/delta-rs/pull/4124) ([rtyler](https://github.com/rtyler))
+- chore: allow integration tests to be run in parallel with nextest [\#4122](https://github.com/delta-io/delta-rs/pull/4122) ([rtyler](https://github.com/rtyler))
+- chore: upgrade azurite and purge the need for a local az CLI to run tests [\#4121](https://github.com/delta-io/delta-rs/pull/4121) ([rtyler](https://github.com/rtyler))
+- feat: migrate delete [\#4117](https://github.com/delta-io/delta-rs/pull/4117) ([roeap](https://github.com/roeap))
+- fix\(datafusion\): handle coalesced multi-file batches in next-scan [\#4112](https://github.com/delta-io/delta-rs/pull/4112) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor: move files scan to separate function [\#4111](https://github.com/delta-io/delta-rs/pull/4111) ([roeap](https://github.com/roeap))
+- refactor: move normal and cdc writes into separate functions [\#4108](https://github.com/delta-io/delta-rs/pull/4108) ([roeap](https://github.com/roeap))
+- refactor: avoid batch concatenation in write workers [\#4107](https://github.com/delta-io/delta-rs/pull/4107) ([roeap](https://github.com/roeap))
+- feat: centralize predicate parsing with literal coercion [\#4106](https://github.com/delta-io/delta-rs/pull/4106) ([roeap](https://github.com/roeap))
+- fix\(python\): object store registration missing in session [\#4105](https://github.com/delta-io/delta-rs/pull/4105) ([JonatanMartens](https://github.com/JonatanMartens))
+- fix\(python\): disable ident normalization in merge [\#4102](https://github.com/delta-io/delta-rs/pull/4102) ([bellshun](https://github.com/bellshun))
+- feat: enable deletion vector features for working with tables [\#4101](https://github.com/delta-io/delta-rs/pull/4101) ([rtyler](https://github.com/rtyler))
+- fix: add support for user names in azure URLs [\#4100](https://github.com/delta-io/delta-rs/pull/4100) ([sebbegg](https://github.com/sebbegg))
+- fix: properly simplify delete predicate expressions for Datafusion [\#4098](https://github.com/delta-io/delta-rs/pull/4098) ([rtyler](https://github.com/rtyler))
+- feat: improve logical planning and migrate update op [\#4096](https://github.com/delta-io/delta-rs/pull/4096) ([roeap](https://github.com/roeap))
+- chore\(deps\): upgrade datafusion to 52.0.0 [\#4092](https://github.com/delta-io/delta-rs/pull/4092) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor!: more logical writes [\#4090](https://github.com/delta-io/delta-rs/pull/4090) ([roeap](https://github.com/roeap))
+- fix: report failed data in data checks [\#4083](https://github.com/delta-io/delta-rs/pull/4083) ([roeap](https://github.com/roeap))
+- refactor: remove unused error variants [\#4078](https://github.com/delta-io/delta-rs/pull/4078) ([roeap](https://github.com/roeap))
+- fix: use LTO thin for linux ARM release [\#4077](https://github.com/delta-io/delta-rs/pull/4077) ([ion-elgreco](https://github.com/ion-elgreco))
+- chore: clean up older ignored tests for deletion vectors and column mapping [\#4075](https://github.com/delta-io/delta-rs/pull/4075) ([rtyler](https://github.com/rtyler))
+- chore: clippy [\#4073](https://github.com/delta-io/delta-rs/pull/4073) ([roeap](https://github.com/roeap))
+- fix: wrap table provider with block\_on in scan for python [\#4072](https://github.com/delta-io/delta-rs/pull/4072) ([ion-elgreco](https://github.com/ion-elgreco))
+- feat: expose new table provider in query builder [\#4061](https://github.com/delta-io/delta-rs/pull/4061) ([ion-elgreco](https://github.com/ion-elgreco))
+- fix: handle DV mask exhaustion and short masks in batch\_project [\#4058](https://github.com/delta-io/delta-rs/pull/4058) ([ethan-tyler](https://github.com/ethan-tyler))
+
+## [rust-v0.30.2](https://github.com/delta-io/delta-rs/tree/rust-v0.30.2) (2026-02-04)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.30.1...rust-v0.30.2)
+
+**Fixed bugs:**
+
+- \[Bug\]: DeltaTable.delete fails during equality comparison with a string [\#4125](https://github.com/delta-io/delta-rs/issues/4125)
+
+**Closed issues:**
+
+- \[Bug\]: write\_deltalake errors on missing nullable columns without generation expressions [\#4156](https://github.com/delta-io/delta-rs/issues/4156)
+- Bug Report: Nested Tokio Runtime Panic in `write_deltalake` [\#4147](https://github.com/delta-io/delta-rs/issues/4147)
+- \[Bug\]: Segmentation fault when registering table to datafusion session [\#4135](https://github.com/delta-io/delta-rs/issues/4135)
+- \[Bug\]: slack link no longer active [\#4118](https://github.com/delta-io/delta-rs/issues/4118)
+- Fast “latest metadata only” API \(avoid full snapshot load\) [\#4114](https://github.com/delta-io/delta-rs/issues/4114)
+- \[Bug\]: Python datafusion missing object store [\#4104](https://github.com/delta-io/delta-rs/issues/4104)
+- \[Bug\]: Missing blob storage container name in object store url [\#4099](https://github.com/delta-io/delta-rs/issues/4099)
+- \[Bug\]: Python merge operation ignores enable\_ident\_normalization setting, causing case-sensitive column name errors [\#4097](https://github.com/delta-io/delta-rs/issues/4097)
+- \[Bug\]: arrow\_cast not not using ExprSimplifier [\#4093](https://github.com/delta-io/delta-rs/issues/4093)
+- \[Feature\]: Create a python method to extract min, max and null count for table to pass into polars \(or similar\) [\#4086](https://github.com/delta-io/delta-rs/issues/4086)
+- \[Bug\]: Vacuum & Checkpoint creation does not work in `tokio::spawn` after version 0.30 [\#4085](https://github.com/delta-io/delta-rs/issues/4085)
+- \[Feature\]: Support writing to tables with Deletion Vectors enabled [\#4079](https://github.com/delta-io/delta-rs/issues/4079)
+- \[Bug\]: Use write\_delta with result from `lazyframe.collect_batches()` [\#4065](https://github.com/delta-io/delta-rs/issues/4065)
+- \[Bug\]: python bindings - Tokio runtime panic when querying tables with datafusion [\#4063](https://github.com/delta-io/delta-rs/issues/4063)
+
+## [rust-v0.30.1](https://github.com/delta-io/delta-rs/tree/rust-v0.30.1) (2026-01-12)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.30.0...rust-v0.30.1)
+
+**Merged pull requests:**
+
+- fix: avoid unnecessary reload of file data by file\_views\(\) [\#4067](https://github.com/delta-io/delta-rs/pull/4067) ([rtyler](https://github.com/rtyler))
+- fix: ensure that delete on an empty table works [\#4066](https://github.com/delta-io/delta-rs/pull/4066) ([rtyler](https://github.com/rtyler))
+- ci: correct maturin invocations to call publish [\#4064](https://github.com/delta-io/delta-rs/pull/4064) ([rtyler](https://github.com/rtyler))
+- chore: 1.3.1 release [\#4060](https://github.com/delta-io/delta-rs/pull/4060) ([ion-elgreco](https://github.com/ion-elgreco))
+- chore!: remove peek\_next\_commit from LogStore [\#4059](https://github.com/delta-io/delta-rs/pull/4059) ([roeap](https://github.com/roeap))
+- feat: expose newest table provider to python [\#4057](https://github.com/delta-io/delta-rs/pull/4057) ([ion-elgreco](https://github.com/ion-elgreco))
+
 ## [rust-v0.30.0](https://github.com/delta-io/delta-rs/tree/rust-v0.30.0) (2025-12-31)
 
 :warning: There are a number of API changes between `0.30.x` and `0.29.4`, but we expect to see better performance as a result!

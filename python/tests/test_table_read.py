@@ -1302,3 +1302,27 @@ def test_nested_runtimes(tmp_path):
     con.execute(f"CREATE EXTERNAL TABLE raw_csv STORED AS CSV LOCATION '{csv_path}'")
     df = con.execute("SELECT * FROM raw_csv")
     write_deltalake(tmp_path / "delta", df, mode="overwrite")
+
+
+@pytest.mark.polars
+def test_read_bool_stats_in_polars(tmp_path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/4224>
+    """
+    import polars as pl
+
+    df = pl.DataFrame(
+        {"p": [10, 10, 20, 20], "a": [1, 2, 3, None], "b": [False, False, True, None]}
+    )
+
+    df.write_delta(
+        tmp_path,
+        delta_write_options={"partition_by": "p"},
+    )
+
+    table = DeltaTable(tmp_path)
+    with pl.Config(tbl_cols=-1):
+        pdf = pl.DataFrame(table.get_add_actions(flatten=True))
+        assert pdf.schema["max.b"] is not None, (
+            "The boolean column stats should be there"
+        )

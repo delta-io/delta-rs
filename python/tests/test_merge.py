@@ -271,10 +271,183 @@ def test_merge_when_matched_update_duplicates(
             predicate="s.deleted = true",
         )
 
-    with pytest.raises(DeltaError):
+    with pytest.raises(DeltaError, match="duplicate relevant WHEN MATCHED"):
         merger.execute()
 
     dt = DeltaTable(tmp_path)
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    assert dt.version() == 0
+    assert result == sample_table
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_when_matched_update_duplicate_with_noop_source_row_passes(
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [10, 100],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [10, 20],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=streaming,
+    ).when_matched_update({"price": "s.price"}, predicate="s.deleted = true").execute()
+
+    expected = Table(
+        {
+            "id": Array(
+                ["1", "2", "3", "4", "5"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 100, 4],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3, 4],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 5,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    assert dt.version() == 1
+    assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_when_matched_delete_unconditional_duplicates_pass(
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["5", "5"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "weight": Array(
+                [105, 106],
+                ArrowField("weight", type=DataType.int32(), nullable=True),
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=streaming,
+    ).when_matched_delete().execute()
+
+    expected = Table(
+        {
+            "id": Array(
+                ["1", "2", "3", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "price": Array(
+                [0, 1, 2, 3],
+                ArrowField("price", type=DataType.int64(), nullable=True),
+            ),
+            "sold": Array(
+                [0, 1, 2, 3],
+                ArrowField("sold", type=DataType.int32(), nullable=True),
+            ),
+            "deleted": Array(
+                [False] * 4,
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select * from tbl order by id asc")
+        .read_all()
+    )
+
+    assert dt.version() == 1
+    assert result == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_when_matched_delete_conditional_duplicates_fail(
+    tmp_path: pathlib.Path, sample_table: Table, streaming: bool
+):
+    write_deltalake(tmp_path, sample_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = Table(
+        {
+            "id": Array(
+                ["4", "4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "deleted": Array(
+                [True, True],
+                ArrowField("deleted", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+
+    merger = dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=streaming,
+    ).when_matched_delete("s.deleted = True")
+
+    with pytest.raises(DeltaError, match="duplicate relevant WHEN MATCHED"):
+        merger.execute()
+
     result = (
         QueryBuilder()
         .register("tbl", dt)
@@ -1978,6 +2151,73 @@ def test_merge_timestamps_partitioned_2344(tmp_path: pathlib.Path, timezone, pre
     assert last_action["operation"] == "MERGE"
     assert result == data
     assert last_action["operationParameters"].get("predicate") == predicate
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_partition_value_with_space_is_idempotent_4352(
+    tmp_path: pathlib.Path, streaming: bool
+):
+    import pyarrow as pa
+
+    source = pa.table(
+        {
+            "group": pa.array(["foo bar", "foo bar", "foo bar"], type=pa.string()),
+            "region": pa.array(["A", "B", "C"], type=pa.string()),
+            "ts": pa.array(
+                [datetime.datetime(2024, 1, 1)] * 3, type=pa.timestamp("us")
+            ),
+            "val": pa.array([1.0, 2.0, 3.0], type=pa.float64()),
+        }
+    )
+
+    DeltaTable.create(
+        tmp_path, schema=source.schema, partition_by=["group"], mode="overwrite"
+    )
+    dt = DeltaTable(tmp_path)
+    predicate = (
+        "target.`group` = source.`group` "
+        "AND target.region = source.region "
+        "AND target.ts = source.ts"
+    )
+
+    first_metrics = (
+        dt.merge(
+            source=source,
+            predicate=predicate,
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+    dt.update_incremental()
+
+    second_metrics = (
+        dt.merge(
+            source=source,
+            predicate=predicate,
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=streaming,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+    dt.update_incremental()
+
+    result = dt.to_pyarrow_table().sort_by([("region", "ascending")])
+    expected = source.sort_by([("region", "ascending")])
+
+    assert first_metrics["num_target_rows_inserted"] == 3
+    assert first_metrics["num_target_files_removed"] == 0
+    assert second_metrics["num_target_rows_updated"] == 3
+    assert second_metrics["num_target_files_removed"] == 1
+    assert len(dt.file_uris()) == 1
+    assert result == expected
 
 
 def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(

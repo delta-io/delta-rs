@@ -45,7 +45,9 @@ use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
 use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
-use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::expr::{
+    parse_generated_column_expression, parse_predicate_expression,
+};
 use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
@@ -259,7 +261,10 @@ pub(crate) fn validation_predicates(
 ) -> Result<Vec<Expr>> {
     // find all columns that are non-nullable in the table schema but nullable
     // in the source schema and add IS NOT NULL checks for them.
-    let table_schema: Schema = table_configuration.schema().as_ref().try_into_arrow()?;
+    let table_schema: Schema = table_configuration
+        .logical_schema()
+        .as_ref()
+        .try_into_arrow()?;
     let non_nullable_table: HashSet<_> = collect_non_nullable_fields(&table_schema)
         .into_iter()
         .collect();
@@ -279,7 +284,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration
-            .schema()
+            .logical_schema()
             .get_invariants()
             .map_err(|e| plan_datafusion_err!("Failed to read invariants from schema: {}", e))?;
         for invariant in invariants {
@@ -296,7 +301,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::GeneratedColumns) {
         let generated = table_configuration
-            .schema()
+            .logical_schema()
             .get_generated_columns()
             .map_err(|e| {
                 plan_datafusion_err!("Failed to read generated columns from schema: {}", e)
@@ -330,7 +335,7 @@ pub(crate) fn generated_columns_to_exprs<'a>(
     generated_columns
         .into_iter()
         .map(|gen_col| {
-            let expr = parse_predicate_expression(df_schema, &gen_col.generation_expr, session)?;
+            let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
             let col_expr = col(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
             Ok::<_, DataFusionError>(validation_expr)
@@ -357,7 +362,7 @@ pub struct DataValidationExec {
     check_expression: Arc<dyn PhysicalExpr>,
     /// Plan properties including the schema after validation
     /// (may have updated nullability)
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DataValidationExec {
@@ -408,12 +413,12 @@ impl DataValidationExec {
             );
         }
         let schema = validated_schema.unwrap_or_else(|| input.schema());
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
-        );
+        ));
         Ok(Self {
             input,
             check_expression,
@@ -447,7 +452,7 @@ impl ExecutionPlan for DataValidationExec {
         "DataValidationExec"
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -486,10 +491,6 @@ impl ExecutionPlan for DataValidationExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input.partition_statistics(partition)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {

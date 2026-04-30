@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.0", path = "../core", features = ["cloud"] }
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false, features = ["cloud"] }
 
 # workspace depenndecies
 bytes = { workspace = true }
@@ -29,11 +29,14 @@ chrono = { workspace = true }
 serial_test = "3"
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
-rand = "0.8"
+rand = "0.10"
 serde_json = { workspace = true }
 azure_storage_blobs = { version = "0.21.0" }
 futures.workspace = true
 azure_storage = "0.21.0"
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = []

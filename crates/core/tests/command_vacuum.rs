@@ -3,7 +3,7 @@ use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
-use object_store::{Error as ObjectStoreError, ObjectStore, path::Path};
+use object_store::{Error as ObjectStoreError, ObjectStoreExt as _, path::Path};
 use serde_json::json;
 use std::sync::Arc;
 

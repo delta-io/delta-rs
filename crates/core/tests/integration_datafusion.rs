@@ -17,7 +17,7 @@ use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::{Expr, col};
 use datafusion::physical_plan::metrics::Label;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
 use datafusion::prelude::SessionConfig;
@@ -1567,6 +1567,64 @@ async fn create_table_with_schema(table_uri: &str, table_schema: &StructType) ->
         .unwrap()
 }
 
+fn schema_with_generated_trunc_year_column() -> StructType {
+    StructType::try_new(vec![
+        StructField::new(
+            "id".to_string(),
+            DataType::Primitive(PrimitiveType::Integer),
+            false,
+        ),
+        StructField::new(
+            "event_date".to_string(),
+            DataType::Primitive(PrimitiveType::Date),
+            false,
+        ),
+        StructField::new(
+            "event_year".to_string(),
+            DataType::Primitive(PrimitiveType::Date),
+            false,
+        )
+        .with_metadata(vec![(
+            ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+            MetadataValue::String("TRUNC(event_date, 'YEAR')".to_string()),
+        )]),
+    ])
+    .unwrap()
+}
+
+fn event_date_record_batch(ids: Vec<i32>, event_dates: Vec<i32>) -> RecordBatch {
+    RecordBatch::try_from_iter_with_nullable(vec![
+        ("id", Arc::new(Int32Array::from(ids)) as ArrayRef, false),
+        (
+            "event_date",
+            Arc::new(Date32Array::from(event_dates)) as ArrayRef,
+            false,
+        ),
+    ])
+    .unwrap()
+}
+
+fn event_date_with_year_record_batch(
+    ids: Vec<i32>,
+    event_dates: Vec<i32>,
+    event_years: Vec<i32>,
+) -> RecordBatch {
+    RecordBatch::try_from_iter_with_nullable(vec![
+        ("id", Arc::new(Int32Array::from(ids)) as ArrayRef, false),
+        (
+            "event_date",
+            Arc::new(Date32Array::from(event_dates)) as ArrayRef,
+            false,
+        ),
+        (
+            "event_year",
+            Arc::new(Date32Array::from(event_years)) as ArrayRef,
+            false,
+        ),
+    ])
+    .unwrap()
+}
+
 #[tokio::test]
 async fn test_schema_merge_append_missing_nullable_column_with_generated_columns() {
     let ctx = SessionContext::new();
@@ -1632,6 +1690,113 @@ async fn test_schema_merge_append_missing_nullable_column_with_generated_columns
             "| 3  | 30    | 33       |      |",
             "| 4  | 40    | 44       |      |",
             "+----+-------+----------+------+",
+        ],
+        &batches
+    );
+}
+
+#[tokio::test]
+async fn test_generated_column_spark_trunc_append_generates_date() {
+    let ctx = SessionContext::new();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().unwrap();
+
+    let table =
+        create_table_with_schema(table_uri, &schema_with_generated_trunc_year_column()).await;
+    let table = table
+        .write(vec![event_date_record_batch(
+            vec![1, 2],
+            vec![18428, 18859],
+        )])
+        .await
+        .unwrap();
+
+    let batches = ctx
+        .read_table(table.table_provider().await.unwrap())
+        .unwrap()
+        .select_exprs(&["id", "event_date", "event_year"])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(
+        &[
+            "+----+------------+------------+",
+            "| id | event_date | event_year |",
+            "+----+------------+------------+",
+            "| 1  | 2020-06-15 | 2020-01-01 |",
+            "| 2  | 2021-08-20 | 2021-01-01 |",
+            "+----+------------+------------+",
+        ],
+        &batches
+    );
+}
+
+#[tokio::test]
+async fn test_generated_column_spark_trunc_validation_rejects_invalid_values() {
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().unwrap();
+
+    let table =
+        create_table_with_schema(table_uri, &schema_with_generated_trunc_year_column()).await;
+    let result = table
+        .write(vec![event_date_with_year_record_batch(
+            vec![1],
+            vec![18428],
+            vec![18428],
+        )])
+        .await;
+
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("failed validation check"),
+        "expected generated column validation failure, got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn test_generated_column_spark_trunc_merge_generates_missing_values() {
+    let ctx = SessionContext::new();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let table_uri = tmp_dir.path().to_str().unwrap();
+
+    let table =
+        create_table_with_schema(table_uri, &schema_with_generated_trunc_year_column()).await;
+    let source = ctx
+        .read_batch(event_date_record_batch(vec![1, 2], vec![18428, 18859]))
+        .unwrap();
+
+    let (table, _) = table
+        .merge(source, col("target.id").eq(col("source.id")))
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("event_date", col("source.event_date"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+
+    let batches = ctx
+        .read_table(table.table_provider().await.unwrap())
+        .unwrap()
+        .select_exprs(&["id", "event_date", "event_year"])
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(
+        &[
+            "+----+------------+------------+",
+            "| id | event_date | event_year |",
+            "+----+------------+------------+",
+            "| 1  | 2020-06-15 | 2020-01-01 |",
+            "| 2  | 2021-08-20 | 2021-01-01 |",
+            "+----+------------+------------+",
         ],
         &batches
     );

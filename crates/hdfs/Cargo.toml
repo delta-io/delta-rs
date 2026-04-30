@@ -12,8 +12,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.0", path = "../core"}
-hdfs-native-object-store = "0.15"
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false}
+hdfs-native-object-store = "0.16"
 
 # workspace dependencies
 tokio = { workspace = true }
@@ -25,4 +25,7 @@ deltalake-test = { path = "../test" }
 which = "7"
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = ["hdfs-native-object-store/integration-test"]

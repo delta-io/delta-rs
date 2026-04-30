@@ -78,7 +78,7 @@ pub(crate) struct DeltaScanMetaExec {
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
     /// plan properties
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DisplayAs for DeltaScanMetaExec {
@@ -102,9 +102,13 @@ impl DisplayAs for DeltaScanMetaExec {
 }
 
 impl DeltaScanMetaExec {
-    fn make_properties(scan_plan: &KernelScanPlan, partition_count: usize) -> PlanProperties {
+    fn make_properties(
+        scan_plan: &KernelScanPlan,
+        include_file_id: bool,
+        partition_count: usize,
+    ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new(scan_plan.output_schema.clone()),
+            EquivalenceProperties::new(scan_plan.effective_schema(include_file_id)),
             Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -119,7 +123,11 @@ impl DeltaScanMetaExec {
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let properties = Self::make_properties(scan_plan.as_ref(), input.len());
+        let properties = Arc::new(Self::make_properties(
+            scan_plan.as_ref(),
+            file_id_field.is_some(),
+            input.len(),
+        ));
         Self {
             scan_plan,
             input,
@@ -185,7 +193,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -224,7 +232,11 @@ impl ExecutionPlan for DeltaScanMetaExec {
             .into_iter()
             .map(|chunk| chunk.collect())
             .collect();
-        let properties = Self::make_properties(self.scan_plan.as_ref(), new_input.len());
+        let properties = Arc::new(Self::make_properties(
+            self.scan_plan.as_ref(),
+            self.file_id_field.is_some(),
+            new_input.len(),
+        ));
 
         Ok(Some(Arc::new(Self {
             properties,
@@ -249,16 +261,14 @@ impl ExecutionPlan for DeltaScanMetaExec {
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
             file_id_field: self.file_id_field.clone(),
-            schema_adapter: super::SchemaAdapter::new(Arc::clone(&self.scan_plan.result_schema)),
+            schema_adapter: super::SchemaAdapter::new(Arc::clone(
+                &self.scan_plan.contract.result_schema,
+            )),
         }))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn supports_limit_pushdown(&self) -> bool {
@@ -475,7 +485,8 @@ impl Stream for DeltaScanMetaStream {
 
 impl RecordBatchStream for DeltaScanMetaStream {
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.scan_plan.output_schema)
+        self.scan_plan
+            .effective_schema(self.file_id_field.is_some())
     }
 }
 
@@ -969,6 +980,29 @@ mod tests {
         assert!(data[0].schema().column_with_name("data").is_some());
         assert!(data[0].schema().column_with_name("file_id").is_some());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_only_scan_excludes_unprojected_file_id_from_reported_schema() -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = Arc::new(create_session().into_inner());
+        let data_idx = provider.schema().index_of("data").unwrap();
+
+        let scan = provider
+            .scan(&session.state(), Some(&vec![data_idx]), &[], None)
+            .await?;
+        let downcast = scan.as_any().downcast_ref::<DeltaScanMetaExec>();
+        assert!(downcast.is_some());
+        assert_eq!(
+            scan.schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().as_str())
+                .collect_vec(),
+            vec!["data"]
+        );
         Ok(())
     }
 

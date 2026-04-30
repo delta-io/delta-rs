@@ -211,7 +211,7 @@ impl JsonWriter {
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
-        let partition_columns = metadata.partition_columns().clone();
+        let partition_columns = metadata.partition_columns().into();
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
@@ -725,7 +725,7 @@ mod tests {
     }
 
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_json_write_checkpoint() {
         use std::fs;
 

@@ -5,10 +5,11 @@ use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::ToDFSchema;
-use datafusion::datasource::{MemTable, provider_as_source};
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder, col, lit, when};
+use datafusion::logical_expr::{Expr, col, lit, when};
 use datafusion::physical_expr::expressions::col as physical_col;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, SendableRecordBatchStream,
@@ -27,17 +28,13 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    DataFusionMixins, DataValidationExec, DeltaScanConfigBuilder, DeltaTableProvider, find_files,
-    generated_columns_to_exprs,
-    logical::{LogicalPlanBuilderExt as _, LogicalPlanExt as _},
-    validation_predicates,
+    DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, Remove, StructType, StructTypeExt};
-use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
-use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
+use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
+use crate::logstore::{LogStore, ObjectStoreRef};
+use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
-use crate::table::config::TablePropertiesExt as _;
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
@@ -273,6 +270,15 @@ pub(crate) struct WriteExecutionPlanMetrics {
     pub write_time_ms: u64,
 }
 
+struct WriteSinkConfig {
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<NonZeroU64>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+    writer_stats_config: WriterStatsConfig,
+}
+
 /// Metrics captured from draining streams through a writer.
 #[derive(Debug, Default)]
 pub(crate) struct WriteStreamMetrics {
@@ -351,139 +357,10 @@ pub(crate) async fn write_execution_plan(
         writer_stats_config,
         None,
         false,
+        None,
     )
     .await?;
     Ok(actions)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_non_empty_expr(
-    snapshot: &EagerSnapshot,
-    log_store: LogStoreRef,
-    session: &dyn Session,
-    partition_columns: Vec<String>,
-    expression: &Expr,
-    rewrite: &[Add],
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
-    partition_scan: bool,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
-    // For each identified file perform a parquet scan + filter + limit (1) + count.
-    // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
-    let mut actions: Vec<Action> = Vec::new();
-
-    // Take the insert plan schema since it might have been schema evolved, if its not
-    // it is simply the table schema
-    let scan_config = DeltaScanConfigBuilder::new()
-        .with_schema(snapshot.input_schema())
-        .build(snapshot)?;
-
-    let target_provider = Arc::new(
-        DeltaTableProvider::try_new(snapshot.clone(), log_store.clone(), scan_config.clone())?
-            .with_files(rewrite.to_vec()),
-    );
-
-    let source = Arc::new(
-        LogicalPlanBuilder::scan("target", provider_as_source(target_provider), None)?.build()?,
-    );
-
-    let cdf_df = if !partition_scan {
-        // Apply the negation of the filter and rewrite files
-        let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
-        let filter = LogicalPlanBuilder::from(source.clone())
-            .filter(negated_expression)?
-            .build()?;
-        let filter = session.create_physical_plan(&filter).await?;
-
-        let add_actions: Vec<Action> = write_execution_plan(
-            Some(snapshot),
-            session,
-            filter,
-            partition_columns.clone(),
-            log_store.object_store(Some(operation_id)),
-            Some(snapshot.table_properties().target_file_size()),
-            None,
-            writer_properties.clone(),
-            writer_stats_config.clone(),
-        )
-        .await?;
-
-        actions.extend(add_actions);
-
-        // CDC logic, simply filters data with predicate and adds the _change_type="delete" as literal column
-        // Only write when CDC actions when it was not a partition scan, load_cdf can deduce the deletes in that case
-        // based on the remove actions if a partition got deleted
-        if should_write_cdc(snapshot)? {
-            Some(
-                source
-                    .into_builder()
-                    .filter(expression.clone())?
-                    .with_column(CDC_COLUMN_NAME, lit("delete"))?
-                    .build()?,
-            )
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    Ok((actions, cdf_df))
-}
-
-// This should only be called with a valid predicate
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn prepare_predicate_actions(
-    predicate: Expr,
-    log_store: LogStoreRef,
-    snapshot: &EagerSnapshot,
-    session: &dyn Session,
-    partition_columns: Vec<String>,
-    writer_properties: Option<WriterProperties>,
-    deletion_timestamp: i64,
-    writer_stats_config: WriterStatsConfig,
-    operation_id: Uuid,
-) -> DeltaResult<(Vec<Action>, Option<LogicalPlan>)> {
-    let candidates = find_files(
-        snapshot,
-        log_store.clone(),
-        session,
-        Some(predicate.clone()),
-    )
-    .await?;
-
-    let (mut actions, cdf_df) = execute_non_empty_expr(
-        snapshot,
-        log_store,
-        session,
-        partition_columns,
-        &predicate,
-        &candidates.candidates,
-        writer_properties,
-        writer_stats_config,
-        candidates.partition_scan,
-        operation_id,
-    )
-    .await?;
-
-    let remove = candidates.candidates;
-
-    for action in remove {
-        actions.push(Action::Remove(Remove {
-            path: action.path,
-            deletion_timestamp: Some(deletion_timestamp),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(action.partition_values),
-            size: Some(action.size),
-            deletion_vector: action.deletion_vector,
-            tags: None,
-            base_row_id: action.base_row_id,
-            default_row_commit_version: action.default_row_commit_version,
-        }))
-    }
-    Ok((actions, cdf_df))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -499,6 +376,7 @@ pub(crate) async fn write_execution_plan_v2(
     writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
+    insert_marker_column: Option<String>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -519,39 +397,58 @@ pub(crate) async fn write_execution_plan_v2(
     };
 
     if let Some(mut pred) = predicate {
-        if contains_cdc {
+        // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
+        // A rewrite plan never needs both paths at once.
+        if let Some(insert_marker_column) = insert_marker_column.as_ref() {
+            pred = when(col(insert_marker_column).eq(lit(true)), pred).otherwise(lit(true))?;
+        } else if contains_cdc {
             pred = when(col(CDC_COLUMN_NAME).eq(lit("insert")), pred).otherwise(lit(true))?;
         }
         validations.push(pred);
     }
 
-    let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
+    let mut plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
+    if let Some(insert_marker_column) = insert_marker_column.as_ref() {
+        plan = drop_internal_column(plan, insert_marker_column)?;
+    }
+
+    let sink_config = WriteSinkConfig {
+        partition_columns,
+        object_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        writer_stats_config,
+    };
 
     if !contains_cdc {
-        write_data_plan(
-            session,
-            plan,
-            partition_columns,
-            object_store,
-            target_file_size,
-            write_batch_size,
-            writer_properties,
-            writer_stats_config,
-        )
-        .await
+        write_data_plan(session, plan, sink_config).await
     } else {
-        write_cdc_plan(
-            session,
-            plan,
-            partition_columns,
-            object_store,
-            target_file_size,
-            write_batch_size,
-            writer_properties,
-            writer_stats_config,
-        )
-        .await
+        write_cdc_plan(session, plan, sink_config).await
     }
+}
+
+fn drop_internal_column(
+    plan: Arc<dyn ExecutionPlan>,
+    column: &str,
+) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+    let schema = plan.schema();
+    let expressions: Vec<_> = schema
+        .fields()
+        .iter()
+        .filter(|field| field.name() != column)
+        .map(|field| {
+            physical_col(field.name(), &schema)
+                .map(|expr| (expr, field.name().clone()))
+                .map_err(DeltaTableError::from)
+        })
+        .collect::<DeltaResult<_>>()?;
+
+    if expressions.len() == schema.fields().len() {
+        return Ok(plan);
+    }
+
+    Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
 }
 
 pub(crate) async fn write_exec_plan(
@@ -571,32 +468,19 @@ pub(crate) async fn write_exec_plan(
         .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
-    let partition_columns = table_config.metadata().partition_columns().clone();
+    let sink_config = WriteSinkConfig {
+        partition_columns: table_config.metadata().partition_columns().to_vec(),
+        object_store,
+        target_file_size,
+        write_batch_size: None,
+        writer_properties: Some(writer_properties),
+        writer_stats_config: stats_config,
+    };
 
     if write_as_cdc {
-        write_cdc_plan(
-            session,
-            exec,
-            partition_columns,
-            object_store,
-            target_file_size,
-            None,
-            Some(writer_properties),
-            stats_config,
-        )
-        .await
+        write_cdc_plan(session, exec, sink_config).await
     } else {
-        write_data_plan(
-            session,
-            exec,
-            partition_columns,
-            object_store,
-            target_file_size,
-            None,
-            Some(writer_properties),
-            stats_config,
-        )
-        .await
+        write_data_plan(session, exec, sink_config).await
     }
 }
 
@@ -771,13 +655,16 @@ fn repartition_by_partition_columns(
 async fn write_data_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
-    object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    sink_config: WriteSinkConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    let WriteSinkConfig {
+        partition_columns,
+        object_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        writer_stats_config,
+    } = sink_config;
     let config = WriterConfig::new(
         plan.schema().clone(),
         partition_columns.clone(),
@@ -863,13 +750,16 @@ async fn write_data_plan(
 async fn write_cdc_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
-    object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    sink_config: WriteSinkConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    let WriteSinkConfig {
+        partition_columns,
+        object_store,
+        target_file_size,
+        write_batch_size,
+        writer_properties,
+        writer_stats_config,
+    } = sink_config;
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
 
     let write_schema = Arc::new(Schema::new(

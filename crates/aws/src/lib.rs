@@ -7,8 +7,6 @@ pub mod constants;
 mod credentials;
 pub mod errors;
 pub mod logstore;
-#[cfg(feature = "native-tls")]
-mod native;
 pub mod storage;
 
 use aws_config::Region;
@@ -27,7 +25,6 @@ use aws_sdk_dynamodb::{
     },
 };
 use deltalake_core::kernel::Version;
-use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
 use deltalake_core::logstore::{
     LogStore, LogStoreFactory, ObjectStoreRef, StorageConfig, default_logstore, logstore_factories,
     object_store_factories,
@@ -43,8 +40,7 @@ use std::{
 };
 use storage::S3StorageOptionsConversion;
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
-use tracing::debug;
-use tracing::warn;
+use tracing::log::*;
 use typed_builder::TypedBuilder;
 use url::Url;
 
@@ -62,28 +58,6 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let s3_options = self.with_env_s3(&options.raw.clone());
-        if s3_options.keys().any(|key| {
-            let key = key.to_ascii_lowercase();
-            [
-                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
-                "copy_if_not_exists",
-            ]
-            .contains(&key.as_str())
-        }) {
-            debug!(
-                "S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required"
-            );
-            warn!(
-                "Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put."
-            );
-            return Ok(logstore::default_s3_logstore(
-                prefixed_store,
-                root_store,
-                location,
-                options,
-            ));
-        }
-
         let s3_options = S3StorageOptions::from_map(&s3_options)?;
         if s3_options.locking_provider.as_deref() == Some("dynamodb") {
             debug!(

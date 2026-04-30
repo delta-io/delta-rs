@@ -1,6 +1,7 @@
 use chrono::Utc;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::logstore::LogStore;
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::table::builder::DeltaTableBuilder;
 use deltalake_gcp::register_handlers;
 use deltalake_test::utils::*;

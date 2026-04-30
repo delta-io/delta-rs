@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.0", path = "../core", features = ["cloud"] }
+deltalake-core = { version = "0.32.0", path = "../core", default-features = false, features = ["cloud"] }
 
 # workspace depenndecies
 async-trait = { workspace = true }
@@ -30,9 +30,12 @@ serial_test = "3"
 deltalake-test = { path = "../test" }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
-rand = "0.8"
+rand = "0.10"
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 
 [features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls"]
+rustls = ["deltalake-core/rustls"]
 integration_test = []

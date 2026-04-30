@@ -2,8 +2,9 @@ use chrono::Utc;
 use deltalake_core::DeltaTable;
 use deltalake_core::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake_core::kernel::{DataType, PrimitiveType};
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::writer::{DeltaWriter, JsonWriter};
-use deltalake_core::{DeltaTableBuilder, ObjectStore, ensure_table_uri, errors::DeltaResult};
+use deltalake_core::{DeltaTableBuilder, ensure_table_uri, errors::DeltaResult};
 use deltalake_test::utils::*;
 use object_store::path::Path;
 use serde_json::json;
@@ -96,7 +97,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     let _ = std::fs::remove_dir_all("./tests/data/issue_1420");
@@ -211,7 +212,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// This test validates a checkpoint can be updated on a pre deltalake (python) 1.x table
 /// see also: <https://github.com/delta-io/delta-rs/issues/3527>
 async fn test_older_checkpoint_reads() -> DeltaResult<()> {
@@ -224,7 +225,7 @@ async fn test_older_checkpoint_reads() -> DeltaResult<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// This test validates that we can read a table with v2 checkpoints
 async fn test_v2_checkpoint_json() -> DeltaResult<()> {
     let temp_table = clone_table("checkpoint-v2-table");

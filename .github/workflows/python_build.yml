@@ -71,7 +71,6 @@ jobs:
   test-datafusion:
     name: Python Build (Python 3.10 DataFusion integration)
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       # v6.0.2
@@ -85,7 +84,7 @@ jobs:
         run: make develop
 
       - name: Assert DataFusion major version
-        run: uv run --no-sync python -c "from importlib.metadata import version; v=version('datafusion'); assert v.split('.')[0]=='52', f'Expected 52.x, got {v}'"
+        run: uv run --no-sync python -c "from importlib.metadata import version; v=version('datafusion'); assert v.split('.')[0]=='53', f'Expected 53.x, got {v}'"
 
       - name: Run DataFusion integration test
         run: DELTALAKE_RUN_DATAFUSION_TESTS=1 uv run --no-sync pytest -v tests/test_datafusion.py -m datafusion

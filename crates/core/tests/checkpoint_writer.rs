@@ -13,7 +13,7 @@ mod simple_checkpoint {
     use std::fs::{self, File};
     use std::path::{Path, PathBuf};
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial]
     async fn simple_checkpoint_test() {
         let table_location = "../test/tests/data/checkpoints";
@@ -35,7 +35,6 @@ mod simple_checkpoint {
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
-        assert_checkpoint_created_by(&checkpoint_path);
 
         // Check that the checkpoint does use run length encoding
         assert_column_rle_encoding(checkpoint_path, true);
@@ -50,7 +49,6 @@ mod simple_checkpoint {
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
         assert!(checkpoint_path.as_path().exists());
-        assert_checkpoint_created_by(&checkpoint_path);
 
         // Check that the checkpoint does use run length encoding
         assert_column_rle_encoding(checkpoint_path, true);
@@ -91,18 +89,6 @@ mod simple_checkpoint {
         } else {
             assert!(!found_rle, "Expected no RLE_DICTIONARY encoding");
         }
-    }
-
-    fn assert_checkpoint_created_by(file_path: &Path) {
-        let file = File::open(file_path).unwrap();
-        let reader = SerializedFileReader::new(file).unwrap();
-        let meta = reader.metadata();
-        let expected_created_by = format!("delta-rs version {}", deltalake_core::crate_version());
-
-        assert_eq!(
-            meta.file_metadata().created_by(),
-            Some(expected_created_by.as_str())
-        );
     }
 
     fn get_last_checkpoint_version(log_path: &Path) -> i64 {
@@ -169,7 +155,7 @@ mod delete_expired_delta_log_in_checkpoint {
         file.set_times(times).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_expired_logs() -> DeltaResult<()> {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/expired",
@@ -244,7 +230,7 @@ mod delete_expired_delta_log_in_checkpoint {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_version_same_version_refreshes_checkpoint_base() -> DeltaResult<()> {
         let tmp_dir = tempfile::tempdir().unwrap();
         let table_location = tmp_dir.path().to_string_lossy().into_owned();
@@ -314,7 +300,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
     // Test to verify that intermediate versions can still be loaded after the checkpoint is created.
     // This is to verify the behavior of `cleanup_expired_logs_for` and its use of safe checkpoints.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_delete_expired_logs_safe_checkpoint() -> DeltaResult<()> {
         // For additional tracing:
         // let _ = pretty_env_logger::try_init();
@@ -401,7 +387,7 @@ mod delete_expired_delta_log_in_checkpoint {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_not_delete_expired_logs() -> DeltaResult<()> {
         let mut table = fs_common::create_table(
             "../test/tests/data/checkpoints_with_expired_logs/not_delete_expired",
