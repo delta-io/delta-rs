@@ -24,12 +24,102 @@ use crate::kernel::arrow::engine_ext::SnapshotExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StatsProjection {
+    None,
     Full,
     NumRecordsOnly,
     PredicateColumns(BTreeSet<ColumnName>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatsSourcePolicy {
+    ParsedWithJsonFallback,
+    JsonOnly,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawStatsPolicy {
+    Preserve,
+    Omit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileStatsMaterialization {
+    stats_projection: StatsProjection,
+    stats_source_policy: StatsSourcePolicy,
+    raw_stats_policy: RawStatsPolicy,
+}
+
+impl FileStatsMaterialization {
+    pub(crate) fn query(stats_projection: StatsProjection) -> Self {
+        Self {
+            stats_projection,
+            stats_source_policy: StatsSourcePolicy::ParsedWithJsonFallback,
+            raw_stats_policy: RawStatsPolicy::Omit,
+        }
+    }
+
+    pub(crate) fn compatibility(stats_projection: StatsProjection) -> Self {
+        Self {
+            stats_projection,
+            stats_source_policy: StatsSourcePolicy::ParsedWithJsonFallback,
+            raw_stats_policy: RawStatsPolicy::Preserve,
+        }
+    }
+
+    pub(crate) fn json_only(
+        stats_projection: StatsProjection,
+        raw_stats_policy: RawStatsPolicy,
+    ) -> Self {
+        Self {
+            stats_projection,
+            stats_source_policy: StatsSourcePolicy::JsonOnly,
+            raw_stats_policy,
+        }
+    }
+
+    pub(crate) fn without_stats() -> Self {
+        Self {
+            stats_projection: StatsProjection::none(),
+            stats_source_policy: StatsSourcePolicy::None,
+            raw_stats_policy: RawStatsPolicy::Omit,
+        }
+    }
+
+    pub(crate) fn stats_projection(&self) -> &StatsProjection {
+        &self.stats_projection
+    }
+
+    pub(crate) fn stats_source_policy(&self) -> StatsSourcePolicy {
+        self.stats_source_policy
+    }
+
+    pub(crate) fn raw_stats_policy(&self) -> RawStatsPolicy {
+        self.raw_stats_policy
+    }
+
+    pub(crate) fn preserves_raw_stats(&self) -> bool {
+        self.raw_stats_policy == RawStatsPolicy::Preserve
+    }
+}
+
 impl StatsProjection {
+    pub(crate) fn none() -> Self {
+        Self::None
+    }
+
+    pub(crate) fn full() -> Self {
+        Self::Full
+    }
+
+    pub(crate) fn num_records_only() -> Self {
+        Self::NumRecordsOnly
+    }
+
+    pub(crate) fn predicate_columns(columns: impl IntoIterator<Item = ColumnName>) -> Self {
+        Self::PredicateColumns(columns.into_iter().collect())
+    }
+
     /// Builds the stats projection for a scan using physical predicate references.
     ///
     /// Use `NumRecordsOnly` when a predicate only touches partition columns,
@@ -83,6 +173,7 @@ impl StatsProjection {
 
     pub(crate) fn stats_schema(&self, snapshot: &KernelSnapshot) -> DeltaResult<KernelSchemaRef> {
         match self {
+            Self::None => Ok(Arc::new(StructType::try_new([])?)),
             Self::Full => Ok(snapshot.table_configuration().stats_schema()?),
             Self::NumRecordsOnly => num_records_only_stats_schema(),
             Self::PredicateColumns(columns) => {
@@ -127,6 +218,7 @@ impl StatsProjection {
     #[cfg(feature = "datafusion")]
     pub(crate) fn emits_top_level_column_stats(&self, physical_name: &str) -> bool {
         match self {
+            Self::None => false,
             Self::Full => true,
             Self::NumRecordsOnly => false,
             Self::PredicateColumns(columns) => columns.iter().any(|column| {
@@ -332,6 +424,44 @@ mod tests {
         predicate: Option<PredicateRef>,
     ) -> DeltaResult<crate::kernel::snapshot::Scan> {
         snapshot.scan_builder().with_predicate(predicate).build()
+    }
+
+    #[test]
+    fn file_stats_materialization_query_defaults_to_omit_raw() {
+        let projection = StatsProjection::num_records_only();
+        let materialization = FileStatsMaterialization::query(projection.clone());
+
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert_eq!(materialization.raw_stats_policy(), RawStatsPolicy::Omit);
+        assert_eq!(materialization.stats_projection(), &projection);
+    }
+
+    #[test]
+    fn file_stats_materialization_compatibility_preserves_raw() {
+        let projection = StatsProjection::full();
+        let materialization = FileStatsMaterialization::compatibility(projection.clone());
+
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert_eq!(materialization.raw_stats_policy(), RawStatsPolicy::Preserve);
+        assert_eq!(materialization.stats_projection(), &projection);
+    }
+
+    #[test]
+    fn file_stats_materialization_without_stats_disables_sources() {
+        let materialization = FileStatsMaterialization::without_stats();
+
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::None
+        );
+        assert_eq!(materialization.raw_stats_policy(), RawStatsPolicy::Omit);
+        assert_eq!(materialization.stats_projection(), &StatsProjection::none());
     }
 
     #[tokio::test]
