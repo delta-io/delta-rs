@@ -17,6 +17,7 @@ use datafusion::physical_plan::{
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -30,7 +31,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, unsupported_column_mapping_write};
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -273,6 +274,9 @@ pub(crate) struct WriteExecutionPlanMetrics {
 struct WriteSinkConfig {
     partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
+    table_config: Option<TableConfiguration>,
+    effective_schema: Option<StructType>,
+    preserve_column_mapping_hive_style_partitions: bool,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
@@ -347,6 +351,7 @@ pub(crate) async fn write_execution_plan(
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         snapshot,
+        None,
         session,
         plan,
         partition_columns,
@@ -358,6 +363,7 @@ pub(crate) async fn write_execution_plan(
         None,
         false,
         None,
+        false,
     )
     .await?;
     Ok(actions)
@@ -366,6 +372,7 @@ pub(crate) async fn write_execution_plan(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
     snapshot: Option<&EagerSnapshot>,
+    effective_schema: Option<StructType>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -377,6 +384,7 @@ pub(crate) async fn write_execution_plan_v2(
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
+    preserve_column_mapping_hive_style_partitions: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -407,6 +415,17 @@ pub(crate) async fn write_execution_plan_v2(
         validations.push(pred);
     }
 
+    if contains_cdc
+        && snapshot.is_some_and(|snapshot| {
+            snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+        })
+    {
+        return Err(unsupported_column_mapping_write(
+            "change data feed",
+            "CDC file writes do not rewrite physical names for column-mapped tables yet",
+        ));
+    }
+
     let mut plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
     if let Some(insert_marker_column) = insert_marker_column.as_ref() {
         plan = drop_internal_column(plan, insert_marker_column)?;
@@ -415,6 +434,9 @@ pub(crate) async fn write_execution_plan_v2(
     let sink_config = WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config: snapshot.map(|snapshot| snapshot.table_configuration().clone()),
+        effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -471,6 +493,9 @@ pub(crate) async fn write_exec_plan(
     let sink_config = WriteSinkConfig {
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
+        table_config: Some(table_config.clone()),
+        effective_schema: None,
+        preserve_column_mapping_hive_style_partitions: false,
         target_file_size,
         write_batch_size: None,
         writer_properties: Some(writer_properties),
@@ -660,6 +685,9 @@ async fn write_data_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config,
+        effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -674,6 +702,14 @@ async fn write_data_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     );
+    let config = match table_config.as_ref() {
+        Some(table_config) => config
+            .with_preserve_column_mapping_hive_style_partitions(
+                preserve_column_mapping_hive_style_partitions,
+            )
+            .with_table_configuration(table_config, effective_schema.as_ref())?,
+        None => config,
+    };
 
     // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
@@ -755,6 +791,9 @@ async fn write_cdc_plan(
     let WriteSinkConfig {
         partition_columns,
         object_store,
+        table_config,
+        effective_schema,
+        preserve_column_mapping_hive_style_partitions,
         target_file_size,
         write_batch_size,
         writer_properties,
@@ -787,6 +826,14 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     );
+    let normal_config = match table_config.as_ref() {
+        Some(table_config) => normal_config
+            .with_preserve_column_mapping_hive_style_partitions(
+                preserve_column_mapping_hive_style_partitions,
+            )
+            .with_table_configuration(table_config, effective_schema.as_ref())?,
+        None => normal_config,
+    };
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),

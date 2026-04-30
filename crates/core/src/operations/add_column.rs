@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use delta_kernel::schema::StructType;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -100,6 +102,13 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 ));
             }
 
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write(
+                    "ADD COLUMN",
+                    "adding column mapping metadata outside write schema merge is not supported yet",
+                ));
+            }
+
             let table_schema = snapshot.schema();
             let new_table_schema = merge_delta_struct(table_schema.as_ref(), fields_right)?;
 
@@ -136,5 +145,45 @@ impl std::future::IntoFuture for AddColumnBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::{DataType, PrimitiveType, StructField};
+
+    #[tokio::test]
+    async fn test_add_column_rejects_column_mapping_table() -> crate::DeltaResult<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let fixture_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_column_mapping");
+        fs_extra::dir::copy(&fixture_source, temp_dir.path(), &Default::default())
+            .map_err(crate::DeltaTableError::generic)?;
+        let table_url = url::Url::from_directory_path(
+            temp_dir
+                .path()
+                .join("table_with_column_mapping")
+                .canonicalize()?,
+        )
+        .unwrap();
+        let table = crate::open_table(table_url).await?;
+
+        let err = table
+            .add_columns()
+            .with_fields([StructField::new(
+                "new_column",
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            )])
+            .await
+            .expect_err("ADD COLUMN should be rejected for column-mapped tables");
+
+        assert!(
+            err.to_string()
+                .contains("Unsupported column mapping write for ADD COLUMN:"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
     }
 }

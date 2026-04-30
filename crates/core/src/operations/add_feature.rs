@@ -224,4 +224,32 @@ mod tests {
         assert!(result.is_err());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn add_column_mapping_feature() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = create_bare_table().write(vec![batch]).await.unwrap();
+        let result = table
+            .add_feature()
+            .with_feature(TableFeatures::ColumnMapping)
+            .with_allow_protocol_versions_increase(true)
+            .await
+            .unwrap();
+
+        let current_protocol = result.snapshot().unwrap().protocol().clone();
+        assert!(
+            &current_protocol
+                .writer_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ColumnMapping)
+        );
+        assert!(
+            &current_protocol
+                .reader_features()
+                .unwrap_or_default()
+                .contains(&TableFeature::ColumnMapping)
+        );
+
+        Ok(())
+    }
 }

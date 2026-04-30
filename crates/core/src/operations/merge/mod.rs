@@ -64,6 +64,7 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
+use delta_kernel::table_features::ColumnMappingMode;
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -85,6 +86,7 @@ use crate::delta_datafusion::{
     resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
@@ -844,6 +846,14 @@ async fn execute(
     if should_cdc {
         debug!("Executing a merge and I should write CDC!");
     }
+    if merge_schema
+        && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+    {
+        return Err(unsupported_column_mapping_write(
+            "merge schema evolution",
+            "schema evolution during MERGE is not implemented for column-mapped tables yet",
+        ));
+    }
 
     info!(cdc_enabled = should_cdc, "merge execution details");
 
@@ -1548,6 +1558,7 @@ async fn execute(
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         Some(&snapshot),
+        None,
         &state,
         write,
         table_partition_cols.to_vec(),
@@ -1559,6 +1570,7 @@ async fn execute(
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
+        false,
     )
     .await?;
     if let Some(schema_metadata) = schema_action {

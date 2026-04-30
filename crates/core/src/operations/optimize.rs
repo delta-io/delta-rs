@@ -32,6 +32,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -52,7 +53,7 @@ use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
@@ -416,6 +417,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write(
+                    "OPTIMIZE",
+                    "rewritten optimized files do not preserve column mapping semantics yet",
+                ));
+            }
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -686,6 +693,7 @@ impl MergePlan {
         let writer_config = PartitionWriterConfig::try_new(
             task_parameters.file_schema.clone(),
             partition_values.clone(),
+            None,
             Some(task_parameters.writer_properties.clone()),
             // Since we know the total size of the bin, we can set the target file size to None.
             if ignore_target_size {
@@ -1384,6 +1392,35 @@ async fn build_zorder_plan(
 mod compact_planner_tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_optimize_rejects_column_mapping_table() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = tempfile::tempdir()?;
+        let fixture_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_column_mapping");
+        fs_extra::dir::copy(&fixture_source, temp_dir.path(), &Default::default())?;
+        let table_url = url::Url::from_directory_path(
+            temp_dir
+                .path()
+                .join("table_with_column_mapping")
+                .canonicalize()?,
+        )
+        .unwrap();
+        let table = crate::open_table(table_url).await?;
+
+        let err = table
+            .optimize()
+            .await
+            .expect_err("optimize should reject column-mapped tables");
+
+        assert!(
+            err.to_string()
+                .contains("Unsupported column mapping write for OPTIMIZE:"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
 
     fn candidate(stable_ordinal: usize, size_bytes: u64) -> OrderedFileCandidate {
         OrderedFileCandidate {

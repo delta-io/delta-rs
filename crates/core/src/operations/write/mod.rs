@@ -54,7 +54,7 @@ use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
     resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{Action, EagerSnapshot, StructType};
@@ -145,6 +145,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Preserve Hive-style partition directories for column-mapped tables.
+    preserve_column_mapping_hive_style_partitions: bool,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// Name of the table, only used when table doesn't exist yet
@@ -197,6 +199,7 @@ impl WriteBuilder {
             safe_cast: false,
             schema_mode: None,
             writer_properties: None,
+            preserve_column_mapping_hive_style_partitions: false,
             commit_properties: CommitProperties::default(),
             name: None,
             description: None,
@@ -289,6 +292,16 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Preserve Hive-style partition directories for column-mapped tables.
+    ///
+    /// The default column-mapped write layout uses randomized file prefixes, which matches Spark
+    /// and Databricks. This option keeps `partition=value/...` paths for integrations that
+    /// explicitly depend on that layout.
+    pub fn with_preserve_column_mapping_hive_style_partitions(mut self, preserve: bool) -> Self {
+        self.preserve_column_mapping_hive_style_partitions = preserve;
         self
     }
 
@@ -406,6 +419,18 @@ impl WriteBuilder {
                 }
             }
             None => {
+                if matches!(
+                    self.configuration
+                        .get("delta.columnMapping.mode")
+                        .and_then(|value| value.as_deref()),
+                    Some("name" | "id")
+                ) {
+                    return Err(unsupported_column_mapping_write(
+                        "WriteBuilder table creation",
+                        "creating column-mapped tables through WriteBuilder is not supported yet",
+                    ));
+                }
+
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
@@ -514,6 +539,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     exec_options,
                     ..
                 } = prepared_write;
+                let effective_schema = schema_delta.effective_schema.clone();
                 actions.extend(schema_delta.into_actions());
 
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
@@ -533,6 +559,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
                     this.snapshot.as_ref(),
+                    effective_schema,
                     &session,
                     source_plan.clone(),
                     partition_columns.clone(),
@@ -544,6 +571,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     exact_validation,
                     contains_cdc,
                     insert_marker_column,
+                    this.preserve_column_mapping_hive_style_partitions,
                 )
                 .await?;
 
@@ -616,6 +644,7 @@ mod tests {
     use crate::TableProperty;
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
+    use crate::kernel::{DataType as DeltaDataType, PrimitiveType, Protocol, StructField};
     use crate::logstore::get_actions;
     use crate::operations::collect_sendable_stream;
     use crate::protocol::SaveMode;
@@ -633,9 +662,11 @@ mod tests {
     use datafusion::prelude::*;
     use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use delta_kernel::engine::arrow_conversion::TryIntoArrow;
-    use delta_kernel::schema::MetadataValue;
+    use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
     use futures::TryStreamExt;
     use itertools::Itertools;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
     use serde_json::{Value, json};
 
     async fn get_write_metrics(table: &DeltaTable) -> WriteMetrics {
@@ -727,6 +758,188 @@ mod tests {
                 _ => None,
             })
             .collect())
+    }
+
+    async fn latest_add_actions(table: &DeltaTable) -> TestResult<Vec<crate::kernel::Add>> {
+        let version = table
+            .version()
+            .expect("expected committed version for latest add actions");
+        let snapshot_bytes = table
+            .log_store
+            .read_commit_entry(version)
+            .await?
+            .expect("failed to get snapshot bytes");
+        Ok(get_actions(version, &snapshot_bytes)?
+            .into_iter()
+            .filter_map(|action| match action {
+                Action::Add(add) => Some(add),
+                _ => None,
+            })
+            .collect())
+    }
+
+    fn column_mapping_fixture_path() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test/tests/data/table_with_column_mapping")
+    }
+
+    fn column_mapping_physical_name(field: &crate::kernel::StructField) -> TestResult<String> {
+        match field
+            .metadata()
+            .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+        {
+            Some(MetadataValue::String(name)) => Ok(name.clone()),
+            other => Err(std::io::Error::other(format!(
+                "expected column mapping physical name, got {other:?}"
+            ))
+            .into()),
+        }
+    }
+
+    fn assert_unsupported_column_mapping_write(err: &DeltaTableError, feature: &str) {
+        assert!(
+            err.to_string()
+                .contains(&format!("Unsupported column mapping write for {feature}:")),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn column_mapping_field(
+        name: &str,
+        primitive_type: PrimitiveType,
+        id: i64,
+        physical_name: &str,
+        nullable: bool,
+    ) -> StructField {
+        let mut field = StructField::new(name, DeltaDataType::Primitive(primitive_type), nullable);
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+            MetadataValue::Number(id),
+        );
+        field.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String(physical_name.to_string()),
+        );
+        field
+    }
+
+    fn column_mapping_protocol() -> TestResult<Protocol> {
+        Ok(serde_json::from_value(json!({
+            "minReaderVersion": 2,
+            "minWriterVersion": 5
+        }))?)
+    }
+
+    fn logical_partition_column_mapping_configuration(
+        enable_cdf: bool,
+    ) -> Vec<(String, Option<String>)> {
+        let mut configuration = vec![
+            (
+                TableProperty::ColumnMappingMode.as_ref().to_string(),
+                Some("name".to_string()),
+            ),
+            (
+                "delta.columnMapping.maxColumnId".to_string(),
+                Some("3".to_string()),
+            ),
+        ];
+        if enable_cdf {
+            configuration.push((
+                TableProperty::EnableChangeDataFeed.as_ref().to_string(),
+                Some("true".to_string()),
+            ));
+        }
+        configuration
+    }
+
+    async fn create_logical_partition_column_mapping_table(
+        enable_cdf: bool,
+    ) -> TestResult<DeltaTable> {
+        Ok(DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                column_mapping_field("id", PrimitiveType::Long, 1, "id", false),
+                column_mapping_field(
+                    "partition_column",
+                    PrimitiveType::String,
+                    2,
+                    "partition_column",
+                    false,
+                ),
+                column_mapping_field(
+                    "data_column",
+                    PrimitiveType::String,
+                    3,
+                    "col-data_column",
+                    true,
+                ),
+            ])
+            .with_partition_columns(["partition_column"])
+            .with_actions([Action::Protocol(column_mapping_protocol()?)])
+            .with_raise_if_key_not_exists(false)
+            .with_configuration(logical_partition_column_mapping_configuration(enable_cdf))
+            .await?)
+    }
+
+    fn logical_partition_column_mapping_batch(
+        rows: &[(i64, &str, &str)],
+    ) -> TestResult<RecordBatch> {
+        Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("partition_column", DataType::Utf8, false),
+                Field::new("data_column", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|(id, _, _)| *id).collect::<Vec<_>>(),
+                )) as _,
+                Arc::new(StringArray::from(
+                    rows.iter()
+                        .map(|(_, partition, _)| Some(*partition))
+                        .collect::<Vec<_>>(),
+                )) as _,
+                Arc::new(StringArray::from(
+                    rows.iter()
+                        .map(|(_, _, value)| Some(*value))
+                        .collect::<Vec<_>>(),
+                )) as _,
+            ],
+        )?)
+    }
+
+    fn assert_parquet_columns(
+        table_root: &std::path::Path,
+        add: &crate::kernel::Add,
+        present: &[&str],
+        absent: &[&str],
+    ) -> TestResult {
+        let file = std::fs::File::open(table_root.join(&add.path))?;
+        let reader = SerializedFileReader::new(file)?;
+        let columns = reader
+            .metadata()
+            .file_metadata()
+            .schema_descr()
+            .columns()
+            .iter()
+            .map(|column| column.path().string())
+            .collect::<Vec<_>>();
+
+        for expected in present {
+            assert!(
+                columns.iter().any(|column| column == expected),
+                "expected Parquet column {expected}, got {columns:?}"
+            );
+        }
+        for unexpected in absent {
+            assert!(
+                columns.iter().all(|column| column != unexpected),
+                "did not expect Parquet column {unexpected}, got {columns:?}"
+            );
+        }
+        Ok(())
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -2053,6 +2266,757 @@ mod tests {
         let remove = &remove_actions[0];
         assert_eq!(remove.path, source_path);
         assert_eq!(remove.deletion_vector, source_deletion_vector);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Delta RS")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let table_root = temp_dir.path().join("table_with_column_mapping");
+
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("DRS".to_string()))
+        );
+        assert!(!add.path.starts_with("Company Very Short="));
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+        assert_parquet_columns(
+            &table_root,
+            add,
+            &[physical_data],
+            &["Super Name", physical_partition, "Company Very Short"],
+        )?;
+
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Delta RS"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'DRS' AND "Super Name" = 'Delta RS'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_uses_random_prefix_by_default_when_partition_physical_names_are_logical()
+    -> TestResult {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let batch =
+            logical_partition_column_mapping_batch(&[(1, "partition-value", "data-value")])?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get("partition_column"),
+            Some(&Some("partition-value".to_string()))
+        );
+        assert!(!add.path.starts_with("partition_column=partition-value/"));
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"]["col-data_column"], json!("data-value"));
+        assert!(stats["minValues"]["data_column"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE partition_column = 'partition-value' AND data_column = 'data-value'",
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_can_preserve_hive_partition_paths() -> TestResult
+    {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let batch =
+            logical_partition_column_mapping_batch(&[(1, "partition-value", "data-value")])?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .with_preserve_column_mapping_hive_style_partitions(true)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get("partition_column"),
+            Some(&Some("partition-value".to_string()))
+        );
+        assert!(add.path.starts_with("partition_column=partition-value/"));
+
+        let rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE partition_column = 'partition-value' AND data_column = 'data-value'",
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_table_uses_configured_random_prefix_length() -> TestResult {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let table = table
+            .set_tbl_properties()
+            .with_raise_if_not_exists(false)
+            .with_properties(HashMap::from([(
+                TableProperty::RandomPrefixLength.as_ref().to_string(),
+                "3".to_string(),
+            )]))
+            .await?;
+
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                1,
+                "partition-value",
+                "data-value",
+            )])?])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        assert_eq!(add_actions[0].path.split('/').next().map(str::len), Some(3));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_table_rejects_invalid_random_prefix_length() -> TestResult {
+        for invalid_length in ["0", "33"] {
+            let table = create_logical_partition_column_mapping_table(false).await?;
+            let table = table
+                .set_tbl_properties()
+                .with_raise_if_not_exists(false)
+                .with_properties(HashMap::from([(
+                    TableProperty::RandomPrefixLength.as_ref().to_string(),
+                    invalid_length.to_string(),
+                )]))
+                .await?;
+
+            let err = table
+                .write(vec![logical_partition_column_mapping_batch(&[(
+                    1,
+                    "partition-value",
+                    "data-value",
+                )])?])
+                .with_save_mode(SaveMode::Append)
+                .await
+                .expect_err("invalid delta.randomPrefixLength should be rejected");
+
+            assert!(
+                err.to_string().contains(&format!(
+                    "invalid delta.randomPrefixLength value `{invalid_length}`"
+                )),
+                "unexpected error for {invalid_length}: {err}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_column_mapping_name_table_uses_random_prefix_by_default_when_partition_physical_names_are_logical()
+    -> TestResult {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[
+                (1, "partition-a", "old"),
+                (2, "partition-b", "keep"),
+            ])?])
+            .await?;
+
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                3,
+                "partition-a",
+                "new",
+            )])?])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("partition_column = 'partition-a'")
+            .await?;
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get("partition_column"),
+            Some(&Some("partition-a".to_string()))
+        );
+        assert!(!add.path.starts_with("partition_column=partition-a/"));
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"]["col-data_column"], json!("new"));
+        assert!(stats["minValues"]["data_column"].is_null());
+
+        let remove_actions = latest_remove_actions(&table).await?;
+        assert_eq!(remove_actions.len(), 1);
+        assert!(
+            !remove_actions[0]
+                .path
+                .starts_with("partition_column=partition-a/")
+        );
+
+        let replacement_rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE partition_column = 'partition-a' AND data_column = 'new'",
+        )
+        .await?;
+        assert_eq!(replacement_rows, vec![1]);
+        let preserved_rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE partition_column = 'partition-b' AND data_column = 'keep'",
+        )
+        .await?;
+        assert_eq!(preserved_rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_merge_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                1,
+                "partition-a",
+                "old",
+            )])?])
+            .await?;
+
+        let source =
+            SessionContext::new().read_batch(logical_partition_column_mapping_batch(&[
+                (1, "partition-a", "updated"),
+                (2, "partition-b", "inserted"),
+            ])?)?;
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("data_column", col("source.data_column")))
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("partition_column", col("source.partition_column"))
+                    .set("data_column", col("source.data_column"))
+            })
+            .unwrap()
+            .await?;
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert!(!add_actions.is_empty());
+        for add in &add_actions {
+            assert!(add.partition_values.contains_key("partition_column"));
+            assert!(!add.path.starts_with("partition_column="));
+            assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+            let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+            assert!(!stats["minValues"]["col-data_column"].is_null());
+            assert!(stats["minValues"]["data_column"].is_null());
+        }
+
+        let updated_rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE id = 1 AND partition_column = 'partition-a' AND data_column = 'updated'",
+        )
+        .await?;
+        assert_eq!(updated_rows, vec![1]);
+        let inserted_rows = query_single_i64_row(
+            &table,
+            "SELECT COUNT(*) FROM test WHERE id = 2 AND partition_column = 'partition-b' AND data_column = 'inserted'",
+        )
+        .await?;
+        assert_eq!(inserted_rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_column_mapping_name_table_is_rejected() -> TestResult {
+        let table = create_logical_partition_column_mapping_table(false).await?;
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                1,
+                "partition-a",
+                "old",
+            )])?])
+            .await?;
+        let source = SessionContext::new().read_batch(logical_partition_column_mapping_batch(
+            &[(1, "partition-a", "updated")],
+        )?)?;
+
+        let err = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| update.update("data_column", col("source.data_column")))
+            .unwrap()
+            .await
+            .expect_err("merge schema evolution should be rejected for column-mapped tables");
+
+        assert_unsupported_column_mapping_write(&err, "merge schema evolution");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_schema_merge_assigns_physical_names()
+    -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true).with_metadata(HashMap::from([(
+                    "delta.userMetadata".to_string(),
+                    "preserve-new-metadata".to_string(),
+                )])),
+                Field::new("Extra Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Delta RS")])) as _,
+                Arc::new(StringArray::from(vec![Some("extra")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await?;
+
+        let schema = table.snapshot()?.schema();
+        let extra = schema
+            .field("Extra Name")
+            .expect("expected merged field in table schema");
+        assert!(matches!(
+            extra
+                .metadata()
+                .get(ColumnMetadataKey::ColumnMappingId.as_ref()),
+            Some(MetadataValue::Number(_))
+        ));
+        let physical_extra = column_mapping_physical_name(extra)?;
+        let super_name = schema
+            .field("Super Name")
+            .expect("expected existing mapped field");
+        assert_eq!(
+            super_name
+                .metadata()
+                .get(ColumnMetadataKey::ColumnMappingId.as_ref()),
+            Some(&MetadataValue::Number(2))
+        );
+        assert_eq!(
+            column_mapping_physical_name(super_name)?,
+            "col-3877fd94-0973-4941-ac6b-646849a1ff65"
+        );
+        assert_eq!(
+            super_name.metadata().get("delta.userMetadata"),
+            Some(&MetadataValue::String("preserve-new-metadata".to_string()))
+        );
+
+        let max_column_id = table
+            .snapshot()?
+            .metadata()
+            .configuration()
+            .get("delta.columnMapping.maxColumnId")
+            .expect("expected max column id")
+            .parse::<i64>()?;
+        assert_eq!(max_column_id, 3);
+
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let table_root = temp_dir.path().join("table_with_column_mapping");
+        assert_parquet_columns(
+            &table_root,
+            &add_actions[0],
+            &[physical_extra.as_str()],
+            &["Extra Name"],
+        )?;
+        let stats: Value = serde_json::from_str(add_actions[0].stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_extra.as_str()], json!("extra"));
+        assert!(stats["minValues"]["Extra Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'DRS' AND "Extra Name" = 'extra'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_column_mapping_name_table_schema_merge_rejects_malformed_max_column_id()
+    -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+        let table = table
+            .set_tbl_properties()
+            .with_raise_if_not_exists(false)
+            .with_properties(HashMap::from([(
+                "delta.columnMapping.maxColumnId".to_string(),
+                "not-a-number".to_string(),
+            )]))
+            .await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+                Field::new("Extra Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Delta RS")])) as _,
+                Arc::new(StringArray::from(vec![Some("extra")])) as _,
+            ],
+        )?;
+
+        let err = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await
+            .expect_err("malformed maxColumnId should be rejected");
+
+        assert!(matches!(err, DeltaTableError::MetadataError(_)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("BME")])) as _,
+                Arc::new(StringArray::from(vec![Some("Replacement")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where(r#""Company Very Short" = 'BME'"#)
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BME".to_string()))
+        );
+        assert_eq!(add.path.split('/').next().map(str::len), Some(2));
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Replacement"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'BME' AND "Super Name" = 'Replacement'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_data_skipping_stats_columns_are_physical() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let table = table
+            .set_tbl_properties()
+            .with_raise_if_not_exists(false)
+            .with_properties(HashMap::from([(
+                TableProperty::DataSkippingStatsColumns.as_ref().to_string(),
+                "Super Name".to_string(),
+            )]))
+            .await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("Company Very Short", DataType::Utf8, true),
+                Field::new("Super Name", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("DRS")])) as _,
+                Arc::new(StringArray::from(vec![Some("Stats Only")])) as _,
+            ],
+        )?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let stats: Value = serde_json::from_str(add_actions[0].stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Stats Only"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+        assert!(stats["minValues"]["col-173b4db9-b5ad-427f-9e75-516aae37fbbb"].is_null());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_update_column_mapping_name_table_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let (table, _metrics) = table
+            .update()
+            .with_predicate(r#""Company Very Short" = 'BME'"#)
+            .with_update("Super Name", lit("Updated Lamb"))
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BME".to_string()))
+        );
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert_eq!(stats["minValues"][physical_data], json!("Updated Lamb"));
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Company Very Short" = 'BME' AND "Super Name" = 'Updated Lamb'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![1]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_mapping_name_table_rewrite_writes_physical_names() -> TestResult {
+        let fixture_source = column_mapping_fixture_path();
+        let (_temp_dir, table) =
+            open_copied_table_fixture(&fixture_source, "table_with_column_mapping").await?;
+
+        let (table, _metrics) = table
+            .delete()
+            .with_predicate(r#""Super Name" = 'Anthony Johnson'"#)
+            .await?;
+
+        let physical_partition = "col-173b4db9-b5ad-427f-9e75-516aae37fbbb";
+        let physical_data = "col-3877fd94-0973-4941-ac6b-646849a1ff65";
+        let add_actions = latest_add_actions(&table).await?;
+        assert_eq!(add_actions.len(), 1);
+        let add = &add_actions[0];
+        assert_eq!(
+            add.partition_values.get(physical_partition),
+            Some(&Some("BMS".to_string()))
+        );
+        let stats: Value = serde_json::from_str(add.stats.as_ref().unwrap())?;
+        assert!(!stats["minValues"][physical_data].is_null());
+        assert!(stats["minValues"]["Super Name"].is_null());
+
+        let rows = query_single_i64_row(
+            &table,
+            r#"SELECT COUNT(*) FROM test WHERE "Super Name" = 'Anthony Johnson'"#,
+        )
+        .await?;
+        assert_eq!(rows, vec![0]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_create_column_mapping_table_is_rejected() -> TestResult {
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Utf8,
+                true,
+            )])),
+            vec![Arc::new(StringArray::from(vec![Some("a")])) as _],
+        )?;
+
+        let err = DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_configuration(HashMap::from([(
+                TableProperty::ColumnMappingMode.as_ref().to_string(),
+                Some("name".to_string()),
+            )]))
+            .await
+            .expect_err("column-mapped table creation through WriteBuilder should fail");
+
+        assert_unsupported_column_mapping_write(&err, "WriteBuilder table creation");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_id_write_is_rejected() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                column_mapping_field("id", PrimitiveType::String, 1, "id", true),
+                column_mapping_field("value", PrimitiveType::Integer, 2, "value", true),
+                column_mapping_field("modified", PrimitiveType::String, 3, "modified", true),
+            ])
+            .with_actions([Action::Protocol(column_mapping_protocol()?)])
+            .with_raise_if_key_not_exists(false)
+            .with_configuration([(TableProperty::ColumnMappingMode.as_ref(), Some("id"))])
+            .await?;
+
+        let err = table
+            .write(vec![get_record_batch(None, false)])
+            .await
+            .expect_err("id-mode column mapping writes should fail");
+
+        assert_unsupported_column_mapping_write(&err, "columnMapping.mode = id");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_nested_write_is_rejected() -> TestResult {
+        let mut nested_count =
+            StructField::new("count", DeltaDataType::Primitive(PrimitiveType::Long), true);
+        nested_count.metadata.insert(
+            ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+            MetadataValue::Number(5),
+        );
+        nested_count.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String("count".to_string()),
+        );
+        let mut nested = StructField::new(
+            "nested",
+            DeltaDataType::Struct(Box::new(StructType::try_new([nested_count])?)),
+            true,
+        );
+        nested.metadata.insert(
+            ColumnMetadataKey::ColumnMappingId.as_ref().to_string(),
+            MetadataValue::Number(4),
+        );
+        nested.metadata.insert(
+            ColumnMetadataKey::ColumnMappingPhysicalName
+                .as_ref()
+                .to_string(),
+            MetadataValue::String("nested".to_string()),
+        );
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                column_mapping_field("id", PrimitiveType::String, 1, "id", true),
+                column_mapping_field("value", PrimitiveType::Integer, 2, "value", true),
+                column_mapping_field("modified", PrimitiveType::String, 3, "modified", true),
+                nested,
+            ])
+            .with_actions([Action::Protocol(column_mapping_protocol()?)])
+            .with_raise_if_key_not_exists(false)
+            .with_configuration([
+                (TableProperty::ColumnMappingMode.as_ref(), Some("name")),
+                ("delta.columnMapping.maxColumnId", Some("4")),
+            ])
+            .await?;
+
+        let err = table
+            .write(vec![get_record_batch_with_nested_struct()])
+            .await
+            .expect_err("nested column-mapped writes should fail");
+
+        assert_unsupported_column_mapping_write(&err, "nested columns");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_column_mapping_name_cdc_write_is_rejected() -> TestResult {
+        let table = create_logical_partition_column_mapping_table(true).await?;
+        let table = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                1,
+                "partition-a",
+                "old",
+            )])?])
+            .await?;
+
+        let err = table
+            .write(vec![logical_partition_column_mapping_batch(&[(
+                2,
+                "partition-a",
+                "new",
+            )])?])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_replace_where("data_column = 'old'")
+            .await
+            .expect_err("CDC writes should be rejected for column-mapped tables");
+
+        assert_unsupported_column_mapping_write(&err, "change data feed");
 
         Ok(())
     }

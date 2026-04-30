@@ -242,3 +242,14 @@ impl DeltaTableError {
         Self::Generic(msg.to_string())
     }
 }
+
+pub(crate) fn unsupported_column_mapping_write(
+    feature: impl AsRef<str>,
+    reason: impl AsRef<str>,
+) -> DeltaTableError {
+    DeltaTableError::Generic(format!(
+        "Unsupported column mapping write for {}: {}",
+        feature.as_ref(),
+        reason.as_ref()
+    ))
+}
