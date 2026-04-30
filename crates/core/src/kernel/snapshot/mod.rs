@@ -49,7 +49,7 @@ use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
-pub(crate) use self::stats_projection::StatsProjection;
+pub(crate) use self::stats_projection::{FileStatsMaterialization, StatsProjection};
 pub use iterators::*;
 pub use scan::*;
 pub use stream::*;
@@ -396,25 +396,66 @@ impl Snapshot {
         engine: Arc<dyn Engine>,
         predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
+        self.files_with_engine_materialized(engine, predicate, false)
+    }
+
+    fn files_with_engine_preserving_raw(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+    ) -> SendableRBStream {
+        self.files_with_engine_materialized(engine, predicate, true)
+    }
+
+    fn files_with_engine_materialized(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+        preserve_raw_stats: bool,
+    ) -> SendableRBStream {
         self.warn_if_skip_stats_with_predicate(&predicate);
         let skip_stats = predicate.is_none() && self.config.skip_stats;
-        let scan = match self
-            .scan_builder()
-            .with_predicate(predicate)
-            .with_skip_stats(skip_stats)
-            .build()
-        {
+        let scan = match self.scan_for_files(predicate, skip_stats, preserve_raw_stats) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
+        let stats_materialization = scan.stats_materialization().clone();
 
         let stream = scan
             .scan_metadata(engine)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        match ScanRowOutStream::try_new(self.inner.clone(), stream, skip_stats) {
+        match ScanRowOutStream::try_new_with_materialization(
+            self.inner.clone(),
+            stream,
+            stats_materialization,
+        ) {
             Ok(s) => s.boxed(),
             Err(err) => Box::pin(once(ready(Err(err)))),
+        }
+    }
+
+    fn scan_for_files(
+        &self,
+        predicate: Option<PredicateRef>,
+        skip_stats: bool,
+        preserve_raw_stats: bool,
+    ) -> DeltaResult<Scan> {
+        let scan = self
+            .scan_builder()
+            .with_predicate(predicate.clone())
+            .with_skip_stats(skip_stats)
+            .build()?;
+        if preserve_raw_stats && !skip_stats {
+            let stats_materialization = FileStatsMaterialization::compatibility(
+                scan.stats_materialization().stats_projection().clone(),
+            );
+            self.scan_builder()
+                .with_predicate(predicate)
+                .with_stats_materialization(stats_materialization)
+                .build()
+        } else {
+            Ok(scan)
         }
     }
 
@@ -437,23 +478,60 @@ impl Snapshot {
         existing_data: Box<T>,
         existing_predicate: Option<PredicateRef>,
     ) -> SendableRBStream {
+        self.files_from_materialized(
+            engine,
+            predicate,
+            existing_version,
+            existing_data,
+            existing_predicate,
+            false,
+        )
+    }
+
+    fn files_from_preserving_raw<T: Iterator<Item = RecordBatch> + Send + 'static>(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+        existing_version: Version,
+        existing_data: Box<T>,
+        existing_predicate: Option<PredicateRef>,
+    ) -> SendableRBStream {
+        self.files_from_materialized(
+            engine,
+            predicate,
+            existing_version,
+            existing_data,
+            existing_predicate,
+            true,
+        )
+    }
+
+    fn files_from_materialized<T: Iterator<Item = RecordBatch> + Send + 'static>(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+        existing_version: Version,
+        existing_data: Box<T>,
+        existing_predicate: Option<PredicateRef>,
+        preserve_raw_stats: bool,
+    ) -> SendableRBStream {
         self.warn_if_skip_stats_with_predicate(&predicate);
         let skip_stats = predicate.is_none() && self.config.skip_stats;
-        let scan = match self
-            .scan_builder()
-            .with_predicate(predicate)
-            .with_skip_stats(skip_stats)
-            .build()
-        {
+        let scan = match self.scan_for_files(predicate, skip_stats, preserve_raw_stats) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
+        let stats_materialization = scan.stats_materialization().clone();
 
         let stream = scan
             .scan_metadata_from(engine, existing_version, existing_data, existing_predicate)
             .map(|d| Ok(rb_from_scan_meta(d?)?));
 
-        match ScanRowOutStream::try_new(self.inner.clone(), stream, skip_stats) {
+        match ScanRowOutStream::try_new_with_materialization(
+            self.inner.clone(),
+            stream,
+            stats_materialization,
+        ) {
             Ok(s) => s.boxed(),
             Err(err) => Box::pin(once(ready(Err(err)))),
         }
@@ -508,7 +586,7 @@ impl Snapshot {
             Some(materialized_seed) => {
                 let (existing_version, existing_data, existing_predicate) =
                     materialized_seed.into_parts();
-                self.files_from(
+                self.files_from_preserving_raw(
                     engine,
                     None,
                     existing_version,
@@ -518,7 +596,11 @@ impl Snapshot {
                 .try_collect()
                 .await?
             }
-            None => self.files_with_engine(engine, None).try_collect().await?,
+            None => {
+                self.files_with_engine_preserving_raw(engine, None)
+                    .try_collect()
+                    .await?
+            }
         };
         let materialized_files = Arc::new(MaterializedFiles::full(self.version(), batches));
         Ok(Arc::new(
@@ -1062,7 +1144,10 @@ pub(crate) fn partitions_schema(
 mod tests {
     use std::sync::Arc;
 
+    use arrow::array::Int64Array;
     use arrow_ipc::writer::FileWriter;
+    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+    use delta_kernel::expressions::Scalar;
     use futures::TryStreamExt;
     use itertools::Itertools;
     use pretty_assertions::assert_eq;
@@ -1073,7 +1158,7 @@ mod tests {
     // use super::replay::tests::test_log_replay;
     use super::*;
     use crate::{
-        DeltaTable, DeltaTableConfig, checkpoints,
+        DeltaTable, DeltaTableConfig, TableProperty, checkpoints,
         kernel::transaction::CommitData,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, DataType, PrimitiveType, StructField, StructType},
@@ -1171,6 +1256,96 @@ mod tests {
             .version();
         table.update_state().await?;
         Ok(version)
+    }
+
+    async fn selective_stats_table() -> DeltaResult<(TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("value", ArrowDataType::Int64, true),
+            ArrowField::new("other", ArrowDataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(Int64Array::from(vec![10, 20, 30])),
+            ],
+        )?;
+        let table_url = url::Url::from_directory_path(table_dir.path()).unwrap();
+        let table = DeltaTable::try_from_url(table_url)
+            .await?
+            .create()
+            .with_columns([
+                StructField::new("value", DataType::Primitive(PrimitiveType::Long), true),
+                StructField::new("other", DataType::Primitive(PrimitiveType::Long), true),
+            ])
+            .with_configuration_property(TableProperty::DataSkippingNumIndexedCols, Some("2"))
+            .await?
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let custom_stats = r#"{"numRecords":3,"minValues":{"value":1,"other":10},"maxValues":{"value":3,"other":30},"nullCount":{"value":0,"other":0}}"#;
+        let log_dir = table_dir.path().join("_delta_log");
+        for entry in std::fs::read_dir(&log_dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            let content = std::fs::read_to_string(&path)?;
+            let mut rewritten = Vec::new();
+            for line in content.lines() {
+                let mut value: serde_json::Value = serde_json::from_str(line)?;
+                if let Some(add) = value.get_mut("add").and_then(|v| v.as_object_mut()) {
+                    add.insert(
+                        "stats".to_string(),
+                        serde_json::Value::String(custom_stats.to_string()),
+                    );
+                }
+                rewritten.push(serde_json::to_string(&value)?);
+            }
+            std::fs::write(&path, rewritten.join("\n") + "\n")?;
+        }
+
+        Ok((table_dir, table))
+    }
+
+    fn field_count(batch: &RecordBatch, name: &str) -> usize {
+        batch
+            .schema()
+            .fields()
+            .iter()
+            .filter(|field| field.name() == name)
+            .count()
+    }
+
+    fn stats_parsed_field_names(batch: &RecordBatch) -> Vec<String> {
+        let schema = batch.schema();
+        let stats_field = schema
+            .field_with_name("stats_parsed")
+            .expect("stats_parsed field should exist");
+        let ArrowDataType::Struct(fields) = stats_field.data_type() else {
+            panic!("stats_parsed should be a struct");
+        };
+        fields.iter().map(|field| field.name().clone()).collect()
+    }
+
+    fn nested_stats_field_names(batch: &RecordBatch, field_name: &str) -> Vec<String> {
+        let schema = batch.schema();
+        let stats_field = schema
+            .field_with_name("stats_parsed")
+            .expect("stats_parsed field should exist");
+        let ArrowDataType::Struct(stats_fields) = stats_field.data_type() else {
+            panic!("stats_parsed should be a struct");
+        };
+        let (_, field) = stats_fields
+            .find(field_name)
+            .unwrap_or_else(|| panic!("{field_name} should exist"));
+        let ArrowDataType::Struct(fields) = field.data_type() else {
+            panic!("{field_name} should be a struct");
+        };
+        fields.iter().map(|field| field.name().clone()).collect()
     }
 
     async fn eager_file_paths(
@@ -1281,15 +1456,15 @@ mod tests {
             .try_collect::<Vec<_>>()
             .await?;
         let expected = [
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+---------------------------------------------------------------------------------------------+-------------------------------------------------------+",
-            "| path                                                                | size | modificationTime | stats | deletionVector | fileConstantValues                                                                          | stats_parsed                                          |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+---------------------------------------------------------------------------------------------+-------------------------------------------------------+",
-            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    |       |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    |       |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    |       |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: , nullCount: , minValues: , maxValues: } |",
-            "+---------------------------------------------------------------------+------+------------------+-------+----------------+---------------------------------------------------------------------------------------------+-------------------------------------------------------+",
+            "+---------------------------------------------------------------------+------+------------------+----------------+---------------------------------------------------------------------------------------------+----------------+",
+            "| path                                                                | size | modificationTime | deletionVector | fileConstantValues                                                                          | stats_parsed   |",
+            "+---------------------------------------------------------------------+------+------------------+----------------+---------------------------------------------------------------------------------------------+----------------+",
+            "| part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet | 262  | 1587968626000    |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: } |",
+            "| part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet | 262  | 1587968602000    |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: } |",
+            "| part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet | 429  | 1587968602000    |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: } |",
+            "| part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet | 429  | 1587968602000    |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: } |",
+            "| part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet | 429  | 1587968602000    |                | {partitionValues: {}, baseRowId: , defaultRowCommitVersion: , tags: , clusteringProvider: } | {numRecords: } |",
+            "+---------------------------------------------------------------------+------+------------------+----------------+---------------------------------------------------------------------------------------------+----------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
 
@@ -1531,6 +1706,75 @@ mod tests {
 
         assert!(!has_stats.is_empty());
         assert!(has_stats.iter().any(|b| *b));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_no_predicate_scan_omits_raw_stats_but_keeps_num_records() -> TestResult {
+        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+
+        let batches: Vec<_> = snapshot.files(base.as_ref(), None).try_collect().await?;
+
+        assert!(!batches.is_empty());
+        assert!(
+            batches
+                .iter()
+                .all(|batch| batch.column_by_name("stats").is_none())
+        );
+        assert!(
+            batches
+                .iter()
+                .all(|batch| field_count(batch, "stats_parsed") == 1)
+        );
+        assert!(
+            batches
+                .iter()
+                .all(|batch| stats_parsed_field_names(batch) == vec!["numRecords"])
+        );
+        assert!(batches.iter().any(|batch| {
+            (0..batch.num_rows()).any(|idx| {
+                LogicalFileView::new(batch.clone(), idx)
+                    .num_records()
+                    .is_some()
+            })
+        }));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_predicate_scan_projects_only_required_stats_fields() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let snapshot =
+            Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let predicate: PredicateRef = Arc::new(Expression::column(["value"]).eq(Scalar::Long(1)));
+
+        let batches: Vec<_> = snapshot
+            .files(table.log_store().as_ref(), Some(predicate))
+            .try_collect()
+            .await?;
+
+        assert_eq!(batches.len(), 1);
+        assert!(batches[0].column_by_name("stats").is_none());
+        assert_eq!(field_count(&batches[0], "stats_parsed"), 1);
+        assert_eq!(
+            stats_parsed_field_names(&batches[0]),
+            vec!["numRecords", "nullCount", "minValues", "maxValues"]
+        );
+        assert_eq!(
+            nested_stats_field_names(&batches[0], "minValues"),
+            vec!["value"]
+        );
+        assert_eq!(
+            nested_stats_field_names(&batches[0], "maxValues"),
+            vec!["value"]
+        );
+        assert_eq!(
+            nested_stats_field_names(&batches[0], "nullCount"),
+            vec!["value"]
+        );
 
         Ok(())
     }
