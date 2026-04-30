@@ -281,6 +281,16 @@ def existing_table(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
 
 
 @pytest.fixture()
+def existing_table_without_nanos(
+    tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"
+):
+    path = str(tmp_path)
+    sample_data_pyarrow = sample_data_pyarrow.drop_columns(["timestamp_ns"])
+    write_deltalake(path, sample_data_pyarrow)
+    return DeltaTable(path)
+
+
+@pytest.fixture()
 def sample_table() -> Table:
     nrows = 5
     return Table(

@@ -25,8 +25,10 @@ except ModuleNotFoundError:
 
 @pytest.mark.pyspark
 @pytest.mark.integration
-def test_basic_read(sample_data_pyarrow: "pa.Table", existing_table: DeltaTable):
-    uri = existing_table._table.table_uri() + "/"
+def test_basic_read(
+    sample_data_pyarrow: "pa.Table", existing_table_without_nanos: DeltaTable
+):
+    uri = existing_table_without_nanos._table.table_uri() + "/"
 
     assert_spark_read_equal(sample_data_pyarrow, uri)
 
@@ -43,7 +45,11 @@ def test_partitioned(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
     partition_cols = ["date32", "utf8", "timestamp", "bool"]
     import pyarrow as pa
 
-    # Add null values to sample data to verify we can read null partitions
+    # drop experimental timestamp_ns from the column which is not Spark
+    # compatible
+    sample_data_pyarrow = sample_data_pyarrow.drop_columns(["timestamp_ns"])
+
+    # Add null values to sample data to verify we can read null partitions,
     sample_data_with_null = sample_data_pyarrow
     for col in partition_cols:
         i = sample_data_pyarrow.schema.get_field_index(col)
@@ -61,9 +67,15 @@ def test_partitioned(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.pyarrow
 @pytest.mark.integration
 def test_overwrite(
-    tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table", existing_table: DeltaTable
+    tmp_path: pathlib.Path,
+    sample_data_pyarrow: "pa.Table",
+    existing_table_without_nanos: DeltaTable,
 ):
     import pyarrow as pa
+
+    # drop experimental timestamp_ns from the column which is not Spark
+    # compatible
+    sample_data_pyarrow = sample_data_pyarrow.drop_columns(["timestamp_ns"])
 
     path = str(tmp_path)
 
