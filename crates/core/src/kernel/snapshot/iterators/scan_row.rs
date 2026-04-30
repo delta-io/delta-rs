@@ -4,7 +4,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{Array as _, *};
-use arrow_schema::{Field as ArrowField, Fields};
+use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Fields};
 use arrow_schema::{Field, Schema};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
@@ -25,6 +25,9 @@ use crate::kernel::ARROW_HANDLER;
 use crate::kernel::StructType;
 use crate::kernel::arrow::engine_ext::SnapshotExt;
 use crate::kernel::arrow::extract::{self as ex};
+use crate::kernel::snapshot::stats_projection::{
+    FileStatsMaterialization, StatsProjection, StatsSourcePolicy,
+};
 use crate::{DeltaResult, DeltaTableError};
 
 pin_project! {
@@ -32,7 +35,7 @@ pin_project! {
         stats_schema: KernelSchemaRef,
         partitions_schema: Option<KernelSchemaRef>,
         column_mapping_mode: ColumnMappingMode,
-        skip_stats: bool,
+        stats_materialization: FileStatsMaterialization,
 
         #[pin]
         stream: S,
@@ -48,11 +51,16 @@ impl<S> ScanRowOutStream<S> {
         let stats_schema = snapshot.stats_schema()?;
         let partitions_schema = snapshot.partitions_schema()?;
         let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+        let stats_materialization = if skip_stats {
+            FileStatsMaterialization::without_stats()
+        } else {
+            FileStatsMaterialization::compatibility(StatsProjection::full())
+        };
         Ok(Self {
             stats_schema,
             partitions_schema,
             column_mapping_mode,
-            skip_stats,
+            stats_materialization,
             stream,
         })
     }
@@ -73,7 +81,7 @@ where
                     this.stats_schema.clone(),
                     this.partitions_schema.as_ref(),
                     *this.column_mapping_mode,
-                    *this.skip_stats,
+                    this.stats_materialization,
                 );
                 Poll::Ready(Some(result))
             }
@@ -123,7 +131,7 @@ pub(crate) fn parse_stats_column_with_schema(
         stats_schema,
         partitions_schema.as_ref(),
         column_mapping_mode,
-        false,
+        &FileStatsMaterialization::compatibility(StatsProjection::full()),
     )
 }
 
@@ -132,41 +140,31 @@ fn parse_stats_column_impl(
     stats_schema: KernelSchemaRef,
     partitions_schema: Option<&KernelSchemaRef>,
     column_mapping_mode: ColumnMappingMode,
-    skip_stats: bool,
+    stats_materialization: &FileStatsMaterialization,
 ) -> DeltaResult<RecordBatch> {
-    let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
-        return Err(DeltaTableError::SchemaMismatch {
-            msg: "stats column not found".to_string(),
-        });
-    };
+    let mut columns = Vec::with_capacity(batch.num_columns() + 2);
+    let mut fields = Vec::with_capacity(batch.num_columns() + 2);
 
-    let mut columns = batch.columns().to_vec();
-    let mut fields = batch.schema().fields().to_vec();
+    for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
+        if field.name() == "stats_parsed" {
+            continue;
+        }
+        if field.name() == "stats" && !stats_materialization.preserves_raw_stats() {
+            continue;
+        }
+        fields.push(field.clone());
+        columns.push(column.clone());
+    }
 
-    let stats_array: Arc<StructArray> = if skip_stats {
-        // `parse_json` on a null `stats` column still runs the full JSON
-        // machinery and produces `{}` structs, not nulls: cancels the
-        // skip_stats win. Build the fully-null `StructArray` directly instead.
-        let arrow_struct: arrow_schema::Schema = stats_schema.as_ref().try_into_arrow()?;
-        Arc::new(StructArray::new_null(
-            arrow_struct.fields().clone(),
-            batch.num_rows(),
-        ))
-    } else {
-        let stats_batch = batch.project(&[stats_idx])?;
-        let stats_data = Box::new(ArrowEngineData::new(stats_batch));
-
-        let parsed = parse_json(stats_data, stats_schema)?;
-        let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
-
-        Arc::new(parsed.into())
-    };
-    fields.push(Arc::new(Field::new(
-        "stats_parsed",
-        stats_array.data_type().to_owned(),
-        true,
-    )));
-    columns.push(stats_array);
+    if let Some(stats_array) = materialize_stats_array(batch, stats_schema, stats_materialization)?
+    {
+        fields.push(Arc::new(Field::new(
+            "stats_parsed",
+            stats_array.data_type().to_owned(),
+            true,
+        )));
+        columns.push(stats_array);
+    }
 
     if let Some(partition_schema) = partitions_schema {
         let partition_array = parse_partitions(
@@ -186,6 +184,102 @@ fn parse_stats_column_impl(
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(fields)),
         columns,
+    )?)
+}
+
+fn materialize_stats_array(
+    batch: &RecordBatch,
+    stats_schema: KernelSchemaRef,
+    stats_materialization: &FileStatsMaterialization,
+) -> DeltaResult<Option<Arc<StructArray>>> {
+    match stats_materialization.stats_source_policy() {
+        StatsSourcePolicy::None => Ok(None),
+        StatsSourcePolicy::JsonOnly => parse_raw_stats_array(batch, stats_schema).map(Some),
+        StatsSourcePolicy::ParsedWithJsonFallback => {
+            let requested_schema: arrow_schema::Schema = stats_schema.as_ref().try_into_arrow()?;
+            if let Some((idx, _)) = batch.schema_ref().column_with_name("stats_parsed") {
+                let parsed = batch
+                    .column(idx)
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                        msg: "stats_parsed column is not a struct".to_string(),
+                    })?;
+                match project_struct_array(parsed, requested_schema.fields()) {
+                    Ok(projected) => return Ok(Some(Arc::new(projected))),
+                    Err(err) => {
+                        debug!(
+                            "existing stats_parsed did not satisfy requested stats schema; falling back to raw stats: {err}"
+                        );
+                    }
+                }
+            }
+            parse_raw_stats_array(batch, stats_schema).map(Some)
+        }
+    }
+}
+
+fn parse_raw_stats_array(
+    batch: &RecordBatch,
+    stats_schema: KernelSchemaRef,
+) -> DeltaResult<Arc<StructArray>> {
+    let Some((stats_idx, _)) = batch.schema_ref().column_with_name("stats") else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: "stats column not found".to_string(),
+        });
+    };
+
+    let stats_batch = batch.project(&[stats_idx])?;
+    let stats_data = Box::new(ArrowEngineData::new(stats_batch));
+
+    let parsed = parse_json(stats_data, stats_schema)?;
+    let parsed: RecordBatch = ArrowEngineData::try_from_engine_data(parsed)?.into();
+
+    Ok(Arc::new(parsed.into()))
+}
+
+fn project_struct_array(
+    array: &StructArray,
+    requested_fields: &Fields,
+) -> DeltaResult<StructArray> {
+    let ArrowDataType::Struct(existing_fields) = array.data_type() else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: "expected struct array for stats_parsed".to_string(),
+        });
+    };
+
+    let mut columns = Vec::with_capacity(requested_fields.len());
+    for requested_field in requested_fields {
+        let existing_idx = existing_fields
+            .iter()
+            .position(|field| field.name() == requested_field.name())
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("stats_parsed field {} not found", requested_field.name()),
+            })?;
+        let existing_column = array.column(existing_idx);
+        let column: ArrayRef = match (requested_field.data_type(), existing_column.data_type()) {
+            (ArrowDataType::Struct(requested_child_fields), ArrowDataType::Struct(_)) => {
+                let child = existing_column
+                    .as_any()
+                    .downcast_ref::<StructArray>()
+                    .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                        msg: format!(
+                            "stats_parsed field {} is not a struct",
+                            requested_field.name()
+                        ),
+                    })?;
+                Arc::new(project_struct_array(child, requested_child_fields)?)
+            }
+            _ => existing_column.clone(),
+        };
+        columns.push(column);
+    }
+
+    Ok(StructArray::try_new_with_length(
+        requested_fields.clone(),
+        columns,
+        array.nulls().cloned(),
+        array.len(),
     )?)
 }
 
@@ -427,6 +521,7 @@ mod tests {
 
     use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
     use crate::kernel::snapshot::Snapshot;
+    use crate::kernel::snapshot::stats_projection::{FileStatsMaterialization, StatsProjection};
     use crate::test_utils::TestTables;
 
     fn scan_row_batch_with_stats(raw_stats: &str) -> RecordBatch {
@@ -451,6 +546,127 @@ mod tests {
             .column_by_name("stats")
             .and_then(|col| col.as_string_opt::<i32>())
             .and_then(|col| col.is_valid(row).then(|| col.value(row).to_string()))
+    }
+
+    fn num_records_stats_schema() -> SchemaRef {
+        Arc::new(
+            StructType::try_new([StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
+        )
+    }
+
+    fn value_stats_schema() -> SchemaRef {
+        Arc::new(
+            StructType::try_new([
+                StructField::nullable("numRecords", DataType::LONG),
+                StructField::nullable(
+                    "minValues",
+                    StructType::try_new([StructField::nullable("value", DataType::INTEGER)])
+                        .unwrap(),
+                ),
+                StructField::nullable(
+                    "maxValues",
+                    StructType::try_new([StructField::nullable("value", DataType::INTEGER)])
+                        .unwrap(),
+                ),
+                StructField::nullable(
+                    "nullCount",
+                    StructType::try_new([StructField::nullable("value", DataType::LONG)]).unwrap(),
+                ),
+            ])
+            .unwrap(),
+        )
+    }
+
+    fn append_stats_parsed(batch: &RecordBatch, stats_parsed: StructArray) -> RecordBatch {
+        let mut fields = batch.schema().fields().to_vec();
+        let mut columns = batch.columns().to_vec();
+        fields.push(Arc::new(Field::new(
+            "stats_parsed",
+            stats_parsed.data_type().clone(),
+            true,
+        )));
+        columns.push(Arc::new(stats_parsed));
+        RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap()
+    }
+
+    fn without_raw_stats(batch: &RecordBatch) -> RecordBatch {
+        let stats_idx = batch.schema().index_of("stats").unwrap();
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| (idx != stats_idx).then_some(field.clone()))
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, column)| (idx != stats_idx).then_some(column.clone()))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap()
+    }
+
+    fn num_records_stats_parsed(num_records: i64) -> StructArray {
+        StructArray::from(vec![(
+            Arc::new(Field::new("numRecords", ArrowDataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![Some(num_records)])) as ArrayRef,
+        )])
+    }
+
+    fn value_stats_parsed() -> StructArray {
+        let min_values = StructArray::from(vec![(
+            Arc::new(Field::new("value", ArrowDataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+        )]);
+        let max_values = StructArray::from(vec![(
+            Arc::new(Field::new("value", ArrowDataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![Some(9)])) as ArrayRef,
+        )]);
+        let null_count = StructArray::from(vec![(
+            Arc::new(Field::new("value", ArrowDataType::Int64, true)),
+            Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef,
+        )]);
+
+        StructArray::from(vec![
+            (
+                Arc::new(Field::new("numRecords", ArrowDataType::Int64, true)),
+                Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "minValues",
+                    min_values.data_type().clone(),
+                    true,
+                )),
+                Arc::new(min_values) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "maxValues",
+                    max_values.data_type().clone(),
+                    true,
+                )),
+                Arc::new(max_values) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new(
+                    "nullCount",
+                    null_count.data_type().clone(),
+                    true,
+                )),
+                Arc::new(null_count) as ArrayRef,
+            ),
+        ])
+    }
+
+    fn stats_parsed_field_names(batch: &RecordBatch) -> Vec<String> {
+        let schema = batch.schema();
+        let field = schema.field_with_name("stats_parsed").unwrap();
+        let ArrowDataType::Struct(fields) = field.data_type() else {
+            panic!("stats_parsed should be a struct");
+        };
+        fields.iter().map(|field| field.name().clone()).collect()
     }
 
     #[test]
@@ -599,8 +815,13 @@ mod tests {
             DataType::LONG,
         )])?);
 
-        let projected =
-            parse_stats_column_impl(&batch, stats_schema, None, ColumnMappingMode::None, false)?;
+        let projected = parse_stats_column_impl(
+            &batch,
+            stats_schema,
+            None,
+            ColumnMappingMode::None,
+            &FileStatsMaterialization::compatibility(StatsProjection::full()),
+        )?;
 
         assert!(projected.schema().column_with_name("stats").is_some());
         assert!(
@@ -614,6 +835,60 @@ mod tests {
     }
 
     #[test]
+    fn parse_stats_column_impl_reuses_existing_stats_parsed_without_raw_json() -> DeltaResult<()> {
+        let batch = scan_row_batch_with_stats(r#"{"numRecords":11"#);
+        let batch = append_stats_parsed(&without_raw_stats(&batch), num_records_stats_parsed(11));
+        let projected = parse_stats_column_impl(
+            &batch,
+            num_records_stats_schema(),
+            None,
+            ColumnMappingMode::None,
+            &FileStatsMaterialization::query(StatsProjection::num_records_only()),
+        )?;
+
+        assert!(projected.schema().column_with_name("stats").is_none());
+        assert_eq!(stats_parsed_field_names(&projected), vec!["numRecords"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_stats_column_impl_projects_wide_stats_parsed_to_requested_fields() -> DeltaResult<()> {
+        let batch = scan_row_batch_with_stats(r#"{"numRecords":11"#);
+        let batch = append_stats_parsed(&batch, value_stats_parsed());
+        let projected = parse_stats_column_impl(
+            &batch,
+            num_records_stats_schema(),
+            None,
+            ColumnMappingMode::None,
+            &FileStatsMaterialization::query(StatsProjection::num_records_only()),
+        )?;
+
+        assert!(projected.schema().column_with_name("stats").is_none());
+        assert_eq!(stats_parsed_field_names(&projected), vec!["numRecords"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parse_stats_column_impl_keeps_raw_stats_when_raw_policy_preserves() -> DeltaResult<()> {
+        let raw_stats = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let batch = scan_row_batch_with_stats(raw_stats);
+        let batch = append_stats_parsed(&batch, value_stats_parsed());
+        let projected = parse_stats_column_impl(
+            &batch,
+            value_stats_schema(),
+            None,
+            ColumnMappingMode::None,
+            &FileStatsMaterialization::compatibility(StatsProjection::full()),
+        )?;
+
+        assert_eq!(raw_stats_string(projected, 0), Some(raw_stats.to_string()));
+
+        Ok(())
+    }
+
+    #[test]
     fn parse_stats_column_impl_errors_on_malformed_stats_json() -> DeltaResult<()> {
         let batch = scan_row_batch_with_stats(r#"{"numRecords":11"#);
         let stats_schema = Arc::new(StructType::try_new([StructField::nullable(
@@ -621,9 +896,14 @@ mod tests {
             DataType::LONG,
         )])?);
 
-        let err =
-            parse_stats_column_impl(&batch, stats_schema, None, ColumnMappingMode::None, false)
-                .expect_err("malformed stats JSON should fail parsing");
+        let err = parse_stats_column_impl(
+            &batch,
+            stats_schema,
+            None,
+            ColumnMappingMode::None,
+            &FileStatsMaterialization::compatibility(StatsProjection::full()),
+        )
+        .expect_err("malformed stats JSON should fail parsing");
 
         assert!(
             err.to_string().contains("json") || err.to_string().contains("JSON"),
