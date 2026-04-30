@@ -110,6 +110,7 @@ pub(crate) async fn file_paths_from(
 pub enum TestTables {
     Simple,
     SimpleWithCheckpoint,
+    SparkVariantCheckpoint,
     SimpleCommit,
     Golden,
     Delta0_8_0Partitioned,
@@ -126,6 +127,7 @@ impl TestTables {
         match self {
             Self::Simple => data_path.join("simple_table"),
             Self::SimpleWithCheckpoint => data_path.join("simple_table_with_checkpoint"),
+            Self::SparkVariantCheckpoint => data_path.join("spark-variant-checkpoint"),
             Self::SimpleCommit => data_path.join("simple_commit"),
             Self::Golden => data_path.join("golden/data-reader-array-primitives"),
             Self::Delta0_8_0Partitioned => data_path.join("delta-0.8.0-partitioned"),
@@ -142,6 +144,7 @@ impl TestTables {
         match self {
             Self::Simple => "simple".into(),
             Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
+            Self::SparkVariantCheckpoint => "spark-variant-checkpoint".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
