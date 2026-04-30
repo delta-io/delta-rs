@@ -43,19 +43,16 @@ pin_project! {
 }
 
 impl<S> ScanRowOutStream<S> {
-    pub fn try_new(
+    pub fn try_new_with_materialization(
         snapshot: Arc<KernelSnapshot>,
         stream: S,
-        skip_stats: bool,
+        stats_materialization: FileStatsMaterialization,
     ) -> DeltaResult<Self> {
-        let stats_schema = snapshot.stats_schema()?;
+        let stats_schema = stats_materialization
+            .stats_projection()
+            .stats_schema(snapshot.as_ref())?;
         let partitions_schema = snapshot.partitions_schema()?;
         let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
-        let stats_materialization = if skip_stats {
-            FileStatsMaterialization::without_stats()
-        } else {
-            FileStatsMaterialization::compatibility(StatsProjection::full())
-        };
         Ok(Self {
             stats_schema,
             partitions_schema,
