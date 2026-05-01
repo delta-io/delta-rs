@@ -1249,10 +1249,7 @@ async fn execute(
                 col_ref
             }
         } else {
-            null_target_column = Some(cast(
-                lit(ScalarValue::Null).alias(name),
-                cast_type.clone(),
-            ));
+            null_target_column = Some(cast(lit(ScalarValue::Null).alias(name), cast_type.clone()));
             Column::new(source_qualifier.clone(), name)
         };
 
