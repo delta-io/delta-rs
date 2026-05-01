@@ -3040,6 +3040,13 @@ fn convert_to_deltalake(
     })
 }
 
+/// Enable or disable casting nanosecond timestamps to microseconds.
+#[cfg(feature = "nanosecond-timestamps")]
+#[pyfunction]
+fn _set_cast_nanos_timestamps_to_micros(cast: bool) {
+    deltalake::schema::cast::set_cast_nanos_timestamps_to_micros(cast);
+}
+
 #[pymodule(gil_used = true)]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -3092,6 +3099,16 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "_NANOSECOND_TIMESTAMPS",
         cfg!(feature = "nanosecond-timestamps"),
     )?;
+    #[cfg(feature = "nanosecond-timestamps")]
+    {
+        // Default is casting happens, since nanosecond timestamps will be
+        // disabled at runtime by default as an experimental feature.
+        _set_cast_nanos_timestamps_to_micros(true);
+        m.add_function(pyo3::wrap_pyfunction!(
+            _set_cast_nanos_timestamps_to_micros,
+            m
+        )?)?;
+    }
 
     Ok(())
 }

@@ -12,9 +12,8 @@ from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
 from arro3.core import Schema as ArrowSchema
 
-from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
+from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake, _nanosecond_timestamps_enabled
 from deltalake._internal import (
-    _NANOSECOND_TIMESTAMPS,
     CommitFailedError,
     Field,
     PrimitiveType,
@@ -905,7 +904,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_mins["decimal"] = 10.0
     expected_mins["date32"] = "2022-01-01"
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_mins["timestamp_ns"] = "1970-01-01T00:00:00Z"
 
     assert stats["minValues"] == expected_mins
@@ -925,7 +924,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_maxs["decimal"] = 14.0
     expected_maxs["date32"] = "2022-01-05"
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000000004Z"
 
     assert stats["maxValues"] == expected_maxs
@@ -2068,7 +2067,7 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
 
 
 @pytest.mark.skipif(
-    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+    not _nanosecond_timestamps_enabled(), reason="nanosecond timestamps not enabled"
 )
 @pytest.mark.pyarrow
 @pytest.mark.parametrize(
@@ -2972,7 +2971,7 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     delta_schema = dt.schema()
     ts_field = delta_schema.fields[1]
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_type = PrimitiveType("timestamp_nanos")
     else:
         expected_type = PrimitiveType("timestamp")
@@ -2980,7 +2979,7 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_resolution = "ns"
     else:
         expected_resolution = "us"
