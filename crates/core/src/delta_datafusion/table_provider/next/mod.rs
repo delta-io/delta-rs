@@ -57,6 +57,7 @@ use crate::kernel::transaction::{PROTOCOL, TransactionError};
 use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::SaveMode;
+use crate::table::normalize_table_url;
 
 mod scan;
 
@@ -168,6 +169,28 @@ pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
         table_root_url.set_path(&format!("{}/", table_root_url.path()));
         table_root_url
     }
+}
+
+pub(crate) fn canonical_table_root_identity(root: &url::Url) -> url::Url {
+    let mut root = ensure_table_root_url(&normalize_table_url(root));
+    let _ = root.set_username("");
+    let _ = root.set_password(None);
+    root.set_query(None);
+    root.set_fragment(None);
+
+    if root.scheme() == "file" {
+        return canonical_local_table_root_url(&root).unwrap_or(root);
+    }
+
+    root
+}
+
+fn canonical_local_table_root_url(root: &url::Url) -> Option<url::Url> {
+    let path = root.to_file_path().ok()?;
+    let canonical_path = std::fs::canonicalize(path).ok()?;
+    let canonical_root = Url::from_directory_path(canonical_path).ok()?;
+
+    Some(ensure_table_root_url(&normalize_table_url(&canonical_root)))
 }
 
 pub(crate) fn redact_url_for_error(url: &Url) -> String {
@@ -620,6 +643,43 @@ mod tests {
             open_fs_path,
         },
     };
+
+    #[test]
+    fn test_canonical_table_root_identity_strips_username_query_and_fragment() {
+        let url =
+            Url::parse("https://urluser:urlpassword@example.com/path?token=abc#frag").unwrap();
+
+        let canonical = canonical_table_root_identity(&url);
+
+        assert_eq!(canonical.username(), "");
+        assert!(canonical.password().is_none());
+        assert!(canonical.query().is_none());
+        assert!(canonical.fragment().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_canonical_table_root_identity_canonicalizes_symlink_equivalent_file_roots() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let real_table = tmp_dir.path().join("real").join("table");
+        std::fs::create_dir_all(&real_table).unwrap();
+
+        let link_table = tmp_dir.path().join("link").join("table");
+        std::fs::create_dir_all(link_table.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_table, &link_table).unwrap();
+
+        let real_url = Url::from_directory_path(&real_table).unwrap();
+        let link_url = Url::from_directory_path(&link_table).unwrap();
+
+        assert_ne!(
+            normalize_table_url(&real_url),
+            normalize_table_url(&link_url)
+        );
+        assert_eq!(
+            canonical_table_root_identity(&real_url),
+            canonical_table_root_identity(&link_url)
+        );
+    }
 
     /// Extracts fields from the parquet scan
     #[derive(Default)]
