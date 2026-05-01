@@ -12,7 +12,15 @@ from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
 from arro3.core import Schema as ArrowSchema
 
-from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake, _nanosecond_timestamps_enabled
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    Transaction,
+    write_deltalake,
+    _nanosecond_timestamps_enabled,
+    enable_nanosecond_timestamps,
+    _disable_nanosecond_timestamps,
+)
 from deltalake._internal import (
     CommitFailedError,
     Field,
@@ -52,6 +60,13 @@ def test_roundtrip_basic(
     tmp_path: pathlib.Path,
     sample_data_pyarrow: "pa.Table",
 ):
+    assert_roundtrips(tmp_path, sample_data_pyarrow)
+
+
+def assert_roundtrips(
+    tmp_path: pathlib.Path,
+    sample_data_pyarrow: "pa.Table",
+):
     # Check we can create the subdirectory
     import pyarrow as pa
 
@@ -80,6 +95,39 @@ def test_roundtrip_basic(
         modification_time = action["modificationTime"] / 1000  # convert back to seconds
         assert start_time < modification_time
         assert modification_time < end_time
+
+
+@pytest.mark.pyarrow
+def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.Path):
+    """
+    Unless ``enable_nanosecond_timestamps()`` is called, nanosecond timestamps
+    are cast to microseconds.
+    """
+    import pyarrow as pa
+
+    table = pa.table(
+        {"timestamp_ns": [pa.scalar(700123, type=pa.timestamp("ns", "UTC"))]}
+    )
+
+    # If nanoseconds are disabled when writing, the data is written as
+    # microseconds:
+    assert not _nanosecond_timestamps_enabled()
+    path = tmp_path / "ns_disabled"
+    write_deltalake(path, table)
+    result = DeltaTable(path).to_pyarrow_table()
+    # Should be rounded to microseconds:
+    assert result == pa.table(
+        {"timestamp_ns": [pa.scalar(700, type=pa.timestamp("us", "UTC"))]}
+    )
+
+    # If nanoseconds are enabled when writing, the data is written as
+    # nanoseconds:
+    enable_nanosecond_timestamps()
+    try:
+        assert _nanosecond_timestamps_enabled()
+        assert_roundtrips(tmp_path / "ns_enabled", table)
+    finally:
+        _disable_nanosecond_timestamps()
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
