@@ -10,11 +10,29 @@ use arrow_schema::{
     ArrowError, DataType, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod merge_schema;
 pub(crate) use merge_schema::*;
 
 use crate::DeltaResult;
+
+/// The Python extension enables the nanosecond-timestamps feature, but wants to
+/// enable/disable them at runtime. We therefore make behavior conditional even
+/// when the feature is enabled.
+static CAST_NANOS_TS_TO_MICROS: AtomicBool =
+    AtomicBool::new(!cfg!(feature = "nanosecond-timestamps"));
+
+#[cfg(feature = "nanosecond-timestamps")]
+/// Set whether casting nanosecond timestamps to microsecond timestamps happens.
+pub fn set_cast_nanos_timestamps_to_micros(cast: bool) {
+    CAST_NANOS_TS_TO_MICROS.store(cast, Ordering::Release)
+}
+
+/// Check whether nanosecond timestamps should be cast to microseconds.
+fn should_cast_nanos_timestamps_to_micros() -> bool {
+    CAST_NANOS_TS_TO_MICROS.load(Ordering::Acquire)
+}
 
 fn cast_struct(
     struct_array: &StructArray,
@@ -234,13 +252,12 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         | DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
         }
-        #[cfg(not(feature = "nanosecond-timestamps"))]
         DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
-        }
-        #[cfg(feature = "nanosecond-timestamps")]
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            Some(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()))
+            if should_cast_nanos_timestamps_to_micros() {
+                Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+            } else {
+                Some(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()))
+            }
         }
         DataType::Struct(fields) => {
             let mut changed = false;
@@ -273,7 +290,6 @@ fn normalize_field(field: &FieldRef) -> Option<FieldRef> {
         .map(|dt| Arc::new(field.as_ref().clone().with_data_type(dt)))
 }
 
-#[cfg(not(feature = "nanosecond-timestamps"))]
 fn has_nanosecond_timestamp(dt: &DataType) -> bool {
     match dt {
         DataType::Timestamp(TimeUnit::Nanosecond, _) => true,
@@ -304,19 +320,19 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
         .collect();
 
     if changed {
-        #[cfg(not(feature = "nanosecond-timestamps"))]
-        let nanosecond_truncated_fields: Vec<&str> = schema
-            .fields()
-            .iter()
-            .filter(|f| has_nanosecond_timestamp(f.data_type()))
-            .map(|f| f.name().as_str())
-            .collect();
-        #[cfg(not(feature = "nanosecond-timestamps"))]
-        if !nanosecond_truncated_fields.is_empty() {
-            tracing::warn!(
-                fields = ?nanosecond_truncated_fields,
-                "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
-            );
+        if should_cast_nanos_timestamps_to_micros() {
+            let nanosecond_truncated_fields: Vec<&str> = schema
+                .fields()
+                .iter()
+                .filter(|f| has_nanosecond_timestamp(f.data_type()))
+                .map(|f| f.name().as_str())
+                .collect();
+            if !nanosecond_truncated_fields.is_empty() {
+                tracing::warn!(
+                    fields = ?nanosecond_truncated_fields,
+                    "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
+                );
+            }
         }
 
         Arc::new(Schema::new_with_metadata(
