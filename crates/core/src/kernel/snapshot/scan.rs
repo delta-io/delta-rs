@@ -74,19 +74,24 @@ impl ScanBuilder {
         self
     }
 
-    /// Skip parsing file-level statistics during kernel log replay.
+    /// Skip file statistics during kernel log replay.
     ///
-    /// When `true`, per-file min/max/null stats are not parsed; `stats_parsed` in scan
-    /// output may be null. Partition-based filtering still applies. When combined with a
-    /// non-empty predicate, the kernel cannot use stats for data skipping; prefer `false`
-    /// when you need predicate-based file pruning from statistics.
+    /// When `true`, min/max/null stats are not parsed and `stats_parsed` in scan output may
+    /// be null. Partition filtering still applies. With a predicate, stats based data skipping
+    /// is disabled. Use `false` when file pruning from statistics is required. Passing `false`
+    /// clears any previous stats materialization override and restores default inference.
     pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
         if skip_stats {
             self.stats_materialization = Some(FileStatsMaterialization::without_stats());
+        } else {
+            self.stats_materialization = None;
         }
         self
     }
 
+    /// Override the file statistics emitted from scan metadata.
+    ///
+    /// The policy controls parsed stats projection, parsed stats source, and raw JSON retention.
     pub(crate) fn with_stats_materialization(
         mut self,
         stats_materialization: FileStatsMaterialization,
@@ -105,11 +110,11 @@ impl ScanBuilder {
 
         let stats_materialization = match stats_materialization {
             Some(stats_materialization) => stats_materialization,
-            None => {
-                let scan =
-                    build_kernel_scan(snapshot.clone(), schema.clone(), predicate.clone(), None)?;
-                FileStatsMaterialization::query(StatsProjection::for_scan(&scan)?)
-            }
+            None => FileStatsMaterialization::query(StatsProjection::for_scan_inputs(
+                snapshot.as_ref(),
+                schema.as_ref(),
+                predicate.as_ref(),
+            )?),
         };
         let inner = build_kernel_scan(snapshot, schema, predicate, Some(&stats_materialization))?;
 
@@ -140,16 +145,14 @@ fn with_kernel_stats_output(
 ) -> KernelScanBuilder {
     match materialization.stats_source_policy() {
         StatsSourcePolicy::None => builder.with_skip_stats(true),
-        StatsSourcePolicy::JsonOnly => builder,
         StatsSourcePolicy::ParsedWithJsonFallback => match materialization.stats_projection() {
             StatsProjection::None => builder.with_skip_stats(true),
             StatsProjection::Full => builder.include_all_stats_columns(),
             StatsProjection::PredicateColumns(columns) => {
                 builder.with_stats_columns(columns.iter().cloned().collect())
             }
-            // The current kernel API has no explicit numRecords-only stats output mode.
-            // Keep the default scan output and let delta-rs materialize the narrow
-            // row-count schema from raw stats when needed.
+            // The kernel API has no explicit numRecords only stats output mode. Use the
+            // default scan output and materialize the row count schema when needed.
             StatsProjection::NumRecordsOnly => builder,
         },
     }
@@ -157,14 +160,12 @@ fn with_kernel_stats_output(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use delta_kernel::expressions::{ColumnName, Scalar};
     use delta_kernel::schema::{DataType, StructField, StructType};
     use delta_kernel::{Expression, PredicateRef};
 
     use super::super::stats_projection::{
-        FileStatsMaterialization, RawStatsPolicy, StatsProjection, StatsSourcePolicy,
+        FileStatsMaterialization, StatsProjection, StatsSourcePolicy,
     };
     use super::*;
     use crate::DeltaTable;
@@ -194,12 +195,9 @@ mod tests {
 
         assert_eq!(
             scan.stats_materialization().stats_projection(),
-            &StatsProjection::num_records_only()
+            &StatsProjection::NumRecordsOnly
         );
-        assert_eq!(
-            scan.stats_materialization().raw_stats_policy(),
-            RawStatsPolicy::Omit
-        );
+        assert!(!scan.stats_materialization().preserves_raw_stats());
         assert_eq!(
             scan.stats_materialization().stats_source_policy(),
             StatsSourcePolicy::ParsedWithJsonFallback
@@ -217,7 +215,28 @@ mod tests {
 
         assert_eq!(
             scan.stats_materialization().stats_projection(),
-            &StatsProjection::predicate_columns([ColumnName::new(["value"])])
+            &StatsProjection::PredicateColumns([ColumnName::new(["value"])].into())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_rejects_predicate_on_unknown_column() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["missing"]).gt(Scalar::Integer(10)));
+
+        let err = snapshot
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()
+            .expect_err("predicate on an unknown column should fail scan planning");
+
+        assert!(
+            err.to_string().to_lowercase().contains("missing")
+                || err.to_string().to_lowercase().contains("unknown"),
+            "unexpected error: {err}"
         );
 
         Ok(())
@@ -233,10 +252,7 @@ mod tests {
             .build()?;
 
         assert_eq!(scan.stats_materialization(), &materialization);
-        assert_eq!(
-            scan.stats_materialization().raw_stats_policy(),
-            RawStatsPolicy::Preserve
-        );
+        assert!(scan.stats_materialization().preserves_raw_stats());
 
         Ok(())
     }
@@ -261,20 +277,26 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn scan_builder_predicate_columns_helper_is_deterministic() {
-        let projection = StatsProjection::predicate_columns([
-            ColumnName::new(["value"]),
-            ColumnName::new(["unreferenced_col"]),
-        ]);
+    #[tokio::test]
+    async fn scan_builder_with_skip_stats_false_clears_prior_skip_stats() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let scan = snapshot
+            .scan_builder()
+            .with_stats_materialization(FileStatsMaterialization::without_stats())
+            .with_skip_stats(false)
+            .build()?;
 
         assert_eq!(
-            projection,
-            StatsProjection::PredicateColumns(BTreeSet::from([
-                ColumnName::new(["unreferenced_col"]),
-                ColumnName::new(["value"]),
-            ]))
+            scan.stats_materialization().stats_projection(),
+            &StatsProjection::NumRecordsOnly
         );
+        assert_eq!(
+            scan.stats_materialization().stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert!(!scan.stats_materialization().preserves_raw_stats());
+
+        Ok(())
     }
 }
 
@@ -311,11 +333,14 @@ impl Scan {
     }
 
     /// Get a shared reference to the inner [`KernelScan`].
-    #[cfg(any(test, feature = "datafusion"))]
+    #[cfg(feature = "datafusion")]
     pub(crate) fn inner(&self) -> &Arc<KernelScan> {
         &self.inner
     }
 
+    /// Get the stats materialization policy attached to this scan.
+    ///
+    /// The policy is used when converting kernel scan rows into output rows.
     pub(crate) fn stats_materialization(&self) -> &FileStatsMaterialization {
         &self.stats_materialization
     }
