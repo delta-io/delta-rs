@@ -369,6 +369,12 @@ pub(crate) fn parse_partitions(
                             }))
                             .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
                         ) as ArrayRef,
+                        #[allow(unreachable_patterns)]
+                        _ => {
+                            return Err(DeltaTableError::generic(
+                                "unsupported partition column type",
+                            ))
+                        }
                     };
                     Ok(arr)
                 }

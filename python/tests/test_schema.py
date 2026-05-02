@@ -238,3 +238,19 @@ def test_field_serialization():
     f = Field("fieldname", "binary", metadata={"key": "value"})
     assert f.name == "fieldname"
     assert f.metadata == {"key": "value"}
+
+
+# <https://github.com/delta-io/delta-rs/issues/1947>
+@pytest.mark.pyarrow
+def test_void_type_to_pyarrow():
+    import pyarrow as pa
+
+    schema = Schema([Field("void_col", PrimitiveType("void"), nullable=True)])
+    arrow_schema = schema.to_arrow()
+    assert arrow_schema.field("void_col").type == pa.null()
+
+    primitive = PrimitiveType("void")
+    assert primitive.to_arrow() == pa.null()
+
+    field = Field("void_field", PrimitiveType("void"), nullable=True)
+    assert field.to_arrow().type == pa.null()
