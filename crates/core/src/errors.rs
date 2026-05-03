@@ -8,6 +8,12 @@ use crate::kernel::transaction::{CommitBuilderError, TransactionError};
 /// A result returned by delta-rs
 pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 
+pub(crate) fn unsupported_column_mapping_write(operation: &str) -> DeltaTableError {
+    DeltaTableError::Generic(format!(
+        "column mapping writes are not supported for {operation} yet"
+    ))
+}
+
 /// Delta Table specific error
 #[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]

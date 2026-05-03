@@ -29,7 +29,7 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::DeltaTable;
-use crate::errors::DeltaTableError;
+use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
@@ -39,6 +39,7 @@ use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
+use crate::table::config::TableProperty;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -121,6 +122,15 @@ impl RecordBatchWriter {
 
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
+        if table
+            .snapshot()?
+            .metadata()
+            .configuration()
+            .contains_key(TableProperty::ColumnMappingMode.as_ref())
+        {
+            return Err(unsupported_column_mapping_write("RecordBatchWriter"));
+        }
+
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
