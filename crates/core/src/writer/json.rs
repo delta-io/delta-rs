@@ -23,12 +23,12 @@ use super::utils::{
 };
 use super::{DeltaWriter, DeltaWriterError, WriteMode};
 use crate::DeltaTable;
-use crate::errors::DeltaTableError;
+use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::config::TablePropertiesExt as _;
+use crate::table::config::{TablePropertiesExt as _, TableProperty};
 use crate::writer::utils::ShareableBuffer;
 
 type BadValue = (Value, ParquetError);
@@ -209,6 +209,15 @@ impl JsonWriter {
 
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
+        if table
+            .snapshot()?
+            .metadata()
+            .configuration()
+            .contains_key(TableProperty::ColumnMappingMode.as_ref())
+        {
+            return Err(unsupported_column_mapping_write("JsonWriter"));
+        }
+
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().into();

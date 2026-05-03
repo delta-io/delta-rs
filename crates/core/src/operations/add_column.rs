@@ -3,10 +3,12 @@
 use std::sync::Arc;
 
 use delta_kernel::schema::StructType;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -79,6 +81,9 @@ impl std::future::IntoFuture for AddColumnBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write("ADD COLUMN"));
+            }
 
             let mut metadata = snapshot.metadata().clone();
             let fields = match this.fields.clone() {

@@ -36,6 +36,7 @@ use datafusion::common::Result;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -54,7 +55,7 @@ use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
     resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{Action, EagerSnapshot, StructType};
@@ -386,6 +387,10 @@ impl WriteBuilder {
 
         match &self.snapshot {
             Some(snapshot) => {
+                if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                    return Err(unsupported_column_mapping_write("WRITE"));
+                }
+
                 if self.mode == SaveMode::Overwrite {
                     PROTOCOL.check_append_only(snapshot)?;
                     if !snapshot.load_config().require_files {
