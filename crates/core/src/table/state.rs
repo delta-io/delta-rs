@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use arrow::array::new_null_array;
 use arrow::compute::concat_batches;
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::record_batch::RecordBatch;
@@ -18,6 +19,7 @@ use super::DeltaTableConfig;
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
+use crate::kernel::snapshot::FIELD_STATS_PARSED;
 use crate::kernel::{
     ARROW_HANDLER, DataType, EagerSnapshot, LogDataHandler, Metadata, Protocol, Snapshot,
     TombstoneView, Version,
@@ -300,8 +302,8 @@ impl Snapshot {
             return Ok(vec![]);
         }
 
-        let input_schema = self.inner.scan_row_parsed_schema_arrow()?;
-        let input_schema = Arc::new(input_schema.as_ref().try_into_kernel()?);
+        let input_arrow_schema = self.inner.scan_row_parsed_schema_arrow()?;
+        let input_schema = Arc::new(input_arrow_schema.as_ref().try_into_kernel()?);
         let evaluator = ARROW_HANDLER.new_expression_evaluator(
             input_schema,
             expression.into(),
@@ -309,7 +311,8 @@ impl Snapshot {
         )?;
 
         let evaluated_batches = files.iter().map(|file| {
-            let batch = evaluator.evaluate_arrow(file.clone())?;
+            let file = add_missing_stats_parsed(file, input_arrow_schema.as_ref())?;
+            let batch = evaluator.evaluate_arrow(file)?;
             if flatten {
                 Ok(batch.normalize(".", None)?)
             } else {
@@ -425,6 +428,27 @@ impl EagerSnapshot {
 /// Target number of rows per coalesced batch. Matches DataFusion's default batch size.
 const COALESCE_TARGET_BATCH_SIZE: usize = 8192;
 
+fn add_missing_stats_parsed(
+    batch: &RecordBatch,
+    input_schema: &ArrowSchema,
+) -> DeltaResult<RecordBatch> {
+    if batch.schema().field_with_name(FIELD_STATS_PARSED).is_ok() {
+        return Ok(batch.clone());
+    }
+
+    let stats_field = input_schema.field_with_name(FIELD_STATS_PARSED)?.clone();
+    let mut fields = batch.schema().fields().to_vec();
+    fields.push(Arc::new(stats_field.clone()));
+
+    let mut columns = batch.columns().to_vec();
+    columns.push(new_null_array(stats_field.data_type(), batch.num_rows()));
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(fields)),
+        columns,
+    )?)
+}
+
 /// Coalesce many small [RecordBatch]es into fewer, larger ones.
 ///
 /// tables with many small commits can produce thousands of
@@ -472,7 +496,7 @@ mod tests {
     #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::get_record_batch;
     use crate::{DeltaResult, DeltaTable};
-    use arrow_array::Int32Array;
+    use arrow_array::{Array, Int32Array};
 
     /// <https://github.com/delta-io/delta-rs/issues/3918>
     #[tokio::test]
@@ -529,6 +553,37 @@ mod tests {
         let concatenated = concat_batches(flattened_batches[0].schema_ref(), &flattened_batches)?;
         let single = snapshot.add_actions_table(true)?;
         assert_eq!(concatenated, single);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_add_actions_batches_skip_stats_returns_null_stats() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let mut config = DeltaTableConfig::default();
+        config.skip_stats = true;
+        let log_store = table.log_store();
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+        let batches = snapshot.snapshot().add_actions_batches(true)?;
+
+        assert!(!batches.is_empty());
+        let batch = concat_batches(batches[0].schema_ref(), &batches)?;
+        for column_name in ["num_records", "min.value", "max.value"] {
+            let column = batch
+                .column_by_name(column_name)
+                .unwrap_or_else(|| panic!("expected add actions output to contain {column_name}"));
+            assert_eq!(column.null_count(), batch.num_rows());
+            assert!((0..batch.num_rows()).all(|row| column.is_null(row)));
+        }
+
         Ok(())
     }
 
