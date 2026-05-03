@@ -28,6 +28,7 @@ pub(crate) const FIELD_NUM_RECORDS: &str = "numRecords";
 pub(crate) const FIELD_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 pub(crate) const FIELD_STATS: &str = "stats";
 pub(crate) const FIELD_STATS_PARSED: &str = "stats_parsed";
+#[cfg(test)]
 const STATS_VALUE_FIELDS: [&str; 3] = [FIELD_MIN_VALUES, FIELD_MAX_VALUES, FIELD_NULL_COUNT];
 const ORDERED_STATS_VALUE_FIELDS: [&str; 3] =
     [FIELD_NULL_COUNT, FIELD_MIN_VALUES, FIELD_MAX_VALUES];
@@ -361,14 +362,19 @@ fn physicalize_column_path(
 }
 
 fn stats_schema_contains_data_column(stats_schema: &StructType, column: &ColumnName) -> bool {
-    STATS_VALUE_FIELDS
+    let min_max_fields = [FIELD_MIN_VALUES, FIELD_MAX_VALUES]
         .into_iter()
         .filter_map(|field_name| stats_schema.field(field_name))
         .filter_map(|field| match field.data_type() {
             DataType::Struct(inner) => Some(inner.as_ref()),
             _ => None,
         })
-        .any(|schema| schema_contains_path(schema, column))
+        .collect::<Vec<_>>();
+
+    min_max_fields.len() == 2
+        && min_max_fields
+            .iter()
+            .all(|schema| schema_contains_path(schema, column))
 }
 
 fn display_columns(columns: &BTreeSet<ColumnName>) -> String {
@@ -574,6 +580,17 @@ mod tests {
         Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
     }
 
+    async fn binary_snapshot() -> DeltaResult<Snapshot> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("data", DataType::BINARY),
+                StructField::nullable("value", DataType::INTEGER),
+            ])
+            .await?;
+        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
     async fn column_mapping_snapshot() -> DeltaResult<Snapshot> {
         let log_store = column_mapping_builder()?.build_storage()?;
         Snapshot::try_new(log_store.as_ref(), Default::default(), None).await
@@ -655,6 +672,19 @@ mod tests {
             assert!(inner.field("value").is_some());
             assert!(inner.field("unreferenced_col").is_none());
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_binary_predicate_uses_num_records_only() -> TestResult {
+        let snapshot = binary_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["data"]).eq(Scalar::Binary(b"bbb".to_vec())));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(projection, StatsProjection::NumRecordsOnly);
 
         Ok(())
     }

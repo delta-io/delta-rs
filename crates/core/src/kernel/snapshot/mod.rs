@@ -49,7 +49,9 @@ use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
-pub(crate) use self::stats_projection::{FileStatsMaterialization, StatsProjection};
+pub(crate) use self::stats_projection::{
+    FIELD_STATS_PARSED, FileStatsMaterialization, StatsProjection,
+};
 pub use iterators::*;
 pub use scan::*;
 pub use stream::*;
