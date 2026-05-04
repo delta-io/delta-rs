@@ -15,6 +15,7 @@ use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{ObjectStore, path::Path};
@@ -39,7 +40,6 @@ use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
-use crate::table::config::TableProperty;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -124,9 +124,9 @@ impl RecordBatchWriter {
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
         if table
             .snapshot()?
-            .metadata()
-            .configuration()
-            .contains_key(TableProperty::ColumnMappingMode.as_ref())
+            .table_config()
+            .column_mapping_mode
+            .is_some_and(|mode| mode != ColumnMappingMode::None)
         {
             return Err(unsupported_column_mapping_write("RecordBatchWriter"));
         }
