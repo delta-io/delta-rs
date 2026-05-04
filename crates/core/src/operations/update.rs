@@ -28,7 +28,8 @@ use datafusion::{
     error::DataFusionError,
     execution::context::SessionState,
     logical_expr::{
-        Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
+        ExprSchemable as _, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+        case, cast, col, lit, try_cast, when,
     },
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
@@ -279,6 +280,7 @@ async fn execute(
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
     operation_id: Uuid,
+    safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -343,10 +345,20 @@ async fn execute(
         .into_iter()
         .map(|field| {
             let expr = match updates.get(field.name()) {
-                Some(expr) => case(col(UPDATE_PREDICATE_COLNAME))
-                    .when(lit(true), expr.to_owned())
-                    .otherwise(col(Column::from_name(field.name())))?
-                    .alias(field.name()),
+                Some(expr) => {
+                    let target_type = field.data_type().clone();
+                    let update_expr = if expr.get_type(plan_with_metrics.schema())? == target_type {
+                        expr.to_owned()
+                    } else if safe_cast {
+                        try_cast(expr.to_owned(), target_type)
+                    } else {
+                        cast(expr.to_owned(), target_type)
+                    };
+                    case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), update_expr)
+                        .otherwise(col(Column::from_name(field.name())))?
+                        .alias(field.name())
+                }
                 None => col(Column::from_name(field.name())),
             };
             Ok::<_, DataFusionError>(expr)
@@ -495,6 +507,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 &state,
                 this.writer_properties,
                 operation_id,
+                this.safe_cast,
             )
             .await?;
 

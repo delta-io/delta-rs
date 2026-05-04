@@ -29,8 +29,6 @@ use delta_kernel::{
         Scan as KernelScan, ScanMetadata,
         state::{DvInfo, ScanFile},
     },
-    schema::{DataType, Schema, StructField},
-    table_configuration::TableConfiguration,
 };
 use futures::Stream;
 use itertools::Itertools;
@@ -41,8 +39,7 @@ use crate::{
     DeltaResult, DeltaTableError,
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
-        LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
-        arrow::engine_ext::{stats_inputs, stats_schema},
+        LogicalFileView, ReceiverStreamBuilder, Scan, StatsProjection, StructDataExt,
         parse_stats_column_with_schema,
     },
 };
@@ -55,68 +52,6 @@ pub(crate) struct ReplayStats {
 impl ReplayStats {
     fn new() -> Self {
         Self { num_scanned: 0 }
-    }
-}
-
-/// Extracts column names referenced in the scan's physical predicate.
-///
-/// Returns a set of column names that are actually used in predicates, which helps
-/// optimize statistics parsing to only process relevant columns.
-fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
-    scan.physical_predicate().map(|predicate| {
-        predicate
-            .references()
-            .into_iter()
-            .map(|col_name| col_name.to_string().trim_matches('`').to_string())
-            .collect()
-    })
-}
-
-/// Create a stats schema containing only columns needed for predicate evaluation
-///
-/// Returns:
-/// No predicate returns a schema with just `numRecords`.
-/// A predicate returns `numRecords` plus stats for referenced columns.
-fn create_minimal_stats_schema(
-    table_configuration: &TableConfiguration,
-    predicate_columns: Option<&HashSet<String>>,
-) -> DeltaResult<Arc<Schema>> {
-    let minimal_schema = || {
-        Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
-            .map(Arc::new)
-            .map_err(Into::into)
-    };
-
-    match predicate_columns {
-        None => {
-            // No predicate. Only numRecords is needed for file statistics.
-            minimal_schema()
-        }
-        Some(cols) if cols.is_empty() => {
-            // Empty predicate columns use the minimal schema.
-            minimal_schema()
-        }
-        Some(cols) => {
-            let (stats_source_schema, table_properties) = stats_inputs(table_configuration)?;
-
-            let filtered_fields: Vec<_> = stats_source_schema
-                .fields()
-                .filter(|field| cols.contains(field.name()))
-                .cloned()
-                .collect();
-
-            if filtered_fields.is_empty() {
-                // Predicates that only reference partition columns use the minimal schema.
-                minimal_schema()
-            } else {
-                // Create stats schema for filtered fields
-                let filtered_schema = Schema::try_new(filtered_fields)?;
-                Ok(Arc::new(stats_schema(
-                    &filtered_schema,
-                    table_properties.as_ref(),
-                )))
-            }
-        }
     }
 }
 
@@ -184,7 +119,11 @@ where
             .physical_schema()
             .as_ref()
             .try_into_arrow()
-            .unwrap();
+            .map_err(DeltaTableError::from);
+        let physical_arrow = match physical_arrow {
+            Ok(schema) => schema,
+            Err(err) => return Poll::Ready(Some(Err(err))),
+        };
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
                 let scan_data = if let Some(selection) = this.file_selection {
@@ -231,30 +170,25 @@ where
                 let scan_files =
                     filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
 
-                // Extract columns referenced in predicate (if any)
-                let predicate_columns = extract_predicate_columns(this.kernel_scan.as_ref());
-
-                // Create minimal stats schema based on predicate columns
-                let stats_schema = match create_minimal_stats_schema(
-                    this.kernel_scan.snapshot().table_configuration(),
-                    predicate_columns.as_ref(),
-                ) {
+                let stats_projection = match StatsProjection::for_scan(this.kernel_scan.as_ref()) {
+                    Ok(projection) => projection,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                };
+                let snapshot = this.kernel_scan.snapshot();
+                let stats_schema = match stats_projection.stats_schema(snapshot) {
                     Ok(schema) => schema,
                     Err(err) => return Poll::Ready(Some(Err(err))),
                 };
 
                 // Parse statistics (will skip parsing for unreferenced columns)
-                let parsed_stats = parse_stats_column_with_schema(
-                    this.kernel_scan.snapshot().as_ref(),
-                    &scan_files,
-                    stats_schema,
-                )?;
+                let parsed_stats =
+                    parse_stats_column_with_schema(snapshot.as_ref(), &scan_files, stats_schema)?;
 
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
                     this.scan_config,
                     parsed_stats,
-                    predicate_columns.as_ref(),
+                    &stats_projection,
                 );
 
                 Poll::Ready(Some(Ok(ctx
@@ -281,27 +215,22 @@ where
 
 /// Extracts DataFusion statistics from parsed file metadata.
 ///
-/// Converts Delta Kernel's file statistics into DataFusion's [`Statistics`] format,
-/// which is used for query optimization and predicate pushdown. This function implements
-/// an important optimization: it only extracts statistics for columns that appear in
-/// predicates, avoiding expensive parsing for unused columns.
+/// Convert Delta Kernel file statistics into DataFusion [`Statistics`].
 ///
-/// # Arguments
+/// Only statistics for predicate columns are extracted.
 ///
-/// * `scan` - The kernel scan containing schema and predicate information
-/// * `parsed_stats` - RecordBatch containing parsed statistics for all files
-/// * `predicate_columns` - Optional set of columns referenced in predicates
+/// The scan provides schema and predicate information. `parsed_stats` contains parsed
+/// statistics for all files. `stats_projection` names the stats fields materialized
+/// for this scan.
 ///
 /// # Returns
 ///
-/// A map from file URL to tuple of:
-/// - [`Statistics`]: DataFusion statistics for query optimization
-/// - [`StructData`]: Partition values to be materialized in the output
+/// A map from file URL to DataFusion statistics and optional partition values.
 fn extract_file_statistics(
     scan: &KernelScan,
     scan_config: &DeltaScanConfig,
     parsed_stats: RecordBatch,
-    predicate_columns: Option<&HashSet<String>>,
+    stats_projection: &StatsProjection,
 ) -> HashMap<Url, (Statistics, Option<StructData>)> {
     (0..parsed_stats.num_rows())
         .map(move |idx| LogicalFileView::new(parsed_stats.clone(), idx))
@@ -320,10 +249,8 @@ fn extract_file_statistics(
                 .physical_schema()
                 .fields()
                 .map(|f| {
-                    // Check if we should extract stats for this column
-                    let should_extract_stats = predicate_columns
-                        .map(|cols| cols.contains(f.name()))
-                        .unwrap_or(false); // No predicate = no stats needed for pruning
+                    let should_extract_stats =
+                        stats_projection.emits_top_level_column_stats(f.name());
 
                     if !should_extract_stats {
                         // Return unknown statistics for non-predicate columns
@@ -571,14 +498,12 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
-    use crate::test_utils::{build_test_table_configuration, column_mapping_test_field};
     use delta_kernel::scan::state::{DvInfo, ScanFile};
-    use delta_kernel::schema::{DataType, StructField, StructType};
     use url::Url;
 
-    use super::{ScanContext, create_minimal_stats_schema, visit_scan_file};
+    use super::{ScanContext, visit_scan_file};
 
     fn scan_file(path: impl Into<String>) -> ScanFile {
         ScanFile {
@@ -590,77 +515,6 @@ mod tests {
             transform: None,
             partition_values: HashMap::new(),
         }
-    }
-
-    #[test]
-    fn test_minimal_stats_schema_uses_stats_source_for_partitioned_tables() {
-        for configuration in [
-            HashMap::from([(
-                "delta.dataSkippingNumIndexedCols".to_string(),
-                "1".to_string(),
-            )]),
-            HashMap::from([(
-                "delta.dataSkippingStatsColumns".to_string(),
-                "p,a".to_string(),
-            )]),
-        ] {
-            let table_configuration = build_test_table_configuration(
-                StructType::try_new([
-                    StructField::nullable("p", DataType::INTEGER),
-                    StructField::nullable("a", DataType::INTEGER),
-                    StructField::nullable("b", DataType::INTEGER),
-                ])
-                .unwrap(),
-                vec!["p".to_string()],
-                configuration,
-            );
-            let predicate_columns = HashSet::from(["p".to_string(), "a".to_string()]);
-
-            let stats_schema =
-                create_minimal_stats_schema(&table_configuration, Some(&predicate_columns))
-                    .unwrap();
-
-            let min_values = match stats_schema.field("minValues").unwrap().data_type() {
-                DataType::Struct(fields) => fields,
-                other => panic!("expected minValues struct, got {other:?}"),
-            };
-            assert!(min_values.field("a").is_some());
-            assert!(min_values.field("p").is_none());
-            assert!(min_values.field("b").is_none());
-        }
-    }
-
-    #[test]
-    fn test_minimal_stats_schema_translates_stats_columns_for_column_mapping() {
-        let table_configuration = build_test_table_configuration(
-            StructType::try_new([
-                column_mapping_test_field("p", "col_p", 1),
-                column_mapping_test_field("a", "col_a", 2),
-                column_mapping_test_field("b", "col_b", 3),
-            ])
-            .unwrap(),
-            vec!["p".to_string()],
-            HashMap::from([
-                ("delta.columnMapping.mode".to_string(), "name".to_string()),
-                (
-                    "delta.dataSkippingStatsColumns".to_string(),
-                    "a".to_string(),
-                ),
-            ]),
-        );
-        let predicate_columns = HashSet::from(["col_p".to_string(), "col_a".to_string()]);
-
-        let stats_schema =
-            create_minimal_stats_schema(&table_configuration, Some(&predicate_columns)).unwrap();
-
-        let min_values = match stats_schema.field("minValues").unwrap().data_type() {
-            DataType::Struct(fields) => fields,
-            other => panic!("expected minValues struct, got {other:?}"),
-        };
-        assert!(min_values.field("col_a").is_some());
-        assert!(min_values.field("a").is_none());
-        assert!(min_values.field("col_p").is_none());
-        assert!(min_values.field("col_b").is_none());
     }
 
     #[test]
