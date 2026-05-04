@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_schema::{DataType, FieldRef, SchemaBuilder};
+use arrow_schema::{DataType, Field, FieldRef, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{HashMap, HashSet, plan_err};
@@ -61,6 +61,10 @@ pub(crate) struct ProjectedScanContract {
     pub(crate) file_id_field: FieldRef,
     /// Whether the scan must preserve file-id in its output for projection or filter semantics.
     pub(crate) retain_file_id: bool,
+    /// Row index field produced by the scan.
+    pub(crate) row_index_field: Option<FieldRef>,
+    /// Whether scan output includes row index.
+    pub(crate) retain_row_index: bool,
 }
 
 impl ProjectedScanContract {
@@ -68,6 +72,7 @@ impl ProjectedScanContract {
         table_schema: SchemaRef,
         provider_schema: SchemaRef,
         config: &DeltaScanConfig,
+        row_index_column: Option<&str>,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
     ) -> Result<Self> {
@@ -86,6 +91,19 @@ impl ProjectedScanContract {
             false
         };
 
+        let row_index_field = row_index_column
+            .map(|name| Arc::new(Field::new(name, DataType::UInt64, false)) as FieldRef);
+        let row_index_idx = row_index_column.and_then(|name| provider_schema.index_of(name).ok());
+
+        let query_projects_row_index = if let Some(row_index_idx) = row_index_idx {
+            match projection {
+                None => true,
+                Some(projection) => projection.iter().any(|idx| *idx == row_index_idx),
+            }
+        } else {
+            false
+        };
+
         let filters_reference_file_id = provider_exposes_file_id
             && filters.iter().any(|filter| {
                 filter
@@ -95,11 +113,21 @@ impl ProjectedScanContract {
             });
         let retain_file_id =
             provider_exposes_file_id && (query_projects_file_id || filters_reference_file_id);
+        let filters_reference_row_index = row_index_column.is_some_and(|row_index_column| {
+            filters.iter().any(|filter| {
+                filter
+                    .column_refs()
+                    .iter()
+                    .any(|column| column.name == row_index_column)
+            })
+        });
+        let retain_row_index =
+            row_index_field.is_some() && (query_projects_row_index || filters_reference_row_index);
 
         let requested_data_projection = projection.map(|projection| {
             projection
                 .iter()
-                .filter(|&&idx| Some(idx) != file_id_idx)
+                .filter(|&&idx| Some(idx) != file_id_idx && Some(idx) != row_index_idx)
                 .copied()
                 .collect_vec()
         });
@@ -120,7 +148,10 @@ impl ProjectedScanContract {
             .collect();
         let missing_columns: Vec<_> = columns_in_filters
             .difference(&columns_in_result)
-            .filter(|column| column.as_str() != file_id_field.name().as_str())
+            .filter(|column| {
+                column.as_str() != file_id_field.name().as_str()
+                    && row_index_column != Some(column.as_str())
+            })
             .cloned()
             .sorted()
             .collect();
@@ -149,6 +180,13 @@ impl ProjectedScanContract {
         let output_schema = if retain_file_id {
             let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
             schema_builder.push(file_id_field.clone());
+            if retain_row_index {
+                schema_builder.push(row_index_field.as_ref().expect("row index field").clone());
+            }
+            Arc::new(schema_builder.finish())
+        } else if retain_row_index {
+            let mut schema_builder = SchemaBuilder::from(result_schema.as_ref());
+            schema_builder.push(row_index_field.as_ref().expect("row index field").clone());
             Arc::new(schema_builder.finish())
         } else {
             result_schema.clone()
@@ -162,6 +200,8 @@ impl ProjectedScanContract {
             result_projection,
             file_id_field,
             retain_file_id,
+            row_index_field,
+            retain_row_index,
         })
     }
 }
@@ -206,6 +246,7 @@ impl KernelScanPlan {
             table_schema,
             provider_schema,
             config,
+            None,
             projection,
             filters,
         )?;
@@ -286,9 +327,12 @@ impl KernelScanPlan {
         self.scan.snapshot().table_configuration()
     }
 
-    // Scan output schema depends on whether execution must preserve file id for this request.
-    pub(crate) fn effective_schema(&self, include_file_id: bool) -> SchemaRef {
-        if include_file_id {
+    pub(crate) fn effective_schema(
+        &self,
+        include_file_id: bool,
+        include_row_index: bool,
+    ) -> SchemaRef {
+        if include_file_id || include_row_index {
             self.contract.output_schema.clone()
         } else {
             self.contract.result_schema.clone()
@@ -1000,6 +1044,7 @@ mod tests {
             table_schema,
             provider_schema,
             &config,
+            None,
             Some(&projection),
             &[],
         )?;
@@ -1047,6 +1092,7 @@ mod tests {
             table_schema,
             provider_schema,
             &config,
+            None,
             Some(&projection),
             &filters,
         )?;
@@ -1097,6 +1143,7 @@ mod tests {
             table_schema,
             provider_schema,
             &config,
+            None,
             Some(&projection),
             &filters,
         )?;
