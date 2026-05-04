@@ -729,11 +729,11 @@ impl TableProviderBuilder {
         };
 
         if let Some(log_store) = log_store.as_ref() {
-            let snapshot_root_identity = canonical_table_root_identity(
+            let snapshot_root_identity = next::canonical_table_root_identity(
                 snapshot.snapshot().scan_builder().build()?.table_root(),
             );
             let log_store_root = log_store.table_root_url();
-            let log_store_root_identity = canonical_table_root_identity(&log_store_root);
+            let log_store_root_identity = next::canonical_table_root_identity(&log_store_root);
 
             let snapshot_root_redacted = next::redact_url_for_error(&snapshot_root_identity);
             let log_store_root_redacted = next::redact_url_for_error(&log_store_root_identity);
@@ -766,15 +766,6 @@ impl TableProviderBuilder {
 
         Ok(provider)
     }
-}
-
-fn canonical_table_root_identity(root: &url::Url) -> url::Url {
-    let mut root = next::ensure_table_root_url(&normalize_table_url(root));
-    let _ = root.set_username("");
-    let _ = root.set_password(None);
-    root.set_query(None);
-    root.set_fragment(None);
-    root
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -1646,19 +1637,6 @@ mod tests {
             err_str.contains("File selection contains"),
             "unexpected error: {err_str}"
         );
-    }
-
-    #[test]
-    fn test_canonical_table_root_identity_strips_username_query_and_fragment() {
-        let url =
-            Url::parse("https://urluser:urlpassword@example.com/path?token=abc#frag").unwrap();
-
-        let canonical = canonical_table_root_identity(&url);
-
-        assert_eq!(canonical.username(), "");
-        assert!(canonical.password().is_none());
-        assert!(canonical.query().is_none());
-        assert!(canonical.fragment().is_none());
     }
 
     #[test]
