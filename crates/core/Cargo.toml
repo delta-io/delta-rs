@@ -92,7 +92,7 @@ validator = { version = "0.19", features = ["derive"] }
 [dev-dependencies]
 arrow = { workspace = true, features = ["prettyprint"]}
 criterion = "0.5"
-ctor = "0"
+ctor = "1"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
