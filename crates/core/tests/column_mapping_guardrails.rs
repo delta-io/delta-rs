@@ -1,16 +1,9 @@
-#![cfg(feature = "datafusion")]
-
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use arrow_array::{RecordBatch, StringArray};
-use arrow_schema::{DataType as ArrowDataType, Field, Schema};
-use datafusion::prelude::{SessionContext, lit};
 use deltalake_core::kernel::{
     ColumnMetadataKey, DataType, MetadataValue, StructField, TableFeatures,
 };
-use deltalake_core::protocol::SaveMode;
 use deltalake_core::writer::{JsonWriter, RecordBatchWriter};
 use deltalake_core::{DeltaTable, DeltaTableError, open_table};
 use tempfile::TempDir;
@@ -30,7 +23,13 @@ fn assert_unsupported_column_mapping_write(err: &DeltaTableError, operation: &st
     );
 }
 
-fn column_mapping_batch() -> RecordBatch {
+#[cfg(feature = "datafusion")]
+fn column_mapping_batch() -> arrow_array::RecordBatch {
+    use std::sync::Arc;
+
+    use arrow_array::{RecordBatch, StringArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+
     let schema = Arc::new(Schema::new(vec![
         Field::new("Company Very Short", ArrowDataType::Utf8, true),
         Field::new("Super Name", ArrowDataType::Utf8, true),
@@ -91,8 +90,11 @@ fn collect_data_files(root: &Path) -> TestResult<BTreeSet<PathBuf>> {
     Ok(files)
 }
 
+#[cfg(feature = "datafusion")]
 #[tokio::test]
 async fn column_mapping_guardrails_write_builder_rejects_before_files() -> TestResult {
+    use deltalake_core::protocol::SaveMode;
+
     let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
     let before = collect_data_files(&table_path)?;
 
@@ -130,8 +132,11 @@ async fn column_mapping_guardrails_legacy_writers_reject() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "datafusion")]
 #[tokio::test]
 async fn column_mapping_guardrails_dml_rejects_before_files() -> TestResult {
+    use datafusion::prelude::{SessionContext, lit};
+
     let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
     let before = collect_data_files(&table_path)?;
 

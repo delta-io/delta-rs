@@ -154,7 +154,6 @@ required-features = ["datafusion"]
 
 [[test]]
 name = "column_mapping_guardrails"
-required-features = ["datafusion"]
 
 [[test]]
 name = "commit_info_format"
