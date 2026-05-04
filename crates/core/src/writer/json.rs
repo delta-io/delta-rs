@@ -7,6 +7,7 @@ use arrow::record_batch::*;
 use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_features::ColumnMappingMode;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use object_store::path::Path;
@@ -28,7 +29,7 @@ use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
-use crate::table::config::{TablePropertiesExt as _, TableProperty};
+use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
 
 type BadValue = (Value, ParquetError);
@@ -211,9 +212,9 @@ impl JsonWriter {
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         if table
             .snapshot()?
-            .metadata()
-            .configuration()
-            .contains_key(TableProperty::ColumnMappingMode.as_ref())
+            .table_config()
+            .column_mapping_mode
+            .is_some_and(|mode| mode != ColumnMappingMode::None)
         {
             return Err(unsupported_column_mapping_write("JsonWriter"));
         }
