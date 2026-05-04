@@ -2922,6 +2922,38 @@ def test_merge(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
+def test_merge_streamed_exec_does_not_rescan_single_use_source(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    target = pa.table({"id": [1, 2], "value": [10, 20]})
+    write_deltalake(str(tmp_path), target)
+
+    dt = DeltaTable(str(tmp_path))
+    source_batch = pa.record_batch({"id": [2, 3], "value": [200, 300]})
+    source = pa.RecordBatchReader.from_batches(source_batch.schema, [source_batch])
+
+    metrics = (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=True,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    expected = pa.table({"id": [1, 2, 3], "value": [10, 200, 300]})
+
+    assert metrics["num_target_rows_updated"] == 1
+    assert metrics["num_target_rows_inserted"] == 1
+    assert result.equals(expected)
+
+
+@pytest.mark.pyarrow
 def test_merge_with_spill_config(tmp_path: pathlib.Path):
     """Verify merge accepts and uses spill configuration without error."""
     import pyarrow as pa
