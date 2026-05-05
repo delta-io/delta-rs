@@ -15,7 +15,6 @@ use arrow_select::take::take;
 use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use object_store::{ObjectStore, path::Path};
@@ -28,9 +27,9 @@ use super::utils::{
     ShareableBuffer, arrow_schema_without_partitions, next_data_path,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
-use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::DeltaTableError;
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
@@ -122,14 +121,7 @@ impl RecordBatchWriter {
 
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
-        if table
-            .snapshot()?
-            .table_config()
-            .column_mapping_mode
-            .is_some_and(|mode| mode != ColumnMappingMode::None)
-        {
-            return Err(unsupported_column_mapping_write("RecordBatchWriter"));
-        }
+        ensure_legacy_writer_supports_table(table, "RecordBatchWriter")?;
 
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();

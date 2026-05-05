@@ -7,7 +7,6 @@ use arrow::record_batch::*;
 use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
-use delta_kernel::table_features::ColumnMappingMode;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use object_store::path::Path;
@@ -22,9 +21,9 @@ use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
-use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
@@ -196,6 +195,8 @@ impl JsonWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
+        ensure_legacy_writer_supports_table(&table, "JsonWriter")?;
+
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
 
@@ -210,14 +211,7 @@ impl JsonWriter {
 
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
-        if table
-            .snapshot()?
-            .table_config()
-            .column_mapping_mode
-            .is_some_and(|mode| mode != ColumnMappingMode::None)
-        {
-            return Err(unsupported_column_mapping_write("JsonWriter"));
-        }
+        ensure_legacy_writer_supports_table(table, "JsonWriter")?;
 
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
