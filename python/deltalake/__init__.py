@@ -1,14 +1,16 @@
 import atexit
 from typing import Optional
 
+from deltalake import table
+from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS as _INTERNAL_NANOSECOND_TIMESTAMPS,
+)
 from deltalake._internal import (
     TableFeatures,
     Transaction,
     __version__,
     rust_core_version,
-    _NANOSECOND_TIMESTAMPS as _INTERNAL_NANOSECOND_TIMESTAMPS,
 )
-from deltalake import table
 from deltalake._internal import (
     init_tracing as _init_tracing,
 )

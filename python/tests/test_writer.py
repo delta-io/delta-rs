@@ -16,10 +16,10 @@ from deltalake import (
     CommitProperties,
     DeltaTable,
     Transaction,
-    write_deltalake,
+    _disable_nanosecond_timestamps,
     _nanosecond_timestamps_enabled,
     enable_nanosecond_timestamps,
-    _disable_nanosecond_timestamps,
+    write_deltalake,
 )
 from deltalake._internal import (
     CommitFailedError,

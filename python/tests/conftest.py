@@ -16,9 +16,9 @@ from azure.storage import blob
 from deltalake import (
     DeltaTable,
     WriterProperties,
-    write_deltalake,
-    enable_nanosecond_timestamps,
     _disable_nanosecond_timestamps,
+    enable_nanosecond_timestamps,
+    write_deltalake,
 )
 from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
