@@ -16,7 +16,7 @@ use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
-#[cfg(any(test, feature = "datafusion"))]
+#[cfg(feature = "datafusion")]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
 pub use self::tombstones::TombstoneView;
 use crate::kernel::scalars::ScalarExt;

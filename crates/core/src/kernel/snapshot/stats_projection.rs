@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -7,13 +5,14 @@ use arrow_schema::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
     SchemaRef as ArrowSchemaRef,
 };
-#[cfg(test)]
 use delta_kernel::PredicateRef;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::ColumnName;
+#[cfg(feature = "datafusion")]
 use delta_kernel::scan::Scan as KernelScan;
 use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef, StructField, StructType};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
+use delta_kernel::table_features::ColumnMappingMode;
 use tracing::debug;
 
 #[cfg(test)]
@@ -22,18 +21,187 @@ use crate::DeltaResult;
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
 use crate::kernel::arrow::engine_ext::SnapshotExt;
 
+pub(crate) const FIELD_MAX_VALUES: &str = "maxValues";
+pub(crate) const FIELD_MIN_VALUES: &str = "minValues";
+pub(crate) const FIELD_NULL_COUNT: &str = "nullCount";
+pub(crate) const FIELD_NUM_RECORDS: &str = "numRecords";
+pub(crate) const FIELD_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
+pub(crate) const FIELD_STATS: &str = "stats";
+pub(crate) const FIELD_STATS_PARSED: &str = "stats_parsed";
+#[cfg(test)]
+const STATS_VALUE_FIELDS: [&str; 3] = [FIELD_MIN_VALUES, FIELD_MAX_VALUES, FIELD_NULL_COUNT];
+const ORDERED_STATS_VALUE_FIELDS: [&str; 3] =
+    [FIELD_NULL_COUNT, FIELD_MIN_VALUES, FIELD_MAX_VALUES];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StatsProjection {
+    /// Do not materialize parsed file statistics.
+    None,
+    /// Materialize the full stats schema supported by the table configuration.
     Full,
+    /// Materialize only the `numRecords` field.
     NumRecordsOnly,
+    /// Materialize `numRecords` and stats for selected physical data columns.
     PredicateColumns(BTreeSet<ColumnName>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatsSourcePolicy {
+    /// Prefer `stats_parsed`, falling back to raw JSON `stats` when needed.
+    ParsedWithJsonFallback,
+    /// Do not read or emit parsed stats.
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RawStatsPolicy {
+    /// Preserve the raw JSON `stats` field in emitted scan rows.
+    Preserve,
+    /// Omit the raw JSON `stats` field from emitted scan rows.
+    Omit,
+}
+
+/// Controls file statistics materialization in scan metadata output.
+///
+/// The policy stores the parsed stats fields to emit, the source for parsed stats,
+/// and whether raw JSON stats remain in the output.
+///
+/// Query paths can emit narrow parsed stats and omit raw JSON. Compatibility paths can keep
+/// raw JSON stats for callers that convert file views back to Add actions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileStatsMaterialization {
+    stats_projection: StatsProjection,
+    stats_source_policy: StatsSourcePolicy,
+    raw_stats_policy: RawStatsPolicy,
+}
+
+impl FileStatsMaterialization {
+    /// Materialization for query paths.
+    ///
+    /// Emits only the parsed stats needed by the scan and omits raw JSON stats.
+    pub(crate) fn query(stats_projection: StatsProjection) -> Self {
+        Self {
+            stats_projection,
+            stats_source_policy: StatsSourcePolicy::ParsedWithJsonFallback,
+            raw_stats_policy: RawStatsPolicy::Omit,
+        }
+    }
+
+    /// Materialization for compatibility paths.
+    ///
+    /// Emits parsed stats and preserves raw JSON stats for callers that convert
+    /// [`LogicalFileView`](crate::kernel::LogicalFileView) back to Add actions.
+    pub(crate) fn compatibility(stats_projection: StatsProjection) -> Self {
+        Self {
+            stats_projection,
+            stats_source_policy: StatsSourcePolicy::ParsedWithJsonFallback,
+            raw_stats_policy: RawStatsPolicy::Preserve,
+        }
+    }
+
+    pub(crate) fn without_stats() -> Self {
+        Self {
+            stats_projection: StatsProjection::none(),
+            stats_source_policy: StatsSourcePolicy::None,
+            raw_stats_policy: RawStatsPolicy::Omit,
+        }
+    }
+
+    pub(crate) fn stats_projection(&self) -> &StatsProjection {
+        &self.stats_projection
+    }
+
+    pub(crate) fn stats_source_policy(&self) -> StatsSourcePolicy {
+        self.stats_source_policy
+    }
+
+    pub(crate) fn preserves_raw_stats(&self) -> bool {
+        self.raw_stats_policy == RawStatsPolicy::Preserve
+    }
+}
+
 impl StatsProjection {
+    pub(crate) fn none() -> Self {
+        Self::None
+    }
+
+    pub(crate) fn full() -> Self {
+        Self::Full
+    }
+
+    /// Build the stats projection from scan builder inputs before constructing the kernel scan.
+    /// This matches enough of kernel scan planning to find physical data column stats without a
+    /// temporary scan.
+    pub(crate) fn for_scan_inputs(
+        snapshot: &KernelSnapshot,
+        schema: Option<&KernelSchemaRef>,
+        predicate: Option<&PredicateRef>,
+    ) -> DeltaResult<Self> {
+        let Some(predicate) = predicate else {
+            debug!(
+                projection = "num_records_only",
+                reason = "no physical predicate",
+                "stats projection selected"
+            );
+            return Ok(Self::NumRecordsOnly);
+        };
+
+        let snapshot_schema;
+        let logical_schema = match schema {
+            Some(schema) => schema.as_ref(),
+            None => {
+                snapshot_schema = snapshot.schema();
+                snapshot_schema.as_ref()
+            }
+        };
+        let stats_schema = snapshot.table_configuration().stats_schema()?;
+        let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+        let requested_columns = predicate
+            .references()
+            .into_iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+
+        let columns = requested_columns
+            .iter()
+            .filter_map(|column| {
+                physicalize_column_path(logical_schema, column, column_mapping_mode)
+            })
+            .filter(|column| stats_schema_contains_data_column(stats_schema.as_ref(), column))
+            .collect::<BTreeSet<_>>();
+
+        if columns.is_empty() {
+            debug!(
+                projection = "num_records_only",
+                reason = "no physical data columns referenced",
+                requested_columns = %display_columns(&requested_columns),
+                "stats projection selected"
+            );
+            Ok(Self::NumRecordsOnly)
+        } else {
+            let filtered_columns = requested_columns
+                .iter()
+                .filter_map(|column| {
+                    physicalize_column_path(logical_schema, column, column_mapping_mode)
+                })
+                .filter(|column| !columns.contains(column))
+                .collect::<BTreeSet<_>>();
+            debug!(
+                projection = "predicate_columns",
+                requested_columns = %display_columns(&requested_columns),
+                selected_columns = %display_columns(&columns),
+                filtered_columns = %display_columns(&filtered_columns),
+                "stats projection selected"
+            );
+            Ok(Self::PredicateColumns(columns))
+        }
+    }
+
     /// Builds the stats projection for a scan using physical predicate references.
     ///
     /// Use `NumRecordsOnly` when a predicate only touches partition columns,
     /// skips all files, or references no data columns.
+    #[cfg(feature = "datafusion")]
     pub(crate) fn for_scan(scan: &KernelScan) -> DeltaResult<Self> {
         let Some(predicate) = scan.physical_predicate() else {
             debug!(
@@ -61,7 +229,7 @@ impl StatsProjection {
             debug!(
                 projection = "num_records_only",
                 reason = "no physical data columns referenced",
-                requested_columns = ?requested_columns,
+                requested_columns = %display_columns(&requested_columns),
                 "stats projection selected"
             );
             Ok(Self::NumRecordsOnly)
@@ -69,12 +237,12 @@ impl StatsProjection {
             let filtered_columns = requested_columns
                 .difference(&columns)
                 .cloned()
-                .collect::<Vec<_>>();
+                .collect::<BTreeSet<_>>();
             debug!(
                 projection = "predicate_columns",
-                requested_columns = ?requested_columns,
-                selected_columns = ?columns,
-                filtered_columns = ?filtered_columns,
+                requested_columns = %display_columns(&requested_columns),
+                selected_columns = %display_columns(&columns),
+                filtered_columns = %display_columns(&filtered_columns),
                 "stats projection selected"
             );
             Ok(Self::PredicateColumns(columns))
@@ -83,6 +251,7 @@ impl StatsProjection {
 
     pub(crate) fn stats_schema(&self, snapshot: &KernelSnapshot) -> DeltaResult<KernelSchemaRef> {
         match self {
+            Self::None => Ok(Arc::new(StructType::try_new([])?)),
             Self::Full => Ok(snapshot.table_configuration().stats_schema()?),
             Self::NumRecordsOnly => num_records_only_stats_schema(),
             Self::PredicateColumns(columns) => {
@@ -103,7 +272,7 @@ impl StatsProjection {
         let stats_schema = self.stats_schema(snapshot)?;
         let stats_schema: ArrowSchema = stats_schema.as_ref().try_into_arrow()?;
         fields.push(Arc::new(ArrowField::new(
-            "stats_parsed",
+            FIELD_STATS_PARSED,
             ArrowDataType::Struct(stats_schema.fields().to_owned()),
             true,
         )));
@@ -111,7 +280,7 @@ impl StatsProjection {
         if let Some(partition_schema) = snapshot.table_configuration().partitions_schema()? {
             let partition_schema: ArrowSchema = partition_schema.as_ref().try_into_arrow()?;
             fields.push(Arc::new(ArrowField::new(
-                "partitionValues_parsed",
+                FIELD_PARTITION_VALUES_PARSED,
                 ArrowDataType::Struct(partition_schema.fields().to_owned()),
                 false,
             )));
@@ -123,12 +292,12 @@ impl StatsProjection {
     /// Returns whether this projection emits stats for a root physical column.
     ///
     /// A nested reference such as `nested.leaf` still emits the enclosing field
-    /// `nested` because replay looks up stats by root column name.
+    /// `nested` stores the root field name used by DataFusion file statistics.
     #[cfg(feature = "datafusion")]
     pub(crate) fn emits_top_level_column_stats(&self, physical_name: &str) -> bool {
         match self {
+            Self::None | Self::NumRecordsOnly => false,
             Self::Full => true,
-            Self::NumRecordsOnly => false,
             Self::PredicateColumns(columns) => columns.iter().any(|column| {
                 column
                     .path()
@@ -141,7 +310,7 @@ impl StatsProjection {
 
 fn num_records_only_stats_schema() -> DeltaResult<KernelSchemaRef> {
     Ok(Arc::new(StructType::try_new([StructField::nullable(
-        "numRecords",
+        FIELD_NUM_RECORDS,
         DataType::LONG,
     )])?))
 }
@@ -166,6 +335,53 @@ fn schema_contains_path(schema: &StructType, column: &ColumnName) -> bool {
     current.field(last).is_some()
 }
 
+fn physicalize_column_path(
+    schema: &StructType,
+    column: &ColumnName,
+    column_mapping_mode: ColumnMappingMode,
+) -> Option<ColumnName> {
+    let mut current = schema;
+    let mut physical_path = Vec::with_capacity(column.path().len());
+    let mut path = column.path().iter().peekable();
+
+    while let Some(segment) = path.next() {
+        let field = current
+            .fields()
+            .find(|field| field.name().eq_ignore_ascii_case(segment.as_str()))?;
+        physical_path.push(field.physical_name(column_mapping_mode).to_string());
+
+        if path.peek().is_some() {
+            let DataType::Struct(inner) = field.data_type() else {
+                return None;
+            };
+            current = inner;
+        }
+    }
+
+    Some(ColumnName::new(physical_path))
+}
+
+fn stats_schema_contains_data_column(stats_schema: &StructType, column: &ColumnName) -> bool {
+    let min_max_fields = [FIELD_MIN_VALUES, FIELD_MAX_VALUES]
+        .into_iter()
+        .filter_map(|field_name| stats_schema.field(field_name))
+        .filter_map(|field| match field.data_type() {
+            DataType::Struct(inner) => Some(inner.as_ref()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    min_max_fields.len() == 2
+        && min_max_fields
+            .iter()
+            .all(|schema| schema_contains_path(schema, column))
+}
+
+fn display_columns(columns: &BTreeSet<ColumnName>) -> String {
+    let values = columns.iter().map(ToString::to_string).collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
+}
+
 /// Filters a full stats schema down to the subset needed for a scan projection.
 ///
 /// `numRecords` is always kept. The min, max, and null count structs are pruned
@@ -177,12 +393,12 @@ fn filter_stats_schema(
     let mut fields = Vec::with_capacity(4);
     fields.push(
         stats_schema
-            .field("numRecords")
+            .field(FIELD_NUM_RECORDS)
             .cloned()
-            .unwrap_or_else(|| StructField::nullable("numRecords", DataType::LONG)),
+            .unwrap_or_else(|| StructField::nullable(FIELD_NUM_RECORDS, DataType::LONG)),
     );
 
-    for stats_field_name in ["nullCount", "minValues", "maxValues"] {
+    for stats_field_name in ORDERED_STATS_VALUE_FIELDS {
         let Some(field) = stats_schema.field(stats_field_name) else {
             continue;
         };
@@ -271,12 +487,18 @@ mod tests {
 
     use super::*;
     use crate::test_utils::TestResult;
-    use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
+    use crate::{DeltaTable, DeltaTableBuilder, DeltaTableError, TableProperty};
 
     fn column_mapping_builder() -> DeltaResult<DeltaTableBuilder> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../test/tests/data/table_with_column_mapping");
-        let url = url::Url::from_directory_path(path.canonicalize().unwrap()).unwrap();
+        let path = path.canonicalize()?;
+        let url = url::Url::from_directory_path(&path).map_err(|_| {
+            DeltaTableError::InvalidTableLocation(format!(
+                "failed to convert {} to a directory URL",
+                path.display()
+            ))
+        })?;
         DeltaTableBuilder::from_url(url).map(|builder| builder.with_allow_http(true))
     }
 
@@ -296,6 +518,42 @@ mod tests {
             .with_partition_columns(["part"])
             .await?;
         Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
+    fn nested_data_type(path: &[&str]) -> DeltaResult<DataType> {
+        let Some((field_name, child_path)) = path.split_first() else {
+            return Ok(DataType::INTEGER);
+        };
+        Ok(DataType::Struct(Box::new(StructType::try_new([
+            StructField::nullable(*field_name, nested_data_type(child_path)?),
+        ])?)))
+    }
+
+    async fn deep_nested_snapshot() -> DeltaResult<Snapshot> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::nullable(
+                "level1",
+                nested_data_type(&["level2", "level3", "level4", "level5", "level6", "leaf"])?,
+            )])
+            .await?;
+        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
+    fn assert_struct_path(schema: &StructType, path: &[&str]) {
+        let Some((field_name, child_path)) = path.split_first() else {
+            return;
+        };
+        let field = schema
+            .field(field_name)
+            .unwrap_or_else(|| panic!("{field_name} should be projected"));
+        if child_path.is_empty() {
+            return;
+        }
+        let DataType::Struct(inner) = field.data_type() else {
+            panic!("{field_name} should be a struct");
+        };
+        assert_struct_path(inner, child_path);
     }
 
     async fn synthetic_snapshot_with_num_indexed_cols(
@@ -322,33 +580,65 @@ mod tests {
         Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
     }
 
+    async fn binary_snapshot() -> DeltaResult<Snapshot> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("data", DataType::BINARY),
+                StructField::nullable("value", DataType::INTEGER),
+            ])
+            .await?;
+        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
     async fn column_mapping_snapshot() -> DeltaResult<Snapshot> {
         let log_store = column_mapping_builder()?.build_storage()?;
         Snapshot::try_new(log_store.as_ref(), Default::default(), None).await
     }
 
-    fn scan_with_predicate(
+    fn projection_for_predicate(
         snapshot: &Snapshot,
-        predicate: Option<PredicateRef>,
-    ) -> DeltaResult<crate::kernel::snapshot::Scan> {
-        snapshot.scan_builder().with_predicate(predicate).build()
+        predicate: Option<&PredicateRef>,
+    ) -> DeltaResult<StatsProjection> {
+        StatsProjection::for_scan_inputs(snapshot.inner.as_ref(), None, predicate)
     }
 
-    #[tokio::test]
-    async fn stats_projection_no_predicate_uses_num_records_only() -> TestResult {
-        let snapshot = synthetic_snapshot().await?;
-        let scan = scan_with_predicate(&snapshot, None)?;
+    #[test]
+    fn file_stats_materialization_query_defaults_to_omit_raw() {
+        let projection = StatsProjection::NumRecordsOnly;
+        let materialization = FileStatsMaterialization::query(projection.clone());
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
-        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert!(!materialization.preserves_raw_stats());
+        assert_eq!(materialization.stats_projection(), &projection);
+    }
 
-        assert_eq!(projection, StatsProjection::NumRecordsOnly);
-        assert!(stats_schema.field("numRecords").is_some());
-        assert!(stats_schema.field("minValues").is_none());
-        assert!(stats_schema.field("maxValues").is_none());
-        assert!(stats_schema.field("nullCount").is_none());
+    #[test]
+    fn file_stats_materialization_compatibility_preserves_raw() {
+        let projection = StatsProjection::full();
+        let materialization = FileStatsMaterialization::compatibility(projection.clone());
 
-        Ok(())
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert!(materialization.preserves_raw_stats());
+        assert_eq!(materialization.stats_projection(), &projection);
+    }
+
+    #[test]
+    fn file_stats_materialization_without_stats_disables_sources() {
+        let materialization = FileStatsMaterialization::without_stats();
+
+        assert_eq!(
+            materialization.stats_source_policy(),
+            StatsSourcePolicy::None
+        );
+        assert!(!materialization.preserves_raw_stats());
+        assert_eq!(materialization.stats_projection(), &StatsProjection::none());
     }
 
     #[tokio::test]
@@ -363,59 +653,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stats_projection_partition_only_predicate_uses_num_records_only() -> TestResult {
-        let snapshot = synthetic_snapshot().await?;
-        let predicate: PredicateRef =
-            Arc::new(Expression::column(["part"]).eq(Scalar::String("A".to_string())));
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
-
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
-        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-
-        assert_eq!(projection, StatsProjection::NumRecordsOnly);
-        assert!(stats_schema.field("numRecords").is_some());
-        assert!(stats_schema.field("minValues").is_none());
-        assert!(stats_schema.field("maxValues").is_none());
-        assert!(stats_schema.field("nullCount").is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stats_projection_static_skip_all_uses_num_records_only() -> TestResult {
-        let snapshot = synthetic_snapshot().await?;
-        let predicate: PredicateRef = Arc::new(delta_kernel::Predicate::literal(false));
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
-
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
-        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-
-        assert_eq!(projection, StatsProjection::NumRecordsOnly);
-        assert!(stats_schema.field("numRecords").is_some());
-        assert!(stats_schema.field("minValues").is_none());
-        assert!(stats_schema.field("maxValues").is_none());
-        assert!(stats_schema.field("nullCount").is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn stats_projection_data_predicate_includes_only_referenced_columns() -> TestResult {
         let snapshot = synthetic_snapshot().await?;
         let predicate: PredicateRef =
             Arc::new(Expression::column(["value"]).gt(Scalar::Integer(10)));
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
         let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-        let stats_schema = stats_schema.to_string();
 
-        assert!(stats_schema.contains("numRecords"));
-        assert!(stats_schema.contains("minValues"));
-        assert!(stats_schema.contains("maxValues"));
-        assert!(stats_schema.contains("nullCount"));
-        assert!(stats_schema.contains("value"));
-        assert!(!stats_schema.contains("unreferenced_col"));
+        assert!(stats_schema.field("numRecords").is_some());
+        for field_name in ["minValues", "maxValues", "nullCount"] {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("{field_name} should be projected"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("{field_name} should be a struct");
+            };
+            assert!(inner.field("value").is_some());
+            assert!(inner.field("unreferenced_col").is_none());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_binary_predicate_uses_num_records_only() -> TestResult {
+        let snapshot = binary_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["data"]).eq(Scalar::Binary(b"bbb".to_vec())));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(projection, StatsProjection::NumRecordsOnly);
 
         Ok(())
     }
@@ -430,9 +699,8 @@ mod tests {
             ])
             .gt(Scalar::Integer(10)),
         );
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
         assert_eq!(
             projection,
             StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new(["value"])]))
@@ -452,9 +720,8 @@ mod tests {
             )
             .gt(Scalar::Integer(10)),
         );
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
 
         assert_eq!(
             projection,
@@ -471,9 +738,8 @@ mod tests {
             Expression::column(["value"]).gt(Scalar::Integer(10)),
             Expression::column(["unreferenced_col"]).eq(Scalar::String("match".to_string())),
         ));
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
 
         assert_eq!(
             projection,
@@ -492,11 +758,9 @@ mod tests {
         let predicate: PredicateRef = Arc::new(
             Expression::column(["Super Name"]).eq(Scalar::String("Timothy Lamb".to_string())),
         );
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
         let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-        let stats_schema = stats_schema.to_string();
 
         let logical_schema = snapshot.inner.table_configuration().logical_schema();
         let logical = logical_schema
@@ -505,8 +769,22 @@ mod tests {
         let physical =
             logical.physical_name(snapshot.inner.table_configuration().column_mapping_mode());
 
-        assert!(stats_schema.contains(physical));
-        assert!(!stats_schema.contains("Super Name"));
+        assert_eq!(
+            projection,
+            StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new([
+                physical.to_string()
+            ])]))
+        );
+        for field_name in ["minValues", "maxValues", "nullCount"] {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("{field_name} should be projected"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("{field_name} should be a struct");
+            };
+            assert!(inner.field(physical).is_some());
+            assert!(inner.field("Super Name").is_none());
+        }
 
         Ok(())
     }
@@ -517,29 +795,50 @@ mod tests {
         let snapshot = synthetic_snapshot().await?;
         let predicate: PredicateRef =
             Arc::new(Expression::column(["nested", "leaf"]).gt(Scalar::Integer(1)));
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
         let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-        let stats_schema = stats_schema.to_string();
 
-        assert!(stats_schema.contains("nested"));
-        assert!(stats_schema.contains("leaf"));
-        assert!(!stats_schema.contains("other_leaf"));
+        for field_name in ["minValues", "maxValues", "nullCount"] {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("{field_name} should be projected"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("{field_name} should be a struct");
+            };
+            let nested = inner.field("nested").expect("nested should be projected");
+            let DataType::Struct(nested_inner) = nested.data_type() else {
+                panic!("nested stats should be a struct");
+            };
+            assert!(nested_inner.field("leaf").is_some());
+            assert!(nested_inner.field("other_leaf").is_none());
+        }
 
         Ok(())
     }
 
-    #[cfg(feature = "datafusion")]
-    #[test]
-    fn stats_projection_emits_only_top_level_stats_fields() {
-        let projection = StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new([
-            "nested", "leaf",
-        ])]));
+    #[tokio::test]
+    async fn stats_projection_deep_nested_struct_predicate_keeps_referenced_path() -> TestResult {
+        let snapshot = deep_nested_snapshot().await?;
+        let path = [
+            "level1", "level2", "level3", "level4", "level5", "level6", "leaf",
+        ];
+        let predicate: PredicateRef = Arc::new(Expression::column(path).gt(Scalar::Integer(1)));
 
-        assert!(projection.emits_top_level_column_stats("nested"));
-        assert!(!projection.emits_top_level_column_stats("leaf"));
-        assert!(!projection.emits_top_level_column_stats("value"));
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+
+        for field_name in STATS_VALUE_FIELDS {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("{field_name} should be projected"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("{field_name} should be a struct");
+            };
+            assert_struct_path(inner, &path);
+        }
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -548,17 +847,15 @@ mod tests {
         let predicate: PredicateRef = Arc::new(
             Expression::column(["unreferenced_col"]).eq(Scalar::String("match".to_string())),
         );
-        let scan = scan_with_predicate(&snapshot, Some(predicate))?;
 
-        let projection = StatsProjection::for_scan(scan.inner().as_ref())?;
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
         let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
-        let stats_schema = stats_schema.to_string();
 
-        assert!(stats_schema.contains("numRecords"));
-        assert!(!stats_schema.contains("unreferenced_col"));
-        assert!(!stats_schema.contains("minValues"));
-        assert!(!stats_schema.contains("maxValues"));
-        assert!(!stats_schema.contains("nullCount"));
+        assert_eq!(projection, StatsProjection::NumRecordsOnly);
+        assert!(stats_schema.field("numRecords").is_some());
+        assert!(stats_schema.field("minValues").is_none());
+        assert!(stats_schema.field("maxValues").is_none());
+        assert!(stats_schema.field("nullCount").is_none());
 
         Ok(())
     }
