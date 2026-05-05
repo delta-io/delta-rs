@@ -7,7 +7,7 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 
 use crate::DeltaTable;
-use crate::errors::DeltaTableError;
+use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Version};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
@@ -22,6 +22,22 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+
+pub(crate) fn ensure_legacy_writer_supports_table(
+    table: &DeltaTable,
+    operation: &str,
+) -> Result<(), DeltaTableError> {
+    if table
+        .snapshot()?
+        .table_config()
+        .column_mapping_mode
+        .is_some_and(|mode| mode != delta_kernel::table_features::ColumnMappingMode::None)
+    {
+        return Err(unsupported_column_mapping_write(operation));
+    }
+
+    Ok(())
+}
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]

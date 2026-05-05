@@ -119,7 +119,9 @@ async fn column_mapping_guardrails_write_builder_rejects_before_files() -> TestR
 
 #[tokio::test]
 async fn column_mapping_guardrails_legacy_writers_reject() -> TestResult {
-    let (_temp_dir, _table_path, table) = copied_column_mapping_table().await?;
+    let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
+    let table_url = Url::from_directory_path(table_path.canonicalize()?).unwrap();
+    let arrow_schema = table.snapshot()?.snapshot().arrow_schema();
 
     let err = RecordBatchWriter::for_table(&table)
         .expect_err("record batch writer should reject column-mapped tables");
@@ -127,6 +129,11 @@ async fn column_mapping_guardrails_legacy_writers_reject() -> TestResult {
 
     let err =
         JsonWriter::for_table(&table).expect_err("json writer should reject column-mapped tables");
+    assert_unsupported_column_mapping_write(&err, "JsonWriter");
+
+    let err = JsonWriter::try_new(table_url, arrow_schema, None, None)
+        .await
+        .expect_err("json writer by URI should reject column-mapped tables");
     assert_unsupported_column_mapping_write(&err, "JsonWriter");
 
     Ok(())
