@@ -587,6 +587,7 @@ pub struct TableProviderBuilder {
     snapshot: Option<SnapshotWrapper>,
     session: Option<Arc<dyn Session>>,
     file_column: Option<String>,
+    row_index_column: Option<String>,
     table_version: Option<Version>,
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
@@ -600,6 +601,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("snapshot", &self.snapshot)
             .field("has_session", &self.session.is_some())
             .field("file_column", &self.file_column)
+            .field("row_index_column", &self.row_index_column)
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
             .field("file_selection", &self.file_selection)
@@ -620,6 +622,7 @@ impl TableProviderBuilder {
             snapshot: None,
             session: None,
             file_column: None,
+            row_index_column: None,
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
@@ -668,6 +671,12 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Add a row index column to scan output.
+    pub(crate) fn with_row_index_column(mut self, row_index_column: impl ToString) -> Self {
+        self.row_index_column = Some(row_index_column.to_string());
+        self
+    }
+
     /// Add predicates applied only during file skipping.
     ///
     /// There are cases where we may want to skip files that definitely do
@@ -697,6 +706,7 @@ impl TableProviderBuilder {
             snapshot,
             session,
             file_column,
+            row_index_column,
             table_version,
             file_skipping_predicates,
             file_selection,
@@ -749,6 +759,9 @@ impl TableProviderBuilder {
         }
 
         let mut provider = next::DeltaScan::new(snapshot, config)?;
+        if let Some(row_index_column) = row_index_column {
+            provider = provider.with_row_index_column(row_index_column)?;
+        }
         if let Some(log_store) = log_store {
             provider = provider.with_log_store(log_store);
         }

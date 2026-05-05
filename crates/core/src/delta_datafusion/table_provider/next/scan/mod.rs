@@ -90,7 +90,7 @@ pub(super) async fn execution_plan(
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
     let file_id_field = scan_plan.contract.file_id_field.clone();
-    if scan_plan.is_metadata_only() {
+    if scan_plan.is_metadata_only() && !scan_plan.contract.retain_row_index {
         let map_file = |f: &ScanFileContext| {
             Ok((
                 f.file_url.to_string(),
@@ -412,17 +412,43 @@ const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
 fn partitioned_files_to_file_groups(
     files: impl IntoIterator<Item = PartitionedFile>,
 ) -> Vec<FileGroup> {
-    let max_files_per_group = MAX_PARTITION_DICT_CARDINALITY;
+    partitioned_files_to_file_groups_with_limit(files, MAX_PARTITION_DICT_CARDINALITY)
+}
 
-    files
+fn partitioned_files_to_file_groups_with_limit(
+    files: impl IntoIterator<Item = PartitionedFile>,
+    max_files_per_group: usize,
+) -> Vec<FileGroup> {
+    let file_groups = files
         .into_iter()
+        // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
+        // row ordinal counters per execution partition. Whole file ownership is required for
+        // scan row ordinals.
         // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
         // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
         // dictionary doesn't exceed the key space (one distinct value per file).
         .chunks(max_files_per_group)
         .into_iter()
-        .map(|chunk| chunk.collect())
-        .collect()
+        .map(|chunk| chunk.collect::<FileGroup>())
+        .collect_vec();
+
+    #[cfg(debug_assertions)]
+    {
+        let mut owner_by_path = HashMap::new();
+        for (partition, group) in file_groups.iter().enumerate() {
+            for file in group.iter() {
+                let path = file.object_meta.location.to_string();
+                if let Some(previous_partition) = owner_by_path.insert(path.clone(), partition) {
+                    debug_assert_eq!(
+                        previous_partition, partition,
+                        "file {path} was assigned to multiple scan partitions; row indexes require whole file ownership"
+                    );
+                }
+            }
+        }
+    }
+
+    file_groups
 }
 
 async fn get_read_plan(
@@ -654,6 +680,19 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
         assert_eq!(groups[1].len(), 1);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "row indexes require whole file ownership")]
+    fn test_partitioned_files_to_file_groups_rejects_split_file_across_groups_in_debug() {
+        let files = vec![
+            PartitionedFile::new("memory:///same.parquet", 0),
+            PartitionedFile::new("memory:///other.parquet", 0),
+            PartitionedFile::new("memory:///same.parquet", 0),
+        ];
+
+        let _ = partitioned_files_to_file_groups_with_limit(files, 1);
     }
 
     #[test]

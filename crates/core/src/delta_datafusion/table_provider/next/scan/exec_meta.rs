@@ -104,11 +104,11 @@ impl DisplayAs for DeltaScanMetaExec {
 impl DeltaScanMetaExec {
     fn make_properties(
         scan_plan: &KernelScanPlan,
-        include_file_id: bool,
         partition_count: usize,
+        include_file_id: bool,
     ) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new(scan_plan.effective_schema(include_file_id)),
+            EquivalenceProperties::new(scan_plan.effective_schema(include_file_id, false)),
             Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -123,10 +123,11 @@ impl DeltaScanMetaExec {
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
+        let include_file_id = file_id_field.is_some();
         let properties = Arc::new(Self::make_properties(
             scan_plan.as_ref(),
-            file_id_field.is_some(),
             input.len(),
+            include_file_id,
         ));
         Self {
             scan_plan,
@@ -234,8 +235,8 @@ impl ExecutionPlan for DeltaScanMetaExec {
             .collect();
         let properties = Arc::new(Self::make_properties(
             self.scan_plan.as_ref(),
-            self.file_id_field.is_some(),
             new_input.len(),
+            self.file_id_field.is_some(),
         ));
 
         Ok(Some(Arc::new(Self {
@@ -486,7 +487,7 @@ impl Stream for DeltaScanMetaStream {
 impl RecordBatchStream for DeltaScanMetaStream {
     fn schema(&self) -> SchemaRef {
         self.scan_plan
-            .effective_schema(self.file_id_field.is_some())
+            .effective_schema(self.file_id_field.is_some(), false)
     }
 }
 

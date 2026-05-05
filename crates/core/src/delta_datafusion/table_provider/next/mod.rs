@@ -29,7 +29,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::{borrow::Cow, sync::Arc};
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::{TableType, sink::DataSinkExec};
 use datafusion::logical_expr::{TableProviderFilterPushDown, dml::InsertOp};
@@ -300,6 +300,7 @@ pub struct DeltaScan {
     scan_schema: SchemaRef,
     /// Provider/public schema, including configured file id capability when enabled.
     full_schema: SchemaRef,
+    row_index_column: Option<String>,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
@@ -339,6 +340,7 @@ impl DeltaScan {
             config,
             scan_schema,
             full_schema,
+            row_index_column: None,
             file_skipping_predicate: None,
             log_store: None,
             read_operation_id: None,
@@ -357,6 +359,25 @@ impl DeltaScan {
     pub(crate) fn with_file_selection(mut self, selection: FileSelection) -> Self {
         self.file_selection = Some(selection);
         self
+    }
+
+    pub(crate) fn with_row_index_column(mut self, column: impl ToString) -> Result<Self> {
+        let column = column.to_string();
+        if self.full_schema.field_with_name(&column).is_ok() {
+            return Err(DataFusionError::Plan(format!(
+                "DeltaScan row index column '{column}' conflicts with an existing scan column"
+            )));
+        }
+
+        let mut fields = self.full_schema.fields().to_vec();
+        fields.push(Arc::new(Field::new(
+            column.clone(),
+            DataType::UInt64,
+            false,
+        )));
+        self.full_schema = Arc::new(Schema::new(fields));
+        self.row_index_column = Some(column);
+        Ok(self)
     }
 
     /// Restrict reads to the provided add actions by normalizing them into a
@@ -484,6 +505,7 @@ impl TableProvider for DeltaScan {
             self.scan_schema.clone(),
             self.full_schema.clone(),
             &self.config,
+            self.row_index_column.as_deref(),
             projection,
             filters,
         )?;
