@@ -25,7 +25,12 @@ except ModuleNotFoundError:
 
 @pytest.mark.pyspark
 @pytest.mark.integration
-def test_basic_read(sample_data_pyarrow: "pa.Table", existing_table: DeltaTable):
+def test_basic_read(
+    request, sample_data_pyarrow: "pa.Table", existing_table: DeltaTable
+):
+    if "timestamp_ns" in sample_data_pyarrow.column_names:
+        pytest.skip("Nanosecond timestamps are not supported in PySpark at the moment")
+
     uri = existing_table._table.table_uri() + "/"
 
     assert_spark_read_equal(sample_data_pyarrow, uri)
@@ -40,6 +45,8 @@ def test_basic_read(sample_data_pyarrow: "pa.Table", existing_table: DeltaTable)
 @pytest.mark.pyarrow
 @pytest.mark.integration
 def test_partitioned(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
+    if "timestamp_ns" in sample_data_pyarrow.column_names:
+        pytest.skip("Nanosecond timestamps are not supported in PySpark at the moment")
     partition_cols = ["date32", "utf8", "timestamp", "bool"]
     import pyarrow as pa
 
@@ -63,6 +70,8 @@ def test_partitioned(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
 def test_overwrite(
     tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table", existing_table: DeltaTable
 ):
+    if "timestamp_ns" in sample_data_pyarrow.column_names:
+        pytest.skip("Nanosecond timestamps are not supported in PySpark at the moment")
     import pyarrow as pa
 
     path = str(tmp_path)
