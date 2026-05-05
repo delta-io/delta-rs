@@ -587,6 +587,7 @@ pub struct TableProviderBuilder {
     snapshot: Option<SnapshotWrapper>,
     session: Option<Arc<dyn Session>>,
     file_column: Option<String>,
+    row_index_column: Option<String>,
     table_version: Option<Version>,
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
@@ -600,6 +601,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("snapshot", &self.snapshot)
             .field("has_session", &self.session.is_some())
             .field("file_column", &self.file_column)
+            .field("row_index_column", &self.row_index_column)
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
             .field("file_selection", &self.file_selection)
@@ -620,6 +622,7 @@ impl TableProviderBuilder {
             snapshot: None,
             session: None,
             file_column: None,
+            row_index_column: None,
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
@@ -668,6 +671,12 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Add a row index column to scan output.
+    pub(crate) fn with_row_index_column(mut self, row_index_column: impl ToString) -> Self {
+        self.row_index_column = Some(row_index_column.to_string());
+        self
+    }
+
     /// Add predicates applied only during file skipping.
     ///
     /// There are cases where we may want to skip files that definitely do
@@ -697,6 +706,7 @@ impl TableProviderBuilder {
             snapshot,
             session,
             file_column,
+            row_index_column,
             table_version,
             file_skipping_predicates,
             file_selection,
@@ -729,11 +739,11 @@ impl TableProviderBuilder {
         };
 
         if let Some(log_store) = log_store.as_ref() {
-            let snapshot_root_identity = canonical_table_root_identity(
+            let snapshot_root_identity = next::canonical_table_root_identity(
                 snapshot.snapshot().scan_builder().build()?.table_root(),
             );
             let log_store_root = log_store.table_root_url();
-            let log_store_root_identity = canonical_table_root_identity(&log_store_root);
+            let log_store_root_identity = next::canonical_table_root_identity(&log_store_root);
 
             let snapshot_root_redacted = next::redact_url_for_error(&snapshot_root_identity);
             let log_store_root_redacted = next::redact_url_for_error(&log_store_root_identity);
@@ -745,6 +755,9 @@ impl TableProviderBuilder {
         }
 
         let mut provider = next::DeltaScan::new(snapshot, config)?;
+        if let Some(row_index_column) = row_index_column {
+            provider = provider.with_row_index_column(row_index_column)?;
+        }
         if let Some(log_store) = log_store {
             provider = provider.with_log_store(log_store);
         }
@@ -766,15 +779,6 @@ impl TableProviderBuilder {
 
         Ok(provider)
     }
-}
-
-fn canonical_table_root_identity(root: &url::Url) -> url::Url {
-    let mut root = next::ensure_table_root_url(&normalize_table_url(root));
-    let _ = root.set_username("");
-    let _ = root.set_password(None);
-    root.set_query(None);
-    root.set_fragment(None);
-    root
 }
 
 impl std::future::IntoFuture for TableProviderBuilder {
@@ -1646,19 +1650,6 @@ mod tests {
             err_str.contains("File selection contains"),
             "unexpected error: {err_str}"
         );
-    }
-
-    #[test]
-    fn test_canonical_table_root_identity_strips_username_query_and_fragment() {
-        let url =
-            Url::parse("https://urluser:urlpassword@example.com/path?token=abc#frag").unwrap();
-
-        let canonical = canonical_table_root_identity(&url);
-
-        assert_eq!(canonical.username(), "");
-        assert!(canonical.password().is_none());
-        assert!(canonical.query().is_none());
-        assert!(canonical.fragment().is_none());
     }
 
     #[test]

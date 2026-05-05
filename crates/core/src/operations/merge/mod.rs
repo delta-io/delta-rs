@@ -29,7 +29,7 @@
 //! ````
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::ops::{Deref, Not};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -43,12 +43,11 @@ use datafusion::common::{
 use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion::functions_window::expr_fn::row_number;
 use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    Expr, ExprFunctionExt, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
+    Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
 };
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
@@ -73,7 +72,9 @@ use tracing::*;
 use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
-use self::validation::{MergeValidation, MergeValidationExec};
+use self::validation::{
+    MergeValidation, MergeValidationExec, build_duplicate_match_validation_plan,
+};
 use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
@@ -113,7 +114,6 @@ const TARGET_COLUMN: &str = "__delta_rs_target";
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
 const TARGET_ROW_ORDINAL_IN_FILE_COLUMN: &str = "__delta_rs_target_row_ordinal_in_file";
-const TARGET_MATCH_ROW_RANK_COLUMN: &str = "__delta_rs_target_match_row_rank";
 pub(crate) const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
 pub(crate) const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 pub(crate) const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
@@ -545,8 +545,8 @@ enum OperationType {
     Copy,
 }
 
-// This enum models whether a matched source/target pair participated in a duplicate relevant
-// WHEN MATCHED clause, not the final write path operation chosen for the row.
+// Records whether a matched pair entered duplicate validation, not the final write path operation
+// chosen for the row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 enum MatchParticipationClass {
@@ -809,6 +809,11 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
     }
 }
 
+const DUPLICATE_MATCH_MARKER_COLUMNS: &[&str] = &[
+    TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+    TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
+];
+
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
@@ -967,6 +972,7 @@ async fn execute(
     // Apply the early filter only to file skipping.
     let file_skipping_predicates =
         build_file_skipping_predicates(target_subset_filter, target_alias.as_deref());
+    let needs_duplicate_match_validation = !match_operations.is_empty();
 
     let target_provider = {
         let mut builder = DeltaScanNext::builder()
@@ -974,6 +980,10 @@ async fn execute(
             .with_log_store(log_store.clone())
             .with_session(state.clone().into())
             .with_file_column(file_column.as_str());
+
+        if needs_duplicate_match_validation {
+            builder = builder.with_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN);
+        }
 
         if !file_skipping_predicates.is_empty() {
             builder = builder.with_file_skipping_predicates(file_skipping_predicates);
@@ -998,12 +1008,6 @@ async fn execute(
         }),
     });
     let target = DataFrame::new(state.clone(), target);
-    let target = target.with_column(
-        TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
-        row_number()
-            .partition_by(vec![col(file_column.as_str())])
-            .build()?,
-    )?;
     let target = target.with_column(TARGET_COLUMN, lit(true))?;
 
     let join = source.join(target, JoinType::Full, &[], &[], Some(predicate.clone()))?;
@@ -1203,6 +1207,8 @@ async fn execute(
     let projection = join.with_column(OPERATION_COLUMN, case)?;
 
     let mut new_columns = vec![];
+    let mut merge_value_column_names = Vec::new();
+    let mut cdc_target_preimage_column_names = Vec::new();
 
     let mut write_projection = Vec::new();
     let mut write_projection_with_cdf = Vec::new();
@@ -1274,11 +1280,24 @@ async fn execute(
         .end()?;
 
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
+        merge_value_column_names.push(name.clone());
 
         write_projection.push(cast(
             Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
             cast_type.clone(),
         ));
+
+        let cdc_target_preimage_name = "__delta_rs_target_c_".to_owned() + delta_field.name();
+        let cdc_target_preimage = null_target_column.clone().unwrap_or_else(|| {
+            cast(
+                Expr::Column(Column::new(qualifier.clone(), delta_field.name())),
+                cast_type.clone(),
+            )
+        });
+        if should_cdc {
+            cdc_target_preimage_column_names.push(cdc_target_preimage_name.clone());
+            new_columns.push((cdc_target_preimage_name.clone(), cdc_target_preimage));
+        }
 
         write_projection_with_cdf.push(
             when(
@@ -1288,10 +1307,10 @@ async fn execute(
                     cast_type.clone(),
                 ),
             )
-            .otherwise(null_target_column.unwrap_or(cast(
-                Expr::Column(Column::new(qualifier, delta_field.name())),
+            .otherwise(cast(
+                Expr::Column(Column::from_name(cdc_target_preimage_name)),
                 cast_type,
-            )))? // We take the column from target table but in case of schema evolution we assign the column as null
+            ))?
             .alias(delta_field.name()),
         );
         new_columns.push((name, case));
@@ -1407,54 +1426,42 @@ async fn execute(
         LogicalPlanBuilder::from(plan).project(fields)?.build()?
     };
 
-    let new_columns = if !match_operations.is_empty() {
-        let mut cardinality_when = Vec::with_capacity(ops.len());
-        let mut cardinality_then = Vec::with_capacity(ops.len());
-
-        for (idx, (_, _, cardinality_class)) in ops.iter().enumerate() {
-            cardinality_when.push(lit(idx as i32));
-            cardinality_then.push(lit(*cardinality_class as i32));
+    // Limit the merge output to columns used by duplicate validation and CDC.
+    // Later projections only need internal merge columns.
+    let new_columns = {
+        let mut fields = vec![
+            col(file_column.as_str()),
+            col(SOURCE_COLUMN),
+            col(TARGET_COLUMN),
+            col(OPERATION_COLUMN),
+            col(DELETE_COLUMN),
+            col(TARGET_INSERT_COLUMN),
+            col(TARGET_UPDATE_COLUMN),
+            col(TARGET_DELETE_COLUMN),
+            col(TARGET_COPY_COLUMN),
+        ];
+        if needs_duplicate_match_validation {
+            fields.push(col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
         }
 
-        let cardinality_class = CaseBuilder::new(
-            Some(Box::new(col(OPERATION_COLUMN))),
-            cardinality_when,
-            cardinality_then,
-            Some(Box::new(lit(0))),
-        )
-        .end()?;
+        fields.extend(
+            merge_value_column_names
+                .iter()
+                .map(|name| Expr::Column(Column::from_name(name.clone()))),
+        );
+        fields.extend(
+            cdc_target_preimage_column_names
+                .iter()
+                .map(|name| Expr::Column(Column::from_name(name.clone()))),
+        );
 
-        let match_row_rank = row_number()
-            .partition_by(vec![
-                col(file_column.as_str()),
-                col(TARGET_ROW_ORDINAL_IN_FILE_COLUMN),
-            ])
-            .order_by(vec![
-                col(TARGET_MATCH_CARDINALITY_CLASS_COLUMN).sort(false, false),
-            ])
-            .build()?;
+        LogicalPlanBuilder::from(new_columns)
+            .project(fields)?
+            .build()?
+    };
 
-        let new_columns = DataFrame::new(state.clone(), new_columns)
-            .with_column(TARGET_MATCH_CARDINALITY_CLASS_COLUMN, cardinality_class)?
-            .with_column(TARGET_MATCH_ROW_RANK_COLUMN, match_row_rank)?
-            .into_unoptimized_plan();
-
-        let validated = LogicalPlan::Extension(Extension {
-            node: Arc::new(MergeValidation {
-                input: new_columns,
-                file_expr: col(file_column.as_str()),
-                file_column: Arc::clone(&file_column),
-                row_ordinal_column: Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
-            }),
-        });
-
-        DataFrame::new(state.clone(), validated)
-            .filter(
-                matched
-                    .and(col(TARGET_MATCH_ROW_RANK_COLUMN).gt(lit(1_u64)))
-                    .not(),
-            )?
-            .into_unoptimized_plan()
+    let new_columns = if !match_operations.is_empty() {
+        build_duplicate_match_validation_plan(new_columns, &state, &ops, Arc::clone(&file_column))?
     } else {
         new_columns
     };
@@ -1878,14 +1885,16 @@ mod tests {
     use dashmap::DashSet;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::common::{Column, ScalarValue, TableReference, ToDFSchema};
+    use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::Expr;
     use datafusion::logical_expr::col;
     use datafusion::logical_expr::expr::BinaryExpr;
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
-    use datafusion::physical_plan::collect;
+    use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder};
     use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion::physical_plan::metrics::MetricBuilder;
+    use datafusion::physical_plan::{collect, displayable};
     use datafusion::prelude::*;
     use delta_kernel::engine::arrow_conversion::TryIntoKernel;
     use delta_kernel::schema::StructType;
@@ -1893,13 +1902,23 @@ mod tests {
     use pretty_assertions::assert_eq;
     use regex::Regex;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::ops::Neg;
     use std::sync::Arc;
     use url::Url;
 
-    use crate::delta_datafusion::{DataFusionMixins, PATH_COLUMN, resolve_file_column_name};
+    use crate::delta_datafusion::{
+        DataFusionMixins, DeltaScanNext, PATH_COLUMN, resolve_file_column_name,
+    };
 
-    use super::MergeMetrics;
+    use super::validation::MergeValidation;
+    use super::{
+        DELETE_COLUMN, MatchParticipationClass, MergeMetrics, OPERATION_COLUMN, OperationType,
+        SOURCE_COLUMN, TARGET_COLUMN, TARGET_COPY_COLUMN, TARGET_DELETE_COLUMN,
+        TARGET_INSERT_COLUMN, TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
+        TARGET_ROW_ORDINAL_IN_FILE_COLUMN, TARGET_UPDATE_COLUMN,
+        build_duplicate_match_validation_plan,
+    };
 
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
@@ -2111,6 +2130,108 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_duplicate_match_validation_plan_drops_validation_marker_columns() {
+        let input = duplicate_match_validation_input_plan();
+        let ops = vec![
+            (
+                HashMap::new(),
+                OperationType::Update,
+                MatchParticipationClass::MatchedAction,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Copy,
+                MatchParticipationClass::MatchedNoop,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Copy,
+                MatchParticipationClass::Ignore,
+            ),
+        ];
+        let state = SessionContext::new().state();
+
+        let plan = build_duplicate_match_validation_plan(
+            input,
+            &state,
+            &ops,
+            Arc::new(PATH_COLUMN.to_string()),
+        )
+        .expect("duplicate validation plan builds");
+
+        let validation = find_merge_validation(&plan).expect("plan contains validation");
+        let validation_input = format!("{}", validation.input.display_indent());
+        assert!(
+            validation_input.contains(TARGET_MATCH_CARDINALITY_CLASS_COLUMN),
+            "validation input includes cardinality before marker columns are projected away: {validation_input}"
+        );
+        assert_eq!(
+            count_unions(&validation.input),
+            0,
+            "validation input remains one upstream plan"
+        );
+        assert_eq!(
+            count_unions(&plan),
+            0,
+            "duplicate validation does not duplicate the upstream merge input"
+        );
+        assert!(
+            !format!("{plan:?}").contains("Window"),
+            "duplicate validation deduplicates in MergeValidationStream without a rank window"
+        );
+
+        let field_names = plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert!(!field_names.contains(&TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
+        assert!(!field_names.contains(&TARGET_MATCH_CARDINALITY_CLASS_COLUMN));
+    }
+
+    #[tokio::test]
+    async fn test_target_row_ordinal_scan_plan_has_no_window_or_sort() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let state = SessionContext::new().state();
+
+        let target_provider = provider_as_source(
+            DeltaScanNext::builder()
+                .with_eager_snapshot(table.snapshot().unwrap().snapshot().clone())
+                .with_log_store(table.log_store.clone())
+                .with_session(state.clone().into())
+                .with_file_column(PATH_COLUMN)
+                .with_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+                .await
+                .expect("target provider builds"),
+        );
+        let target =
+            LogicalPlanBuilder::scan(TableReference::bare("target"), target_provider, None)
+                .expect("scan builds")
+                .build()
+                .expect("scan plan builds");
+
+        assert!(
+            target
+                .schema()
+                .field_with_unqualified_name(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+                .is_ok(),
+            "scan exposes the target row ordinal column"
+        );
+
+        let physical = state
+            .create_physical_plan(&target)
+            .await
+            .expect("physical plan builds");
+        let plan = displayable(physical.as_ref()).indent(true).to_string();
+        assert!(plan.contains("DeltaScanExec"));
+        assert!(!plan.contains("BoundedWindowAggExec"));
+        assert!(!plan.contains("SortExec"));
+    }
+
     #[tokio::test]
     async fn test_merge_rewrite_removes_old_file_and_avoids_duplicate_rows() {
         let (table, source) = setup().await;
@@ -2193,6 +2314,40 @@ mod tests {
             duplicate_count, 0,
             "Expected merge output without duplicate rows"
         );
+    }
+
+    fn duplicate_match_validation_input_plan() -> LogicalPlan {
+        LogicalPlanBuilder::empty(false)
+            .project(vec![
+                lit(ScalarValue::Boolean(None)).alias(SOURCE_COLUMN),
+                lit(ScalarValue::Boolean(None)).alias(TARGET_COLUMN),
+                lit(ScalarValue::Int32(None)).alias(OPERATION_COLUMN),
+                lit(ScalarValue::Utf8(None)).alias(PATH_COLUMN),
+                lit(ScalarValue::UInt64(None)).alias(TARGET_ROW_ORDINAL_IN_FILE_COLUMN),
+                lit(ScalarValue::Boolean(Some(false))).alias(DELETE_COLUMN),
+                lit(ScalarValue::Boolean(Some(false))).alias(TARGET_INSERT_COLUMN),
+                lit(ScalarValue::Boolean(Some(false))).alias(TARGET_UPDATE_COLUMN),
+                lit(ScalarValue::Boolean(Some(false))).alias(TARGET_DELETE_COLUMN),
+                lit(ScalarValue::Boolean(Some(false))).alias(TARGET_COPY_COLUMN),
+            ])
+            .unwrap()
+            .build()
+            .unwrap()
+    }
+
+    fn find_merge_validation(plan: &LogicalPlan) -> Option<&MergeValidation> {
+        if let LogicalPlan::Extension(Extension { node }) = plan
+            && let Some(validation) = node.as_any().downcast_ref::<MergeValidation>()
+        {
+            return Some(validation);
+        }
+
+        plan.inputs().into_iter().find_map(find_merge_validation)
+    }
+
+    fn count_unions(plan: &LogicalPlan) -> usize {
+        let current = usize::from(matches!(plan, LogicalPlan::Union(_)));
+        current + plan.inputs().into_iter().map(count_unions).sum::<usize>()
     }
 
     async fn assert_merge_encoded_partition_value_removes_original_file(

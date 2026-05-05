@@ -14,6 +14,7 @@ use url::Url;
 
 #[cfg(feature = "datafusion")]
 use super::MaterializedFiles;
+use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSourcePolicy};
 use crate::DeltaResult;
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 
@@ -22,14 +23,20 @@ pub type SendableScanMetadataStream = Pin<Box<dyn Stream<Item = DeltaResult<Scan
 /// Builder to scan a snapshot of a table.
 #[derive(Debug)]
 pub struct ScanBuilder {
-    inner: KernelScanBuilder,
+    snapshot: Arc<KernelSnapshot>,
+    schema: Option<SchemaRef>,
+    predicate: Option<PredicateRef>,
+    stats_materialization: Option<FileStatsMaterialization>,
 }
 
 impl ScanBuilder {
     /// Create a new [`ScanBuilder`] instance.
     pub fn new(snapshot: impl Into<Arc<KernelSnapshot>>) -> Self {
         Self {
-            inner: KernelScanBuilder::new(snapshot.into()),
+            snapshot: snapshot.into(),
+            schema: None,
+            predicate: None,
+            stats_materialization: None,
         }
     }
 
@@ -41,7 +48,7 @@ impl ScanBuilder {
     /// [`Schema`]: crate::schema::Schema
     /// [`Snapshot`]: crate::snapshot::Snapshot
     pub fn with_schema(mut self, schema: SchemaRef) -> Self {
-        self.inner = self.inner.with_schema(schema);
+        self.schema = Some(schema);
         self
     }
 
@@ -50,7 +57,9 @@ impl ScanBuilder {
     ///
     /// [`Snapshot`]: crate::Snapshot
     pub fn with_schema_opt(mut self, schema_opt: Option<SchemaRef>) -> Self {
-        self.inner = self.inner.with_schema_opt(schema_opt);
+        if let Some(schema) = schema_opt {
+            self.schema = Some(schema);
+        }
         self
     }
 
@@ -61,50 +70,279 @@ impl ScanBuilder {
     /// NOTE: The filtering is best-effort and can produce false positives (rows that should should
     /// have been filtered out but were kept).
     pub fn with_predicate(mut self, predicate: impl Into<Option<PredicateRef>>) -> Self {
-        self.inner = self.inner.with_predicate(predicate);
+        self.predicate = predicate.into();
         self
     }
 
-    /// Skip parsing file-level statistics during kernel log replay.
+    /// Skip file statistics during kernel log replay.
     ///
-    /// When `true`, per-file min/max/null stats are not parsed; `stats_parsed` in scan
-    /// output may be null. Partition-based filtering still applies. When combined with a
-    /// non-empty predicate, the kernel cannot use stats for data skipping; prefer `false`
-    /// when you need predicate-based file pruning from statistics.
+    /// When `true`, min/max/null stats are not parsed and `stats_parsed` in scan output may
+    /// be null. Partition filtering still applies. With a predicate, stats based data skipping
+    /// is disabled. Use `false` when file pruning from statistics is required. Passing `false`
+    /// clears any previous stats materialization override and restores default inference.
     pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
-        self.inner = self.inner.with_skip_stats(skip_stats);
+        if skip_stats {
+            self.stats_materialization = Some(FileStatsMaterialization::without_stats());
+        } else {
+            self.stats_materialization = None;
+        }
+        self
+    }
+
+    /// Override the file statistics emitted from scan metadata.
+    ///
+    /// The policy controls parsed stats projection, parsed stats source, and raw JSON retention.
+    pub(crate) fn with_stats_materialization(
+        mut self,
+        stats_materialization: FileStatsMaterialization,
+    ) -> Self {
+        self.stats_materialization = Some(stats_materialization);
         self
     }
 
     pub fn build(self) -> DeltaResult<Scan> {
-        Ok(Scan::from(self.inner.build()?))
+        let Self {
+            snapshot,
+            schema,
+            predicate,
+            stats_materialization,
+        } = self;
+
+        let stats_materialization = match stats_materialization {
+            Some(stats_materialization) => stats_materialization,
+            None => FileStatsMaterialization::query(StatsProjection::for_scan_inputs(
+                snapshot.as_ref(),
+                schema.as_ref(),
+                predicate.as_ref(),
+            )?),
+        };
+        let inner = build_kernel_scan(snapshot, schema, predicate, Some(&stats_materialization))?;
+
+        Ok(Scan::new(Arc::new(inner), stats_materialization))
+    }
+}
+
+fn build_kernel_scan(
+    snapshot: Arc<KernelSnapshot>,
+    schema: Option<SchemaRef>,
+    predicate: Option<PredicateRef>,
+    stats_materialization: Option<&FileStatsMaterialization>,
+) -> DeltaResult<KernelScan> {
+    let mut builder = KernelScanBuilder::new(snapshot)
+        .with_schema_opt(schema)
+        .with_predicate(predicate);
+
+    if let Some(stats_materialization) = stats_materialization {
+        builder = with_kernel_stats_output(builder, stats_materialization);
+    }
+
+    Ok(builder.build()?)
+}
+
+fn with_kernel_stats_output(
+    builder: KernelScanBuilder,
+    materialization: &FileStatsMaterialization,
+) -> KernelScanBuilder {
+    match materialization.stats_source_policy() {
+        StatsSourcePolicy::None => builder.with_skip_stats(true),
+        StatsSourcePolicy::ParsedWithJsonFallback => match materialization.stats_projection() {
+            StatsProjection::None => builder.with_skip_stats(true),
+            StatsProjection::Full => builder.include_all_stats_columns(),
+            StatsProjection::PredicateColumns(columns) => {
+                builder.with_stats_columns(columns.iter().cloned().collect())
+            }
+            // The kernel API has no explicit numRecords only stats output mode. Use the
+            // default scan output and materialize the row count schema when needed.
+            StatsProjection::NumRecordsOnly => builder,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use delta_kernel::expressions::{ColumnName, Scalar};
+    use delta_kernel::schema::{DataType, StructField, StructType};
+    use delta_kernel::{Expression, PredicateRef};
+
+    use super::super::stats_projection::{
+        FileStatsMaterialization, StatsProjection, StatsSourcePolicy,
+    };
+    use super::*;
+    use crate::DeltaTable;
+
+    async fn synthetic_snapshot() -> DeltaResult<super::super::Snapshot> {
+        let nested = StructType::try_new([
+            StructField::nullable("leaf", DataType::INTEGER),
+            StructField::nullable("other_leaf", DataType::STRING),
+        ])?;
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("value", DataType::INTEGER),
+                StructField::nullable("unreferenced_col", DataType::STRING),
+                StructField::nullable("part", DataType::STRING),
+                StructField::nullable("nested", DataType::Struct(Box::new(nested))),
+            ])
+            .with_partition_columns(["part"])
+            .await?;
+        super::super::Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
+    #[tokio::test]
+    async fn scan_builder_infers_num_records_only_for_default_query_scan() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let scan = snapshot.scan_builder().build()?;
+
+        assert_eq!(
+            scan.stats_materialization().stats_projection(),
+            &StatsProjection::NumRecordsOnly
+        );
+        assert!(!scan.stats_materialization().preserves_raw_stats());
+        assert_eq!(
+            scan.stats_materialization().stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_infers_predicate_columns_for_data_predicate() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["value"]).gt(Scalar::Integer(10)));
+        let scan = snapshot.scan_builder().with_predicate(predicate).build()?;
+
+        assert_eq!(
+            scan.stats_materialization().stats_projection(),
+            &StatsProjection::PredicateColumns([ColumnName::new(["value"])].into())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_rejects_predicate_on_unknown_column() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["missing"]).gt(Scalar::Integer(10)));
+
+        let err = snapshot
+            .scan_builder()
+            .with_predicate(predicate)
+            .build()
+            .expect_err("predicate on an unknown column should fail scan planning");
+
+        assert!(
+            err.to_string().to_lowercase().contains("missing")
+                || err.to_string().to_lowercase().contains("unknown"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_preserves_explicit_compatibility_materialization() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let materialization = FileStatsMaterialization::compatibility(StatsProjection::full());
+        let scan = snapshot
+            .scan_builder()
+            .with_stats_materialization(materialization.clone())
+            .build()?;
+
+        assert_eq!(scan.stats_materialization(), &materialization);
+        assert!(scan.stats_materialization().preserves_raw_stats());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_preserves_explicit_without_stats_materialization() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let scan = snapshot
+            .scan_builder()
+            .with_stats_materialization(FileStatsMaterialization::without_stats())
+            .build()?;
+
+        assert_eq!(
+            scan.stats_materialization().stats_projection(),
+            &StatsProjection::none()
+        );
+        assert_eq!(
+            scan.stats_materialization().stats_source_policy(),
+            StatsSourcePolicy::None
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_with_skip_stats_false_clears_prior_skip_stats() -> DeltaResult<()> {
+        let snapshot = synthetic_snapshot().await?;
+        let scan = snapshot
+            .scan_builder()
+            .with_stats_materialization(FileStatsMaterialization::without_stats())
+            .with_skip_stats(false)
+            .build()?;
+
+        assert_eq!(
+            scan.stats_materialization().stats_projection(),
+            &StatsProjection::NumRecordsOnly
+        );
+        assert_eq!(
+            scan.stats_materialization().stats_source_policy(),
+            StatsSourcePolicy::ParsedWithJsonFallback
+        );
+        assert!(!scan.stats_materialization().preserves_raw_stats());
+
+        Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct Scan {
     inner: Arc<KernelScan>,
+    stats_materialization: FileStatsMaterialization,
 }
 
 impl From<KernelScan> for Scan {
     fn from(inner: KernelScan) -> Self {
-        Self {
-            inner: Arc::new(inner),
-        }
+        Self::new(
+            Arc::new(inner),
+            FileStatsMaterialization::compatibility(StatsProjection::full()),
+        )
     }
 }
 
 impl From<Arc<KernelScan>> for Scan {
     fn from(inner: Arc<KernelScan>) -> Self {
-        Self { inner }
+        Self::new(
+            inner,
+            FileStatsMaterialization::compatibility(StatsProjection::full()),
+        )
     }
 }
 
 impl Scan {
+    fn new(inner: Arc<KernelScan>, stats_materialization: FileStatsMaterialization) -> Self {
+        Self {
+            inner,
+            stats_materialization,
+        }
+    }
+
     /// Get a shared reference to the inner [`KernelScan`].
-    #[cfg(any(test, feature = "datafusion"))]
+    #[cfg(feature = "datafusion")]
     pub(crate) fn inner(&self) -> &Arc<KernelScan> {
         &self.inner
+    }
+
+    /// Get the stats materialization policy attached to this scan.
+    ///
+    /// The policy is used when converting kernel scan rows into output rows.
+    pub(crate) fn stats_materialization(&self) -> &FileStatsMaterialization {
+        &self.stats_materialization
     }
 
     /// The table's root URL. Any relative paths returned from `scan_data` (or in a callback from

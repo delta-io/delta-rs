@@ -1,22 +1,31 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::{Array, Int32Array, RecordBatch, UInt64Array};
+use arrow::array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, UInt64Array};
+use arrow::compute::{filter_record_batch, take};
 use arrow::datatypes::SchemaRef;
-use datafusion::common::{DataFusionError, Result as DataFusionResult};
-use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use datafusion::common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::{
+    Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore, col,
+    conditional_expressions::CaseBuilder, lit,
+};
 use datafusion::physical_expr::Distribution;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, RecordBatchStream,
     SendableRecordBatchStream,
 };
+use datafusion::prelude::DataFrame;
 use futures::{Stream, StreamExt};
 
 use crate::DeltaTableError;
 use crate::delta_datafusion::get_path_column;
-use crate::operations::merge::{MatchParticipationClass, TARGET_MATCH_CARDINALITY_CLASS_COLUMN};
+use crate::operations::merge::{
+    DUPLICATE_MATCH_MARKER_COLUMNS, MatchParticipationClass, OPERATION_COLUMN, OperationType,
+    TARGET_MATCH_CARDINALITY_CLASS_COLUMN, TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
+};
 
 #[derive(Debug)]
 pub(crate) struct MergeValidationExec {
@@ -116,6 +125,8 @@ impl DisplayAs for MergeValidationExec {
 struct TargetMatchState {
     matched_action_count: i32,
     unconditional_delete_count: i32,
+    emitted_winner: bool,
+    buffered_noop: Option<RecordBatch>,
 }
 
 struct MergeValidationStream {
@@ -126,6 +137,8 @@ struct MergeValidationStream {
     file_id_by_path: HashMap<String, usize>,
     file_paths: Vec<String>,
     target_row_state: HashMap<(usize, u64), TargetMatchState>,
+    buffered_noop_order: Vec<(usize, u64)>,
+    pending_output: VecDeque<RecordBatch>,
 }
 
 impl MergeValidationStream {
@@ -143,6 +156,8 @@ impl MergeValidationStream {
             file_id_by_path: HashMap::new(),
             file_paths: Vec::new(),
             target_row_state: HashMap::new(),
+            buffered_noop_order: Vec::new(),
+            pending_output: VecDeque::new(),
         }
     }
 
@@ -158,7 +173,7 @@ impl MergeValidationStream {
         }
     }
 
-    fn validate_batch(&mut self, batch: &RecordBatch) -> DataFusionResult<()> {
+    fn validate_batch(&mut self, batch: &RecordBatch) -> DataFusionResult<Option<RecordBatch>> {
         let file_dictionary =
             get_path_column(batch, self.file_column.as_str()).map_err(DataFusionError::from)?;
         let file_keys = file_dictionary.keys();
@@ -203,11 +218,20 @@ impl MergeValidationStream {
                 )))
             })?;
 
+        let mut keep_mask = vec![true; batch.num_rows()];
+
         for row in 0..batch.num_rows() {
-            if file_keys.is_null(row)
-                || row_ordinal_array.is_null(row)
-                || cardinality_class_array.is_null(row)
-            {
+            if cardinality_class_array.is_null(row) {
+                continue;
+            }
+
+            let cardinality_class = cardinality_class_array.value(row);
+
+            if !is_candidate_match(cardinality_class) {
+                continue;
+            }
+
+            if file_keys.is_null(row) || row_ordinal_array.is_null(row) {
                 continue;
             }
 
@@ -216,13 +240,10 @@ impl MergeValidationStream {
                 continue;
             };
 
+            keep_mask[row] = false;
             let row_ordinal = row_ordinal_array.value(row);
-            let cardinality_class = cardinality_class_array.value(row);
-
-            let state = self
-                .target_row_state
-                .entry((file_id, row_ordinal))
-                .or_default();
+            let key = (file_id, row_ordinal);
+            let state = self.target_row_state.entry(key).or_default();
 
             if cardinality_class == MatchParticipationClass::MatchedAction as i32 {
                 state.matched_action_count += 1;
@@ -243,26 +264,85 @@ impl MergeValidationStream {
                     )),
                 )));
             }
+
+            if cardinality_class == MatchParticipationClass::MatchedNoop as i32 {
+                if !state.emitted_winner && state.buffered_noop.is_none() {
+                    state.buffered_noop = Some(take_row(batch, row)?);
+                    self.buffered_noop_order.push(key);
+                }
+            } else if !state.emitted_winner {
+                state.emitted_winner = true;
+                state.buffered_noop = None;
+                keep_mask[row] = true;
+            }
         }
 
-        Ok(())
+        if keep_mask.iter().all(|keep| *keep) {
+            Ok(Some(batch.clone()))
+        } else if keep_mask.iter().any(|keep| *keep) {
+            Ok(Some(filter_record_batch(
+                batch,
+                &BooleanArray::from(keep_mask),
+            )?))
+        } else {
+            Ok(None)
+        }
     }
+
+    fn queue_buffered_noops(&mut self) {
+        for key in self.buffered_noop_order.drain(..) {
+            if let Some(state) = self.target_row_state.get_mut(&key)
+                && !state.emitted_winner
+                && let Some(batch) = state.buffered_noop.take()
+            {
+                self.pending_output.push_back(batch);
+            }
+        }
+    }
+}
+
+fn is_candidate_match(cardinality_class: i32) -> bool {
+    cardinality_class == MatchParticipationClass::MatchedNoop as i32
+        || cardinality_class == MatchParticipationClass::MatchedUnconditionalDelete as i32
+        || cardinality_class == MatchParticipationClass::MatchedAction as i32
+}
+
+fn take_row(batch: &RecordBatch, row: usize) -> DataFusionResult<RecordBatch> {
+    let indices = UInt64Array::from(vec![row as u64]);
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| Ok(take(column.as_ref(), &indices, None)?))
+        .collect::<DataFusionResult<Vec<ArrayRef>>>()?;
+
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
 impl Stream for MergeValidationStream {
     type Item = DataFusionResult<RecordBatch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.input.poll_next_unpin(cx) {
-            Poll::Ready(Some(Ok(batch))) => {
-                if let Err(err) = self.validate_batch(&batch) {
-                    return Poll::Ready(Some(Err(err)));
-                }
-                Poll::Ready(Some(Ok(batch)))
+        loop {
+            if let Some(batch) = self.pending_output.pop_front() {
+                return Poll::Ready(Some(Ok(batch)));
             }
-            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+
+            match self.input.poll_next_unpin(cx) {
+                Poll::Ready(Some(Ok(batch))) => match self.validate_batch(&batch) {
+                    Ok(Some(batch)) => return Poll::Ready(Some(Ok(batch))),
+                    Ok(None) => continue,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                },
+                Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
+                Poll::Ready(None) => {
+                    self.queue_buffered_noops();
+                    if let Some(batch) = self.pending_output.pop_front() {
+                        return Poll::Ready(Some(Ok(batch)));
+                    }
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            }
         }
     }
 
@@ -275,6 +355,50 @@ impl RecordBatchStream for MergeValidationStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+pub(super) fn build_duplicate_match_validation_plan(
+    input: LogicalPlan,
+    state: &SessionState,
+    ops: &[(
+        HashMap<Column, Expr>,
+        OperationType,
+        MatchParticipationClass,
+    )],
+    file_column: Arc<String>,
+) -> DataFusionResult<LogicalPlan> {
+    let mut cardinality_when = Vec::with_capacity(ops.len());
+    let mut cardinality_then = Vec::with_capacity(ops.len());
+
+    for (idx, (_, _, cardinality_class)) in ops.iter().enumerate() {
+        cardinality_when.push(lit(idx as i32));
+        cardinality_then.push(lit(*cardinality_class as i32));
+    }
+
+    let cardinality_class = CaseBuilder::new(
+        Some(Box::new(col(OPERATION_COLUMN))),
+        cardinality_when,
+        cardinality_then,
+        Some(Box::new(lit(0))),
+    )
+    .end()?;
+
+    let input = DataFrame::new(state.clone(), input)
+        .with_column(TARGET_MATCH_CARDINALITY_CLASS_COLUMN, cardinality_class)?
+        .into_unoptimized_plan();
+
+    let validated = LogicalPlan::Extension(Extension {
+        node: Arc::new(MergeValidation {
+            input,
+            file_expr: col(file_column.as_str()),
+            file_column: Arc::clone(&file_column),
+            row_ordinal_column: Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+        }),
+    });
+
+    Ok(DataFrame::new(state.clone(), validated)
+        .drop_columns(DUPLICATE_MATCH_MARKER_COLUMNS)?
+        .into_unoptimized_plan())
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, PartialOrd)]
@@ -327,6 +451,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, UInt16Type};
     use arrow_array::builder::StringDictionaryBuilder;
     use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+    use futures::TryStreamExt;
 
     use crate::delta_datafusion::PATH_COLUMN;
     use crate::operations::merge::TARGET_ROW_ORDINAL_IN_FILE_COLUMN;
@@ -378,6 +503,54 @@ mod tests {
     fn empty_stream(schema: SchemaRef) -> SendableRecordBatchStream {
         let stream = futures::stream::iter(Vec::<DataFusionResult<RecordBatch>>::new());
         Box::pin(RecordBatchStreamAdapter::new(schema, Box::pin(stream)))
+    }
+
+    fn stream_from_batches(batches: Vec<RecordBatch>) -> SendableRecordBatchStream {
+        let schema = batches
+            .first()
+            .expect("expected at least one batch")
+            .schema();
+        let stream = futures::stream::iter(batches.into_iter().map(Ok));
+        Box::pin(RecordBatchStreamAdapter::new(schema, Box::pin(stream)))
+    }
+
+    async fn collect_validated(batches: Vec<RecordBatch>) -> DataFusionResult<Vec<RecordBatch>> {
+        let schema = batches
+            .first()
+            .expect("expected at least one batch")
+            .schema();
+        let stream = MergeValidationStream::new(
+            stream_from_batches(batches),
+            schema,
+            Arc::new(PATH_COLUMN.to_string()),
+            Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+        );
+
+        stream.try_collect::<Vec<_>>().await
+    }
+
+    fn output_rows(batches: &[RecordBatch]) -> Vec<(u64, i32)> {
+        batches
+            .iter()
+            .flat_map(|batch| {
+                let ordinals = batch
+                    .column_by_name(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+                    .expect("ordinal column exists")
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .expect("ordinal column is UInt64");
+                let classes = batch
+                    .column_by_name(TARGET_MATCH_CARDINALITY_CLASS_COLUMN)
+                    .expect("class column exists")
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .expect("class column is Int32");
+
+                (0..batch.num_rows())
+                    .map(|row| (ordinals.value(row), classes.value(row)))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     fn validate(b: &RecordBatch) -> DataFusionResult<()> {
@@ -473,6 +646,32 @@ mod tests {
     }
 
     #[test]
+    fn test_ignore_rows_do_not_allocate_validation_state() {
+        let b = batch(
+            vec![10, 11],
+            vec![
+                MatchParticipationClass::Ignore as i32,
+                MatchParticipationClass::Ignore as i32,
+            ],
+        );
+        let schema = b.schema();
+        let mut s = MergeValidationStream::new(
+            empty_stream(schema.clone()),
+            schema,
+            Arc::new(PATH_COLUMN.to_string()),
+            Arc::new(TARGET_ROW_ORDINAL_IN_FILE_COLUMN.to_string()),
+        );
+
+        s.validate_batch(&b).expect("ignore rows pass validation");
+
+        assert_eq!(
+            s.target_row_state.len(),
+            0,
+            "ignore rows are irrelevant to duplicate validation state"
+        );
+    }
+
+    #[test]
     fn test_one_matched_action_and_one_matched_noop_passes() {
         let b = batch(
             vec![10, 10],
@@ -536,5 +735,28 @@ mod tests {
 
         validate_batches(&[first, second])
             .expect("dictionary keys must be remapped per batch before cross batch validation");
+    }
+
+    #[tokio::test]
+    async fn test_cross_batch_dedup_outputs_highest_priority_match() {
+        let first = batch(
+            vec![7, 8, 9],
+            vec![
+                MatchParticipationClass::MatchedNoop as i32,
+                MatchParticipationClass::Ignore as i32,
+                MatchParticipationClass::MatchedNoop as i32,
+            ],
+        );
+        let second = batch(vec![7], vec![MatchParticipationClass::MatchedAction as i32]);
+
+        let output = collect_validated(vec![first, second])
+            .await
+            .expect("validation passes");
+        let rows = output_rows(&output);
+
+        assert_eq!(rows.iter().filter(|(ordinal, _)| *ordinal == 7).count(), 1);
+        assert!(rows.contains(&(7, MatchParticipationClass::MatchedAction as i32)));
+        assert!(rows.contains(&(8, MatchParticipationClass::Ignore as i32)));
+        assert!(rows.contains(&(9, MatchParticipationClass::MatchedNoop as i32)));
     }
 }

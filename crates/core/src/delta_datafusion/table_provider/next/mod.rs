@@ -29,7 +29,7 @@ use std::any::Any;
 use std::collections::HashSet;
 use std::{borrow::Cow, sync::Arc};
 
-use arrow::datatypes::{Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::datasource::{TableType, sink::DataSinkExec};
 use datafusion::logical_expr::{TableProviderFilterPushDown, dml::InsertOp};
@@ -57,6 +57,7 @@ use crate::kernel::transaction::{PROTOCOL, TransactionError};
 use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::SaveMode;
+use crate::table::normalize_table_url;
 
 mod scan;
 
@@ -170,6 +171,28 @@ pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
     }
 }
 
+pub(crate) fn canonical_table_root_identity(root: &url::Url) -> url::Url {
+    let mut root = ensure_table_root_url(&normalize_table_url(root));
+    let _ = root.set_username("");
+    let _ = root.set_password(None);
+    root.set_query(None);
+    root.set_fragment(None);
+
+    if root.scheme() == "file" {
+        return canonical_local_table_root_url(&root).unwrap_or(root);
+    }
+
+    root
+}
+
+fn canonical_local_table_root_url(root: &url::Url) -> Option<url::Url> {
+    let path = root.to_file_path().ok()?;
+    let canonical_path = std::fs::canonicalize(path).ok()?;
+    let canonical_root = Url::from_directory_path(canonical_path).ok()?;
+
+    Some(ensure_table_root_url(&normalize_table_url(&canonical_root)))
+}
+
 pub(crate) fn redact_url_for_error(url: &Url) -> String {
     let mut redacted = url.clone();
     let _ = redacted.set_password(None);
@@ -277,6 +300,7 @@ pub struct DeltaScan {
     scan_schema: SchemaRef,
     /// Provider/public schema, including configured file id capability when enabled.
     full_schema: SchemaRef,
+    row_index_column: Option<String>,
     #[serde(skip)]
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
@@ -316,6 +340,7 @@ impl DeltaScan {
             config,
             scan_schema,
             full_schema,
+            row_index_column: None,
             file_skipping_predicate: None,
             log_store: None,
             read_operation_id: None,
@@ -334,6 +359,25 @@ impl DeltaScan {
     pub(crate) fn with_file_selection(mut self, selection: FileSelection) -> Self {
         self.file_selection = Some(selection);
         self
+    }
+
+    pub(crate) fn with_row_index_column(mut self, column: impl ToString) -> Result<Self> {
+        let column = column.to_string();
+        if self.full_schema.field_with_name(&column).is_ok() {
+            return Err(DataFusionError::Plan(format!(
+                "DeltaScan row index column '{column}' conflicts with an existing scan column"
+            )));
+        }
+
+        let mut fields = self.full_schema.fields().to_vec();
+        fields.push(Arc::new(Field::new(
+            column.clone(),
+            DataType::UInt64,
+            false,
+        )));
+        self.full_schema = Arc::new(Schema::new(fields));
+        self.row_index_column = Some(column);
+        Ok(self)
     }
 
     /// Restrict reads to the provided add actions by normalizing them into a
@@ -461,6 +505,7 @@ impl TableProvider for DeltaScan {
             self.scan_schema.clone(),
             self.full_schema.clone(),
             &self.config,
+            self.row_index_column.as_deref(),
             projection,
             filters,
         )?;
@@ -620,6 +665,43 @@ mod tests {
             open_fs_path,
         },
     };
+
+    #[test]
+    fn test_canonical_table_root_identity_strips_username_query_and_fragment() {
+        let url =
+            Url::parse("https://urluser:urlpassword@example.com/path?token=abc#frag").unwrap();
+
+        let canonical = canonical_table_root_identity(&url);
+
+        assert_eq!(canonical.username(), "");
+        assert!(canonical.password().is_none());
+        assert!(canonical.query().is_none());
+        assert!(canonical.fragment().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_canonical_table_root_identity_canonicalizes_symlink_equivalent_file_roots() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let real_table = tmp_dir.path().join("real").join("table");
+        std::fs::create_dir_all(&real_table).unwrap();
+
+        let link_table = tmp_dir.path().join("link").join("table");
+        std::fs::create_dir_all(link_table.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real_table, &link_table).unwrap();
+
+        let real_url = Url::from_directory_path(&real_table).unwrap();
+        let link_url = Url::from_directory_path(&link_table).unwrap();
+
+        assert_ne!(
+            normalize_table_url(&real_url),
+            normalize_table_url(&link_url)
+        );
+        assert_eq!(
+            canonical_table_root_identity(&real_url),
+            canonical_table_root_identity(&link_url)
+        );
+    }
 
     /// Extracts fields from the parquet scan
     #[derive(Default)]
