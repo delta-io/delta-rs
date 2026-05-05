@@ -72,6 +72,7 @@ pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
 };
+pub use engine::{DataFusionEngine, InjectedEngine};
 pub(crate) use find_files::*;
 pub use table_provider::{
     DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,

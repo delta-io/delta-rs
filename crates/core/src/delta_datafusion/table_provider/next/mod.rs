@@ -40,13 +40,14 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use datafusion::catalog::{ScanArgs, ScanResult};
+use delta_kernel::Engine;
 use delta_kernel::table_configuration::TableConfiguration;
 use serde::{Deserialize, Serialize};
 
 pub use self::scan::{DeltaScanExec, DeltaNextPhysicalCodec};
 pub(crate) use self::scan::KernelScanPlan;
 use crate::delta_datafusion::DeltaScanConfig;
-use crate::delta_datafusion::engine::DataFusionEngine;
+use crate::delta_datafusion::engine::{DataFusionEngine, InjectedEngine};
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::kernel::{EagerSnapshot, Snapshot};
 
@@ -175,7 +176,11 @@ impl TableProvider for DeltaScan {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let engine = DataFusionEngine::new_from_session(session);
+        let engine: Arc<dyn Engine> = session
+            .config()
+            .get_extension::<InjectedEngine>()
+            .map(|e| e.0.clone())
+            .unwrap_or_else(|| DataFusionEngine::new_from_session(session));
 
         // Filter out file_id column from projection if present
         let file_id_idx = self
@@ -218,7 +223,11 @@ impl TableProvider for DeltaScan {
     }
 
     async fn scan_with_args<'a>(&self, state: &dyn Session, args: ScanArgs<'a>) -> Result<ScanResult> {
-        let engine = DataFusionEngine::new_from_session(state);
+        let engine: Arc<dyn Engine> = state
+            .config()
+            .get_extension::<InjectedEngine>()
+            .map(|e| e.0.clone())
+            .unwrap_or_else(|| DataFusionEngine::new_from_session(state));
 
         // Filter out file_id column from projection if present
         let file_id_idx = self

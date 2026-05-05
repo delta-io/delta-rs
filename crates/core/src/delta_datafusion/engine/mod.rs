@@ -15,6 +15,10 @@ mod expressions;
 mod file_formats;
 mod storage;
 
+/// Wraps a custom [`Engine`] for injection into a DataFusion session config extension.
+#[derive(Clone)]
+pub struct InjectedEngine(pub Arc<dyn Engine>);
+
 /// A Datafusion based Kernel Engine
 #[derive(Clone)]
 pub struct DataFusionEngine {
