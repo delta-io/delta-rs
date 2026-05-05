@@ -4,9 +4,7 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{Array as _, *};
-use arrow_schema::{
-    DataType as ArrowDataType, Field as ArrowField, Fields, SchemaRef as ArrowSchemaRef,
-};
+use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Fields};
 use arrow_schema::{Field, Schema};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel;
@@ -38,7 +36,8 @@ use crate::{DeltaResult, DeltaTableError};
 pin_project! {
     pub(crate) struct ScanRowOutStream<S> {
         stats_schema: KernelSchemaRef,
-        stats_arrow_schema: ArrowSchemaRef,
+        // Derived from `stats_schema`; cached to avoid converting per batch.
+        stats_arrow_fields: Fields,
         partitions_schema: Option<KernelSchemaRef>,
         column_mapping_mode: ColumnMappingMode,
         stats_materialization: FileStatsMaterialization,
@@ -57,12 +56,13 @@ impl<S> ScanRowOutStream<S> {
         let stats_schema = stats_materialization
             .stats_projection()
             .stats_schema(snapshot.as_ref())?;
-        let stats_arrow_schema = Arc::new(stats_schema.as_ref().try_into_arrow()?);
+        let stats_arrow_schema: Schema = stats_schema.as_ref().try_into_arrow()?;
+        let stats_arrow_fields = stats_arrow_schema.fields().clone();
         let partitions_schema = snapshot.partitions_schema()?;
         let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
         Ok(Self {
             stats_schema,
-            stats_arrow_schema,
+            stats_arrow_fields,
             partitions_schema,
             column_mapping_mode,
             stats_materialization,
@@ -84,7 +84,7 @@ where
                 let result = parse_stats_column_impl(
                     &batch,
                     this.stats_schema.clone(),
-                    Some(this.stats_arrow_schema.fields()),
+                    Some(&*this.stats_arrow_fields),
                     this.partitions_schema.as_ref(),
                     *this.column_mapping_mode,
                     this.stats_materialization,
