@@ -34,6 +34,10 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
 }
 
 impl From<TableFeatures> for KernelTableFeatures {
@@ -56,6 +60,8 @@ impl From<TableFeatures> for KernelTableFeatures {
             TableFeatures::RowTracking => KernelTableFeatures::RowTracking,
             TableFeatures::DomainMetadata => KernelTableFeatures::DomainMetadata,
             TableFeatures::IcebergCompatV1 => KernelTableFeatures::IcebergCompatV1,
+            TableFeatures::VariantType => KernelTableFeatures::VariantType,
+            TableFeatures::VariantTypePreview => KernelTableFeatures::VariantTypePreview,
         }
     }
 }
