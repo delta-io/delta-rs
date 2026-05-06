@@ -102,13 +102,23 @@ impl DisplayAs for DeltaScanMetaExec {
 }
 
 impl DeltaScanMetaExec {
-    fn make_properties(
-        scan_plan: &KernelScanPlan,
-        partition_count: usize,
-        include_file_id: bool,
-    ) -> PlanProperties {
+    fn output_schema(scan_plan: &KernelScanPlan) -> SchemaRef {
+        // Row index projection requires row ordinals from each file. Planning
+        // routes it to DeltaScanExec.
+        debug_assert!(
+            !scan_plan.contract.retain_row_index,
+            "metadata scan cannot satisfy row index projection"
+        );
+        if scan_plan.contract.retain_file_id {
+            Arc::clone(&scan_plan.contract.output_schema)
+        } else {
+            Arc::clone(&scan_plan.contract.result_schema)
+        }
+    }
+
+    fn make_properties(scan_plan: &KernelScanPlan, partition_count: usize) -> PlanProperties {
         PlanProperties::new(
-            EquivalenceProperties::new(scan_plan.effective_schema(include_file_id, false)),
+            EquivalenceProperties::new(Self::output_schema(scan_plan)),
             Partitioning::UnknownPartitioning(partition_count),
             EmissionType::Incremental,
             Boundedness::Bounded,
@@ -123,12 +133,8 @@ impl DeltaScanMetaExec {
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let include_file_id = file_id_field.is_some();
-        let properties = Arc::new(Self::make_properties(
-            scan_plan.as_ref(),
-            input.len(),
-            include_file_id,
-        ));
+        debug_assert_eq!(file_id_field.is_some(), scan_plan.contract.retain_file_id);
+        let properties = Arc::new(Self::make_properties(scan_plan.as_ref(), input.len()));
         Self {
             scan_plan,
             input,
@@ -236,7 +242,6 @@ impl ExecutionPlan for DeltaScanMetaExec {
         let properties = Arc::new(Self::make_properties(
             self.scan_plan.as_ref(),
             new_input.len(),
-            self.file_id_field.is_some(),
         ));
 
         Ok(Some(Arc::new(Self {
@@ -486,8 +491,7 @@ impl Stream for DeltaScanMetaStream {
 
 impl RecordBatchStream for DeltaScanMetaStream {
     fn schema(&self) -> SchemaRef {
-        self.scan_plan
-            .effective_schema(self.file_id_field.is_some(), false)
+        DeltaScanMetaExec::output_schema(&self.scan_plan)
     }
 }
 

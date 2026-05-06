@@ -68,6 +68,14 @@ pub(crate) struct ProjectedScanContract {
 }
 
 impl ProjectedScanContract {
+    /// Returns the row index field when retained in scan output.
+    pub(crate) fn retained_row_index_field(&self) -> Option<FieldRef> {
+        match (self.retain_row_index, self.row_index_field.as_ref()) {
+            (true, Some(field)) => Some(Arc::clone(field)),
+            _ => None,
+        }
+    }
+
     pub(crate) fn try_new(
         table_schema: SchemaRef,
         provider_schema: SchemaRef,
@@ -325,18 +333,6 @@ impl KernelScanPlan {
 
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
-    }
-
-    pub(crate) fn effective_schema(
-        &self,
-        include_file_id: bool,
-        include_row_index: bool,
-    ) -> SchemaRef {
-        if include_file_id || include_row_index {
-            self.contract.output_schema.clone()
-        } else {
-            self.contract.result_schema.clone()
-        }
     }
 }
 
@@ -1323,6 +1319,24 @@ mod tests {
             field.data_type(),
             &crate::delta_datafusion::file_id::file_id_data_type()
         );
+    }
+
+    #[test]
+    fn test_retained_row_index_field_ignores_incomplete_internal_contract() {
+        let schema = Arc::new(Schema::empty());
+        let contract = ProjectedScanContract {
+            result_schema: Arc::clone(&schema),
+            scan_schema: Arc::clone(&schema),
+            output_schema: schema,
+            kernel_projection: None,
+            result_projection: None,
+            file_id_field: DeltaScanConfig::default().file_id_field(),
+            retain_file_id: false,
+            row_index_field: None,
+            retain_row_index: true,
+        };
+
+        assert!(contract.retained_row_index_field().is_none());
     }
 
     /// The scan in this test only projects one column. This requires the scan plan to add the
