@@ -12,9 +12,16 @@ from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
 from arro3.core import Schema as ArrowSchema
 
-from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    Transaction,
+    _disable_nanosecond_timestamps,
+    _nanosecond_timestamps_enabled,
+    enable_nanosecond_timestamps,
+    write_deltalake,
+)
 from deltalake._internal import (
-    _NANOSECOND_TIMESTAMPS,
     CommitFailedError,
     Field,
     PrimitiveType,
@@ -53,6 +60,13 @@ def test_roundtrip_basic(
     tmp_path: pathlib.Path,
     sample_data_pyarrow: "pa.Table",
 ):
+    assert_roundtrips(tmp_path, sample_data_pyarrow)
+
+
+def assert_roundtrips(
+    tmp_path: pathlib.Path,
+    sample_data_pyarrow: "pa.Table",
+):
     # Check we can create the subdirectory
     import pyarrow as pa
 
@@ -81,6 +95,39 @@ def test_roundtrip_basic(
         modification_time = action["modificationTime"] / 1000  # convert back to seconds
         assert start_time < modification_time
         assert modification_time < end_time
+
+
+@pytest.mark.pyarrow
+def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.Path):
+    """
+    Unless ``enable_nanosecond_timestamps()`` is called, nanosecond timestamps
+    are cast to microseconds.
+    """
+    import pyarrow as pa
+
+    table = pa.table(
+        {"timestamp_ns": [pa.scalar(700123, type=pa.timestamp("ns", "UTC"))]}
+    )
+
+    # If nanoseconds are disabled when writing, the data is written as
+    # microseconds:
+    assert not _nanosecond_timestamps_enabled()
+    path = tmp_path / "ns_disabled"
+    write_deltalake(path, table)
+    result = DeltaTable(path).to_pyarrow_table()
+    # Should be rounded to microseconds:
+    assert result == pa.table(
+        {"timestamp_ns": [pa.scalar(700, type=pa.timestamp("us", "UTC"))]}
+    )
+
+    # If nanoseconds are enabled when writing, the data is written as
+    # nanoseconds:
+    enable_nanosecond_timestamps()
+    try:
+        assert _nanosecond_timestamps_enabled()
+        assert_roundtrips(tmp_path / "ns_enabled", table)
+    finally:
+        _disable_nanosecond_timestamps()
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
@@ -905,7 +952,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_mins["decimal"] = 10.0
     expected_mins["date32"] = "2022-01-01"
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_mins["timestamp_ns"] = "1970-01-01T00:00:00Z"
 
     assert stats["minValues"] == expected_mins
@@ -925,7 +972,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_maxs["decimal"] = 14.0
     expected_maxs["date32"] = "2022-01-05"
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000000004Z"
 
     assert stats["maxValues"] == expected_maxs
@@ -2068,7 +2115,7 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
 
 
 @pytest.mark.skipif(
-    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+    not _nanosecond_timestamps_enabled(), reason="nanosecond timestamps not enabled"
 )
 @pytest.mark.pyarrow
 @pytest.mark.parametrize(
@@ -2972,7 +3019,7 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     delta_schema = dt.schema()
     ts_field = delta_schema.fields[1]
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_type = PrimitiveType("timestamp_nanos")
     else:
         expected_type = PrimitiveType("timestamp")
@@ -2980,7 +3027,7 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
-    if _NANOSECOND_TIMESTAMPS:
+    if _nanosecond_timestamps_enabled():
         expected_resolution = "ns"
     else:
         expected_resolution = "us"

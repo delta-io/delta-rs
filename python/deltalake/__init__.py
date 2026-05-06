@@ -1,6 +1,10 @@
 import atexit
 from typing import Optional
 
+from deltalake import table
+from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS as _INTERNAL_NANOSECOND_TIMESTAMPS,
+)
 from deltalake._internal import (
     TableFeatures,
     Transaction,
@@ -77,6 +81,57 @@ def init_tracing(endpoint: Optional[str] = None) -> None:
     atexit.register(_shutdown_tracing)
 
 
+# Support nanosecond timestamps:
+_NANOSECOND_TIMESTAMPS: bool = False
+
+
+def enable_nanosecond_timestamps() -> None:
+    """
+    Enable experimental support for nanosecond timestamp primitive data types.
+    """
+    if not _INTERNAL_NANOSECOND_TIMESTAMPS:
+        raise RuntimeError(
+            "Extension wasn't compiled with nanosecond-timestamps Cargo feature"
+        )
+
+    if _nanosecond_timestamps_enabled():
+        # Already called, no work necessary.
+        return
+
+    global _NANOSECOND_TIMESTAMPS
+    _NANOSECOND_TIMESTAMPS = True
+    table.SUPPORTED_WRITER_FEATURES.add("timestampNanos")
+    table.SUPPORTED_READER_FEATURES.add("timestampNanos")
+
+    from deltalake._internal import _set_cast_nanos_timestamps_to_micros
+
+    _set_cast_nanos_timestamps_to_micros(False)
+
+
+def _disable_nanosecond_timestamps() -> None:
+    """
+    Disable nanosecond timestamps, for unit tests.
+    """
+    if not _nanosecond_timestamps_enabled():
+        return
+
+    global _NANOSECOND_TIMESTAMPS
+    _NANOSECOND_TIMESTAMPS = False
+    table.SUPPORTED_WRITER_FEATURES.remove("timestampNanos")
+    table.SUPPORTED_READER_FEATURES.remove("timestampNanos")
+
+    from deltalake._internal import _set_cast_nanos_timestamps_to_micros
+
+    _set_cast_nanos_timestamps_to_micros(True)
+
+
+def _nanosecond_timestamps_enabled() -> bool:
+    """
+    Return whether nanosecond timestamps are enabled.
+    """
+    return _NANOSECOND_TIMESTAMPS
+
+
 __all__ = [
     "BloomFilterProperties",
     "ColumnProperties",
@@ -93,6 +148,7 @@ __all__ = [
     "WriterProperties",
     "__version__",
     "convert_to_deltalake",
+    "enable_nanosecond_timestamps",
     "init_tracing",
     "rust_core_version",
     "write_deltalake",
