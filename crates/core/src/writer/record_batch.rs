@@ -27,7 +27,7 @@ use super::utils::{
     ShareableBuffer, arrow_schema_without_partitions, next_data_path,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::schema::cast::normalize_for_delta;
@@ -121,6 +121,8 @@ impl RecordBatchWriter {
 
     /// Creates a [`RecordBatchWriter`] to write data to provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
+        ensure_legacy_writer_supports_table(table, "RecordBatchWriter")?;
+
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;

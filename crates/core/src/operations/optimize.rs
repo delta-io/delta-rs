@@ -32,6 +32,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -52,7 +53,7 @@ use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
@@ -415,6 +416,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write("OPTIMIZE"));
+            }
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();

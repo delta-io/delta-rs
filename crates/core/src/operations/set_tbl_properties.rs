@@ -8,10 +8,12 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
+use crate::table::config::TableProperty;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
@@ -94,6 +96,12 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 
             let current_protocol = snapshot.protocol();
             let properties = this.properties;
+
+            if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
+                return Err(unsupported_column_mapping_write(
+                    "SET TBLPROPERTIES delta.columnMapping.mode",
+                ));
+            }
 
             let new_protocol = current_protocol
                 .clone()

@@ -35,6 +35,7 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -50,6 +51,7 @@ use super::{
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
 };
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
@@ -457,6 +459,9 @@ impl std::future::IntoFuture for UpdateBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write("UPDATE"));
+            }
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

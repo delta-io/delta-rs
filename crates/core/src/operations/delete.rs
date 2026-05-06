@@ -51,6 +51,7 @@ use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
@@ -73,7 +74,7 @@ use crate::delta_datafusion::{
     Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
     scan_files_where_matches, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, LogicalFileView, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
@@ -295,6 +296,9 @@ impl std::future::IntoFuture for DeleteBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write("DELETE"));
+            }
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
