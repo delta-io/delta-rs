@@ -1290,7 +1290,7 @@ mod tests {
         drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
     };
     use crate::{DeltaTable, DeltaTableConfig, DeltaTableError};
-    use arrow::array::{Int64Array, StringArray};
+    use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use chrono::{TimeZone, Utc};
@@ -1299,8 +1299,7 @@ mod tests {
     use datafusion::datasource::listing::PartitionedFile;
     use datafusion::execution::context::SessionState;
     use datafusion::logical_expr::dml::InsertOp;
-    use datafusion::physical_plan::{collect_partitioned, displayable};
-    use datafusion::prelude::{and, col, lit};
+    use datafusion::physical_plan::collect_partitioned;
     use object_store::path::Path;
     use std::sync::Arc;
     use url::Url;
@@ -1382,23 +1381,16 @@ mod tests {
         let table = create_test_table().await.unwrap();
         let session_state = create_test_session_state();
 
-        let scan_config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let table_provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )
-        .unwrap();
-
+        let table_provider = table.table_provider().await.unwrap();
         let schema = table_provider.schema();
+        let value_array: ArrayRef = match schema.field(1).data_type() {
+            ArrowDataType::Utf8 => Arc::new(StringArray::from(vec!["test1", "test2"])),
+            ArrowDataType::Utf8View => Arc::new(StringViewArray::from(vec!["test1", "test2"])),
+            data_type => panic!("unexpected value field data type: {data_type:?}"),
+        };
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![
-                Arc::new(Int64Array::from(vec![1, 2])),
-                Arc::new(StringArray::from(vec!["test1", "test2"])),
-            ],
+            vec![Arc::new(Int64Array::from(vec![1, 2])), value_array],
         )
         .unwrap();
 
@@ -1693,58 +1685,5 @@ mod tests {
             metadata_size_hint: None,
         };
         assert_eq!(file.partition_values, ref_file.partition_values)
-    }
-
-    #[tokio::test]
-    async fn test_scan_with_projection_has_stable_schema_for_filters() {
-        let columns = [
-            StructField::new(
-                "v1".to_string(),
-                DataType::Primitive(PrimitiveType::Long),
-                true,
-            ),
-            StructField::new(
-                "v2".to_string(),
-                DataType::Primitive(PrimitiveType::Long),
-                true,
-            ),
-            StructField::new(
-                "v3".to_string(),
-                DataType::Primitive(PrimitiveType::Long),
-                true,
-            ),
-        ];
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns(columns)
-            .await
-            .unwrap();
-        let session_state = create_test_session_state();
-
-        let scan_config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let table_provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )
-        .unwrap();
-
-        // The scan only projects the first column. This requires the TableProvider to add the
-        // columns required for the filter to an intermediate schema. This test should assert that
-        // this intermediate schema is created deterministically.
-        let filter = and(col("v2").eq(lit(2)), col("v3").eq(lit(3)));
-        let scan = table_provider
-            .scan(session_state.as_ref(), Some(&vec![0]), &[filter], None)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            displayable(scan.as_ref()).indent(false).to_string(),
-            "\
-DeltaScan
-  DataSourceExec: file_groups={1 group: [[]]}, projection=[v1], file_type=parquet, predicate=v2@1 = CAST(2 AS Int64) AND v3@2 = CAST(3 AS Int64), pruning_predicate=v2_null_count@2 != row_count@3 AND v2_min@0 <= 2 AND 2 <= v2_max@1 AND v3_null_count@6 != row_count@3 AND v3_min@4 <= 3 AND 3 <= v3_max@5, required_guarantees=[]\n"
-        )
     }
 }

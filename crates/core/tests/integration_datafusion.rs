@@ -25,9 +25,7 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::delta_datafusion::{
-    DeltaScan, DeltaScanConfigBuilder, DeltaTableFactory, DeltaTableProvider,
-};
+use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
 use deltalake_core::kernel::{
     ColumnMetadataKey, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
 };
@@ -62,6 +60,22 @@ fn open_fs_path(path: &str) -> DeltaTable {
     let url =
         url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
     DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
+
+fn string_value(array: &dyn Array, index: usize) -> &str {
+    match array.data_type() {
+        ArrowDataType::Utf8 => array
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(index),
+        ArrowDataType::Utf8View => array
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap()
+            .value(index),
+        data_type => panic!("expected string array, got {data_type:?}"),
+    }
 }
 
 mod local {
@@ -2089,12 +2103,7 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
-        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )?);
+        let table_provider: Arc<dyn TableProvider> = table.table_provider().await?;
         ctx.register_table("delta_table", table_provider)?;
 
         let source_table = Arc::new(MemTable::try_new(table_schema, vec![vec![batch]])?);
@@ -2211,12 +2220,7 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
-        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )?);
+        let table_provider: Arc<dyn TableProvider> = table.table_provider().await?;
         ctx.register_table("test_table", table_provider.clone())?;
 
         let initial_mem_table = Arc::new(MemTable::try_new(
@@ -2267,14 +2271,8 @@ mod insert_into_tests {
 
         ctx.deregister_table("test_table")?;
         let refreshed_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
-        let refreshed_scan_config =
-            DeltaScanConfigBuilder::new().build(refreshed_table.snapshot()?.snapshot())?;
         let refreshed_table_provider: Arc<dyn TableProvider> =
-            Arc::new(DeltaTableProvider::try_new(
-                refreshed_table.snapshot()?.snapshot().clone(),
-                refreshed_table.log_store(),
-                refreshed_scan_config,
-            )?);
+            refreshed_table.table_provider().await?;
         ctx.register_table("test_table", refreshed_table_provider)?;
 
         let all_data = ctx
@@ -2289,20 +2287,19 @@ mod insert_into_tests {
 
         let names_col = data_batch.column_by_name("name").unwrap();
         let ages_col = data_batch.column_by_name("age").unwrap();
-        let names_array = arrow::array::StringArray::from(names_col.to_data());
         let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
 
-        assert_eq!(names_array.value(0), "Thierry");
+        assert_eq!(string_value(names_col.as_ref(), 0), "Thierry");
         assert_eq!(ages_array.value(0), 22);
-        assert_eq!(names_array.value(1), "Bernard");
+        assert_eq!(string_value(names_col.as_ref(), 1), "Bernard");
         assert_eq!(ages_array.value(1), 24);
-        assert_eq!(names_array.value(2), "Robert");
+        assert_eq!(string_value(names_col.as_ref(), 2), "Robert");
         assert_eq!(ages_array.value(2), 25);
-        assert_eq!(names_array.value(3), "Ion");
+        assert_eq!(string_value(names_col.as_ref(), 3), "Ion");
         assert_eq!(ages_array.value(3), 30);
-        assert_eq!(names_array.value(4), "Denny");
+        assert_eq!(string_value(names_col.as_ref(), 4), "Denny");
         assert_eq!(ages_array.value(4), 35);
-        assert_eq!(names_array.value(5), "Tyler");
+        assert_eq!(string_value(names_col.as_ref(), 5), "Tyler");
         assert_eq!(ages_array.value(5), 40);
 
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
@@ -2351,12 +2348,7 @@ mod insert_into_tests {
         )?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
-        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )?);
+        let table_provider: Arc<dyn TableProvider> = table.table_provider().await?;
         ctx.register_table("test_table", table_provider.clone())?;
 
         let mem_table1 = Arc::new(MemTable::try_new(table_schema.clone(), vec![vec![batch1]])?);
@@ -2390,13 +2382,7 @@ mod insert_into_tests {
 
         ctx.deregister_table("test_table")?;
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
-        let final_scan_config =
-            DeltaScanConfigBuilder::new().build(final_table.snapshot()?.snapshot())?;
-        let final_table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            final_table.snapshot()?.snapshot().clone(),
-            final_table.log_store(),
-            final_scan_config,
-        )?);
+        let final_table_provider: Arc<dyn TableProvider> = final_table.table_provider().await?;
         ctx.register_table("test_table", final_table_provider)?;
 
         let all_data = ctx
@@ -2411,16 +2397,15 @@ mod insert_into_tests {
 
         let names_col = data_batch.column_by_name("name").unwrap();
         let ages_col = data_batch.column_by_name("age").unwrap();
-        let names_array = arrow::array::StringArray::from(names_col.to_data());
         let ages_array = arrow::array::Int64Array::from(ages_col.to_data());
 
-        assert_eq!(names_array.value(0), "Robert");
+        assert_eq!(string_value(names_col.as_ref(), 0), "Robert");
         assert_eq!(ages_array.value(0), 25);
-        assert_eq!(names_array.value(1), "Ion");
+        assert_eq!(string_value(names_col.as_ref(), 1), "Ion");
         assert_eq!(ages_array.value(1), 30);
-        assert_eq!(names_array.value(2), "Denny");
+        assert_eq!(string_value(names_col.as_ref(), 2), "Denny");
         assert_eq!(ages_array.value(2), 35);
-        assert_eq!(names_array.value(3), "Tyler");
+        assert_eq!(string_value(names_col.as_ref(), 3), "Tyler");
         assert_eq!(ages_array.value(3), 40);
 
         assert_eq!(final_table.version(), Some(1)); // CREATE + OVERWRITE = version 1 (the initial append might not commit separately)
@@ -2474,12 +2459,7 @@ mod insert_into_tests {
             RecordBatch::try_new(table_schema.clone(), vec![Arc::new(names), Arc::new(ages)])?;
 
         let ctx = SessionContext::new();
-        let scan_config = DeltaScanConfigBuilder::new().build(table.snapshot()?.snapshot())?;
-        let table_provider: Arc<dyn TableProvider> = Arc::new(DeltaTableProvider::try_new(
-            table.snapshot()?.snapshot().clone(),
-            table.log_store(),
-            scan_config,
-        )?);
+        let table_provider: Arc<dyn TableProvider> = table.table_provider().await?;
         ctx.register_table("delta_table", table_provider)?;
 
         let source_table = Arc::new(MemTable::try_new(table_schema, vec![vec![batch]])?);
@@ -2529,16 +2509,15 @@ mod insert_into_tests {
 
         let names_col = content_batch.column_by_name("name").unwrap();
         let ages_col = content_batch.column_by_name("age").unwrap();
-        let names_array = names_col.as_string_view();
         let ages_array = ages_col.as_primitive::<Int64Type>();
 
-        assert_eq!(names_array.value(0), "Robert");
+        assert_eq!(string_value(names_col.as_ref(), 0), "Robert");
         assert_eq!(ages_array.value(0), 25);
-        assert_eq!(names_array.value(1), "Ion");
+        assert_eq!(string_value(names_col.as_ref(), 1), "Ion");
         assert_eq!(ages_array.value(1), 30);
-        assert_eq!(names_array.value(2), "Denny");
+        assert_eq!(string_value(names_col.as_ref(), 2), "Denny");
         assert_eq!(ages_array.value(2), 35);
-        assert_eq!(names_array.value(3), "Tyler");
+        assert_eq!(string_value(names_col.as_ref(), 3), "Tyler");
         assert_eq!(ages_array.value(3), 40);
 
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;

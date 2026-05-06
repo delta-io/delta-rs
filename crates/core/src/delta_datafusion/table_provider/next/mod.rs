@@ -632,11 +632,17 @@ mod tests {
     use datafusion::{
         catalog::Session,
         datasource::MemTable,
-        datasource::{physical_plan::FileScanConfig, source::DataSource},
+        datasource::{
+            physical_plan::{FileScanConfig, ParquetSource},
+            source::DataSource,
+        },
         error::DataFusionError,
         logical_expr::dml::InsertOp,
+        physical_optimizer::pruning::PruningPredicate,
         physical_plan::{ExecutionPlanVisitor, collect_partitioned, visit_execution_plan},
+        prelude::{col, lit},
     };
+    use datafusion_datasource::file::FileSource as _;
     use datafusion_datasource::source::DataSourceExec;
     use futures::{StreamExt as _, TryStreamExt as _};
     use parquet::file::reader::FileReader as _;
@@ -761,6 +767,47 @@ mod tests {
             }
 
             Ok(true)
+        }
+    }
+
+    #[derive(Default)]
+    struct ParquetPredicateVisitor {
+        predicate: Option<String>,
+        pruning_predicate: Option<String>,
+    }
+
+    impl ExecutionPlanVisitor for ParquetPredicateVisitor {
+        type Error = DataFusionError;
+
+        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
+            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
+                return Ok(true);
+            };
+            let Some(scan_config) = datasource_exec
+                .data_source()
+                .as_any()
+                .downcast_ref::<FileScanConfig>()
+            else {
+                return Ok(true);
+            };
+            let Some(parquet_source) = scan_config
+                .file_source
+                .as_any()
+                .downcast_ref::<ParquetSource>()
+            else {
+                return Ok(true);
+            };
+            let Some(predicate) = parquet_source.filter() else {
+                return Ok(true);
+            };
+
+            let pruning_predicate = PruningPredicate::try_new(
+                predicate.clone(),
+                parquet_source.table_schema().table_schema().clone(),
+            )?;
+            self.predicate = Some(predicate.to_string());
+            self.pruning_predicate = Some(pruning_predicate.predicate_expr().to_string());
+            Ok(false)
         }
     }
 
@@ -1243,6 +1290,66 @@ mod tests {
             replay_ops.iter().all(|op| !op.is_log_replay_read()),
             "expected serde+update+provider scan to reuse materialized state, got {replay_ops:?}",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_projected_scan_preserves_filter_columns_for_parquet_pruning() -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("v1", ArrowDataType::Int64, true),
+            ArrowField::new("v2", ArrowDataType::Int64, true),
+            ArrowField::new("v3", ArrowDataType::Int64, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2, 3])),
+                Arc::new(Int64Array::from(vec![2, 2, 4])),
+                Arc::new(Int64Array::from(vec![3, 5, 3])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let projection = vec![0];
+        let filter = col("v2").eq(lit(2i64)).and(col("v3").eq(lit(3i64)));
+        let plan = provider
+            .scan(&state, Some(&projection), &[filter], None)
+            .await?;
+
+        assert_eq!(plan.schema().fields().len(), 1);
+        assert_eq!(plan.schema().field(0).name(), "v1");
+
+        let mut visitor = ParquetPredicateVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor)?;
+
+        let predicate = visitor
+            .predicate
+            .expect("projected scan should push a parquet predicate");
+        assert!(
+            predicate.contains("v2@1") && predicate.contains("v3@2"),
+            "expected filter-only columns to retain stable predicate indices, got {predicate}",
+        );
+
+        let pruning_predicate = visitor
+            .pruning_predicate
+            .expect("projected scan should build a pruning predicate");
+        for expected in ["v2_min", "v2_max", "v3_min", "v3_max"] {
+            assert!(
+                pruning_predicate.contains(expected),
+                "expected pruning predicate to reference {expected}, got {pruning_predicate}",
+            );
+        }
 
         Ok(())
     }

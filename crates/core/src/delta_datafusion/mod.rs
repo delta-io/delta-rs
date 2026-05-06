@@ -619,7 +619,6 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
-    use arrow_array::cast::AsArray;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::config::TableParquetOptions;
     use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
@@ -946,16 +945,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select ID, moDified, vaLue from test")
@@ -1039,16 +1031,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx.sql("select col_1, col_2 from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1096,19 +1081,12 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
 
         let mut cfg = SessionConfig::default();
         cfg.options_mut().execution.parquet.pushdown_filters = true;
         let ctx = SessionContext::new_with_config(cfg);
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1, col_2 from test WHERE col_1 = 'A'")
@@ -1193,16 +1171,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1.col_1a, col_1.col_1b from test")
@@ -1433,12 +1404,9 @@ mod tests {
             .unwrap();
 
         let (log_store, mut operations) = recording_log_store(table.log_store());
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store.clone(),
-            config,
-        )
-        .unwrap();
+        let provider = DeltaScanNext::new(table.snapshot().unwrap().snapshot().clone(), config)
+            .unwrap()
+            .with_log_store(log_store.clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
         let state = ctx.state();
@@ -1453,8 +1421,8 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert_eq!(1, batch.num_columns());
         assert_eq!(1, batch.num_rows());
-        let small = batch.column_by_name("small").unwrap().as_string::<i32>();
-        assert_eq!("a", small.iter().next().unwrap().unwrap());
+        let small = ScalarValue::try_from_array(batch.column_by_name("small").unwrap(), 0).unwrap();
+        assert_eq!("a", small.to_string());
 
         let files = table.get_files_by_partitions(&[]).await.unwrap();
         assert_eq!(1, files.len());
