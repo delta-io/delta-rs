@@ -113,6 +113,7 @@ impl FileSelection {
     /// - [`FileSelection::from_file_paths`]
     /// - [`FileSelection::from_adds`]
     /// - [`normalize_path_as_file_id`]
+    #[cfg(test)]
     pub(crate) fn new(file_ids: impl IntoIterator<Item = String>) -> Self {
         Self {
             file_ids: file_ids.into_iter().collect(),

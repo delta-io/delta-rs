@@ -53,7 +53,7 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::table_provider::DeltaScanWire;
+use crate::delta_datafusion::table_provider::{DeltaScan, DeltaScanWire};
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
@@ -73,8 +73,7 @@ pub(crate) use data_validation::{
 pub(crate) use find_files::*;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
-    DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
-    next::DeltaScanExec,
+    DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
 };
 pub(crate) use table_provider::{
     next::FILE_ID_COLUMN_DEFAULT, resolve_file_column_name, update_datafusion_session,
@@ -620,14 +619,8 @@ mod tests {
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::config::TableParquetOptions;
-    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
-    use datafusion::prelude::{SessionConfig, col};
-    use datafusion_datasource::file::FileSource as _;
+    use datafusion::prelude::SessionConfig;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
@@ -1238,131 +1231,6 @@ mod tests {
             .unwrap();
 
         df.collect().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_builder_no_scan_config() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan = table_provider::DeltaScanBuilder::new(
-            table.snapshot().unwrap().snapshot(),
-            table.log_store(),
-            &state,
-        )
-        .with_filter(Some(col("a").eq(lit("s"))))
-        .build()
-        .await
-        .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_builder_scan_config_disable_pushdown() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan =
-            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-                .with_filter(Some(col("a").eq(lit("s"))))
-                .with_scan_config(
-                    DeltaScanConfigBuilder::new()
-                        .with_parquet_pushdown(false)
-                        .build(snapshot.snapshot())
-                        .unwrap(),
-                )
-                .build()
-                .await
-                .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert!(visitor.predicate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_applies_parquet_options() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-
-        let mut config = SessionConfig::default();
-        config.options_mut().execution.parquet.pushdown_filters = true;
-        let ctx = SessionContext::new_with_config(config);
-        let state = ctx.state();
-
-        let scan =
-            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-                .build()
-                .await
-                .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(ctx.copied_table_options().parquet, visitor.options.unwrap());
-    }
-
-    /// Extracts fields from the parquet scan
-    #[derive(Default)]
-    struct ParquetVisitor {
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        options: Option<TableParquetOptions>,
-    }
-
-    impl ExecutionPlanVisitor for ParquetVisitor {
-        type Error = DataFusionError;
-
-        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-                return Ok(true);
-            };
-
-            let Some(scan_config) = datasource_exec
-                .data_source()
-                .as_any()
-                .downcast_ref::<FileScanConfig>()
-            else {
-                return Ok(true);
-            };
-
-            if let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-            {
-                self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.filter();
-            }
-
-            Ok(true)
-        }
     }
 
     // Run a query that filters out all files and sorts.

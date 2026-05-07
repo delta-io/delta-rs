@@ -25,7 +25,7 @@ use datafusion_proto::bytes::{
     logical_plan_from_bytes_with_extension_codec, logical_plan_to_bytes_with_extension_codec,
 };
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::delta_datafusion::{DeltaScan, DeltaTableFactory};
+use deltalake_core::delta_datafusion::DeltaTableFactory;
 use deltalake_core::kernel::{
     ColumnMetadataKey, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
 };
@@ -136,11 +136,6 @@ mod local {
             if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
                 let files = get_scanned_files(exec);
                 self.scanned_files.extend(files);
-            } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScan>() {
-                self.keep_count = exec
-                    .metrics()
-                    .and_then(|m| m.sum_by_name("files_scanned").map(|v| v.as_usize()))
-                    .unwrap_or_default();
             } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScanExec>() {
                 self.keep_count = exec
                     .metrics()
