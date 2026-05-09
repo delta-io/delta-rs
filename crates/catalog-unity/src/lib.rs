@@ -91,9 +91,48 @@ pub enum UnityCatalogError {
     #[error("Missing configuration key: {0}")]
     MissingConfiguration(String),
 
-    /// Unknown configuration key
+    /// Generic "no credential available" — kept for backward compatibility with
+    /// any external consumer that matches on this variant. New code should
+    /// prefer the more specific [`Self::IncompleteCredentialOptions`] (raised
+    /// when the user-supplied [`UnityCatalogBuilder`] lacks the options needed
+    /// to construct any supported credential provider) or
+    /// [`Self::UnsupportedCredentialKind`] (raised when the
+    /// `/temporary-table-credentials` endpoint replied 200 but the response
+    /// did not contain any credential type we know how to consume).
     #[error("Failed to get a credential from UnityCatalog client configuration.")]
     MissingCredential,
+
+    /// Raised when [`UnityCatalogBuilder::build`] cannot assemble any
+    /// supported credential provider from the options the caller supplied —
+    /// e.g. only `databricks_host` was set, or `client_id` was set but
+    /// `client_secret` was not. The `hint` lists which option groups would
+    /// have produced a working provider so the caller can correct one.
+    #[error(
+        "Incomplete UnityCatalog credential options. Provided: [{provided}]. \
+         Supply one of: a `databricks_token` (bearer), \
+         (`unity_client_id` + `unity_client_secret` + `databricks_host`), \
+         (`unity_client_id` + `unity_client_secret` + `unity_authority_id`), \
+         or set `azure_use_azure_cli=true`."
+    )]
+    IncompleteCredentialOptions {
+        /// Comma-separated list of credential-relevant options the caller
+        /// actually set (names only, never values). Empty when the caller
+        /// supplied no auth options at all.
+        provided: String,
+    },
+
+    /// Raised when the Unity Catalog `/temporary-table-credentials` endpoint
+    /// returned a 200 OK but the response did not include any credential type
+    /// this crate knows how to consume (AWS, Azure, GCP, R2). Distinct from
+    /// [`Self::TemporaryCredentialsFetchFailure`], which covers transport- or
+    /// API-level errors.
+    #[error(
+        "Unity Catalog returned a successful temporary-credentials response \
+         but did not include any credential type supported by this client \
+         (expected one of: aws_temp_credentials, azure_user_delegation_sas, \
+         azure_aad, gcp_oauth_token, r2_temp_credentials)."
+    )]
+    UnsupportedCredentialKind,
 
     /// Temporary Credentials Fetch Failure
     #[error("Unable to get temporary credentials from Unity Catalog: {error_code}: {message}")]
@@ -553,7 +592,9 @@ impl UnityCatalogBuilder {
         let credentials = match temp_creds_res {
             TableTempCredentialsResponse::Success(temp_creds) => temp_creds
                 .get_credentials()
-                .ok_or_else(|| UnityCatalogError::MissingCredential)?,
+                // 200 OK but the response did not carry any credential kind
+                // we recognise — distinct from a transport/API error below.
+                .ok_or(UnityCatalogError::UnsupportedCredentialKind)?,
             TableTempCredentialsResponse::Error(rw_error) => {
                 // If that fails attempt to get just read permissions.
                 match unity_catalog
@@ -562,7 +603,7 @@ impl UnityCatalogBuilder {
                 {
                     TableTempCredentialsResponse::Success(temp_creds) => temp_creds
                         .get_credentials()
-                        .ok_or_else(|| UnityCatalogError::MissingCredential)?,
+                        .ok_or(UnityCatalogError::UnsupportedCredentialKind)?,
                     TableTempCredentialsResponse::Error(read_error) => {
                         return Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
                             error_code: read_error.error_code,
@@ -576,6 +617,38 @@ impl UnityCatalogBuilder {
             }
         };
         Ok((storage_location, credentials))
+    }
+
+    /// Snapshot the names (never values) of the credential-relevant options
+    /// the caller has set. Used by [`Self::build`] to produce a specific
+    /// "incomplete options" error message rather than the historical opaque
+    /// `MissingCredential`. We deliberately exclude opaque secrets like
+    /// `bearer_token` / `client_secret` — only the *presence* of each option
+    /// is reported, never its content.
+    fn provided_credential_option_names(&self) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        if self.workspace_url.is_some() {
+            out.push("databricks_host");
+        }
+        if self.bearer_token.is_some() {
+            out.push("databricks_token");
+        }
+        if self.client_id.is_some() {
+            out.push("unity_client_id");
+        }
+        if self.client_secret.is_some() {
+            out.push("unity_client_secret");
+        }
+        if self.authority_id.is_some() {
+            out.push("unity_authority_id");
+        }
+        if self.authority_host.is_some() {
+            out.push("unity_authority_host");
+        }
+        if self.use_azure_cli {
+            out.push("azure_use_azure_cli");
+        }
+        out
     }
 
     fn get_credential_provider(&self) -> Option<CredentialProvider> {
@@ -623,9 +696,14 @@ impl UnityCatalogBuilder {
 
     /// Build an instance of [`UnityCatalog`]
     pub fn build(self) -> DataCatalogResult<UnityCatalog> {
-        let credential = self
-            .get_credential_provider()
-            .ok_or(UnityCatalogError::MissingCredential)?;
+        let credential = self.get_credential_provider().ok_or_else(|| {
+            // Tell the caller exactly which auth-related options they did
+            // (or did not) supply, instead of the opaque `MissingCredential`
+            // we used to raise — see issue #3756. Names only, no secrets.
+            UnityCatalogError::IncompleteCredentialOptions {
+                provided: self.provided_credential_option_names().join(", "),
+            }
+        })?;
 
         let workspace_url = self
             .workspace_url
@@ -967,12 +1045,14 @@ impl std::fmt::Debug for UnityCatalog {
 #[cfg(test)]
 mod tests {
     use crate::UnityCatalogBuilder;
+    use crate::UnityCatalogError;
     use crate::client::ClientOptions;
     use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
     use crate::models::*;
     use deltalake_core::DataCatalog;
     use httpmock::prelude::*;
     use std::collections::HashMap;
+    use std::error::Error;
 
     #[tokio::test]
     async fn test_unity_client() {
@@ -1086,6 +1166,102 @@ mod tests {
         assert_eq!(builder.client_id, Some("test_client_id".to_string()));
         assert_eq!(builder.client_secret, Some("test_secret".to_string()));
         assert_eq!(builder.authority_id, Some("test_tenant".to_string()));
+    }
+
+    /// Regression for #3756: building a UnityCatalog with no auth options at
+    /// all must surface the new specific `IncompleteCredentialOptions` error
+    /// (with an empty `provided` list), not the historical opaque
+    /// `MissingCredential`.
+    #[test]
+    fn test_build_fails_with_incomplete_credential_options_when_empty() {
+        let err = UnityCatalogBuilder::builder()
+            .build()
+            .build()
+            .expect_err("expected build() to fail without any credential options");
+
+        // The error path is wrapped in DataCatalogError::Generic { source }.
+        // Walk the source chain to recover the specific UnityCatalogError.
+        let inner = err
+            .source()
+            .and_then(|e| e.downcast_ref::<UnityCatalogError>())
+            .expect("expected a UnityCatalogError in the source chain");
+        match inner {
+            UnityCatalogError::IncompleteCredentialOptions { provided } => {
+                assert_eq!(provided, "", "no options were set, so list must be empty");
+            }
+            other => panic!("expected IncompleteCredentialOptions, got: {other:?}"),
+        }
+    }
+
+    /// Regression for #3756: when a partial set of options is supplied —
+    /// here `unity_client_id` alone — the new error must list it by name so
+    /// the user knows which complementary option (`unity_client_secret` +
+    /// host or authority_id) to add.
+    #[test]
+    fn test_build_fails_with_incomplete_credential_options_lists_provided() {
+        let mut storage_options = HashMap::new();
+        storage_options.insert(
+            "unity_client_id".to_string(),
+            "test_client_id".to_string(),
+        );
+
+        let err = UnityCatalogBuilder::builder()
+            .build()
+            .try_with_options(&storage_options)
+            .unwrap()
+            .build()
+            .expect_err("expected build() to fail with partial credential options");
+
+        let inner = err
+            .source()
+            .and_then(|e| e.downcast_ref::<UnityCatalogError>())
+            .expect("expected a UnityCatalogError in the source chain");
+        match inner {
+            UnityCatalogError::IncompleteCredentialOptions { provided } => {
+                assert!(
+                    provided.contains("unity_client_id"),
+                    "expected provided list to mention unity_client_id, got: {provided:?}"
+                );
+            }
+            other => panic!("expected IncompleteCredentialOptions, got: {other:?}"),
+        }
+    }
+
+    /// Regression for #3756: the rendered error message must guide the user
+    /// toward at least one valid combination (bearer token, oauth pair,
+    /// service principal, or azure-cli) and must not leak any secret value.
+    #[test]
+    fn test_incomplete_credential_options_display_does_not_leak_secrets() {
+        let err = UnityCatalogError::IncompleteCredentialOptions {
+            provided: "unity_client_id, unity_client_secret".to_string(),
+        };
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("databricks_token")
+                && rendered.contains("unity_client_id")
+                && rendered.contains("azure_use_azure_cli"),
+            "expected guidance toward each supported combo: {rendered}"
+        );
+        assert!(
+            !rendered.contains("test_secret"),
+            "Display impl must reflect names, never values: {rendered}"
+        );
+    }
+
+    /// Regression for #3756: `UnsupportedCredentialKind` is the new variant
+    /// for the post-API-call branch (the temp-creds endpoint replied 200 but
+    /// without a credential type we recognise). Verify the message mentions
+    /// it as distinct from the transport-level
+    /// `TemporaryCredentialsFetchFailure`.
+    #[test]
+    fn test_unsupported_credential_kind_message() {
+        let rendered = UnityCatalogError::UnsupportedCredentialKind.to_string();
+        assert!(
+            rendered.contains("aws_temp_credentials")
+                && rendered.contains("azure_user_delegation_sas")
+                && rendered.contains("gcp_oauth_token"),
+            "expected message to enumerate supported kinds: {rendered}"
+        );
     }
 
     #[test]

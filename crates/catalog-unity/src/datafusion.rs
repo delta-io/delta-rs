@@ -241,7 +241,10 @@ impl SchemaProvider for UnitySchemaProvider {
                     .map_err(|err| DataFusionError::External(err.into()))?;
 
                 let new_storage_opts = temp_creds.get_credentials().ok_or_else(|| {
-                    DataFusionError::External(UnityCatalogError::MissingCredential.into())
+                    // 200 OK from /temporary-table-credentials but no
+                    // credential kind we know how to consume — see the
+                    // doc-comment on `UnsupportedCredentialKind`.
+                    DataFusionError::External(UnityCatalogError::UnsupportedCredentialKind.into())
                 })?;
                 let table_url = ensure_table_uri(&table.storage_location)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
