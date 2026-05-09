@@ -217,6 +217,10 @@ pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResul
 #[cfg(any(target_os = "windows", test))]
 pub(crate) const DELTA_UNC_SCHEME: &str = "delta-unc";
 
+/// Query parameter key used to store the UNC prefix (`\\server\share`) inside a `delta-unc` URL.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const DELTA_UNC_PREFIX_KEY: &str = "unc_prefix";
+
 /// Split a `file://server/share/...` URL produced from a Windows UNC path into
 /// `(\\server\share PathBuf, share-relative delta-unc:/// URL)`.
 ///
@@ -258,9 +262,27 @@ pub(crate) fn split_unc_url(location: &Url) -> Option<(std::path::PathBuf, Url)>
 
     // `file:` is a "special" scheme in the URL spec — set_scheme() cannot change it to a
     // non-special scheme. Construct the delta-unc URL from scratch instead.
-    let share_relative = Url::parse(&format!("{DELTA_UNC_SCHEME}://{new_path}")).ok()?;
+    // Encode the UNC prefix as a query parameter so that `to_uri` can reconstruct real
+    // filesystem paths (e.g. `\\server\share\table\file.parquet`).
+    let prefix_str = prefix.to_str()?;
+    let encoded_prefix = percent_encoding::utf8_percent_encode(
+        prefix_str,
+        percent_encoding::NON_ALPHANUMERIC,
+    );
+    let share_relative = Url::parse(&format!(
+        "{DELTA_UNC_SCHEME}://{new_path}?{DELTA_UNC_PREFIX_KEY}={encoded_prefix}"
+    ))
+    .ok()?;
 
     Some((prefix, share_relative))
+}
+
+/// Extract the UNC prefix (e.g. `\\server\share`) from a `delta-unc` URL's query parameter.
+#[cfg(target_os = "windows")]
+fn extract_unc_prefix(url: &Url) -> Option<String> {
+    url.query_pairs()
+        .find(|(key, _)| key == DELTA_UNC_PREFIX_KEY)
+        .map(|(_, value)| value.into_owned())
 }
 
 /// Return the [LogStoreRef] using the given [ObjectStoreRef]
@@ -626,6 +648,34 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
             .replace("file://", "");
             uri
         }
+        #[cfg(target_os = "windows")]
+        DELTA_UNC_SCHEME => {
+            // Reconstruct a native UNC path from the prefix stored in the query parameter
+            // and the share-relative path in the URL + the file location.
+            if let Some(unc_prefix) = extract_unc_prefix(root) {
+                let table_relative = root.path().trim_start_matches('/').trim_end_matches('/');
+                if location.as_ref().is_empty() || location.as_ref() == "/" {
+                    if table_relative.is_empty() {
+                        unc_prefix
+                    } else {
+                        format!(r"{unc_prefix}\{table_relative}")
+                    }
+                } else if table_relative.is_empty() {
+                    format!(r"{unc_prefix}\{}", location.as_ref().replace('/', r"\"))
+                } else {
+                    format!(
+                        r"{unc_prefix}\{}\{}",
+                        table_relative,
+                        location.as_ref().replace('/', r"\")
+                    )
+                }
+            } else {
+                // Fallback: no prefix encoded — return the URL string
+                root.join(location.as_ref())
+                    .map(|url| url.to_string())
+                    .unwrap_or_else(|_| format!("{}/{}", root.as_ref(), location.as_ref()))
+            }
+        }
         _ => {
             if location.as_ref().is_empty() || location.as_ref() == "/" {
                 root.as_ref().to_string()
@@ -843,15 +893,24 @@ pub(crate) mod tests {
         assert!(store.is_ok());
     }
 
+    /// Helper to extract the unc_prefix query parameter from a delta-unc URL (test-only).
+    fn test_extract_unc_prefix(url: &Url) -> Option<String> {
+        url.query_pairs()
+            .find(|(key, _)| key == DELTA_UNC_PREFIX_KEY)
+            .map(|(_, value)| value.into_owned())
+    }
+
     #[test]
     fn split_unc_url_extracts_server_share_and_relative_url() {
         let location = Url::parse("file://server/TestShare/basic_partitioned/").unwrap();
         let (prefix, share_relative) =
             split_unc_url(&location).expect("UNC URL should be detected");
         assert_eq!(prefix.to_str().unwrap(), r"\\server\TestShare");
+        assert_eq!(share_relative.scheme(), DELTA_UNC_SCHEME);
+        assert_eq!(share_relative.path(), "/basic_partitioned/");
         assert_eq!(
-            share_relative.as_str(),
-            "delta-unc:///basic_partitioned/"
+            test_extract_unc_prefix(&share_relative).as_deref(),
+            Some(r"\\server\TestShare")
         );
     }
 
@@ -860,7 +919,12 @@ pub(crate) mod tests {
         let location = Url::parse("file://server/share/a/b/c").unwrap();
         let (prefix, share_relative) = split_unc_url(&location).unwrap();
         assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
-        assert_eq!(share_relative.as_str(), "delta-unc:///a/b/c");
+        assert_eq!(share_relative.scheme(), DELTA_UNC_SCHEME);
+        assert_eq!(share_relative.path(), "/a/b/c");
+        assert_eq!(
+            test_extract_unc_prefix(&share_relative).as_deref(),
+            Some(r"\\server\share")
+        );
     }
 
     #[test]
@@ -868,7 +932,12 @@ pub(crate) mod tests {
         let location = Url::parse("file://server/share/").unwrap();
         let (prefix, share_relative) = split_unc_url(&location).unwrap();
         assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
-        assert_eq!(share_relative.as_str(), "delta-unc:///");
+        assert_eq!(share_relative.scheme(), DELTA_UNC_SCHEME);
+        assert_eq!(share_relative.path(), "/");
+        assert_eq!(
+            test_extract_unc_prefix(&share_relative).as_deref(),
+            Some(r"\\server\share")
+        );
     }
 
     #[test]
