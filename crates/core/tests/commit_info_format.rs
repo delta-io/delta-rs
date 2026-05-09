@@ -39,5 +39,8 @@ async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
     let engine_info = last_commit.engine_info.as_ref().unwrap();
     assert_eq!(engine_info, &format!("delta-rs:{}", crate_version()));
 
+    // verify blind append is flagged for append writes with no removes
+    assert_eq!(last_commit.is_blind_append, Some(true));
+
     Ok(())
 }
