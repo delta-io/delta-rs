@@ -153,6 +153,11 @@ pub fn logstore_factories() -> LogStoreFactoryRegistry {
                 Url::parse("file://").unwrap(),
                 Arc::new(DefaultLogStoreFactory::default()),
             );
+            #[cfg(target_os = "windows")]
+            registry.insert(
+                Url::parse(&format!("{}://", super::DELTA_UNC_SCHEME)).unwrap(),
+                Arc::new(DefaultLogStoreFactory::default()),
+            );
             registry
         })
         .clone()

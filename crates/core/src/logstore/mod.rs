@@ -210,8 +210,17 @@ pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResul
     Err(DeltaTableError::InvalidTableLocation(location.to_string()))
 }
 
+/// URL scheme used internally for UNC-backed tables. The kernel validates `file://` URLs by
+/// calling `Url::to_file_path()`, which rejects share-relative paths on Windows (no drive
+/// letter). Using a non-file scheme makes the kernel treat it as a generic URL, skipping
+/// filesystem validation while preserving correct path math for the prefixed `LocalFileSystem`.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) const DELTA_UNC_SCHEME: &str = "delta-unc";
+
 /// Split a `file://server/share/...` URL produced from a Windows UNC path into
-/// `(\\server\share PathBuf, share-relative file:/// URL)`.
+/// `(\\server\share PathBuf, share-relative delta-unc:/// URL)`.
+///
+/// The returned URL uses the `delta-unc` scheme so the kernel skips `to_file_path()` validation.
 ///
 /// Returns `None` for URLs that are not UNC-shaped (any non-`file` scheme, no host, the
 /// `localhost` sentinel, or a missing share segment). Defined cross-platform so it can be unit
@@ -247,10 +256,9 @@ pub(crate) fn split_unc_url(location: &Url) -> Option<(std::path::PathBuf, Url)>
         new_path.push('/');
     }
 
-    let mut share_relative = location.clone();
-    // `file:` is a special scheme; clearing the host yields `file:///...`.
-    share_relative.set_host(None).ok()?;
-    share_relative.set_path(&new_path);
+    // `file:` is a "special" scheme in the URL spec — set_scheme() cannot change it to a
+    // non-special scheme. Construct the delta-unc URL from scratch instead.
+    let share_relative = Url::parse(&format!("{DELTA_UNC_SCHEME}://{new_path}")).ok()?;
 
     Some((prefix, share_relative))
 }
@@ -841,7 +849,10 @@ pub(crate) mod tests {
         let (prefix, share_relative) =
             split_unc_url(&location).expect("UNC URL should be detected");
         assert_eq!(prefix.to_str().unwrap(), r"\\server\TestShare");
-        assert_eq!(share_relative.as_str(), "file:///basic_partitioned/");
+        assert_eq!(
+            share_relative.as_str(),
+            "delta-unc:///basic_partitioned/"
+        );
     }
 
     #[test]
@@ -849,7 +860,7 @@ pub(crate) mod tests {
         let location = Url::parse("file://server/share/a/b/c").unwrap();
         let (prefix, share_relative) = split_unc_url(&location).unwrap();
         assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
-        assert_eq!(share_relative.as_str(), "file:///a/b/c");
+        assert_eq!(share_relative.as_str(), "delta-unc:///a/b/c");
     }
 
     #[test]
@@ -857,7 +868,7 @@ pub(crate) mod tests {
         let location = Url::parse("file://server/share/").unwrap();
         let (prefix, share_relative) = split_unc_url(&location).unwrap();
         assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
-        assert_eq!(share_relative.as_str(), "file:///");
+        assert_eq!(share_relative.as_str(), "delta-unc:///");
     }
 
     #[test]
