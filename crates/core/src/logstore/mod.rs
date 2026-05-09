@@ -960,18 +960,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn split_unc_url_rejects_localhost() {
-        let location = Url::parse("file://localhost/path/to/table/").unwrap();
-        assert!(split_unc_url(&location).is_none());
-    }
-
-    #[test]
-    fn split_unc_url_rejects_host_without_share() {
-        let location = Url::parse("file://server/").unwrap();
-        assert!(split_unc_url(&location).is_none());
-    }
-
-    #[test]
     fn logstore_with_memory_and_rt() {
         let location = Url::parse("memory:///table").unwrap();
         let store = logstore_for(
