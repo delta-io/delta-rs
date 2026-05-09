@@ -174,6 +174,29 @@ pub(crate) static DELTA_LOG_REGEX: LazyLock<Regex> =
 /// let logstore = logstore_for(&location, storage_config).expect("Failed to get a logstore");
 /// ```
 pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResult<LogStoreRef> {
+    // Windows UNC paths (`\\server\share\...`) become `file://server/share/...` URLs after
+    // canonicalization. Routing those through `object_store::parse_url_opts` silently drops the
+    // host (see arrow-rs-object-store#715), so detect them up front and build a
+    // `LocalFileSystem::new_with_prefix(\\server\share)` directly. The kernel-facing URL is
+    // rewritten to be share-relative so the rest of the pipeline (PrefixStore decoration, etc.)
+    // works without further special casing.
+    #[cfg(target_os = "windows")]
+    if let Some((unc_prefix, share_relative)) = split_unc_url(location) {
+        debug!(
+            "UNC table location detected; building LocalFileSystem rooted at {unc_prefix:?} \
+             with share-relative URL {share_relative}"
+        );
+        let store: ObjectStoreRef = Arc::new(
+            object_store::local::LocalFileSystem::new_with_prefix(&unc_prefix)?,
+        );
+        let store = if let Some(runtime) = &storage_config.runtime {
+            Arc::new(DeltaIOStorageBackend::new(store, runtime.clone())) as Arc<dyn ObjectStore>
+        } else {
+            store
+        };
+        return logstore_with(store, &share_relative, storage_config);
+    }
+
     // turn location into scheme
     let scheme = Url::parse(&format!("{}://", location.scheme()))
         .map_err(|_| DeltaTableError::InvalidTableLocation(location.clone().into()))?;
@@ -185,6 +208,51 @@ pub fn logstore_for(location: &Url, storage_config: StorageConfig) -> DeltaResul
     }
 
     Err(DeltaTableError::InvalidTableLocation(location.to_string()))
+}
+
+/// Split a `file://server/share/...` URL produced from a Windows UNC path into
+/// `(\\server\share PathBuf, share-relative file:/// URL)`.
+///
+/// Returns `None` for URLs that are not UNC-shaped (any non-`file` scheme, no host, the
+/// `localhost` sentinel, or a missing share segment). Defined cross-platform so it can be unit
+/// tested anywhere; only [`logstore_for`] consumes it on Windows.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn split_unc_url(location: &Url) -> Option<(std::path::PathBuf, Url)> {
+    use percent_encoding::percent_decode_str;
+
+    if location.scheme() != "file" {
+        return None;
+    }
+    let host = location.host_str()?;
+    if host.is_empty() || host.eq_ignore_ascii_case("localhost") {
+        return None;
+    }
+
+    let mut segments = location.path_segments()?;
+    let share_encoded = segments.next()?;
+    if share_encoded.is_empty() {
+        return None;
+    }
+    let share = percent_decode_str(share_encoded)
+        .decode_utf8()
+        .ok()?
+        .into_owned();
+
+    let prefix = std::path::PathBuf::from(format!(r"\\{host}\{share}"));
+
+    let rest: Vec<&str> = segments.collect();
+    let mut new_path = String::from("/");
+    new_path.push_str(&rest.join("/"));
+    if location.path().ends_with('/') && !new_path.ends_with('/') {
+        new_path.push('/');
+    }
+
+    let mut share_relative = location.clone();
+    // `file:` is a special scheme; clearing the host yields `file:///...`.
+    share_relative.set_host(None).ok()?;
+    share_relative.set_path(&new_path);
+
+    Some((prefix, share_relative))
 }
 
 /// Return the [LogStoreRef] using the given [ObjectStoreRef]
@@ -765,6 +833,62 @@ pub(crate) mod tests {
         let location = Url::parse("memory:///table").unwrap();
         let store = logstore_for(&location, StorageConfig::default());
         assert!(store.is_ok());
+    }
+
+    #[test]
+    fn split_unc_url_extracts_server_share_and_relative_url() {
+        let location = Url::parse("file://server/TestShare/basic_partitioned/").unwrap();
+        let (prefix, share_relative) =
+            split_unc_url(&location).expect("UNC URL should be detected");
+        assert_eq!(prefix.to_str().unwrap(), r"\\server\TestShare");
+        assert_eq!(share_relative.as_str(), "file:///basic_partitioned/");
+    }
+
+    #[test]
+    fn split_unc_url_keeps_nested_path() {
+        let location = Url::parse("file://server/share/a/b/c").unwrap();
+        let (prefix, share_relative) = split_unc_url(&location).unwrap();
+        assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
+        assert_eq!(share_relative.as_str(), "file:///a/b/c");
+    }
+
+    #[test]
+    fn split_unc_url_share_root() {
+        let location = Url::parse("file://server/share/").unwrap();
+        let (prefix, share_relative) = split_unc_url(&location).unwrap();
+        assert_eq!(prefix.to_str().unwrap(), r"\\server\share");
+        assert_eq!(share_relative.as_str(), "file:///");
+    }
+
+    #[test]
+    fn split_unc_url_decodes_percent_encoded_share() {
+        let location = Url::parse("file://server/My%20Share/table/").unwrap();
+        let (prefix, _) = split_unc_url(&location).unwrap();
+        assert_eq!(prefix.to_str().unwrap(), r"\\server\My Share");
+    }
+
+    #[test]
+    fn split_unc_url_rejects_non_file_scheme() {
+        let location = Url::parse("s3://bucket/key").unwrap();
+        assert!(split_unc_url(&location).is_none());
+    }
+
+    #[test]
+    fn split_unc_url_rejects_local_file_url() {
+        let location = Url::parse("file:///path/to/table/").unwrap();
+        assert!(split_unc_url(&location).is_none());
+    }
+
+    #[test]
+    fn split_unc_url_rejects_localhost() {
+        let location = Url::parse("file://localhost/path/to/table/").unwrap();
+        assert!(split_unc_url(&location).is_none());
+    }
+
+    #[test]
+    fn split_unc_url_rejects_host_without_share() {
+        let location = Url::parse("file://server/").unwrap();
+        assert!(split_unc_url(&location).is_none());
     }
 
     #[test]
