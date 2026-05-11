@@ -22,11 +22,11 @@ use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::SchemaMode;
 use super::configs::WriterStatsConfig;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
+use super::{SchemaMode, WriteError};
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
     DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
@@ -34,8 +34,8 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, Add, DeletionVectorDescriptor, EagerSnapshot, MetadataExt as _, ProtocolExt as _,
-    Remove, StructType, StructTypeExt, new_metadata,
+    Action, Add, DeletionVectorDescriptor, EagerSnapshot, Metadata, ProtocolExt as _, Remove,
+    StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -378,6 +378,10 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
             .build()?;
     }
 
+    // Validate the effective partition columns against the prepared writer input.
+    // Schema merge projects missing table columns before partition values are derived.
+    validate_partition_columns_in_schema(&partition_columns, source.schema().inner().as_ref())?;
+
     let insert_plan = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: SOURCE_COUNT_ID.into(),
@@ -708,6 +712,39 @@ fn resolve_exact_validation(
         .transpose()?)
 }
 
+fn validate_partition_columns_in_schema(
+    partition_columns: &[String],
+    schema: &Schema,
+) -> DeltaResult<()> {
+    let missing = partition_columns
+        .iter()
+        .filter(|column| schema.index_of(column.as_str()).is_err())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(WriteError::MissingPartitionColumns { columns: missing }.into())
+    }
+}
+
+fn metadata_with_schema_and_partition_columns(
+    metadata: &Metadata,
+    schema: &StructType,
+    partition_columns: &[String],
+) -> DeltaResult<Metadata> {
+    let mut value = serde_json::to_value(metadata)?;
+    value["schemaString"] = serde_json::Value::String(serde_json::to_string(schema)?);
+    value["partitionColumns"] = serde_json::Value::Array(
+        partition_columns
+            .iter()
+            .map(|column| serde_json::Value::String(column.clone()))
+            .collect(),
+    );
+    Ok(serde_json::from_value(value)?)
+}
+
 fn schema_delta_for_prepared_source(
     snapshot: Option<&EagerSnapshot>,
     insert_plan: &LogicalPlan,
@@ -721,16 +758,17 @@ fn schema_delta_for_prepared_source(
         return Ok(SchemaDelta::default());
     };
 
-    let should_update_schema = match schema_mode {
+    let partition_columns_changed = snapshot.metadata().partition_columns() != partition_columns;
+    let should_update_metadata = match schema_mode {
         Some(SchemaMode::Merge) if schema_drift => true,
         Some(SchemaMode::Overwrite) if mode == SaveMode::Overwrite => {
             let delta_schema: StructType = insert_plan.schema().as_arrow().try_into_kernel()?;
-            &delta_schema != snapshot.schema().as_ref()
+            &delta_schema != snapshot.schema().as_ref() || partition_columns_changed
         }
         _ => false,
     };
 
-    if !should_update_schema {
+    if !should_update_metadata {
         return Ok(SchemaDelta::default());
     }
 
@@ -739,8 +777,16 @@ fn schema_delta_for_prepared_source(
         _ => insert_plan.schema().as_arrow().try_into_kernel()?,
     };
 
-    if &schema_struct == snapshot.schema().as_ref() {
+    if &schema_struct == snapshot.schema().as_ref() && !partition_columns_changed {
         return Ok(SchemaDelta::default());
+    }
+
+    if partition_columns_changed {
+        tracing::info!(
+            previous_partition_columns = ?snapshot.metadata().partition_columns(),
+            new_partition_columns = ?partition_columns,
+            "replacing table partition columns during schema overwrite"
+        );
     }
 
     let current_protocol = snapshot.protocol();
@@ -750,11 +796,11 @@ fn schema_delta_for_prepared_source(
         .apply_column_metadata_to_protocol(&schema_struct)?
         .move_table_properties_into_features(&configuration);
 
-    let mut metadata = new_metadata(&schema_struct, partition_columns, configuration)?;
-    let existing_metadata_id = snapshot.metadata().id().to_string();
-    if !existing_metadata_id.is_empty() {
-        metadata = metadata.with_table_id(existing_metadata_id)?;
-    }
+    let metadata = metadata_with_schema_and_partition_columns(
+        snapshot.metadata(),
+        &schema_struct,
+        partition_columns,
+    )?;
 
     Ok(SchemaDelta {
         metadata: Some(metadata.into()),

@@ -7,8 +7,10 @@
 //!  - The save mode will control how existing data is handled (i.e. overwrite, append, etc)
 //!  - Conflicting columns (i.e. a INT, and a STRING)
 //!    will result in an exception.
-//!  - The partition columns, if present, are validated against the existing metadata. If not
-//!    present, then the partitioning of the table is respected.
+//!    Partition columns, if present, are validated against the existing metadata.
+//!    When omitted, the table partitioning is respected.
+//!    Full table overwrite with `SchemaMode::Overwrite` and no replaceWhere predicate may
+//!    replace the partition columns.
 //!
 //! In combination with `Overwrite`, a `replaceWhere` option can be used to transactionally
 //! replace data that matches a predicate.
@@ -79,12 +81,15 @@ pub(crate) enum WriteError {
     AlreadyExists(Url),
 
     #[error(
-        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}"
+        "Specified table partitioning does not match table partitioning: expected: {expected:?}, got: {got:?}. To change partition columns, use full table overwrite with schema overwrite and no replaceWhere predicate."
     )]
     PartitionColumnMismatch {
         expected: Vec<String>,
         got: Vec<String>,
     },
+
+    #[error("Partition column(s) not found in write schema: {}", columns.join(", "))]
+    MissingPartitionColumns { columns: Vec<String> },
 }
 
 impl From<WriteError> for DeltaTableError {
@@ -224,8 +229,10 @@ impl WriteBuilder {
         self
     }
 
-    /// (Optional) Specify table partitioning. If specified, the partitioning is validated,
-    /// if the table already exists. In case a new table is created, the partitioning is applied.
+    /// (Optional) Specify table partitioning. For existing tables this must match the
+    /// current partitioning, except full table overwrite with schema overwrite and
+    /// no replaceWhere predicate may replace the partitioning. For new tables, the
+    /// partitioning is applied.
     pub fn with_partition_columns(
         mut self,
         partition_columns: impl IntoIterator<Item = impl Into<String>>,
@@ -346,6 +353,14 @@ impl WriteBuilder {
         self
     }
 
+    /// Partition layout changes require a full table rewrite. Predicate overwrites
+    /// replace only a table subset and must keep the existing layout.
+    fn can_overwrite_partition_columns(&self) -> bool {
+        self.mode == SaveMode::Overwrite
+            && self.schema_mode == Some(SchemaMode::Overwrite)
+            && self.predicate.is_none()
+    }
+
     fn get_partition_columns(&self) -> Result<Vec<String>, WriteError> {
         // validate partition columns
         let active_partitions = self
@@ -356,10 +371,14 @@ impl WriteBuilder {
         if let Some(active_part) = active_partitions {
             if let Some(ref partition_columns) = self.partition_columns {
                 if &active_part != partition_columns {
-                    Err(WriteError::PartitionColumnMismatch {
-                        expected: active_part,
-                        got: partition_columns.to_vec(),
-                    })
+                    if self.can_overwrite_partition_columns() {
+                        Ok(partition_columns.clone())
+                    } else {
+                        Err(WriteError::PartitionColumnMismatch {
+                            expected: active_part,
+                            got: partition_columns.to_vec(),
+                        })
+                    }
                 } else {
                     Ok(partition_columns.clone())
                 }
@@ -734,6 +753,22 @@ mod tests {
                 _ => None,
             })
             .collect())
+    }
+
+    async fn modified_partitioned_table(batch: &RecordBatch) -> TestResult<DeltaTable> {
+        Ok(DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_partition_columns(["modified"])
+            .await?)
+    }
+
+    fn expect_write_error(err: &DeltaTableError) -> &WriteError {
+        let DeltaTableError::GenericError { source } = err else {
+            panic!("expected WriteError, got {err:?}");
+        };
+        source
+            .downcast_ref::<WriteError>()
+            .expect("expected WriteError source")
     }
 
     fn assert_common_write_metrics(write_metrics: WriteMetrics) {
@@ -1277,6 +1312,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_merge_schema_with_partitions_allows_source_missing_partition_column() -> TestResult
+    {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let evolved_schema = Arc::new(ArrowSchema::new(vec![
+            batch.schema().field(0).as_ref().clone(),
+            batch.schema().field(1).as_ref().clone(),
+            Field::new("inserted_by", DataType::Utf8, true),
+        ]));
+        let evolved_batch = RecordBatch::try_new(
+            evolved_schema,
+            vec![
+                batch.column(0).clone(),
+                batch.column(1).clone(),
+                Arc::new(StringArray::from(vec![
+                    Some("A1"),
+                    Some("B1"),
+                    None,
+                    Some("B2"),
+                    Some("A3"),
+                    Some("A4"),
+                    None,
+                    None,
+                    Some("B4"),
+                    Some("A5"),
+                    Some("A7"),
+                ])),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![evolved_batch])
+            .with_save_mode(SaveMode::Append)
+            .with_schema_mode(SchemaMode::Merge)
+            .await?;
+
+        assert_eq!(table.version(), Some(1));
+        let schema = table.snapshot().unwrap().metadata().parse_schema()?;
+        let names = schema
+            .fields()
+            .map(|field| field.name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "value", "modified", "inserted_by"]);
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &vec!["modified".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_merge_schema_preserves_existing_field_metadata() {
         let schema: StructType = serde_json::from_value(json!({
             "type": "struct",
@@ -1403,6 +1491,285 @@ mod tests {
             .with_schema_mode(SchemaMode::Overwrite)
             .await;
         assert!(table.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_can_change_partition_columns_without_schema_change() -> TestResult
+    {
+        let batch = get_record_batch(None, false);
+
+        let table = modified_partitioned_table(&batch).await?;
+
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &vec!["modified".to_string()]
+        );
+        let initial_num_files = table.snapshot().unwrap().log_data().num_files();
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(["id"])
+            .await?;
+
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &vec!["id".to_string()]
+        );
+
+        let add_paths = table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .iter()
+            .map(|add| add.path().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!add_paths.is_empty());
+        assert!(add_paths.iter().all(|path| path.contains("id=")));
+
+        let remove_actions = latest_remove_actions(&table).await?;
+        assert_eq!(remove_actions.len(), initial_num_files);
+        assert!(
+            remove_actions
+                .iter()
+                .all(|remove| remove.deletion_timestamp.is_some())
+        );
+
+        let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
+        let operation_parameters = commit_info[0].operation_parameters.as_ref().unwrap();
+        assert_eq!(operation_parameters["partitionBy"], json!("[\"id\"]"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_can_change_schema_and_partition_columns() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let mut new_schema_builder = arrow_schema::SchemaBuilder::new();
+        for field in batch.schema().fields() {
+            if field.name() != "modified" {
+                new_schema_builder.push(field.clone());
+            }
+        }
+        new_schema_builder.push(Field::new("inserted_by", DataType::Utf8, true));
+        let new_schema = new_schema_builder.finish();
+        let inserted_by = StringArray::from(vec![
+            Some("A1"),
+            Some("B1"),
+            None,
+            Some("B2"),
+            Some("A3"),
+            Some("A4"),
+            None,
+            None,
+            Some("B4"),
+            Some("A5"),
+            Some("A7"),
+        ]);
+        let new_batch = RecordBatch::try_new(
+            Arc::new(new_schema),
+            vec![
+                Arc::new(batch.column_by_name("id").unwrap().clone()),
+                Arc::new(batch.column_by_name("value").unwrap().clone()),
+                Arc::new(inserted_by),
+            ],
+        )?;
+
+        let table = table
+            .write(vec![new_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(["inserted_by"])
+            .await?;
+
+        let schema = table.snapshot().unwrap().metadata().parse_schema()?;
+        let names = schema
+            .fields()
+            .map(|field| field.name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["id", "value", "inserted_by"]);
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &vec!["inserted_by".to_string()]
+        );
+
+        let add_paths = table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .iter()
+            .map(|add| add.path().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!add_paths.is_empty());
+        assert!(add_paths.iter().all(|path| path.contains("inserted_by=")));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_partition_change_preserves_table_metadata() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = DeltaTable::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_partition_columns(["modified"])
+            .with_table_name("preserve_name")
+            .with_description("preserve_description")
+            .await?;
+
+        let initial_metadata = table.snapshot().unwrap().metadata().clone();
+        let initial_created_time = initial_metadata.created_time();
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(["id"])
+            .await?;
+
+        let metadata = table.snapshot().unwrap().metadata();
+        assert_eq!(metadata.id(), initial_metadata.id());
+        assert_eq!(metadata.name(), Some("preserve_name"));
+        assert_eq!(metadata.description(), Some("preserve_description"));
+        assert_eq!(metadata.created_time(), initial_created_time);
+        assert_eq!(metadata.partition_columns(), &vec!["id".to_string()]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_can_remove_partition_columns() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(std::iter::empty::<&str>())
+            .await?;
+
+        assert_eq!(table.version(), Some(1));
+        assert!(
+            table
+                .snapshot()
+                .unwrap()
+                .metadata()
+                .partition_columns()
+                .is_empty()
+        );
+
+        let add_paths = table
+            .snapshot()
+            .unwrap()
+            .log_data()
+            .iter()
+            .map(|add| add.path().into_owned())
+            .collect::<Vec<_>>();
+        assert!(!add_paths.is_empty());
+        assert!(add_paths.iter().all(|path| !path.contains('/')));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_append_rejects_partition_column_change() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let result = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .with_partition_columns(["id"])
+            .await;
+
+        let err = result.expect_err("append should reject partition column change");
+        match expect_write_error(&err) {
+            WriteError::PartitionColumnMismatch { expected, got } => {
+                assert_eq!(expected, &vec!["modified".to_string()]);
+                assert_eq!(got, &vec!["id".to_string()]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_without_schema_overwrite_rejects_partition_column_change() -> TestResult
+    {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let result = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_partition_columns(["id"])
+            .await;
+
+        assert!(matches!(result, Err(DeltaTableError::GenericError { .. })));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_replace_where_rejects_partition_column_change() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let result = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(["id"])
+            .with_replace_where(col("id").eq(lit("A")))
+            .await;
+
+        assert!(matches!(result, Err(DeltaTableError::GenericError { .. })));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_preserves_partition_columns_when_omitted() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .await?;
+
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &vec!["modified".to_string()]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_schema_rejects_missing_new_partition_column() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = modified_partitioned_table(&batch).await?;
+
+        let result = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .with_schema_mode(SchemaMode::Overwrite)
+            .with_partition_columns(["missing_partition"])
+            .await;
+
+        let err = result.expect_err("missing partition column should fail");
+        match expect_write_error(&err) {
+            WriteError::MissingPartitionColumns { columns } => {
+                assert_eq!(columns, &vec!["missing_partition".to_string()]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        Ok(())
     }
 
     #[tokio::test]

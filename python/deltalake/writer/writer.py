@@ -87,7 +87,9 @@ def write_deltalake(
         table_or_uri: URI of a table or a DeltaTable object.
         data: Data to write. If passing iterable, the schema must also be given.
         partition_by: List of columns to partition the table by. Only required
-            when creating a new table.
+            when creating a new table, or when replacing partition columns during a
+            full table ``mode="overwrite"`` with ``schema_mode="overwrite"`` and no
+            ``predicate``.
         mode: How to handle existing data. Default is to error if table already exists.
             If 'append', will add new data.
             If 'overwrite', will replace table with new data.

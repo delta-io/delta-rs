@@ -145,6 +145,122 @@ def test_update_schema(existing_sample_table: DeltaTable):
 
 
 @pytest.mark.pyarrow
+def test_overwrite_schema_can_change_partition_by(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        data,
+        partition_by=["some_str"],
+        name="preserve_name",
+        description="preserve_description",
+    )
+    table = DeltaTable(tmp_path)
+    assert table.metadata().partition_columns == ["some_str"]
+
+    write_deltalake(
+        table,
+        data,
+        mode="overwrite",
+        schema_mode="overwrite",
+        partition_by=["some_int"],
+    )
+
+    table.update_incremental()
+    assert table.version() == 1
+    assert table.metadata().partition_columns == ["some_int"]
+    assert table.metadata().name == "preserve_name"
+    assert table.metadata().description == "preserve_description"
+    assert table.to_pyarrow_table().to_pydict() == {
+        "some_int": [1],
+        "some_str": ["foo"],
+    }
+
+    version_actions = get_version_actions(table, 1)
+    add_actions = [entry["add"] for entry in version_actions if "add" in entry]
+    remove_actions = [entry["remove"] for entry in version_actions if "remove" in entry]
+    assert add_actions
+    assert all("some_int=" in add["path"] for add in add_actions)
+    assert len(remove_actions) == 1
+
+
+@pytest.mark.pyarrow
+def test_overwrite_schema_can_remove_partition_by(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, partition_by=["some_str"])
+    table = DeltaTable(tmp_path)
+
+    write_deltalake(
+        table,
+        data,
+        mode="overwrite",
+        schema_mode="overwrite",
+        partition_by=[],
+    )
+
+    table.update_incremental()
+    assert table.version() == 1
+    assert table.metadata().partition_columns == []
+    version_actions = get_version_actions(table, 1)
+    add_actions = [entry["add"] for entry in version_actions if "add" in entry]
+    assert add_actions
+    assert all("/" not in add["path"] for add in add_actions)
+
+
+def test_replace_where_rejects_partition_by_change(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1, 2],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo", "bar"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, partition_by=["some_str"])
+
+    with pytest.raises(
+        DeltaError,
+        match="Specified table partitioning does not match table partitioning",
+    ):
+        write_deltalake(
+            tmp_path,
+            data,
+            mode="overwrite",
+            schema_mode="overwrite",
+            partition_by=["some_int"],
+            predicate="some_int = 1",
+        )
+
+
+@pytest.mark.pyarrow
 def test_merge_schema(existing_table: DeltaTable):
     import pyarrow as pa
 
@@ -844,6 +960,11 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
 def get_log_path(table: DeltaTable) -> str:
     """Returns _delta_log path for this delta table."""
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+
+
+def get_version_actions(table: DeltaTable, version: int) -> list[dict]:
+    log_path = table._table.table_uri() + "/_delta_log/" + f"{version:020}.json"
+    return [json.loads(line) for line in urlopen(log_path).readlines()]
 
 
 def get_add_actions(table: DeltaTable) -> list[dict]:

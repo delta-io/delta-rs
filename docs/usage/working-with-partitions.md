@@ -135,6 +135,34 @@ print(pdf)
 5     2      b      US
 ```
 
+### Replacing Partition Columns
+
+To change a table's partition columns, rewrite the full table with
+`mode="overwrite"` and `schema_mode="overwrite"`, and pass the new
+`partition_by` value. The new partition columns must be present in the data being
+written. This rewrites the table metadata and data files in one transaction.
+
+```python
+df_repartitioned = pd.DataFrame({
+    "num": [1, 2, 3],
+    "letter": ["a", "b", "c"],
+    "continent": ["NA", "NA", "NA"]
+})
+
+dt = DeltaTable("tmp/partitioned-table")
+write_deltalake(
+    dt,
+    df_repartitioned,
+    mode="overwrite",
+    schema_mode="overwrite",
+    partition_by=["continent"],
+)
+```
+
+Partition columns cannot be changed when using a `predicate` overwrite because a
+predicate overwrite replaces only part of the table and must preserve the
+existing partition layout.
+
 ## Updating Partitioned Tables with Merge
 
 You can perform merge operations on partitioned tables in the same way you do on non-partitioned ones. If only a subset of existing partitions are present in the source (i.e. new) data then `deltalake` can skip reading the partitions not present in the source data. You can do this by providing a predicate that specifies which partition values are in the source data.
