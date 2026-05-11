@@ -69,7 +69,7 @@ typed-builder = { version = "0.23.0" }
 
 # opentelemetry
 tracing-opentelemetry = { version = "0.32" }
-opentelemetry = { version = "0.31" }
+opentelemetry = { version = "0.32" }
 opentelemetry-otlp = { version = "0.31", features = ["http-proto"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
