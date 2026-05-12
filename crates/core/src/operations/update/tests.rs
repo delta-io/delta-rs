@@ -729,7 +729,7 @@ async fn test_update_with_array_that_must_be_coerced() {
         ],
     )
     .expect("Failed to create record batch");
-    let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
+    let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&batch));
 
     let table = DeltaTable::new_in_memory()
         .create()

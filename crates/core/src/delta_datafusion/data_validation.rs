@@ -77,6 +77,7 @@ impl PartialOrd for DataValidation {
 }
 
 impl DataValidation {
+    #[allow(dead_code)]
     pub(crate) fn try_new(
         input: LogicalPlan,
         validations: impl IntoIterator<Item = Expr>,
@@ -118,6 +119,7 @@ impl DataValidation {
 ///
 /// This is used to update the schema of the data after validation to
 /// reflect the non-nullability of these columns.
+#[allow(dead_code)]
 struct NotNullExtractor {
     non_nullable_columns: Vec<ColumnName>,
 }
@@ -722,6 +724,7 @@ fn collect_non_nullable_fields_recursive(
 /// ];
 /// let new_schema = make_fields_non_nullable(schema.as_ref(), &paths);
 /// ```
+#[allow(dead_code)]
 pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) -> Schema {
     // Convert ColumnName paths to Vec<String> for easier comparison
     let target_paths: HashSet<Vec<String>> = paths
@@ -743,6 +746,7 @@ pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) ->
 }
 
 /// Recursively make fields non-nullable based on target paths.
+#[allow(dead_code)]
 fn make_fields_non_nullable_recursive(
     field: &arrow_schema::Field,
     current_path: Vec<String>,

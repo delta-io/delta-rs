@@ -353,7 +353,7 @@ impl CdfLoadBuilder {
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
 
-        let partition_values = snapshot.metadata().partition_columns().clone();
+        let partition_values = snapshot.metadata().partition_columns();
         let schema = snapshot.input_schema();
         let schema_fields: Vec<Arc<Field>> = schema
             .fields()
@@ -382,18 +382,17 @@ impl CdfLoadBuilder {
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let cdc_file_groups =
-            create_partition_values(schema.clone(), cdc, &partition_values, None)?;
+        let cdc_file_groups = create_partition_values(schema.clone(), cdc, partition_values, None)?;
         let add_file_groups = create_partition_values(
             schema.clone(),
             add,
-            &partition_values,
+            partition_values,
             Self::get_add_action_type(),
         )?;
         let remove_file_groups = create_partition_values(
             schema.clone(),
             remove,
-            &partition_values,
+            partition_values,
             Self::get_remove_action_type(),
         )?;
 

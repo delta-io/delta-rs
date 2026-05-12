@@ -17,7 +17,8 @@ repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
-delta_kernel = { package = "buoyant_kernel", version = "0.21.200, <0.21.300", features = [
+delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
+#delta_kernel = { package = "buoyant_kernel", version = "0.22.0, <0.22.100", features = [
     "arrow-58",
     "internal-api",
 ] }

@@ -1195,12 +1195,11 @@ async fn build_compaction_plan(
     filters: &[PartitionFilter],
     target_size: NonZeroU64,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
+    type PartitionFileEntry = (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>);
+
     let mut metrics = Metrics::default();
     let mut planner_stats = PlannerStats::preserve_locality();
-    let mut partition_files: HashMap<
-        String,
-        (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>),
-    > = HashMap::new();
+    let mut partition_files: HashMap<String, PartitionFileEntry> = HashMap::new();
 
     let predicate = if filters.is_empty() {
         None
@@ -1632,7 +1631,7 @@ pub(super) mod zorder {
             use arrow_ord::sort::sort_to_indices;
             use arrow_schema::Field;
             use arrow_select::take::take;
-            use rand::{Rng, RngExt};
+            use rand::RngExt;
 
             #[test]
             fn test_order() {

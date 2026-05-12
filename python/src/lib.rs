@@ -1461,6 +1461,7 @@ impl RawDeltaTable {
         let log_store = self.log_store()?;
         let adds: Vec<_> = rt()
             .block_on(async {
+                #[allow(deprecated)]
                 state
                     .file_views_by_partitions(&log_store, &converted_filters)
                     .try_collect()
@@ -1541,6 +1542,7 @@ impl RawDeltaTable {
                     let log_store = self.log_store()?;
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
+                            #[allow(deprecated)]
                             state
                                 .file_views_by_partitions(&log_store, &converted_filters)
                                 .try_collect()
@@ -2246,7 +2248,7 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
         properties = properties.set_write_batch_size(batch_size);
     }
     if let Some(row_group_size) = max_row_group_size {
-        properties = properties.set_max_row_group_size(row_group_size);
+        properties = properties.set_max_row_group_row_count(Some(row_group_size));
     }
     properties = properties.set_statistics_truncate_length(statistics_truncate_length);
 

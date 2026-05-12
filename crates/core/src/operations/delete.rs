@@ -153,9 +153,7 @@ struct FullFileDeleteResult {
 }
 
 fn derive_live_row_count(view: &LogicalFileView) -> Option<usize> {
-    let Some(raw_rows) = view.num_records() else {
-        return None;
-    };
+    let raw_rows = view.num_records()?;
 
     let deleted = match view.deletion_vector_descriptor() {
         Some(dv) => match usize::try_from(dv.cardinality) {

@@ -321,8 +321,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
-        let _ = arrow::util::pretty::print_batches(&[updated_batch.clone()]);
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&batch));
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&updated_batch));
 
         let ctx = SessionContext::new();
         let before = ctx.read_batch(batch).expect("Failed to make DataFrame");

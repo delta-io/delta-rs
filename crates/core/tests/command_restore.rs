@@ -8,7 +8,7 @@ use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::{DeltaTable, ensure_table_uri};
 use futures::TryStreamExt;
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use std::error::Error;
 use std::fs;
 use std::sync::Arc;
