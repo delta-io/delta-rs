@@ -1,4 +1,4 @@
-mod fs_common;
+use crate::fs_common;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet

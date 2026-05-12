@@ -1,6 +1,6 @@
 #![allow(dead_code)]
-mod fs_common;
 
+use crate::fs_common;
 use deltalake_core::crate_version;
 use deltalake_core::kernel::Action;
 use deltalake_core::kernel::transaction::CommitBuilder;
