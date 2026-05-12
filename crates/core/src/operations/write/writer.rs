@@ -686,7 +686,7 @@ mod tests {
             .unwrap()
             .object_store(None);
         let properties = WriterProperties::builder()
-            .set_max_row_group_size(1024)
+            .set_max_row_group_row_count(Some(1024))
             .build();
         // configure small target file size and and row group size so we can observe multiple files written
         let mut writer = get_partition_writer(

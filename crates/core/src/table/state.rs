@@ -568,8 +568,10 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
 
-        let mut config = DeltaTableConfig::default();
-        config.skip_stats = true;
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
         let log_store = table.log_store();
         let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
         let batches = snapshot.snapshot().add_actions_batches(true)?;

@@ -1002,7 +1002,7 @@ mod tests {
 
     use super::*;
     use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
-    use object_store::{ObjectStore, PutPayload, memory::InMemory};
+    use object_store::{PutPayload, memory::InMemory};
     use serde_json::json;
     use url::Url;
 

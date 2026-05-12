@@ -220,6 +220,7 @@ impl MergeValidationStream {
 
         let mut keep_mask = vec![true; batch.num_rows()];
 
+        #[allow(clippy::needless_range_loop)]
         for row in 0..batch.num_rows() {
             if cardinality_class_array.is_null(row) {
                 continue;

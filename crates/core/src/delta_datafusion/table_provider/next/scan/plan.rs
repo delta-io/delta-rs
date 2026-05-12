@@ -93,7 +93,7 @@ impl ProjectedScanContract {
         let query_projects_file_id = if let Some(file_id_idx) = file_id_idx {
             match projection {
                 None => true,
-                Some(projection) => projection.iter().any(|idx| *idx == file_id_idx),
+                Some(projection) => projection.contains(&file_id_idx),
             }
         } else {
             false
@@ -106,7 +106,7 @@ impl ProjectedScanContract {
         let query_projects_row_index = if let Some(row_index_idx) = row_index_idx {
             match projection {
                 None => true,
-                Some(projection) => projection.iter().any(|idx| *idx == row_index_idx),
+                Some(projection) => projection.contains(&row_index_idx),
             }
         } else {
             false
@@ -364,10 +364,7 @@ impl DeltaScanConfig {
             return Some(name);
         };
         let file_id_idx = result_schema.fields().len();
-        projection
-            .iter()
-            .any(|&idx| idx == file_id_idx)
-            .then_some(name)
+        projection.contains(&file_id_idx).then_some(name)
     }
 
     /// The physical arrow schema exposed by the table provider
@@ -769,7 +766,7 @@ mod tests {
         let scan_plan = KernelScanPlan::try_new(
             table.snapshot()?.snapshot().snapshot(),
             None,
-            &[expr.clone()],
+            std::slice::from_ref(&expr),
             &DeltaScanConfig::default(),
             None,
         )?;
@@ -781,7 +778,7 @@ mod tests {
         let scan_plan = KernelScanPlan::try_new(
             table.snapshot()?.snapshot().snapshot(),
             None,
-            &[expr.clone()],
+            std::slice::from_ref(&expr),
             &DeltaScanConfig::default(),
             None,
         )?;
@@ -791,7 +788,7 @@ mod tests {
         let scan_plan = KernelScanPlan::try_new(
             table.snapshot()?.snapshot().snapshot(),
             None,
-            &[expr.clone()],
+            std::slice::from_ref(&expr),
             &DeltaScanConfig::default(),
             None,
         )?;
@@ -860,7 +857,7 @@ mod tests {
         let filter =
             col(r#""Super Name""#).eq(lit(ScalarValue::Utf8View(Some("Timothy Lamb".to_string()))));
         let scan = provider
-            .scan(&ctx.state(), None, &[filter.clone()], None)
+            .scan(&ctx.state(), None, std::slice::from_ref(&filter), None)
             .await?;
         let batches = collect(scan, ctx.task_ctx()).await?;
         assert_batches_sorted_eq!(&expected, &batches);
@@ -918,8 +915,10 @@ mod tests {
             scan_plan.contract.result_schema.as_ref()
         ));
 
-        let mut config = DeltaScanConfig::default();
-        config.schema_force_view_types = true;
+        let config = DeltaScanConfig {
+            schema_force_view_types: true,
+            ..Default::default()
+        };
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
         assert!(schema_has_view_types(
             scan_plan.contract.result_schema.as_ref()
@@ -979,8 +978,10 @@ mod tests {
             DataType::Utf8View | DataType::BinaryView
         ));
 
-        let mut config = DeltaScanConfig::default();
-        config.schema_force_view_types = false;
+        let config = DeltaScanConfig {
+            schema_force_view_types: false,
+            ..Default::default()
+        };
         let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
         assert!(!schema_has_view_types(
             scan_plan.contract.result_schema.as_ref()
@@ -1363,7 +1364,7 @@ mod tests {
 
         let expected_schema = snapshot
             .schema()
-            .project(&vec!["cases", "county", "state"])
+            .project(&["cases", "county", "state"])
             .unwrap();
         // Assert string representation as the equality check is order-insensitive.
         assert_eq!(

@@ -55,7 +55,7 @@ pub(crate) fn next_data_path(
         "part-{part}-{writer_id}-c000{}.parquet",
         compression_to_str(&compression)
     );
-    prefix.child(file_name)
+    prefix.clone().join(file_name)
 }
 
 /// Convert a vector of json values to a RecordBatch

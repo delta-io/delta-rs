@@ -2507,15 +2507,14 @@ mod tests {
         assert_eq!(remove_actions.len(), 2);
         assert!(
             remove_actions.iter().any(|remove| {
-                remove.path == dv_source.path().to_string()
+                remove.path == dv_source.path()
                     && remove.deletion_vector == dv_source.deletion_vector_descriptor()
             }),
             "expected tombstone for DV-backed source file"
         );
         assert!(
             remove_actions.iter().any(|remove| {
-                remove.path == appended_source.path().to_string()
-                    && remove.deletion_vector.is_none()
+                remove.path == appended_source.path() && remove.deletion_vector.is_none()
             }),
             "expected tombstone for appended non-DV source file"
         );
@@ -3743,7 +3742,7 @@ mod tests {
                 true,
             ),
         ]));
-        let nanos = 1760961600_123456789i64;
+        let nanos = 1_760_961_600_123_456_789_i64;
         let batch = RecordBatch::try_new(
             schema,
             vec![

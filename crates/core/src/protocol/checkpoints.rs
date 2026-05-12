@@ -243,7 +243,7 @@ mod tests {
         log_path: &Path,
     ) -> DeltaResult<Option<LastCheckpointHint>> {
         const LAST_CHECKPOINT_FILE_NAME: &str = "_last_checkpoint";
-        let file_path = log_path.child(LAST_CHECKPOINT_FILE_NAME);
+        let file_path = log_path.clone().join(LAST_CHECKPOINT_FILE_NAME);
         let maybe_data = storage.get(&file_path).await;
         let data = match maybe_data {
             Ok(data) => data.bytes().await?,
@@ -527,17 +527,24 @@ mod tests {
 
             let log_store = table.log_store();
 
-            let path = log_store.log_path().child("00000000000000000000.json");
+            let path = log_store
+                .log_path()
+                .clone()
+                .join("00000000000000000000.json");
             let res = table.log_store().object_store(None).get(&path).await;
             assert!(res.is_err());
 
             let path = log_store
                 .log_path()
-                .child("00000000000000000001.checkpoint.parquet");
+                .clone()
+                .join("00000000000000000001.checkpoint.parquet");
             let res = table.log_store().object_store(None).get(&path).await;
             assert!(res.is_ok());
 
-            let path = log_store.log_path().child("00000000000000000001.json");
+            let path = log_store
+                .log_path()
+                .clone()
+                .join("00000000000000000001.json");
             let res = table.log_store().object_store(None).get(&path).await;
             assert!(res.is_ok());
         }

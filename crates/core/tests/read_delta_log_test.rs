@@ -452,7 +452,7 @@ async fn test_read_table_features() -> DeltaResult<()> {
     let path = "../test/tests/data/simple_table_features";
     let table_uri =
         Url::from_directory_path(std::fs::canonicalize(path)?).expect("Failed to create Url path");
-    let mut table = deltalake_core::open_table(table_uri).await?;
+    let table = deltalake_core::open_table(table_uri).await?;
     let rf = table.snapshot()?.protocol().reader_features();
     let wf = table.snapshot()?.protocol().writer_features();
 
