@@ -769,6 +769,9 @@ impl TableFeatures {
 
                     // Unknown features
                     TableFeature::Unknown(_) => (None, None),
+                    others => {
+                        panic!("This table has unsupported table features: {others:?}");
+                    }
                 }
             }
             None => (None, None),
