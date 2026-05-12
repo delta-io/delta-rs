@@ -40,7 +40,7 @@ pub(crate) async fn create_checkpoint_for(
     .await
     .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-    snapshot.checkpoint(engine.as_ref())?;
+    snapshot.checkpoint(engine.as_ref(), None)?;
     Ok(())
 }
 

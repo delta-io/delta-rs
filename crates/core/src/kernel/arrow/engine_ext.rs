@@ -20,7 +20,7 @@ use delta_kernel::snapshot::Snapshot;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
-use delta_kernel::transforms::SchemaTransform;
+use delta_kernel::transforms::{SchemaTransform, transform_output_type};
 use delta_kernel::{DeltaResult, ExpressionEvaluator};
 
 use crate::errors::{DeltaResult as DeltaResultLocal, DeltaTableError};
@@ -277,6 +277,8 @@ pub(crate) fn stats_schema(
 // Convert a min/max stats schema into a nullcount schema (all leaf fields are LONG)
 pub(crate) struct NullCountStatsTransform;
 impl<'a> SchemaTransform<'a> for NullCountStatsTransform {
+    transform_output_type!(|'a, T| Option<Cow<'a, T>>);
+
     fn transform_primitive(&mut self, _ptype: &'a PrimitiveType) -> Option<Cow<'a, PrimitiveType>> {
         Some(Cow::Owned(PrimitiveType::Long))
     }
@@ -354,6 +356,8 @@ impl BaseStatsTransform {
 }
 
 impl<'a> SchemaTransform<'a> for BaseStatsTransform {
+    transform_output_type!(|'a, T| Option<Cow<'a, T>>);
+
     fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
         use Cow::*;
 
@@ -416,6 +420,8 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
 struct MinMaxStatsTransform;
 
 impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
+    transform_output_type!(|'a, T| Option<Cow<'a, T>>);
+
     // array and map fields are not eligible for data skipping, so filter them out.
     fn transform_array(&mut self, _: &'a ArrayType) -> Option<Cow<'a, ArrayType>> {
         None
