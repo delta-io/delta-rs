@@ -788,7 +788,7 @@ async fn test_optimize_compaction_tombstones_preserve_deletion_vector_metadata()
 
     let dv_remove = removes
         .iter()
-        .find(|remove| remove.path == dv_source.path().to_string())
+        .find(|remove| remove.path == dv_source.path())
         .ok_or_else(|| std::io::Error::other("expected tombstone for the DV-backed source add"))?;
     assert_eq!(
         dv_remove.deletion_vector,
@@ -1261,7 +1261,7 @@ async fn test_compact_rewrite_is_unbounded_and_idempotent() -> Result<(), Box<dy
     let make_uncompressed_writer_properties = || {
         WriterProperties::builder()
             .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-            .set_max_row_group_size(64 * 1024)
+            .set_max_row_group_row_count(Some(64 * 1024))
             .build()
     };
 
@@ -1843,7 +1843,7 @@ async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
             WriterProperties::builder()
                 .set_compression(parquet::basic::Compression::UNCOMPRESSED)
                 // Easier to hit the target size with a smaller row group size
-                .set_max_row_group_size(64 * 1024)
+                .set_max_row_group_row_count(Some(64 * 1024))
                 .build(),
         )
         .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))

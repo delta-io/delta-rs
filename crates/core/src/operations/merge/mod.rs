@@ -2457,7 +2457,7 @@ mod tests {
             .collect();
         assert_eq!(removed_paths, vec![original_path]);
 
-        let expected = vec![
+        let expected = [
             "+----+-------+------------+".to_string(),
             "| id | value | modified   |".to_string(),
             "+----+-------+------------+".to_string(),

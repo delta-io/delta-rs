@@ -31,7 +31,7 @@ impl Expression {
         let execution_props = session.execution_props();
         let context = SimplifyContext::default()
             .with_schema(schema)
-            .with_query_execution_start_time(execution_props.query_execution_start_time.clone())
+            .with_query_execution_start_time(execution_props.query_execution_start_time)
             .with_config_options(
                 execution_props
                     .config_options()

@@ -471,6 +471,7 @@ mod tests {
     use datafusion::execution::TaskContext;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::ExecutionPlan;
+    #[allow(deprecated)]
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use futures::StreamExt;
     use std::sync::Arc;
@@ -658,6 +659,7 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
+        #[allow(deprecated)]
         let coalescence = CoalesceBatchesExec::new(Arc::new(merge), 100);
         let mut stream = coalescence.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)

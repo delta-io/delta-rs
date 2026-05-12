@@ -427,15 +427,17 @@ mod local {
 
         // Simple Equality test, we only exercise the limit in this test
         let e = col("value").eq(lit(2));
-        let metrics = get_scan_metrics(&table, &state, &[e.clone()]).await?;
+        let metrics = get_scan_metrics(&table, &state, std::slice::from_ref(&e)).await?;
         assert_eq!(metrics.num_scanned_files(), 2);
         assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
 
-        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(1)).await?;
+        let metrics =
+            get_scan_metrics_with_limit(&table, &state, std::slice::from_ref(&e), Some(1)).await?;
         assert_eq!(metrics.num_scanned_files(), 1);
         assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
 
-        let metrics = get_scan_metrics_with_limit(&table, &state, &[e.clone()], Some(3)).await?;
+        let metrics =
+            get_scan_metrics_with_limit(&table, &state, std::slice::from_ref(&e), Some(3)).await?;
         assert_eq!(metrics.num_scanned_files(), 2);
         assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
 

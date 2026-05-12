@@ -5,7 +5,6 @@ use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
 use delta_kernel::FileMeta;
 use delta_kernel::actions::{Metadata, Protocol};
-use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::log_segment::{LogSegment, LogSegmentFiles};
 use delta_kernel::path::ParsedLogPath;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;

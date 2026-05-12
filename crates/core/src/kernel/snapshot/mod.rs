@@ -642,14 +642,16 @@ impl Snapshot {
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
         let store = log_store.root_object_store(None);
 
-        let log_root = self.table_root_path()?.child("_delta_log");
+        let log_root = self.table_root_path()?.join("_delta_log");
         let start_from = if let Some(limit) = limit {
             let v = self.version() as i64;
             std::cmp::max(v - limit as i64 + 1, 0)
         } else {
             0
         };
-        let start_from = log_root.child(format!("{:020}", start_from).as_str());
+        let start_from = log_root
+            .clone()
+            .join(format!("{:020}", start_from).as_str());
 
         let dummy_url = url::Url::parse("memory:///")
             .map_err(|e| DeltaTableError::InvalidTableLocation(format!("memory:///: {}", e)))?;
@@ -777,11 +779,7 @@ impl Snapshot {
                 .await
                 .map_err(|e| DeltaTableError::GenericError { source: e.into() })??;
         if let Some(version) = version {
-            return Ok(Some(version.try_into().map_err(|e| {
-                DeltaTableError::GenericError {
-                    source: Box::new(e),
-                }
-            })?));
+            return Ok(Some(version));
         }
         Ok(None)
     }
@@ -954,8 +952,10 @@ pub(crate) async fn resolve_snapshot(
             Ok(snapshot)
         }
     } else {
-        let mut config = DeltaTableConfig::default();
-        config.require_files = require_files;
+        let config = DeltaTableConfig {
+            require_files,
+            ..Default::default()
+        };
         EagerSnapshot::try_new(log_store, config, version).await
     }
 }
@@ -1532,8 +1532,10 @@ mod tests {
     #[tokio::test]
     async fn test_eager_snapshot_log_data_is_non_panicking_without_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let mut config = DeltaTableConfig::default();
-        config.require_files = false;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
 
         let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
 
@@ -1545,8 +1547,10 @@ mod tests {
     #[tokio::test]
     async fn test_eager_snapshot_try_log_data_is_non_panicking_without_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let mut config = DeltaTableConfig::default();
-        config.require_files = false;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
 
         let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
 
@@ -1683,8 +1687,10 @@ mod tests {
     #[tokio::test]
     async fn test_file_views_skip_stats_same_paths() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let mut skip_cfg = DeltaTableConfig::default();
-        skip_cfg.skip_stats = true;
+        let skip_cfg = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
         let with_skip = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
         let full = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
         let mut paths_skip: Vec<String> = with_skip
@@ -1717,8 +1723,10 @@ mod tests {
         assert!(!default_stats.is_empty());
         assert!(default_stats.iter().any(|b| *b));
 
-        let mut skip_cfg = DeltaTableConfig::default();
-        skip_cfg.skip_stats = true;
+        let skip_cfg = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
         let skip_eager = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
         let skip_stats: Vec<Option<String>> = skip_eager
             .file_views(base.as_ref(), None)
@@ -1737,8 +1745,10 @@ mod tests {
 
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
-        let mut skip_cfg = DeltaTableConfig::default();
-        skip_cfg.skip_stats = true;
+        let skip_cfg = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
         let snapshot = Snapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
 
         let predicate: PredicateRef =
@@ -1760,8 +1770,10 @@ mod tests {
     async fn test_eager_skip_stats_with_predicate_keeps_stats_omitted() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
-        let mut skip_cfg = DeltaTableConfig::default();
-        skip_cfg.skip_stats = true;
+        let skip_cfg = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
         let snapshot = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
 
         let predicate: PredicateRef =
@@ -2021,8 +2033,10 @@ mod tests {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let mut config = DeltaTableConfig::default();
-        config.require_files = false;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
         let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(11)).await?;
 
         assert!(snapshot.snapshot().materialized_files().is_none());
@@ -2162,7 +2176,7 @@ mod tests {
         checkpoints::create_checkpoint(&table, None).await?;
 
         let updated = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(version as u64))
+            .update(log_store.engine(None), Some(version))
             .await?;
         assert_eq!(updated.version(), version);
         assert_eq!(updated.checkpoint_version(), Some(version));
@@ -2201,9 +2215,7 @@ mod tests {
 
         checkpoints::create_checkpoint(&table, None).await?;
 
-        snapshot
-            .update(log_store.as_ref(), Some(version as u64))
-            .await?;
+        snapshot.update(log_store.as_ref(), Some(version)).await?;
         assert_eq!(snapshot.version(), version);
         assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
         assert_eq!(
@@ -2269,9 +2281,7 @@ mod tests {
             EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
 
         checkpoints::create_checkpoint(&table, None).await?;
-        snapshot
-            .update(log_store.as_ref(), Some(version as u64))
-            .await?;
+        snapshot.update(log_store.as_ref(), Some(version)).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
 
         let prior_snapshot = snapshot.snapshot.clone();
@@ -2282,9 +2292,7 @@ mod tests {
             .expect("expected materialized files");
         let prior_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
 
-        snapshot
-            .update(log_store.as_ref(), Some(version as u64))
-            .await?;
+        snapshot.update(log_store.as_ref(), Some(version)).await?;
 
         assert!(Arc::ptr_eq(&snapshot.snapshot, &prior_snapshot));
         assert!(Arc::ptr_eq(
@@ -2321,7 +2329,7 @@ mod tests {
         }
 
         let err = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(version as u64))
+            .update(log_store.engine(None), Some(version))
             .await
             .unwrap_err();
         assert!(
