@@ -82,31 +82,41 @@ impl RecordBatchWriter {
             |snapshot| snapshot.metadata().configuration().clone(),
         );
 
-        let schema = normalize_for_delta(&schema);
-
-        Ok(Self {
-            storage: delta_table.object_store(),
-            arrow_schema_ref: schema.clone(),
-            original_schema_ref: schema,
+        Ok(Self::new_with_table(
+            delta_table,
+            schema,
+            partition_columns,
+            configuration,
             writer_properties,
-            partition_columns: partition_columns.unwrap_or_default(),
-            should_evolve: false,
-            arrow_writers: HashMap::new(),
-            num_indexed_cols: configuration
-                .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| {
-                    v.parse::<u64>()
-                        .ok()
-                        .map(DataSkippingNumIndexedCols::NumColumns)
-                })
-                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
-                    DEFAULT_NUM_INDEX_COLS,
-                )),
-            stats_columns: configuration
-                .get("delta.dataSkippingStatsColumns")
-                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
-            commit_properties: None,
-        })
+        ))
+    }
+
+    /// Create a new [`RecordBatchWriter`] for an existing table after validating table metadata.
+    pub async fn try_new_checked(
+        table_uri: impl AsRef<str>,
+        schema: ArrowSchemaRef,
+        partition_columns: Option<Vec<String>>,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> Result<Self, DeltaTableError> {
+        let table_url = url::Url::parse(table_uri.as_ref())
+            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
+        let delta_table = DeltaTableBuilder::from_url(table_url)?
+            .with_storage_options(storage_options.unwrap_or_default())
+            .load()
+            .await?;
+        ensure_legacy_writer_supports_table(&delta_table, "RecordBatchWriter")?;
+
+        // Initialize writer properties for the underlying arrow writer
+        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
+        let configuration = delta_table.snapshot()?.metadata().configuration().clone();
+
+        Ok(Self::new_with_table(
+            delta_table,
+            schema,
+            partition_columns,
+            configuration,
+            writer_properties,
+        ))
     }
 
     /// Add the [CommitProperties] to the [RecordBatchWriter] to be used when the writer flushes
@@ -156,6 +166,40 @@ impl RecordBatchWriter {
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
             commit_properties: None,
         })
+    }
+
+    fn new_with_table(
+        delta_table: DeltaTable,
+        schema: ArrowSchemaRef,
+        partition_columns: Option<Vec<String>>,
+        configuration: HashMap<String, String>,
+        writer_properties: WriterProperties,
+    ) -> Self {
+        let schema = normalize_for_delta(&schema);
+
+        Self {
+            storage: delta_table.object_store(),
+            arrow_schema_ref: schema.clone(),
+            original_schema_ref: schema,
+            writer_properties,
+            partition_columns: partition_columns.unwrap_or_default(),
+            should_evolve: false,
+            arrow_writers: HashMap::new(),
+            num_indexed_cols: configuration
+                .get("delta.dataSkippingNumIndexedCols")
+                .and_then(|v| {
+                    v.parse::<u64>()
+                        .ok()
+                        .map(DataSkippingNumIndexedCols::NumColumns)
+                })
+                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                    DEFAULT_NUM_INDEX_COLS,
+                )),
+            stats_columns: configuration
+                .get("delta.dataSkippingStatsColumns")
+                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            commit_properties: None,
+        }
     }
 
     /// Returns the current byte length of the in memory buffer.
@@ -590,6 +634,25 @@ mod tests {
         let table_uri = crate::ensure_table_uri(table_path).unwrap();
 
         let writer = RecordBatchWriter::try_new(table_uri, schema, None, None).unwrap();
+
+        assert_eq!(
+            writer.writer_properties.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_record_batch_writer_try_new_checked_defaults_include_delta_rs_created_by() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let partition_cols = vec![];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let schema = table.snapshot().unwrap().snapshot().arrow_schema();
+        let table_uri = crate::ensure_table_uri(table_path).unwrap();
+
+        let writer = RecordBatchWriter::try_new_checked(table_uri, schema, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(
             writer.writer_properties.created_by(),

@@ -128,6 +128,12 @@ async fn column_mapping_guardrails_legacy_writers_reject() -> TestResult {
     assert_unsupported_column_mapping_write(&err, "RecordBatchWriter");
 
     let err =
+        RecordBatchWriter::try_new_checked(table_url.as_str(), arrow_schema.clone(), None, None)
+            .await
+            .expect_err("checked record batch writer should reject column-mapped tables");
+    assert_unsupported_column_mapping_write(&err, "RecordBatchWriter");
+
+    let err =
         JsonWriter::for_table(&table).expect_err("json writer should reject column-mapped tables");
     assert_unsupported_column_mapping_write(&err, "JsonWriter");
 
