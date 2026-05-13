@@ -25,6 +25,7 @@ use uuid::Uuid;
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
 use crate::kernel::{EagerSnapshot, Snapshot, Version};
+use crate::kernel::transaction::PROTOCOL;
 use crate::logstore::{LogStore, LogStoreExt as _};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
