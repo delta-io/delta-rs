@@ -708,7 +708,7 @@ class DeltaTable:
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
-            error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
+            error_on_type_mismatch: specify if update returns an error when update expressions fail to cast to target column types :default = True
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
@@ -841,8 +841,12 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> TableMerger:
         """Pass the source data which you want to merge on the target delta table, providing a
-        predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
-        match the underlying table.
+        predicate in SQL query like format.
+
+        MERGE casts update and insert expressions to the target column types. If
+        ``error_on_type_mismatch`` is True, failed casts raise an error. If
+        ``error_on_type_mismatch`` is False, failed casts become null for target columns that allow
+        null values. Target columns that do not allow null values still fail the write constraint check.
 
         Args:
             source: source data
@@ -850,7 +854,7 @@ class DeltaTable:
             source_alias: Alias for the source table
             target_alias: Alias for the target table
             merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
-            error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+            error_on_type_mismatch: specify if merge returns an error when update or insert expressions fail to cast to target column types :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
