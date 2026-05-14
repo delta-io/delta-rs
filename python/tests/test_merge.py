@@ -2847,6 +2847,367 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     assert table_schema.field("price").type == sample_table["price"].type
 
 
+def _merge_with_type_mismatch_actions(merger, action_style: str):
+    if action_style == "all":
+        return merger.when_matched_update_all().when_not_matched_insert_all()
+
+    return merger.when_matched_update(
+        {"value": "source.value"}
+    ).when_not_matched_insert({"id": "source.id", "value": "source.value"})
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_type_mismatch_default_castable_value_succeeds(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["old"], type=pa.string()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([99, 100], type=pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+    )
+
+    _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": ["99", "100"]}
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_type_mismatch_default_uncastable_value_errors(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+    )
+
+    with pytest.raises(
+        Exception,
+        match="Cannot cast string '.+' to value of Int64 type",
+    ):
+        _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_safe_cast_uncastable_value_becomes_null_for_nullable_target(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        error_on_type_mismatch=False,
+    )
+
+    _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [None, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_numeric_overflow_becomes_null_for_nullable_target(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int32()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([2**31, -(2**31) - 1], type=pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value"})
+        .when_not_matched_insert({"id": "source.id", "value": "source.value"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [None, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_not_matched_by_source_update_failed_cast_becomes_null(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([10, 20], type=pa.int64()),
+        }
+    )
+    source = pa.table({"id": pa.array([1], type=pa.int64())})
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_not_matched_by_source_update({"value": "'abc'"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [10, None]}
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_safe_cast_uncastable_value_still_fails_for_non_nullable_target(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target_schema = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("value", pa.int64(), nullable=False),
+        ]
+    )
+    target = pa.Table.from_arrays(
+        [pa.array([1], type=pa.int64()), pa.array([10], type=pa.int64())],
+        schema=target_schema,
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        error_on_type_mismatch=False,
+    )
+
+    with pytest.raises(Exception, match="Invalid data found:"):
+        _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_cdf_projection_uses_null_on_failed_cast(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        target,
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().to_pydict()
+    assert result == {"id": [1], "value": [None]}
+
+    cdf = pa.table(dt.load_cdf(1, 1).read_all()).select(["id", "value", "_change_type"])
+    values_by_change_type = {
+        row["_change_type"]: row["value"] for row in cdf.to_pylist()
+    }
+    assert values_by_change_type == {
+        "update_preimage": 10,
+        "update_postimage": None,
+    }
+
+
+@pytest.mark.pyarrow
+def test_merge_schema_type_mismatch_existing_column_still_errors_by_default(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+            "extra": pa.array(["new"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+    ).when_matched_update({"value": "source.value", "extra": "source.extra"})
+
+    with pytest.raises(
+        Exception,
+        match="Cannot cast string 'abc' to value of Int64 type",
+    ):
+        merger.execute()
+
+
+@pytest.mark.pyarrow
+def test_merge_schema_safe_cast_existing_column_failed_cast_becomes_null(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+            "extra": pa.array(["matched", "inserted"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            merge_schema=True,
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value", "extra": "source.extra"})
+        .when_not_matched_insert(
+            {
+                "id": "source.id",
+                "value": "source.value",
+                "extra": "source.extra",
+            }
+        )
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {
+        "id": [1, 2],
+        "value": [None, None],
+        "extra": ["matched", "inserted"],
+    }
+
+
 @pytest.mark.pyarrow
 def test_merge_on_decimal_3033(tmp_path):
     import pyarrow as pa
