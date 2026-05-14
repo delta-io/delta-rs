@@ -47,7 +47,7 @@ use datafusion::logical_expr::build_join_schema;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
-    Expr, JoinType, col, conditional_expressions::CaseBuilder, lit, when,
+    Expr, JoinType, cast, col, conditional_expressions::CaseBuilder, lit, try_cast, when,
 };
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE, UserDefinedLogicalNode,
@@ -56,9 +56,7 @@ use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::metrics::{MetricBuilder, MetricsSet};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::{
-    execution::context::SessionState,
-    physical_plan::ExecutionPlan,
-    prelude::{DataFrame, cast},
+    execution::context::SessionState, physical_plan::ExecutionPlan, prelude::DataFrame,
 };
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
@@ -137,6 +135,14 @@ const TARGET_FILES_PRUNED_METRIC_LEGACY: &str = "files_pruned";
 const SOURCE_COUNT_ID: &str = "merge_source_count";
 const TARGET_COUNT_ID: &str = "merge_target_count";
 const OUTPUT_COUNT_ID: &str = "merge_output_count";
+
+fn merge_cast(expr: Expr, data_type: DataType, safe_cast: bool) -> Expr {
+    if safe_cast {
+        try_cast(expr, data_type)
+    } else {
+        cast(expr, data_type)
+    }
+}
 
 /// Merge records into a Delta Table.
 pub struct MergeBuilder {
@@ -438,10 +444,11 @@ impl MergeBuilder {
         self
     }
 
-    /// Specify the cast options to use when casting columns that do not match
-    /// the table's schema.  When `cast_options.safe` is set true then any
-    /// failures to cast a datatype will use null instead of returning an error
-    /// to the user.
+    /// Specify whether MERGE uses safe casts when casting update and insert
+    /// expressions to the table's schema. When enabled, failed casts yield null
+    /// for target columns that allow null values. When disabled, failed casts
+    /// return an error. A failed safe cast into a column that does not allow
+    /// null values still fails the write constraint check.
     ///
     /// Example (column's type is int):
     /// Input               Output
@@ -824,7 +831,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     mut commit_properties: CommitProperties,
-    _safe_cast: bool,
+    safe_cast: bool,
     streaming: bool,
     source_alias: Option<String>,
     target_alias: Option<String>,
@@ -1257,7 +1264,11 @@ async fn execute(
                 col_ref
             }
         } else {
-            null_target_column = Some(cast(lit(ScalarValue::Null).alias(name), cast_type.clone()));
+            null_target_column = Some(merge_cast(
+                lit(ScalarValue::Null).alias(name),
+                cast_type.clone(),
+                safe_cast,
+            ));
             Column::new(source_qualifier.clone(), name)
         };
 
@@ -1282,16 +1293,18 @@ async fn execute(
         let name = "__delta_rs_c_".to_owned() + delta_field.name();
         merge_value_column_names.push(name.clone());
 
-        write_projection.push(cast(
+        write_projection.push(merge_cast(
             Expr::Column(Column::from_name(name.clone())).alias(delta_field.name()),
             cast_type.clone(),
+            safe_cast,
         ));
 
         let cdc_target_preimage_name = "__delta_rs_target_c_".to_owned() + delta_field.name();
         let cdc_target_preimage = null_target_column.clone().unwrap_or_else(|| {
-            cast(
+            merge_cast(
                 Expr::Column(Column::new(qualifier.clone(), delta_field.name())),
                 cast_type.clone(),
+                safe_cast,
             )
         });
         if should_cdc {
@@ -1302,14 +1315,16 @@ async fn execute(
         write_projection_with_cdf.push(
             when(
                 col(CDC_COLUMN_NAME).not_eq(lit("update_preimage")),
-                cast(
+                merge_cast(
                     Expr::Column(Column::from_name(name.clone())),
                     cast_type.clone(),
+                    safe_cast,
                 ),
             )
-            .otherwise(cast(
+            .otherwise(merge_cast(
                 Expr::Column(Column::from_name(cdc_target_preimage_name)),
                 cast_type,
+                safe_cast,
             ))?
             .alias(delta_field.name()),
         );
@@ -2560,6 +2575,24 @@ mod tests {
             .unwrap()
     }
 
+    fn invalid_int_source(ctx: &SessionContext) -> DataFrame {
+        let source_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("value", ArrowDataType::Utf8, true),
+            Field::new("modified", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            source_schema,
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B"])),
+                Arc::new(arrow::array::StringArray::from(vec!["not an integer"])),
+                Arc::new(arrow::array::StringArray::from(vec!["2023-07-04"])),
+            ],
+        )
+        .unwrap();
+        ctx.read_batch(batch).unwrap()
+    }
+
     fn merge_source(schema: Arc<ArrowSchema>) -> DataFrame {
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -2942,6 +2975,67 @@ mod tests {
 
         assert_merge(table, metrics).await;
     }
+
+    #[tokio::test]
+    async fn test_merge_strict_cast_errors_on_invalid_update_value() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+
+        let ctx = SessionContext::new();
+        let source = invalid_int_source(&ctx);
+
+        let err = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("Cannot cast")
+                && err.to_string().contains("not an integer")
+                && err.to_string().contains("Int32"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_safe_cast_converts_invalid_update_value_to_null() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+
+        let ctx = SessionContext::new();
+        let source = invalid_int_source(&ctx);
+
+        let (table, metrics) = table
+            .merge(source, col("target.id").eq(col("source.id")))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_safe_cast(true)
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  |       | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
     #[tokio::test]
     async fn test_merge_preserves_nullability_without_schema_merge() {
         // Test that nullability constraints are preserved when merge_schema is false (default)
