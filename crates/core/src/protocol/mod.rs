@@ -412,29 +412,20 @@ impl DeltaOperation {
 
     /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
-        if let Some(Some(Some(map))) = serde_json::to_value(self)?
-            .as_object()
-            .map(|p| p.values().next().map(|q| q.as_object()))
-        {
-            Ok(map
-                .iter()
-                .filter(|item| !item.1.is_null())
-                .map(|(k, v)| {
-                    (
-                        k.to_owned(),
-                        serde_json::Value::String(if v.is_string() {
-                            String::from(v.as_str().unwrap())
-                        } else {
-                            v.to_string()
-                        }),
-                    )
-                })
-                .collect())
-        } else {
-            Err(DeltaTableError::Generic(
-                "Operation parameters serialized into unexpected shape".into(),
-            ))
+        let value = serde_json::to_value(self)?;
+        if let Value::Object(mut operation) = value {
+            if let Some(Value::Object(parameters)) = operation.values_mut().next() {
+                return Ok(take(parameters)
+                    .into_iter()
+                    .filter(|item| !item.1.is_null())
+                    .map(|(key, value)| (key, operation_parameter_value(value)))
+                    .collect());
+            }
         }
+
+        Err(DeltaTableError::Generic(
+            "Operation parameters serialized into unexpected shape".into(),
+        ))
     }
 
     /// Denotes if the operation changes the data contained in the table
@@ -492,6 +483,13 @@ impl DeltaOperation {
             _ => false,
         }
     }
+}
+
+pub(crate) fn operation_parameter_value(value: Value) -> Value {
+    Value::String(match value {
+        Value::String(value) => value,
+        value => value.to_string(),
+    })
 }
 
 /// The SaveMode used when performing a DeltaOperation
