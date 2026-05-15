@@ -436,10 +436,17 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-/// A codec for deltalake physical plans
+/// Legacy codec for serialized plans that still contain the retired physical
+/// [`DeltaScan`] wrapper.
+#[deprecated(
+    note = "DeltaPhysicalCodec only supports the retired physical DeltaScan wrapper. \
+            Use DeltaLogicalCodec for table-provider serialization until a DeltaScanExec \
+            physical codec is available."
+)]
 #[derive(Debug)]
 pub struct DeltaPhysicalCodec {}
 
+#[allow(deprecated)]
 impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_decode(
         &self,
@@ -449,12 +456,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
-        let delta_scan = DeltaScan::new(
-            &wire.table_url,
-            wire.config,
-            (*inputs)[0].clone(),
-            wire.logical_schema,
-        );
+        let delta_scan = wire.into_delta_scan((*inputs)[0].clone());
         Ok(Arc::new(delta_scan))
     }
 
@@ -466,11 +468,12 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         let delta_scan = node
             .as_any()
             .downcast_ref::<DeltaScan>()
-            .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
+            .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
         let wire = DeltaScanWire::from(delta_scan);
-        serde_json::to_writer(buf, &wire)
-            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
+        serde_json::to_writer(buf, &wire).map_err(|_| {
+            DataFusionError::Internal("Unable to encode legacy delta scan!".to_string())
+        })?;
         Ok(())
     }
 }
@@ -707,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn roundtrip_test_delta_exec_plan() {
         let ctx = SessionContext::new();
         let codec = DeltaPhysicalCodec {};
