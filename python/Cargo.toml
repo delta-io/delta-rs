@@ -72,8 +72,13 @@ tracing-subscriber = { workspace = true }
 [target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
-# Unix (excluding macOS & emscripten) → jemalloc
-[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
+# Unix (excluding macOS, emscripten & FreeBSD) → jemalloc
+# FreeBSD's system malloc is already jemalloc-derived, and the bundled
+# jemallocator's `dlsym(RTLD_NEXT, "pthread_create")` initialization fails on
+# FreeBSD (jemalloc aborts during DSO init). Fall back to the system allocator
+# on FreeBSD instead — no performance regression since the system allocator
+# is the same family.
+[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten"), not(target_os = "freebsd")))'.dependencies]
 jemallocator = { version = "0.5", features = [
     "disable_initial_exec_tls",
     "background_threads",

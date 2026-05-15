@@ -1,7 +1,6 @@
 use url::Url;
 
-#[allow(dead_code)]
-mod fs_common;
+use crate::fs_common;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn read_null_partitions_from_checkpoint() {

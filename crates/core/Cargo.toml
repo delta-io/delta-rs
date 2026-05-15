@@ -128,51 +128,20 @@ nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]
 
 integration_test = []
 
-[[test]]
-name = "command_optimize"
-required-features = ["datafusion"]
+# All integration tests are consolidated into two test binaries to keep
+# compile and link time down — see
+# https://matklad.github.io/2021/02/27/delete-cargo-integration-tests.html
+#
+# - `it` holds tests that do not need the datafusion feature.
+# - `it_datafusion` holds everything that does.
 
 [[test]]
-name = "command_merge"
-required-features = ["datafusion"]
+name = "it"
+path = "tests/it/main.rs"
 
 [[test]]
-name = "command_restore"
-required-features = ["datafusion"]
-
-[[test]]
-name = "checkpoint_writer"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_filesystem_check"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_vacuum"
-required-features = ["datafusion"]
-
-[[test]]
-name = "column_mapping_guardrails"
-
-[[test]]
-name = "commit_info_format"
-required-features = ["datafusion"]
-
-[[test]]
-name = "integration"
-required-features = ["datafusion"]
-
-[[test]]
-name = "integration_checkpoint"
-required-features = ["datafusion"]
-
-[[test]]
-name = "read_delta_log_test"
-required-features = ["datafusion"]
-
-[[test]]
-name = "read_delta_partitions_test"
+name = "it_datafusion"
+path = "tests/it_datafusion/main.rs"
 required-features = ["datafusion"]
 
 [[bench]]

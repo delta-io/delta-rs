@@ -3,9 +3,6 @@ use deltalake_test::utils::*;
 use deltalake_test::{test_concurrent_writes, test_read_tables};
 use serial_test::serial;
 
-#[allow(dead_code)]
-mod fs_common;
-
 static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 
 #[tokio::test]

@@ -12,8 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use url::Url;
 
-#[allow(dead_code)]
-mod fs_common;
+use crate::fs_common;
 
 fn find_git_root() -> PathBuf {
     let output = Command::new("git")

@@ -1,4 +1,3 @@
-#![cfg(feature = "datafusion")]
 use std::{path::PathBuf, sync::Arc};
 
 use datafusion::{

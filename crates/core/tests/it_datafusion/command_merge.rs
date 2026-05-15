@@ -1,5 +1,7 @@
 #![allow(dead_code)]
-mod fs_common;
+
+#[allow(unused_imports)]
+use crate::fs_common;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
