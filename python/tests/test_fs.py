@@ -1,7 +1,7 @@
 import pickle
 import urllib
-from uuid import uuid4
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pytest
 
