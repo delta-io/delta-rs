@@ -36,7 +36,8 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, Transaction, Version,
+    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Transaction,
+    Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -59,8 +60,10 @@ use deltalake::{DeltaResult, DeltaTable, DeltaTableBuilder, init_client_version}
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet, PyModule};
-use pyo3::{IntoPyObjectExt, prelude::*};
+use pyo3::types::{
+    IntoPyDict, PyCapsule, PyDict, PyFrozenSet, PyMapping, PyMappingMethods, PyModule, PyTuple,
+};
+use pyo3::{Borrowed, IntoPyObjectExt, prelude::*};
 use pyo3_arrow::export::{Arro3RecordBatchReader, Arro3Table};
 use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema, PyTable};
 use schema::PySchema;
@@ -1585,22 +1588,9 @@ impl RawDeltaTable {
                 predicate: None,
             };
 
-            let mut properties = CommitProperties::default();
-            if let Some(props) = commit_properties {
-                if let Some(metadata) = props.custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    properties = properties.with_metadata(json_metadata);
-                };
-
-                if let Some(max_retries) = props.max_commit_retries {
-                    properties = properties.with_max_retries(max_retries);
-                };
-            }
-
-            if let Some(post_commit_hook_props) = post_commithook_properties {
-                properties = set_post_commithook_properties(properties, post_commit_hook_props)
-            }
+            let properties =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+                    .unwrap_or_default();
 
             rt().block_on(
                 CommitBuilder::from(properties)
@@ -2370,9 +2360,7 @@ fn maybe_create_commit_properties(
 
     if let Some(commit_props) = maybe_commit_properties {
         if let Some(metadata) = commit_props.custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            commit_properties = commit_properties.with_metadata(json_metadata);
+            commit_properties = commit_properties.with_metadata(metadata.into_inner());
         };
 
         if let Some(max_retries) = commit_props.max_commit_retries {
@@ -2733,11 +2721,117 @@ impl From<&PyTransaction> for Transaction {
     }
 }
 
-#[derive(FromPyObject)]
+#[derive(Debug)]
+struct PyCustomMetadata(Map<String, Value>);
+
+impl PyCustomMetadata {
+    fn into_inner(self) -> Map<String, Value> {
+        self.0
+    }
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyCustomMetadata {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let py = obj.py();
+        let mapping = obj.cast::<PyMapping>().map_err(|_| {
+            PyValueError::new_err("CommitProperties.custom_metadata must be a mapping")
+        })?;
+        let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
+        let kwargs = [("allow_nan", false)].into_py_dict(py)?;
+        let mut metadata = Map::new();
+
+        for item in mapping.items()? {
+            let item = item.cast::<PyTuple>()?;
+            let key = item.get_item(0)?;
+            let value = item.get_item(1)?;
+            let key = key.extract::<String>().map_err(|_| {
+                PyValueError::new_err("CommitProperties.custom_metadata keys must be strings")
+            })?;
+            let value = py_to_json_metadata_value(&json_dumps, &kwargs, &value, &key)?;
+            validate_reserved_commit_metadata(&key, &value)?;
+            metadata.insert(key, value);
+        }
+
+        Ok(Self(metadata))
+    }
+}
+
+fn py_to_json_metadata_value(
+    json_dumps: &Bound<'_, PyAny>,
+    kwargs: &Bound<'_, PyDict>,
+    value: &Bound<'_, PyAny>,
+    key: &str,
+) -> PyResult<Value> {
+    let value_json: String = json_dumps
+        .call((value,), Some(kwargs))
+        .and_then(|json| json.extract())
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "CommitProperties.custom_metadata value for '{key}' must be JSON-serializable: {err}"
+            ))
+        })?;
+
+    serde_json::from_str(&value_json).map_err(|err| {
+        PyValueError::new_err(format!(
+            "CommitProperties.custom_metadata value for '{key}' must be valid JSON: {err}"
+        ))
+    })
+}
+
+fn validate_reserved_commit_metadata(key: &str, value: &Value) -> PyResult<()> {
+    // Keep this match aligned with RESERVED_COMMIT_INFO_KEYS in core transaction metadata
+    // normalization. Python raises ValueError before commit construction, while core
+    // normalization keeps Rust callers compatible by logging and dropping invalid reserved data.
+    match key {
+        "timestamp" | "operation" | "engineInfo" => Err(PyValueError::new_err(format!(
+            "CommitProperties.custom_metadata key '{key}' is generated by delta-rs and cannot be set"
+        ))),
+        "operationParameters" if !value.is_object() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['operationParameters'] must be a JSON object",
+        )),
+        "readVersion" if value.as_u64().is_none() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['readVersion'] must be a non-negative integer",
+        )),
+        "userId" | "userName" | "userMetadata" if !value.is_string() => Err(PyValueError::new_err(
+            format!("CommitProperties.custom_metadata['{key}'] must be a string"),
+        )),
+        "isolationLevel" => {
+            let valid = value
+                .as_str()
+                .is_some_and(|value| value.parse::<IsolationLevel>().is_ok());
+            if valid {
+                Ok(())
+            } else {
+                Err(PyValueError::new_err(
+                    "CommitProperties.custom_metadata['isolationLevel'] must be a valid IsolationLevel string",
+                ))
+            }
+        }
+        "isBlindAppend" if !value.is_boolean() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['isBlindAppend'] must be a boolean",
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub struct PyCommitProperties {
-    custom_metadata: Option<HashMap<String, String>>,
+    custom_metadata: Option<PyCustomMetadata>,
     max_commit_retries: Option<usize>,
     app_transactions: Option<Vec<PyTransaction>>,
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyCommitProperties {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            custom_metadata: obj.getattr("custom_metadata")?.extract()?,
+            max_commit_retries: obj.getattr("max_commit_retries")?.extract()?,
+            app_transactions: obj.getattr("app_transactions")?.extract()?,
+        })
+    }
 }
 
 #[pyfunction]

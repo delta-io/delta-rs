@@ -74,6 +74,7 @@
 //!       └───────────────────────────────┘
 //!</pre>
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -93,11 +94,13 @@ use serde::{Deserialize, Serialize};
 
 use self::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::errors::DeltaTableError;
-use crate::kernel::{Action, CommitInfo, EagerSnapshot, Metadata, Protocol, Transaction, Version};
+use crate::kernel::{
+    Action, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction, Version,
+};
 use crate::logstore::ObjectStoreRef;
 use crate::logstore::{CommitOrBytes, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
-use crate::protocol::DeltaOperation;
+use crate::protocol::{DeltaOperation, operation_parameter_value};
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
@@ -115,6 +118,21 @@ mod state;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
+// These keys map to typed CommitInfo fields used by common Spark compatible writers. They are not
+// required by the protocol, but leaving them in flattened metadata can produce duplicate JSON keys.
+// Keep this list aligned with validate_reserved_commit_metadata in python/src/lib.rs.
+const RESERVED_COMMIT_INFO_KEYS: &[&str] = &[
+    "timestamp",
+    "userId",
+    "userName",
+    "operation",
+    "operationParameters",
+    "readVersion",
+    "isolationLevel",
+    "isBlindAppend",
+    "engineInfo",
+    "userMetadata",
+];
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -290,6 +308,142 @@ pub struct CommitData {
     pub app_transactions: Vec<Transaction>,
 }
 
+/// Moves reserved commit metadata into typed CommitInfo fields.
+///
+/// This prevents serde flatten from serializing duplicate commitInfo keys when callers pass fields
+/// such as readVersion or operationParameters through custom metadata. Rust callers keep the
+/// existing tolerant behavior: invalid reserved metadata is logged and dropped. Python validates
+/// the same key set early in validate_reserved_commit_metadata and raises ValueError instead.
+/// See issue 4443 for the Python custom metadata request that introduced this normalization path.
+fn normalize_reserved_commit_metadata(
+    commit_info: &mut CommitInfo,
+    app_metadata: &mut HashMap<String, Value>,
+) {
+    match app_metadata.remove("operationParameters") {
+        Some(Value::Object(operation_parameters)) => {
+            let generated_parameters = commit_info
+                .operation_parameters
+                .get_or_insert_with(HashMap::new);
+            for (key, value) in operation_parameters {
+                generated_parameters
+                    .entry(key)
+                    .or_insert_with(|| operation_parameter_value(value));
+            }
+        }
+        Some(value) => log_unexpected_reserved_metadata_type(
+            "operationParameters",
+            &value,
+            "object with string-compatible values",
+        ),
+        None => {}
+    }
+
+    if let Some(value) = app_metadata.remove("readVersion") {
+        if let Some(value) = value.as_u64() {
+            if commit_info.read_version.is_none() {
+                commit_info.read_version = Some(value);
+            }
+        } else {
+            log_unexpected_reserved_metadata_type("readVersion", &value, "non-negative integer");
+        }
+    }
+
+    promote_string_reserved_metadata(app_metadata, "userId", &mut commit_info.user_id);
+    promote_string_reserved_metadata(app_metadata, "userName", &mut commit_info.user_name);
+    promote_string_reserved_metadata(app_metadata, "userMetadata", &mut commit_info.user_metadata);
+
+    if let Some(value) = app_metadata.remove("isolationLevel") {
+        if let Some(value) = value
+            .as_str()
+            .and_then(|value| IsolationLevel::from_str(value).ok())
+        {
+            if commit_info.isolation_level.is_none() {
+                commit_info.isolation_level = Some(value);
+            }
+        } else {
+            log_unexpected_reserved_metadata_type(
+                "isolationLevel",
+                &value,
+                "valid IsolationLevel string",
+            );
+        }
+    }
+
+    if let Some(value) = app_metadata.remove("isBlindAppend") {
+        if let Some(value) = value.as_bool() {
+            if commit_info.is_blind_append.is_none() {
+                commit_info.is_blind_append = Some(value);
+            }
+        } else {
+            log_unexpected_reserved_metadata_type("isBlindAppend", &value, "boolean");
+        }
+    }
+
+    for key in RESERVED_COMMIT_INFO_KEYS {
+        app_metadata.remove(*key);
+    }
+}
+
+fn promote_string_reserved_metadata(
+    metadata: &mut HashMap<String, Value>,
+    key: &'static str,
+    target: &mut Option<String>,
+) {
+    let Some(value) = metadata.remove(key) else {
+        return;
+    };
+
+    if let Value::String(value) = value {
+        if target.is_none() {
+            *target = Some(value);
+        }
+    } else {
+        log_unexpected_reserved_metadata_type(key, &value, "string");
+    }
+}
+
+fn log_unexpected_reserved_metadata_type(key: &str, value: &Value, expected: &str) {
+    debug!(
+        key,
+        expected,
+        actual = json_value_kind(value),
+        "Ignoring reserved commit metadata key with unexpected type"
+    );
+}
+
+fn json_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+fn assign_commit_info_metadata(
+    commit_info: &mut CommitInfo,
+    app_metadata: &mut HashMap<String, Value>,
+) {
+    normalize_reserved_commit_metadata(commit_info, app_metadata);
+
+    let mut existing_info = std::mem::take(&mut commit_info.info);
+    normalize_reserved_commit_metadata(commit_info, &mut existing_info);
+    // app_metadata is the override layer for flattened commit info. It fills missing typed fields
+    // above, and wins over provided CommitInfo.info keys for custom fields.
+    for (key, value) in existing_info {
+        app_metadata.entry(key).or_insert(value);
+    }
+    debug_assert!(
+        RESERVED_COMMIT_INFO_KEYS
+            .iter()
+            .all(|key| !app_metadata.contains_key(*key))
+    );
+
+    commit_info.info = app_metadata.clone();
+}
+
 impl CommitData {
     /// Create new data to be committed
     pub fn new(
@@ -298,14 +452,23 @@ impl CommitData {
         mut app_metadata: HashMap<String, Value>,
         app_transactions: Vec<Transaction>,
     ) -> Self {
-        if !actions.iter().any(|a| matches!(a, Action::CommitInfo(..))) {
+        if let Some(Action::CommitInfo(commit_info)) = actions
+            .iter_mut()
+            .find(|action| matches!(action, Action::CommitInfo(..)))
+        {
+            // Callers that provide a CommitInfo action own generated typed fields such as
+            // timestamp and engineInfo. Flattened app metadata overrides custom keys, and callers
+            // may provide clientVersion for compatibility.
+            assign_commit_info_metadata(commit_info, &mut app_metadata);
+        } else {
             let mut commit_info = operation.get_commit_info();
             commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            // clientVersion is provenance metadata, but it is not reserved. Callers can override it
+            // while engineInfo remains a generated typed CommitInfo field.
             app_metadata
                 .entry("clientVersion".to_string())
                 .or_insert(Value::String(format!("delta-rs.{}", crate_version())));
-            app_metadata.extend(commit_info.info);
-            commit_info.info = app_metadata.clone();
+            assign_commit_info_metadata(&mut commit_info, &mut app_metadata);
             // commit info should be the first action to support in-commit timestamps.
             actions.insert(0, Action::CommitInfo(commit_info));
         }
@@ -1001,7 +1164,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::kernel::IsolationLevel;
     use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
+    use crate::protocol::SaveMode;
     use object_store::{PutPayload, memory::InMemory};
     use serde_json::json;
     use url::Url;
@@ -1099,5 +1264,195 @@ mod tests {
             *with_metadata.app_metadata.get("clientVersion").unwrap(),
             json!("test-client.0.0.1")
         );
+    }
+
+    fn commit_info(data: &CommitData) -> &CommitInfo {
+        match &data.actions[0] {
+            Action::CommitInfo(info) => info,
+            action => panic!("expected first action to be commitInfo, got {action:?}"),
+        }
+    }
+
+    #[test]
+    fn test_commit_data_strips_and_promotes_reserved_metadata() {
+        let data = CommitData::new(
+            vec![],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([
+                ("readVersion".to_owned(), json!(7)),
+                ("userId".to_owned(), json!("user-1")),
+                ("userName".to_owned(), json!("Jane Doe")),
+                ("userMetadata".to_owned(), json!("metadata")),
+                ("isolationLevel".to_owned(), json!("SnapshotIsolation")),
+                ("isBlindAppend".to_owned(), json!(true)),
+                ("timestamp".to_owned(), json!(1)),
+                ("operation".to_owned(), json!("CUSTOM OPERATION")),
+                ("engineInfo".to_owned(), json!("custom-engine")),
+                ("custom".to_owned(), json!({"kept": true})),
+            ]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert_eq!(info.read_version, Some(7));
+        assert_eq!(info.user_id.as_deref(), Some("user-1"));
+        assert_eq!(info.user_name.as_deref(), Some("Jane Doe"));
+        assert_eq!(info.user_metadata.as_deref(), Some("metadata"));
+        assert_eq!(
+            info.isolation_level,
+            Some(IsolationLevel::SnapshotIsolation)
+        );
+        assert_eq!(info.is_blind_append, Some(true));
+        assert_eq!(info.operation.as_deref(), Some("FSCK"));
+        assert_ne!(info.engine_info.as_deref(), Some("custom-engine"));
+        assert_eq!(info.info.get("custom"), Some(&json!({"kept": true})));
+
+        for key in [
+            "timestamp",
+            "userId",
+            "userName",
+            "operation",
+            "operationParameters",
+            "readVersion",
+            "isolationLevel",
+            "isBlindAppend",
+            "engineInfo",
+            "userMetadata",
+        ] {
+            assert!(
+                !info.info.contains_key(key),
+                "reserved key {key} must not remain in flattened commit info"
+            );
+        }
+    }
+
+    #[test]
+    fn test_commit_data_merges_operation_parameters_generated_keys_win() {
+        let data = CommitData::new(
+            vec![],
+            DeltaOperation::Write {
+                mode: SaveMode::Overwrite,
+                partition_by: Some(vec!["id".to_owned()]),
+                predicate: None,
+            },
+            HashMap::from([(
+                "operationParameters".to_owned(),
+                json!({
+                    "mode": "custom-mode",
+                    "partitionBy": "custom-partitioning",
+                    "customParameter": {"kept": true},
+                    "customBoolean": true,
+                    "customNumber": 7,
+                }),
+            )]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        let operation_parameters = info
+            .operation_parameters
+            .as_ref()
+            .expect("operation parameters should be present");
+        assert_eq!(operation_parameters.get("mode"), Some(&json!("Overwrite")));
+        assert_eq!(
+            operation_parameters.get("partitionBy"),
+            Some(&json!("[\"id\"]"))
+        );
+        assert_eq!(
+            operation_parameters.get("customParameter"),
+            Some(&json!("{\"kept\":true}"))
+        );
+        assert_eq!(
+            operation_parameters.get("customBoolean"),
+            Some(&json!("true"))
+        );
+        assert_eq!(operation_parameters.get("customNumber"), Some(&json!("7")));
+        assert!(!info.info.contains_key("operationParameters"));
+    }
+
+    #[test]
+    fn test_commit_data_normalizes_reserved_keys_from_existing_commit_info_info() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo {
+                info: HashMap::from([
+                    ("userName".to_owned(), json!("shadow-user")),
+                    (
+                        "operationParameters".to_owned(),
+                        json!({"custom": {"kept": true}}),
+                    ),
+                    ("custom".to_owned(), json!("kept")),
+                ]),
+                ..Default::default()
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([("custom".to_owned(), json!("metadata-wins"))]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert_eq!(info.user_name.as_deref(), Some("shadow-user"));
+        let operation_parameters = info
+            .operation_parameters
+            .as_ref()
+            .expect("operation parameters should be promoted");
+        assert_eq!(
+            operation_parameters.get("custom"),
+            Some(&json!("{\"kept\":true}"))
+        );
+        assert_eq!(info.info.get("custom"), Some(&json!("metadata-wins")));
+        assert!(!info.info.contains_key("userName"));
+        assert!(!info.info.contains_key("operationParameters"));
+    }
+
+    #[test]
+    fn test_commit_data_does_not_promote_reserved_metadata_over_typed_fields() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo {
+                user_name: Some("typed-user".to_owned()),
+                read_version: Some(10),
+                ..Default::default()
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([
+                ("userName".to_owned(), json!("metadata-user")),
+                ("readVersion".to_owned(), json!(11)),
+                ("custom".to_owned(), json!("kept")),
+            ]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert_eq!(info.user_name.as_deref(), Some("typed-user"));
+        assert_eq!(info.read_version, Some(10));
+        assert!(!info.info.contains_key("userName"));
+        assert!(!info.info.contains_key("readVersion"));
+        assert_eq!(info.info.get("custom"), Some(&json!("kept")));
+    }
+
+    #[test]
+    fn test_commit_data_strips_wrong_typed_reserved_metadata_without_clobbering_typed_fields() {
+        let data = CommitData::new(
+            vec![Action::CommitInfo(CommitInfo {
+                user_name: Some("typed-user".to_owned()),
+                read_version: Some(10),
+                ..Default::default()
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::from([
+                ("userName".to_owned(), json!(123)),
+                ("readVersion".to_owned(), json!("abc")),
+                ("isBlindAppend".to_owned(), json!("not-a-bool")),
+                ("custom".to_owned(), json!("kept")),
+            ]),
+            vec![],
+        );
+
+        let info = commit_info(&data);
+        assert_eq!(info.user_name.as_deref(), Some("typed-user"));
+        assert_eq!(info.read_version, Some(10));
+        assert_eq!(info.info.get("custom"), Some(&json!("kept")));
+        assert!(!info.info.contains_key("userName"));
+        assert!(!info.info.contains_key("readVersion"));
+        assert!(!info.info.contains_key("isBlindAppend"));
     }
 }
