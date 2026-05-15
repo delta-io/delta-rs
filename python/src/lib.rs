@@ -92,12 +92,22 @@ use crate::utils::rt;
 use crate::writer::to_lazy_table;
 
 #[global_allocator]
-#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
+#[cfg(all(
+    target_family = "unix",
+    not(target_os = "emscripten"),
+    not(target_os = "freebsd")
+))]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+// On FreeBSD, neither jemallocator nor mimalloc is set as global allocator.
+// jemallocator fails its dlsym(RTLD_NEXT, "pthread_create") init under
+// FreeBSD's threading model (see python/Cargo.toml comment). The Rust
+// system allocator is used by default; FreeBSD's libc malloc is
+// jemalloc-derived already, so there is no performance regression.
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
