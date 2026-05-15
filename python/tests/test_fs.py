@@ -1,5 +1,6 @@
 import pickle
 import urllib
+from uuid import uuid4
 from typing import TYPE_CHECKING
 
 import pytest
@@ -115,7 +116,7 @@ def test_roundtrip_s3_env(
     sample_data_pyarrow: "pa.Table",
     monkeypatch,
 ):
-    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip"
+    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip/{uuid4()}"
 
     # Create new table with path
     with pytest.raises(DeltaProtocolError, match="Atomic rename requires a LockClient"):
@@ -146,7 +147,7 @@ def test_roundtrip_s3_env(
 def test_roundtrip_s3_direct(
     s3_localstack_bucket_root_uri, s3_localstack_creds, sample_data_pyarrow: "pa.Table"
 ):
-    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip2"
+    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip2/{uuid4()}"
 
     # Fails without any credentials
     with pytest.raises(Exception):
@@ -189,7 +190,7 @@ def test_roundtrip_s3_direct(
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip"
+    table_path = f"abfs://deltars/roundtrip/{uuid4()}"
 
     # Create new table with path
     write_deltalake(table_path, sample_data_pyarrow)
@@ -212,7 +213,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip2"
+    table_path = f"abfs://deltars/roundtrip2/{uuid4()}"
 
     # Can pass storage_options in directly
     write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_creds)
@@ -235,7 +236,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip3"
+    table_path = f"abfs://deltars/roundtrip3/{uuid4()}"
     write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
@@ -250,7 +251,7 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table")
 def test_roundtrip_azure_decoded_sas(
     azurite_sas_creds, sample_data_pyarrow: "pa.Table"
 ):
-    table_path = "abfs://deltars/roundtrip4"
+    table_path = f"abfs://deltars/roundtrip4/{uuid4()}"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
         azurite_sas_creds["SAS_TOKEN"]
     )
