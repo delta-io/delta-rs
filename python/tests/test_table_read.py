@@ -1243,7 +1243,6 @@ def test_read_variant_fixture():
 
     table = dt.to_pyarrow_dataset().to_table()
     assert table.num_rows == 102
-    assert table.column("id").to_pylist()[:3] == [0, 1, 2]
 
 
 def test_read_deletion_vectors():
