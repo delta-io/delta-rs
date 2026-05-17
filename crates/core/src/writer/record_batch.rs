@@ -979,6 +979,42 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn test_mismatched_schema_log_message() {
+            let table_dir = tempfile::tempdir().unwrap();
+            let table_path = table_dir.path().to_str().unwrap();
+
+            let batch = get_record_batch(None, false);
+            let partition_cols = vec![];
+            let table = create_initialized_table(table_path, &partition_cols).await;
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Write the first batch with the first schema to the table
+            writer.write(batch).await.unwrap();
+            let adds = writer.flush().await.unwrap();
+            assert_eq!(adds.len(), 1);
+
+            // Create a second batch with a different schema
+            let second_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let second_batch = RecordBatch::try_new(
+                second_schema,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+                    Arc::new(StringArray::from(vec![Some("will"), Some("robert")])),
+                ],
+            )
+            .unwrap();
+
+            let result = writer.write(second_batch).await;
+            assert!(result.is_err());
+            let error_message: String = result.unwrap_err().to_string();
+
+            assert!(error_message.contains("Arrow RecordBatch schema does not match: Column 'id' type mismatch - expected Int64, found Int32"));
+        }
+
+        #[tokio::test]
         async fn test_write_schema_evolution() {
             let table_schema = get_delta_schema();
             let table_dir = tempfile::tempdir().unwrap();
