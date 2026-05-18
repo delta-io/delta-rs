@@ -2191,6 +2191,11 @@ passed to it differs from the existing table's schema. If you wish to
 alter the schema as part of an overwrite pass in <code>schema_mode="overwrite"</code> or <code>schema_mode="merge"</code>.
 <code>schema_mode="overwrite"</code> will completely overwrite the schema, even if columns are dropped; merge will append the new columns
 and fill missing columns with <code>null</code>. <code>schema_mode="merge"</code> is also supported on append operations.</p>
+<p>When replacing the entire table with <code>mode="overwrite"</code> and <code>schema_mode="overwrite"</code>,
+you may also provide a different <code>partition_by</code> value to replace the table's
+partition columns. This is only supported for full table overwrites. Overwrites
+that use a <code>predicate</code> (also known as <code>replaceWhere</code>) must keep the existing
+partition columns because they replace only a subset of the table.</p>
 <h2 id="overwriting-part-of-the-table-data-using-a-predicate">Overwriting part of the table data using a predicate</h2>
 <div class="admonition note">
 <p class="admonition-title">Note</p>

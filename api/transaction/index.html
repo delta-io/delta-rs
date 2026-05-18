@@ -2335,7 +2335,7 @@
   </span>
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CommitProperties</span><span class="p">(</span><span class="n">custom_metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_commit_retries</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">app_transactions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Transaction</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">CommitProperties</span><span class="p">(</span><span class="n">custom_metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_commit_retries</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">app_transactions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Transaction</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2361,11 +2361,22 @@
         <tr>
           <td><code>custom_metadata</code></td>
           <td>
-                <code>dict[str, str] | None</code>
+                <code>dict[str, <span title="typing.Any">Any</span>] | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>custom metadata that will be added to the transaction commit.</p>
+              <p>custom metadata that will be added to the transaction
+commit. Top level keys must be strings and values must be JSON
+serializable. Values such as NaN and Infinity are rejected.
+Reserved commit info keys have stricter requirements:
+"operationParameters" must be a JSON object; "readVersion" must
+be an integer greater than or equal to zero, not a float;
+"userId", "userName", and "userMetadata" must be strings;
+"isolationLevel" must be one of "Serializable",
+"WriteSerializable", or "SnapshotIsolation"; "isBlindAppend"
+must be a boolean. The generated keys "timestamp", "operation",
+and "engineInfo" cannot be set through custom metadata. Callers
+may set "clientVersion", and it is preserved when provided.</p>
             </div>
           </td>
           <td>

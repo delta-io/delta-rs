@@ -2389,7 +2389,9 @@
           <td>
             <div class="doc-md-description">
               <p>List of columns to partition the table by. Only required
-when creating a new table.</p>
+when creating a new table, or when replacing partition columns during a
+full table <code>mode="overwrite"</code> with <code>schema_mode="overwrite"</code> and no
+<code>predicate</code>.</p>
             </div>
           </td>
           <td>

@@ -3836,8 +3836,11 @@ If a datetime object without a timezone is passed, the UTC timezone will be assu
   <div class="doc doc-contents ">
   
       <p>Pass the source data which you want to merge on the target delta table, providing a
-predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
-match the underlying table.</p>
+predicate in SQL query like format.</p>
+<p>MERGE casts update and insert expressions to the target column types. If
+<code>error_on_type_mismatch</code> is True, failed casts raise an error. If
+<code>error_on_type_mismatch</code> is False, failed casts become null for target columns that allow
+null values. Target columns that do not allow null values still fail the write constraint check.</p>
 
 
 
@@ -3929,7 +3932,7 @@ match the underlying table.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>specify if merge will return error if data types are mismatching :default = True</p>
+              <p>specify if merge returns an error when update or insert expressions fail to cast to target column types :default = True</p>
             </div>
           </td>
           <td>
@@ -4999,7 +5002,7 @@ to be passed for it to execute.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>specify if update will return error if data types are mismatching :default = True</p>
+              <p>specify if update returns an error when update expressions fail to cast to target column types :default = True</p>
             </div>
           </td>
           <td>
