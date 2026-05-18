@@ -35,7 +35,7 @@ jobs:
         run: |
           # Install minimum PyArrow version
           make develop
-          uv pip install pyarrow==16.0.0
+          uv pip install pyarrow==21.0.0
 
       - name: Run tests
         run: make unit-test

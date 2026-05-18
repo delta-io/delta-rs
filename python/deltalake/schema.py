@@ -7,11 +7,20 @@ from deltalake._internal import (
     PrimitiveType,
     Schema,
     StructType,
+    VariantType,
 )
 
-__all__ = ["ArrayType", "Field", "MapType", "PrimitiveType", "Schema", "StructType"]
+__all__ = [
+    "ArrayType",
+    "Field",
+    "MapType",
+    "PrimitiveType",
+    "Schema",
+    "StructType",
+    "VariantType",
+]
 
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
-DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
+DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType", "VariantType"]

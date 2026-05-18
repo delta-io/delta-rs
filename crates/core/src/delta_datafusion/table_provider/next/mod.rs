@@ -1433,28 +1433,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_direct_scan_rejects_unsupported_reader_protocol() -> TestResult {
-        let table = create_in_memory_id_table_with_reader_protocol(2).await?;
-        let provider = DeltaScan::new(
-            table.snapshot()?.snapshot().snapshot().clone(),
-            DeltaScanConfig::default(),
-        )?;
-
-        let session = Arc::new(create_session().into_inner());
-        let state = session.state_ref().read().clone();
-        let err = provider
-            .scan(&state, None, &[], None)
-            .await
-            .expect_err("unsupported reader protocol should fail before scan planning");
-        assert!(
-            err.to_string().contains("Unsupported"),
-            "unexpected error: {err}"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
@@ -1914,28 +1892,6 @@ mod tests {
 
         let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert!(deletion_vectors.is_empty());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_deletion_vectors_reject_unsupported_reader_protocol() -> TestResult {
-        let table = create_in_memory_id_table_with_reader_protocol(2).await?;
-        let provider = DeltaScan::new(
-            table.snapshot()?.snapshot().snapshot().clone(),
-            DeltaScanConfig::default(),
-        )?;
-
-        let session = Arc::new(create_session().into_inner());
-        let state = session.state_ref().read().clone();
-        let err = provider
-            .deletion_vectors(&state)
-            .await
-            .expect_err("unsupported reader protocol should fail before deletion-vector reads");
-        assert!(
-            err.to_string().contains("Unsupported"),
-            "unexpected error: {err}"
-        );
 
         Ok(())
     }

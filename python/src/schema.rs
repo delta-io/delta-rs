@@ -49,9 +49,7 @@ fn schema_type_to_python(schema_type: DataType, py: Python<'_>) -> PyResult<Boun
             let struct_type: StructType = (*struct_type).into();
             Ok(struct_type.into_py_any(py)?.into_bound(py))
         }
-        DataType::Variant(_) => {
-            unimplemented!("Variant type not yet supported")
-        }
+        DataType::Variant(_) => Ok(VariantType::new().into_py_any(py)?.into_bound(py)),
     }
 }
 
@@ -67,6 +65,9 @@ fn python_type_to_schema(ob: &Bound<'_, PyAny>) -> PyResult<DataType> {
     }
     if let Ok(struct_type) = ob.extract::<StructType>() {
         return Ok(struct_type.into());
+    }
+    if ob.extract::<VariantType>().is_ok() {
+        return Ok(DataType::unshredded_variant());
     }
     if let Ok(raw_primitive) = ob.extract::<String>() {
         // Pass through PrimitiveType::new() to do validation
@@ -181,6 +182,92 @@ impl PrimitiveType {
 #[derive(Clone)]
 pub struct ArrayType {
     inner_type: DeltaArrayType,
+}
+
+#[pyclass(module = "deltalake._internal")]
+#[derive(Clone)]
+pub struct VariantType;
+
+impl From<VariantType> for DataType {
+    fn from(_: VariantType) -> DataType {
+        DataType::unshredded_variant()
+    }
+}
+
+impl TryFrom<DataType> for VariantType {
+    type Error = PyErr;
+
+    fn try_from(value: DataType) -> PyResult<Self> {
+        match value {
+            DataType::Variant(_) => Ok(Self),
+            _ => Err(PyTypeError::new_err("Type is not variant")),
+        }
+    }
+}
+
+#[pymethods]
+impl VariantType {
+    #[new]
+    fn new() -> Self {
+        Self
+    }
+
+    fn __repr__(&self) -> String {
+        "VariantType()".to_string()
+    }
+
+    fn __richcmp__(&self, _other: VariantType, cmp: pyo3::basic::CompareOp) -> PyResult<bool> {
+        match cmp {
+            pyo3::basic::CompareOp::Eq => Ok(true),
+            pyo3::basic::CompareOp::Ne => Ok(false),
+            _ => Err(PyNotImplementedError::new_err(
+                "Only == and != are supported.",
+            )),
+        }
+    }
+
+    #[getter]
+    fn get_type(&self) -> String {
+        "variant".to_string()
+    }
+
+    #[pyo3(text_signature = "($self)")]
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&DataType::unshredded_variant())
+            .map_err(|err| PyException::new_err(err.to_string()))
+    }
+
+    #[staticmethod]
+    #[pyo3(text_signature = "(type_json)")]
+    fn from_json(type_json: String) -> PyResult<Self> {
+        let data_type: DataType = serde_json::from_str(&type_json)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        data_type.try_into()
+    }
+
+    #[pyo3(text_signature = "($self)")]
+    fn to_arrow(&self) -> PyResult<Arro3DataType> {
+        let arrow_type: ArrowDataType = (&DataType::unshredded_variant())
+            .try_into_arrow()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+        Ok(arrow_type.into())
+    }
+
+    #[staticmethod]
+    #[pyo3(text_signature = "(data_type)")]
+    fn from_arrow(data_type: PyDataType) -> PyResult<Self> {
+        let inner_type: DataType = (&data_type.into_inner())
+            .try_into_kernel()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+        inner_type.try_into()
+    }
+
+    fn __arrow_c_schema__<'py>(&self, py: Python<'py>) -> PyArrowResult<Bound<'py, PyCapsule>> {
+        let arrow_type: ArrowDataType = (&DataType::unshredded_variant())
+            .try_into_arrow()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+        to_schema_pycapsule(py, arrow_type)
+    }
 }
 
 impl From<DeltaArrayType> for ArrayType {

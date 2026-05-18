@@ -3184,6 +3184,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;
+    m.add_class::<schema::VariantType>()?;
     m.add_class::<schema::ArrayType>()?;
     m.add_class::<schema::MapType>()?;
     m.add_class::<schema::Field>()?;

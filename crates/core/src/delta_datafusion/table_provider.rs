@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
+use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{EagerSnapshot, Snapshot, Version};
 use crate::logstore::{LogStore, LogStoreExt as _};
 use crate::table::normalize_table_url;
@@ -383,6 +384,10 @@ impl TableProviderBuilder {
                 }
             }
         };
+
+        PROTOCOL
+            .can_read_from_protocol(snapshot.snapshot().protocol())
+            .map_err(|err| DataFusionError::Plan(err.to_string()))?;
 
         if let Some(log_store) = log_store.as_ref() {
             let snapshot_root_identity = next::canonical_table_root_identity(

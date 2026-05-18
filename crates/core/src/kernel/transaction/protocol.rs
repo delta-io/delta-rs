@@ -8,6 +8,7 @@ use super::{TableReference, TransactionError};
 use crate::kernel::contains_timestamp_nanos;
 use crate::kernel::{
     Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
+    contains_variant,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -148,6 +149,40 @@ impl ProtocolChecker {
         )
     }
 
+    /// Check can write variant
+    pub fn check_can_write_variant(
+        &self,
+        snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        trace!("checking to see if {snapshot:?} can write variant");
+        let contains_variant = contains_variant(schema.fields());
+        let required_features: Option<&[TableFeature]> =
+            match snapshot.protocol().min_writer_version() {
+                0..=6 => None,
+                _ => snapshot.protocol().writer_features(),
+            };
+
+        let has_variant_feature = |features: &[TableFeature]| {
+            features.contains(&TableFeature::VariantType)
+                || features.contains(&TableFeature::VariantTypePreview)
+        };
+
+        if let Some(table_features) = required_features {
+            if !has_variant_feature(table_features) && contains_variant {
+                return Err(TransactionError::TableFeaturesRequired(
+                    TableFeature::VariantType,
+                ));
+            }
+        } else if contains_variant {
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::VariantType,
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Check if delta-rs can read form the given delta table.
     pub fn can_read_from(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
         self.can_read_from_protocol(snapshot.protocol())
@@ -162,7 +197,9 @@ impl ProtocolChecker {
         let required_features: Option<HashSet<TableFeature>> = match protocol.min_reader_version() {
             0 | 1 => None,
             2 => Some(READER_V2.clone()),
-            3 => Some(READER_V3.clone()),
+            3 => protocol
+                .reader_features_set()
+                .or_else(|| Some(READER_V3.clone())),
             _ => protocol.reader_features_set(),
         };
         trace!("my reader features: {:?}", self.reader_features);
@@ -260,13 +297,20 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     let mut reader_features = HashSet::new();
     reader_features.insert(TableFeature::TimestampWithoutTimezone);
     reader_features.insert(TableFeature::DeletionVectors);
-    // reader_features.insert(TableFeature::ColumnMapping);
+    reader_features.insert(TableFeature::VariantType);
+    reader_features.insert(TableFeature::VariantTypePreview);
+    #[cfg(feature = "datafusion")]
+    {
+        reader_features.insert(TableFeature::ColumnMapping);
+    }
 
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
     #[cfg(feature = "nanosecond-timestamps")]
     writer_features.insert(TableFeature::TimestampNanos);
+    writer_features.insert(TableFeature::VariantType);
+    writer_features.insert(TableFeature::VariantTypePreview);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(TableFeature::ChangeDataFeed);
@@ -288,7 +332,7 @@ mod tests {
     use super::*;
     use crate::TableProperty;
     use crate::kernel::DataType as DeltaDataType;
-    use crate::kernel::{Action, Add, Metadata, PrimitiveType, ProtocolInner, Remove};
+    use crate::kernel::{Action, Add, Metadata, PrimitiveType, ProtocolInner, Remove, StructField};
     use crate::protocol::SaveMode;
     use crate::table::state::DeltaTableState;
     use crate::test_utils::{ActionFactory, TestSchemas};
@@ -724,5 +768,109 @@ mod tests {
             .snapshot()
             .expect("Failed to get snapshot from test table");
         assert!(checker_5.can_write_to(eager_5).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_variant_reader_writer_features_are_supported() {
+        let checker = ProtocolChecker::new(
+            HashSet::from_iter([TableFeature::VariantType, TableFeature::VariantTypePreview]),
+            HashSet::from_iter([TableFeature::VariantType, TableFeature::VariantTypePreview]),
+        );
+
+        for feature in [TableFeature::VariantType, TableFeature::VariantTypePreview] {
+            let actions = vec![
+                Action::Protocol(
+                    ProtocolInner::new(3, 7)
+                        .append_reader_features([feature.clone()])
+                        .append_writer_features([feature.clone()])
+                        .as_kernel(),
+                ),
+                metadata_action(None).into(),
+            ];
+            let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
+            let eager = snapshot.snapshot();
+            assert!(checker.can_read_from(eager).is_ok());
+            assert!(checker.can_write_to(eager).is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_minreader_v3_checks_explicit_reader_features() {
+        let checker = ProtocolChecker::new(
+            HashSet::from_iter([TableFeature::VariantType]),
+            HashSet::from_iter([TableFeature::VariantType]),
+        );
+
+        let actions = vec![
+            Action::Protocol(
+                ProtocolInner::new(3, 7)
+                    .append_reader_features([
+                        TableFeature::VariantType,
+                        TableFeature::VariantShreddingPreview,
+                    ])
+                    .append_writer_features([
+                        TableFeature::VariantType,
+                        TableFeature::VariantShreddingPreview,
+                    ])
+                    .as_kernel(),
+            ),
+            metadata_action(None).into(),
+        ];
+        let snapshot = DeltaTableState::from_actions(actions).await.unwrap();
+
+        let err = checker.can_read_from(snapshot.snapshot()).unwrap_err();
+        assert!(matches!(
+            err,
+            TransactionError::UnsupportedTableFeatures(features)
+                if features == vec![TableFeature::VariantShreddingPreview]
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_check_can_write_variant_requires_table_feature() {
+        let checker = ProtocolChecker::new(
+            HashSet::from_iter([TableFeature::VariantType]),
+            HashSet::from_iter([TableFeature::VariantType]),
+        );
+        let schema = Schema::try_new(vec![StructField::new(
+            "v",
+            DeltaDataType::unshredded_variant(),
+            true,
+        )])
+        .unwrap();
+
+        let missing_feature = DeltaTableState::from_actions(vec![
+            Action::Protocol(
+                ProtocolInner::new(3, 7)
+                    .append_reader_features([TableFeature::DeletionVectors])
+                    .append_writer_features([TableFeature::DeletionVectors])
+                    .as_kernel(),
+            ),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap();
+        assert!(
+            checker
+                .check_can_write_variant(missing_feature.snapshot(), &schema)
+                .is_err()
+        );
+
+        let preview_feature = DeltaTableState::from_actions(vec![
+            Action::Protocol(
+                ProtocolInner::new(3, 7)
+                    .append_reader_features([TableFeature::VariantTypePreview])
+                    .append_writer_features([TableFeature::VariantTypePreview])
+                    .as_kernel(),
+            ),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap();
+        assert!(
+            checker
+                .check_can_write_variant(preview_feature.snapshot(), &schema)
+                .is_ok()
+        );
     }
 }
