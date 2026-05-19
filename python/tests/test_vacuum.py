@@ -411,3 +411,49 @@ def test_vacuum_positional_and_keyword_keep_versions_conflict_raises():
     commit = CommitProperties(custom_metadata={"userName": "John Doe"})
     with pytest.raises(TypeError, match="multiple values for 'keep_versions'"):
         dt.vacuum(None, True, True, None, commit, False, [1], keep_versions=[2])
+
+
+@pytest.mark.polars
+def test_vacuum_null_partition(tmp_path: pathlib.Path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/3896>
+    """
+    import datetime
+
+    import polars as pl
+
+    # Schema with a nullable partition column
+    schema = {
+        "date": pl.Date,
+        "player_id": pl.Int64,
+        "year": pl.Int64,
+    }
+
+    # Data to append, including a null in the partition column
+    data = pl.DataFrame(
+        {
+            "date": [datetime.date(2023, 1, 3), datetime.date(2023, 1, 4)],
+            "player_id": [3, 4],
+            "year": [2023, None],  # Null partition
+        },
+        schema=schema,
+    )
+
+    # Append new data
+    print("Appending data with null partition...")
+    write_deltalake(
+        tmp_path,
+        data,
+        partition_by=["year"],
+        mode="append",
+    )
+    dt = DeltaTable(tmp_path)
+    files_before_optimize = dt.file_uris()
+
+    # # Optimize the table to make old files obsolete
+    dt.optimize.z_order(["date", "player_id"])
+    files_after_optimize = dt.file_uris()
+    assert files_before_optimize != files_after_optimize
+
+    # Vacuum the table
+    dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
