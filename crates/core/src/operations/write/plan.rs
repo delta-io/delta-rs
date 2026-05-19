@@ -19,7 +19,7 @@ use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{CdcOptions, WriterProperties};
 use uuid::Uuid;
 
 use super::configs::WriterStatsConfig;
@@ -41,6 +41,7 @@ use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
 use crate::operations::{get_num_idx_cols_and_stats_columns, get_target_file_size};
 use crate::protocol::SaveMode;
+use crate::table::config::TableProperty;
 
 /// Schema and protocol actions required before the sink executes the write.
 #[derive(Default)]
@@ -685,6 +686,11 @@ fn build_exec_options(
     let (num_indexed_cols, stats_columns) =
         get_num_idx_cols_and_stats_columns(config, configuration.clone());
 
+    // Apply Parquet content-defined chunking when enabled in table properties and the
+    // caller has not already provided explicit writer properties.
+    let writer_properties =
+        writer_properties.or_else(|| parquet_cdc_writer_properties(snapshot, configuration));
+
     WriteExecOptions {
         partition_columns,
         target_file_size,
@@ -695,6 +701,54 @@ fn build_exec_options(
             stats_columns,
         },
     }
+}
+
+/// Build CDC-enabled [`WriterProperties`] when content-defined chunking is enabled in table
+/// properties, or `None` when it is not enabled.
+///
+/// For existing tables the stored configuration is read from the snapshot; for new tables the
+/// write-time `configuration` map is consulted instead.
+fn parquet_cdc_writer_properties(
+    snapshot: Option<&EagerSnapshot>,
+    configuration: &HashMap<String, Option<String>>,
+) -> Option<WriterProperties> {
+    // Prefer the snapshot's stored configuration over the write-time map.
+    let get = |property: TableProperty| -> Option<String> {
+        let key = property.as_ref();
+        snapshot
+            .and_then(|s| s.metadata().configuration().get(key).cloned())
+            .or_else(|| configuration.get(key).and_then(|v| v.clone()))
+    };
+
+    let enabled = get(TableProperty::ParquetContentDefinedChunkingEnabled)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !enabled {
+        return None;
+    }
+
+    let min_chunk_size = get(TableProperty::ParquetContentDefinedChunkingMinChunkSize)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE);
+
+    let max_chunk_size = get(TableProperty::ParquetContentDefinedChunkingMaxChunkSize)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE);
+
+    let norm_level = get(TableProperty::ParquetContentDefinedChunkingNormLevel)
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(parquet::file::properties::DEFAULT_CDC_NORM_LEVEL);
+
+    Some(
+        WriterProperties::builder()
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size,
+                max_chunk_size,
+                norm_level,
+            }))
+            .build(),
+    )
 }
 
 fn resolve_exact_validation(
