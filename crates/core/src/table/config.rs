@@ -119,6 +119,21 @@ pub enum TableProperty {
 
     /// 'classic' for classic Delta Lake checkpoints. 'v2' for v2 checkpoints.
     CheckpointPolicy,
+
+    /// true to enable Parquet content-defined chunking when writing data files.
+    /// CDC produces row groups whose boundaries are deterministic functions of the
+    /// data content, which improves dedupe and incremental upload efficiency on
+    /// content-addressable stores (e.g. HuggingFace Hub / Xet).
+    ParquetContentDefinedChunkingEnabled,
+
+    /// Minimum row group size in bytes when content-defined chunking is enabled.
+    ParquetContentDefinedChunkingMinChunkSize,
+
+    /// Maximum row group size in bytes when content-defined chunking is enabled.
+    ParquetContentDefinedChunkingMaxChunkSize,
+
+    /// Gearhash normalization level for content-defined chunking.
+    ParquetContentDefinedChunkingNormLevel,
 }
 
 impl AsRef<str> for TableProperty {
@@ -148,6 +163,18 @@ impl AsRef<str> for TableProperty {
             Self::SetTransactionRetentionDuration => "delta.setTransactionRetentionDuration",
             Self::TargetFileSize => "delta.targetFileSize",
             Self::TuneFileSizesForRewrites => "delta.tuneFileSizesForRewrites",
+            Self::ParquetContentDefinedChunkingEnabled => {
+                "delta.parquet.contentDefinedChunking.enabled"
+            }
+            Self::ParquetContentDefinedChunkingMinChunkSize => {
+                "delta.parquet.contentDefinedChunking.minChunkSize"
+            }
+            Self::ParquetContentDefinedChunkingMaxChunkSize => {
+                "delta.parquet.contentDefinedChunking.maxChunkSize"
+            }
+            Self::ParquetContentDefinedChunkingNormLevel => {
+                "delta.parquet.contentDefinedChunking.normLevel"
+            }
         }
     }
 }
@@ -185,6 +212,18 @@ impl FromStr for TableProperty {
             "delta.setTransactionRetentionDuration" => Ok(Self::SetTransactionRetentionDuration),
             "delta.targetFileSize" => Ok(Self::TargetFileSize),
             "delta.tuneFileSizesForRewrites" => Ok(Self::TuneFileSizesForRewrites),
+            "delta.parquet.contentDefinedChunking.enabled" => {
+                Ok(Self::ParquetContentDefinedChunkingEnabled)
+            }
+            "delta.parquet.contentDefinedChunking.minChunkSize" => {
+                Ok(Self::ParquetContentDefinedChunkingMinChunkSize)
+            }
+            "delta.parquet.contentDefinedChunking.maxChunkSize" => {
+                Ok(Self::ParquetContentDefinedChunkingMaxChunkSize)
+            }
+            "delta.parquet.contentDefinedChunking.normLevel" => {
+                Ok(Self::ParquetContentDefinedChunkingNormLevel)
+            }
             _ => Err(DeltaTableError::Generic("unknown config key".into())),
         }
     }

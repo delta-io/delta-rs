@@ -100,6 +100,7 @@ features = [
     "datafusion",
     "gcs",
     "hdfs",
+    "hf",
     "lakefs",
     "python",
     "unity-experimental",

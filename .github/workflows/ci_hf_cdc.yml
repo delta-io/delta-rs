@@ -1,0 +1,53 @@
+name: HuggingFace and CDC Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - 'crates/hf/**'
+      - 'crates/core/src/operations/write/plan.rs'
+      - 'python/tests/test_huggingface_and_cdc.py'
+      - '.github/workflows/ci_hf_cdc.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ./python
+
+env:
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  hf-cdc-python:
+    name: HuggingFace and CDC Python tests
+    runs-on: ubuntu-latest
+    # Skip entirely when HF secrets are not available (e.g. PRs from forks).
+    if: ${{ secrets.HF_TOKEN != '' }}
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-env
+
+      - name: Build and install deltalake
+        run: make develop
+
+      - name: Install huggingface_hub for token resolution
+        run: uv pip install huggingface_hub
+
+      - name: Run CDC and HuggingFace Python tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET: ${{ secrets.HF_DATASET }}
+        run: uv run --no-sync pytest tests/test_huggingface_and_cdc.py -v
