@@ -5,7 +5,7 @@ no special API is required beyond passing them in the ``configuration`` dict.
 
 HF credentials are passed as ``storage_options={"hf.token": ...}`` to
 ``write_deltalake`` / ``DeltaTable``.  Tests requiring live HF credentials are
-skipped when HF_TOKEN or HF_DATASET is not set.
+skipped when HF_TOKEN or HF_BUCKET is not set.
 """
 
 import os
@@ -31,8 +31,8 @@ def _hf_token() -> str | None:
 
 
 requires_hf = pytest.mark.skipif(
-    not _hf_token() or not os.environ.get("HF_DATASET"),
-    reason="No HF token (HF_TOKEN env or `hf auth login`) or HF_DATASET env not set",
+    not _hf_token() or not os.environ.get("HF_BUCKET"),
+    reason="No HF token (HF_TOKEN env or `hf auth login`) or HF_BUCKET env not set",
 )
 
 
@@ -58,26 +58,26 @@ def sample_table() -> pa.Table:
 # ---------------------------------------------------------------------------
 
 
-def test_cdc_table_properties_are_persisted(tmp_path, sample_table):
-    """Table properties with CDC options are stored and returned as-is."""
+def test_cdc_format_options_are_persisted(tmp_path, sample_table):
+    """Format options with CDC settings are stored on Metadata.format.options."""
     path = str(tmp_path)
     write_deltalake(
         path,
         sample_table,
-        configuration={
-            "delta.parquet.contentDefinedChunking.enabled": "true",
-            "delta.parquet.contentDefinedChunking.minChunkSize": "65536",
-            "delta.parquet.contentDefinedChunking.maxChunkSize": "524288",
-            "delta.parquet.contentDefinedChunking.normLevel": "2",
+        format_options={
+            "contentDefinedChunking.enabled": "true",
+            "contentDefinedChunking.minChunkSize": "65536",
+            "contentDefinedChunking.maxChunkSize": "524288",
+            "contentDefinedChunking.normLevel": "2",
         },
     )
 
     dt = DeltaTable(path)
-    cfg = dt.metadata().configuration
-    assert cfg.get("delta.parquet.contentDefinedChunking.enabled") == "true"
-    assert cfg.get("delta.parquet.contentDefinedChunking.minChunkSize") == "65536"
-    assert cfg.get("delta.parquet.contentDefinedChunking.maxChunkSize") == "524288"
-    assert cfg.get("delta.parquet.contentDefinedChunking.normLevel") == "2"
+    opts = dt.metadata().format_options
+    assert opts.get("contentDefinedChunking.enabled") == "true"
+    assert opts.get("contentDefinedChunking.minChunkSize") == "65536"
+    assert opts.get("contentDefinedChunking.maxChunkSize") == "524288"
+    assert opts.get("contentDefinedChunking.normLevel") == "2"
 
 
 def test_cdc_write_and_read(tmp_path, sample_table):
@@ -86,7 +86,7 @@ def test_cdc_write_and_read(tmp_path, sample_table):
     write_deltalake(
         path,
         sample_table,
-        configuration={"delta.parquet.contentDefinedChunking.enabled": "true"},
+        format_options={"contentDefinedChunking.enabled": "true"},
     )
 
     dt = DeltaTable(path)
@@ -94,20 +94,20 @@ def test_cdc_write_and_read(tmp_path, sample_table):
     assert result.num_rows == len(sample_table)
 
 
-def test_cdc_append_preserves_properties(tmp_path, sample_table):
-    """Appending to a CDC-enabled table preserves CDC properties across versions."""
+def test_cdc_append_preserves_format_options(tmp_path, sample_table):
+    """Appending to a CDC-enabled table preserves CDC format options across versions."""
     path = str(tmp_path)
     write_deltalake(
         path,
         sample_table,
-        configuration={"delta.parquet.contentDefinedChunking.enabled": "true"},
+        format_options={"contentDefinedChunking.enabled": "true"},
     )
     write_deltalake(path, sample_table, mode="append")
 
     dt = DeltaTable(path)
     assert dt.version() == 1
-    cfg = dt.metadata().configuration
-    assert cfg.get("delta.parquet.contentDefinedChunking.enabled") == "true"
+    opts = dt.metadata().format_options
+    assert opts.get("contentDefinedChunking.enabled") == "true"
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert result.num_rows == 2 * len(sample_table)
@@ -121,8 +121,8 @@ def test_cdc_append_preserves_properties(tmp_path, sample_table):
 @pytest.fixture(scope="module")
 def hf_table_uri() -> str:
     """Unique HF path for this test run; avoids cross-run collisions."""
-    dataset = os.environ["HF_DATASET"]
-    return f"hf://datasets/{dataset}/delta-ci-{os.getpid()}"
+    bucket = os.environ["HF_BUCKET"]
+    return f"hf://buckets/{bucket}/delta-ci-{os.getpid()}"
 
 
 @pytest.fixture(scope="module")
@@ -146,18 +146,18 @@ def test_hf_write_and_read(hf_table_uri, hf_storage_options, sample_table):
 
 @requires_hf
 def test_hf_cdc_write_and_read(hf_table_uri, hf_storage_options, sample_table):
-    """Write a CDC-enabled Delta table to HF Hub, read it back, and verify properties."""
+    """Write a CDC-enabled Delta table to HF Hub, read it back, and verify format options."""
     uri = hf_table_uri + "-cdc"
     write_deltalake(
         uri,
         sample_table,
         storage_options=hf_storage_options,
-        configuration={"delta.parquet.contentDefinedChunking.enabled": "true"},
+        format_options={"contentDefinedChunking.enabled": "true"},
     )
 
     dt = DeltaTable(uri, storage_options=hf_storage_options)
-    cfg = dt.metadata().configuration
-    assert cfg.get("delta.parquet.contentDefinedChunking.enabled") == "true"
+    opts = dt.metadata().format_options
+    assert opts.get("contentDefinedChunking.enabled") == "true"
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert result.num_rows == len(sample_table)

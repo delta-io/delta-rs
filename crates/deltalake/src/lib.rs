@@ -53,7 +53,7 @@ mod __deltalake_auto_register_hdfs {
     }
 }
 
-#[cfg(any(feature = "hf", feature = "hf-native-tls"))]
+#[cfg(feature = "hf")]
 mod __deltalake_auto_register_hf {
     #[ctor::ctor]
     fn register() {

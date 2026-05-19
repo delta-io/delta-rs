@@ -30,8 +30,6 @@ jobs:
   hf-cdc-python:
     name: HuggingFace and CDC Python tests
     runs-on: ubuntu-latest
-    # Skip entirely when HF secrets are not available (e.g. PRs from forks).
-    if: ${{ secrets.HF_TOKEN != '' }}
 
     steps:
       # v6.0.2
@@ -49,5 +47,5 @@ jobs:
       - name: Run CDC and HuggingFace Python tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_DATASET: ${{ secrets.HF_DATASET }}
+          HF_BUCKET: ${{ secrets.HF_BUCKET }}
         run: uv run --no-sync pytest tests/test_huggingface_and_cdc.py -v
