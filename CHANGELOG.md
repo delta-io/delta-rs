@@ -1,5 +1,14 @@
 # Changelog
 
+## [rust-v0.32.3](https://github.com/delta-io/delta-rs/tree/rust-v0.32.3) (2026-05-19)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.32.2...rust-v0.32.3)
+
+**Merged pull requests:**
+
+- docs: update the changelog for 0.32.2 [\#4459](https://github.com/delta-io/delta-rs/pull/4459) ([rtyler](https://github.com/rtyler))
+- feat: add support for variant type [\#4325](https://github.com/delta-io/delta-rs/pull/4325) ([abhiaagarwal](https://github.com/abhiaagarwal))
+
 ## [python-v1.6.0](https://github.com/delta-io/delta-rs/tree/python-v1.6.0) (2026-05-17)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/python-v1.5.1...python-v1.6.0)
