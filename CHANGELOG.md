@@ -1,5 +1,67 @@
 # Changelog
 
+## [python-v1.6.0](https://github.com/delta-io/delta-rs/tree/python-v1.6.0) (2026-05-17)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/python-v1.5.1...python-v1.6.0)
+
+_Note:_ This release upgrades the **minimum** pyarrow version supported to 21.0.0 which
+includes preliminary support for `variant` types.
+
+**Closed issues:**
+
+- \[Bug\]: DynamoDB setup instruction in docs [\#4452](https://github.com/delta-io/delta-rs/issues/4452)
+- \[Feature\]: Support passing datatypes other than string in custom\_metadata in CommitProperties from python [\#4443](https://github.com/delta-io/delta-rs/issues/4443)
+- \[Bug\]: can't change partition column by overwriting table [\#4434](https://github.com/delta-io/delta-rs/issues/4434)
+- \[Bug\]: Python 1.5.1 MERGE regression: small source batch uses substantially more RSS than 1.5.0 [\#4422](https://github.com/delta-io/delta-rs/issues/4422)
+- \[Bug\]: python import deltalake crashes on linux kerner with 64KB page size [\#4413](https://github.com/delta-io/delta-rs/issues/4413)
+- \[Bug\]: Regression in 1.5.1: schema\_mode='overwrite' with predicate fails for mixed-case column names \(utcDate\) [\#4404](https://github.com/delta-io/delta-rs/issues/4404)
+- \[Bug\]: update\_incremental\(\) and transaction\_version\(\) hold the GIL for the entire S3 round-trip [\#4402](https://github.com/delta-io/delta-rs/issues/4402)
+- \[Bug\]: Clarification \(or regression\) `dataSkippingNumIndexedCols` [\#4398](https://github.com/delta-io/delta-rs/issues/4398)
+- \[Feature\]: Build Musl arm64 wheels [\#4392](https://github.com/delta-io/delta-rs/issues/4392)
+- \[Bug\]: deltalake\_catalog\_unity failes to list catalogs [\#4360](https://github.com/delta-io/delta-rs/issues/4360)
+- \[Bug\]: UnityCatalogFactory::parse\_url\_opts only allows unity-specific options [\#4225](https://github.com/delta-io/delta-rs/issues/4225)
+- \[Bug\]: deltalake `get_add_actions` not exposing bool min/max [\#4224](https://github.com/delta-io/delta-rs/issues/4224)
+
+**Merged pull requests:**
+
+- refactor: deprecate legacy DeltaScan codec surface [\#4458](https://github.com/delta-io/delta-rs/pull/4458) ([ethan-tyler](https://github.com/ethan-tyler))
+- docs: update dynamodb locking setup [\#4456](https://github.com/delta-io/delta-rs/pull/4456) ([fizyxbt](https://github.com/fizyxbt))
+- fix: normalize commit metadata handling [\#4455](https://github.com/delta-io/delta-rs/pull/4455) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: restore merge safe cast behavior [\#4454](https://github.com/delta-io/delta-rs/pull/4454) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: adopt the released buoyant\_kernel version [\#4453](https://github.com/delta-io/delta-rs/pull/4453) ([rtyler](https://github.com/rtyler))
+- test\(core\): consolidate integration tests into two binaries [\#4451](https://github.com/delta-io/delta-rs/pull/4451) ([rtyler](https://github.com/rtyler))
+- fix\(core\): add checked RecordBatchWriter constructor [\#4450](https://github.com/delta-io/delta-rs/pull/4450) ([fksegundo](https://github.com/fksegundo))
+- fix\(python\): gate jemallocator off on FreeBSD \(fall back to system allocator\) [\#4449](https://github.com/delta-io/delta-rs/pull/4449) ([sahuagin](https://github.com/sahuagin))
+- fix: support Windows UNC paths [\#4447](https://github.com/delta-io/delta-rs/pull/4447) ([rtyler](https://github.com/rtyler))
+- chore: clippy and dependency API fixes [\#4446](https://github.com/delta-io/delta-rs/pull/4446) ([rtyler](https://github.com/rtyler))
+- chore: upgrade to the buoyant\_kernel 0.22 [\#4445](https://github.com/delta-io/delta-rs/pull/4445) ([rtyler](https://github.com/rtyler))
+- fix: allow partition column changes on schema overwrite [\#4444](https://github.com/delta-io/delta-rs/pull/4444) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor: remove DeltaTableProvider [\#4435](https://github.com/delta-io/delta-rs/pull/4435) ([ethan-tyler](https://github.com/ethan-tyler))
+- test: port DeltaTableProvider tests to next provider [\#4432](https://github.com/delta-io/delta-rs/pull/4432) ([ethan-tyler](https://github.com/ethan-tyler))
+- refactor: clean up row index scan contract [\#4431](https://github.com/delta-io/delta-rs/pull/4431) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: clarify cached stats arrow fields [\#4429](https://github.com/delta-io/delta-rs/pull/4429) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: reduce duplicate validation memory [\#4428](https://github.com/delta-io/delta-rs/pull/4428) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix\(core\): reject unsupported column mapping writes [\#4424](https://github.com/delta-io/delta-rs/pull/4424) ([fksegundo](https://github.com/fksegundo))
+- refactor: selective stats materialization policy [\#4421](https://github.com/delta-io/delta-rs/pull/4421) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: local file table root identity [\#4419](https://github.com/delta-io/delta-rs/pull/4419) ([ethan-tyler](https://github.com/ethan-tyler))
+- ci: build wheels with 64k pages [\#4418](https://github.com/delta-io/delta-rs/pull/4418) ([rtyler](https://github.com/rtyler))
+- chore: upgrade to the 200 series of buoyant\_kernel [\#4416](https://github.com/delta-io/delta-rs/pull/4416) ([rtyler](https://github.com/rtyler))
+- chore: update the changelog and prepare for the next patch release [\#4415](https://github.com/delta-io/delta-rs/pull/4415) ([rtyler](https://github.com/rtyler))
+- chore: cap the upper range of the buoyant\_kernel for this release [\#4412](https://github.com/delta-io/delta-rs/pull/4412) ([rtyler](https://github.com/rtyler))
+- fix\(catalog-unity\): skip non-Unity keys in try\_with\_options [\#4410](https://github.com/delta-io/delta-rs/pull/4410) ([1fanwang](https://github.com/1fanwang))
+- fix: listing catalogs from Unity [\#4409](https://github.com/delta-io/delta-rs/pull/4409) ([hjohnss6](https://github.com/hjohnss6))
+- fix: exclude partition columns from add stats schema [\#4408](https://github.com/delta-io/delta-rs/pull/4408) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: preserve mixed case columns in replaceWhere writes [\#4407](https://github.com/delta-io/delta-rs/pull/4407) ([ethan-tyler](https://github.com/ethan-tyler))
+- fix: release GIL for DeltaTable update calls [\#4406](https://github.com/delta-io/delta-rs/pull/4406) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: add tests for cleanup\_expired\_logs\_for [\#4405](https://github.com/delta-io/delta-rs/pull/4405) ([mbkroese](https://github.com/mbkroese))
+- refactor: introduce selective stats projection primitives [\#4403](https://github.com/delta-io/delta-rs/pull/4403) ([ethan-tyler](https://github.com/ethan-tyler))
+- chore: regenerate updated changelog [\#4400](https://github.com/delta-io/delta-rs/pull/4400) ([rtyler](https://github.com/rtyler))
+- feat: add aarch64 musl wheel builds [\#4399](https://github.com/delta-io/delta-rs/pull/4399) ([Slyrc](https://github.com/Slyrc))
+- chore: next iteration of development [\#4396](https://github.com/delta-io/delta-rs/pull/4396) ([rtyler](https://github.com/rtyler))
+- feat: nanosecond timestamps support, gated by a Cargo feature [\#4370](https://github.com/delta-io/delta-rs/pull/4370) ([itamarst](https://github.com/itamarst))
+- feat: add support for variant type [\#4325](https://github.com/delta-io/delta-rs/pull/4325) ([abhiaagarwal](https://github.com/abhiaagarwal))
+- fix: propagate schema\_force\_view\_types through merge write projection [\#4302](https://github.com/delta-io/delta-rs/pull/4302) ([sheganinans](https://github.com/sheganinans))
+
 ## [rust-v0.32.2](https://github.com/delta-io/delta-rs/tree/rust-v0.32.2) (2026-05-15)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.32.1...rust-v0.32.2)
