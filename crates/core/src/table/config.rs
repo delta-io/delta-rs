@@ -119,21 +119,6 @@ pub enum TableProperty {
 
     /// 'classic' for classic Delta Lake checkpoints. 'v2' for v2 checkpoints.
     CheckpointPolicy,
-
-    /// true to enable Parquet content-defined chunking when writing data files.
-    /// CDC produces row groups whose boundaries are deterministic functions of the
-    /// data content, which improves dedupe and incremental upload efficiency on
-    /// content-addressable stores (e.g. HuggingFace Hub / Xet).
-    ParquetContentDefinedChunkingEnabled,
-
-    /// Minimum row group size in bytes when content-defined chunking is enabled.
-    ParquetContentDefinedChunkingMinChunkSize,
-
-    /// Maximum row group size in bytes when content-defined chunking is enabled.
-    ParquetContentDefinedChunkingMaxChunkSize,
-
-    /// Gearhash normalization level for content-defined chunking.
-    ParquetContentDefinedChunkingNormLevel,
 }
 
 impl AsRef<str> for TableProperty {
@@ -163,18 +148,6 @@ impl AsRef<str> for TableProperty {
             Self::SetTransactionRetentionDuration => "delta.setTransactionRetentionDuration",
             Self::TargetFileSize => "delta.targetFileSize",
             Self::TuneFileSizesForRewrites => "delta.tuneFileSizesForRewrites",
-            Self::ParquetContentDefinedChunkingEnabled => {
-                "delta.parquet.contentDefinedChunking.enabled"
-            }
-            Self::ParquetContentDefinedChunkingMinChunkSize => {
-                "delta.parquet.contentDefinedChunking.minChunkSize"
-            }
-            Self::ParquetContentDefinedChunkingMaxChunkSize => {
-                "delta.parquet.contentDefinedChunking.maxChunkSize"
-            }
-            Self::ParquetContentDefinedChunkingNormLevel => {
-                "delta.parquet.contentDefinedChunking.normLevel"
-            }
         }
     }
 }
@@ -212,21 +185,54 @@ impl FromStr for TableProperty {
             "delta.setTransactionRetentionDuration" => Ok(Self::SetTransactionRetentionDuration),
             "delta.targetFileSize" => Ok(Self::TargetFileSize),
             "delta.tuneFileSizesForRewrites" => Ok(Self::TuneFileSizesForRewrites),
-            "delta.parquet.contentDefinedChunking.enabled" => {
-                Ok(Self::ParquetContentDefinedChunkingEnabled)
-            }
-            "delta.parquet.contentDefinedChunking.minChunkSize" => {
-                Ok(Self::ParquetContentDefinedChunkingMinChunkSize)
-            }
-            "delta.parquet.contentDefinedChunking.maxChunkSize" => {
-                Ok(Self::ParquetContentDefinedChunkingMaxChunkSize)
-            }
-            "delta.parquet.contentDefinedChunking.normLevel" => {
-                Ok(Self::ParquetContentDefinedChunkingNormLevel)
-            }
             _ => Err(DeltaTableError::Generic("unknown config key".into())),
         }
     }
+}
+
+/// Key in `Metadata.format.options` that enables Parquet content-defined chunking.
+pub const PARQUET_CDC_ENABLED: &str = "contentDefinedChunking.enabled";
+/// Key in `Metadata.format.options` for the minimum CDC chunk size in bytes.
+pub const PARQUET_CDC_MIN_CHUNK_SIZE: &str = "contentDefinedChunking.minChunkSize";
+/// Key in `Metadata.format.options` for the maximum CDC chunk size in bytes.
+pub const PARQUET_CDC_MAX_CHUNK_SIZE: &str = "contentDefinedChunking.maxChunkSize";
+/// Key in `Metadata.format.options` for the Gear hash normalization level.
+pub const PARQUET_CDC_NORM_LEVEL: &str = "contentDefinedChunking.normLevel";
+
+/// Build [`parquet::file::properties::CdcOptions`] from a table's `Metadata.format.options`
+/// when content-defined chunking is enabled, or `None` when it is not.
+///
+/// For existing tables the stored format options are read from the snapshot; for new tables
+/// the write-time `format_options` map is consulted instead.
+pub fn parquet_cdc_options(
+    snapshot_format_options: &std::collections::HashMap<String, String>,
+    format_options: &std::collections::HashMap<String, String>,
+) -> Option<parquet::file::properties::CdcOptions> {
+    let get = |key: &str| -> Option<&str> {
+        snapshot_format_options
+            .get(key)
+            .or_else(|| format_options.get(key))
+            .map(|s| s.as_str())
+    };
+
+    if !get(PARQUET_CDC_ENABLED)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    Some(parquet::file::properties::CdcOptions {
+        min_chunk_size: get(PARQUET_CDC_MIN_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE),
+        max_chunk_size: get(PARQUET_CDC_MAX_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE),
+        norm_level: get(PARQUET_CDC_NORM_LEVEL)
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_NORM_LEVEL),
+    })
 }
 
 /// Delta configuration error

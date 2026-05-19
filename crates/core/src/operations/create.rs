@@ -87,6 +87,7 @@ pub struct CreateBuilder {
     actions: Vec<Action>,
     log_store: Option<LogStoreRef>,
     configuration: HashMap<String, Option<String>>,
+    format_options: HashMap<String, String>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
@@ -124,6 +125,7 @@ impl CreateBuilder {
             actions: Default::default(),
             log_store: None,
             configuration: Default::default(),
+            format_options: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
             custom_execute_handler: None,
@@ -233,6 +235,21 @@ impl CreateBuilder {
     ) -> Self {
         self.configuration
             .insert(key.as_ref().into(), value.map(|v| v.into()));
+        self
+    }
+
+    /// Set the `format.options` map stored on the table's `Metadata`.
+    ///
+    /// Format options are passed to the parquet writer when files are produced (e.g. enabling
+    /// content-defined chunking via `contentDefinedChunking.enabled = "true"`).
+    pub fn with_format_options(
+        mut self,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.format_options = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
         self
     }
 
@@ -354,6 +371,9 @@ impl CreateBuilder {
             self.partition_columns.unwrap_or_default(),
             configuration,
         )?;
+        if !self.format_options.is_empty() {
+            metadata = metadata.with_format_options(self.format_options.clone())?;
+        }
         if let Some(name) = self.name {
             metadata = metadata.with_name(name)?;
         }

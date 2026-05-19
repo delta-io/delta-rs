@@ -64,11 +64,10 @@ impl ObjectStoreFactory for HfObjectStoreFactory {
 /// Wraps `OpendalStore` to make Delta-on-HF possible.
 ///
 /// Two adaptations:
-/// 1. The OpenDAL HF backend doesn't support `PutMode::Create` (conditional
-///    `if_not_exists` writes), which Delta uses for log commits. HF Hub is a
-///    Git-based, fundamentally single-writer store; we approximate the contract
-///    with a HEAD-then-PUT — racy across concurrent writers, but correct for the
-///    single-writer scenario HF supports.
+/// 1. The OpenDAL HF backend doesn't declare `write_with_if_not_exists`, so OpenDAL rejects
+///    `PutMode::Create` with `Unsupported`. We approximate the conditional semantics with a
+///    HEAD-then-PUT — racy across concurrent writers, but HF Hub is a single-writer store in
+///    practice (git push for git repos, single-uploader workflows for buckets).
 /// 2. Delta's kernel computes paths from the URL host onward (e.g. for
 ///    `hf://datasets/owner/repo/path/`, the path is `owner/repo/path/_delta_log`),
 ///    but the OpenDAL HF operator is already scoped to `owner/repo`. We strip the
