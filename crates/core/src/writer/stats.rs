@@ -1,8 +1,10 @@
-use std::cmp::min;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, ops::AddAssign};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::AddAssign,
+};
 
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -164,7 +166,32 @@ fn stats_from_metadata(
     } else if num_indexed_cols == DataSkippingNumIndexedCols::AllColumns {
         (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
     } else if let DataSkippingNumIndexedCols::NumColumns(n_cols) = num_indexed_cols {
-        (0..min(n_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+        // The `delta.dataSkippingNumIndexedCols` budget is consumed by distinct
+        // top-level fields, not by parquet leaf columns. A single top-level
+        // column with many nested fields therefore takes one slot, not N.
+        // Partition columns do not consume a slot.
+        let limit = n_cols as usize;
+        let mut admitted: HashSet<String> = HashSet::new();
+        let mut admitted_count: usize = 0;
+        let mut idxs: Vec<usize> = Vec::new();
+        for (idx, col) in schema_descriptor.columns().iter().enumerate() {
+            let top = match col.path().parts().first() {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            if partition_values.contains_key(&top) {
+                continue;
+            }
+            if !admitted.contains(&top) {
+                if admitted_count >= limit {
+                    continue;
+                }
+                admitted.insert(top);
+                admitted_count += 1;
+            }
+            idxs.push(idx);
+        }
+        idxs
     } else {
         return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
@@ -177,7 +204,8 @@ fn stats_from_metadata(
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
-        // Do not include partition columns in statistics
+        // Do not include partition columns in statistics (still relevant for
+        // the `AllColumns` and explicit `stats_columns` branches).
         if partition_values.contains_key(&column_path_parts[0]) {
             continue;
         }
@@ -981,6 +1009,97 @@ mod tests {
                 ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 k => panic!("Key {k:?} should not be present in null_count"),
             }
+        }
+    }
+
+    // Regression test for delta-io/delta-rs#3172: leaves under a nested
+    // top-level field used to consume the `delta.dataSkippingNumIndexedCols`
+    // budget one-by-one, starving later top-level columns of stats. After the
+    // fix the budget is counted per distinct top-level field, so every
+    // top-level column up to the limit gets stats.
+    #[tokio::test]
+    async fn test_nested_fields_do_not_consume_stats_budget() {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+
+        // 5 top-level columns, 8 parquet leaves total ("1", nested.{2,3,4,5},
+        // year, month, day). With `dataSkippingNumIndexedCols=5` the
+        // leaf-counted implementation would burn the budget on "1" plus the
+        // four `nested.*` leaves, dropping year/month/day. With the
+        // top-level-counted budget all five top-level columns are admitted.
+        let nested = StructType::try_new([
+            StructField::nullable("2", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("3", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("4", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("5", DeltaDataType::Primitive(PrimitiveType::Long)),
+        ])
+        .unwrap();
+        let configuration: HashMap<String, Option<String>> = [(
+            "delta.dataSkippingNumIndexedCols".to_string(),
+            Some("5".to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("1", DeltaDataType::Primitive(PrimitiveType::String)),
+                StructField::nullable("nested", DeltaDataType::Struct(Box::new(nested))),
+                StructField::nullable("year", DeltaDataType::Primitive(PrimitiveType::Long)),
+                StructField::nullable("month", DeltaDataType::Primitive(PrimitiveType::Long)),
+                StructField::nullable("day", DeltaDataType::Primitive(PrimitiveType::Long)),
+            ])
+            .with_configuration(configuration)
+            .await
+            .unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let arrow_schema = writer.arrow_schema();
+        let rows = vec![json!({
+            "1": "foo",
+            "nested": {"2": 100, "3": 200, "4": 300, "5": 400},
+            "year": 2024,
+            "month": 12,
+            "day": 1
+        })];
+        let batch = record_batch_from_message(arrow_schema, rows.as_slice()).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let add = writer.flush().await.unwrap();
+        assert_eq!(add.len(), 1);
+        let stats = add[0].get_stats().unwrap().unwrap();
+
+        // Every top-level non-partition column should have min/max/nullCount.
+        for key in ["1", "year", "month", "day"] {
+            assert!(
+                stats.min_values.contains_key(key),
+                "min_values missing top-level column {key:?}: {:?}",
+                stats.min_values.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                stats.max_values.contains_key(key),
+                "max_values missing top-level column {key:?}: {:?}",
+                stats.max_values.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                stats.null_count.contains_key(key),
+                "null_count missing top-level column {key:?}: {:?}",
+                stats.null_count.keys().collect::<Vec<_>>()
+            );
+        }
+
+        // The nested struct's leaves should still produce per-field stats
+        // under the "nested" key (one top-level slot, all leaves admitted).
+        let nested_min = stats
+            .min_values
+            .get("nested")
+            .and_then(ColumnValueStat::as_column)
+            .expect("nested entry should be a column map");
+        for key in ["2", "3", "4", "5"] {
+            assert!(
+                nested_min.contains_key(key),
+                "nested.{key} missing from min_values"
+            );
         }
     }
 
