@@ -22,6 +22,7 @@ use datafusion::common::{
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -235,6 +236,23 @@ impl DeltaScanExec {
         stats.column_statistics = new_stats;
         Ok(stats)
     }
+
+    /// The default physical expr adapter rewrites missing nullable columns to null literals.
+    /// That rewrite supports schema evolution. Delta materialized columns live above the
+    /// Parquet child, including partition values, file id, and row index. Dynamic filters
+    /// on those columns must stay bound to this exec's output schema; rewriting them
+    /// against the Parquet child can turn them into null literals and drop rows.
+    fn references_delta_materialized_column(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
+        let input_schema = self.input.schema();
+        collect_columns(filter).iter().any(|column| {
+            self.scan_plan
+                .contract
+                .result_schema
+                .field_with_name(column.name())
+                .is_ok()
+                && input_schema.field_with_name(column.name()).is_err()
+        })
+    }
 }
 
 impl ExecutionPlan for DeltaScanExec {
@@ -379,7 +397,16 @@ impl ExecutionPlan for DeltaScanExec {
             .and_then(|adapter| {
                 parent_filters
                     .iter()
-                    .map(|filter| adapter.rewrite(Arc::clone(filter)))
+                    .map(|filter| {
+                        if self.references_delta_materialized_column(filter) {
+                            // Leave filters that reference Delta materialized columns in the parent
+                            // schema. `FilterDescription::from_children` marks them unsupported for
+                            // the Parquet child because those columns are absent from the child schema.
+                            Ok(Arc::clone(filter))
+                        } else {
+                            adapter.rewrite(Arc::clone(filter))
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()
             });
 
@@ -716,8 +743,12 @@ mod tests {
     use datafusion::{
         common::{ToDFSchema, stats::Precision},
         datasource::TableProvider,
+        logical_expr::Operator,
+        physical_expr::expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, lit as physical_lit,
+        },
         physical_plan::{
-            collect, collect_partitioned,
+            PhysicalExpr, collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
         },
         prelude::{col, lit},
@@ -903,6 +934,119 @@ mod tests {
         let input_batches = collect(Arc::clone(&exec.input), session.task_ctx()).await?;
         assert!(!input_batches.is_empty());
         child_filters[0][0].predicate.evaluate(&input_batches[0])?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_rejects_delta_materialized_dynamic_filters()
+    -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let letter_idx = exec.schema().index_of("letter")?;
+        assert!(exec.schema().field_with_name("letter").is_ok());
+        assert!(exec.input.schema().field_with_name("letter").is_err());
+
+        let letter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("letter", letter_idx));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&letter),
+            Operator::Eq,
+            physical_lit("a"),
+        ));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![letter], predicate));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_rejects_mixed_delta_materialized_dynamic_filters()
+    -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let letter_idx = exec.schema().index_of("letter")?;
+        let number_idx = exec.schema().index_of("number")?;
+        assert!(exec.schema().field_with_name("letter").is_ok());
+        assert!(exec.schema().field_with_name("number").is_ok());
+        assert!(exec.input.schema().field_with_name("letter").is_err());
+        assert!(exec.input.schema().field_with_name("number").is_ok());
+
+        let letter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("letter", letter_idx));
+        let number: Arc<dyn PhysicalExpr> = Arc::new(Column::new("number", number_idx));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![letter, number],
+            physical_lit(true),
+        ));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_keeps_parquet_dynamic_filters() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let id_idx = exec.schema().index_of("id")?;
+        assert!(exec.schema().field_with_name("id").is_ok());
+        assert!(exec.input.schema().field_with_name("id").is_ok());
+
+        let data: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", id_idx));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![data],
+            physical_lit(true),
+        ));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::Yes));
 
         Ok(())
     }

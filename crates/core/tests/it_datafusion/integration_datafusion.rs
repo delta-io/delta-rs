@@ -417,6 +417,150 @@ mod local {
         Ok(())
     }
 
+    const ISSUE_4467_SCENARIO_COUNT: usize = 3;
+    const ISSUE_4467_ZONE_COUNT: usize = 2;
+    const ISSUE_4467_ROWS_PER_ZONE: usize = 5;
+    const ISSUE_4467_FILTERED_SCENARIO_COUNT: usize = 2;
+    const ISSUE_4467_FILTERED_ZONE_COUNT: usize = 1;
+    const ISSUE_4467_FILTERED_IDX_COUNT: usize = 3;
+    const ISSUE_4467_FILTERED_EXPECTED_ROWS: i64 = (ISSUE_4467_FILTERED_SCENARIO_COUNT
+        * ISSUE_4467_FILTERED_ZONE_COUNT
+        * ISSUE_4467_ROWS_PER_ZONE) as i64;
+
+    fn issue_4467_quoted_values(prefix: &str, count: usize) -> String {
+        (0..count)
+            .map(|value| format!("'{prefix}{value}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    async fn issue_4467_prepare_table(offset: i64) -> (tempfile::TempDir, DeltaTable) {
+        let mut scenarios = vec![];
+        let mut zones = vec![];
+        let mut idx = vec![];
+        let mut values = vec![];
+
+        for scenario in 0..ISSUE_4467_SCENARIO_COUNT {
+            for zone in 0..ISSUE_4467_ZONE_COUNT {
+                for row_idx in 0..ISSUE_4467_ROWS_PER_ZONE {
+                    scenarios.push(format!("s{scenario}"));
+                    zones.push(format!("z{zone}"));
+                    idx.push(row_idx as i64);
+                    values.push(offset + values.len() as i64);
+                }
+            }
+        }
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("scenario", ArrowDataType::Utf8, false),
+            ArrowField::new("price_zone", ArrowDataType::Utf8, false),
+            ArrowField::new("idx", ArrowDataType::Int64, false),
+            ArrowField::new("val", ArrowDataType::Int64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(scenarios)),
+                Arc::new(StringArray::from(zones)),
+                Arc::new(Int64Array::from(idx)),
+                Arc::new(Int64Array::from(values)),
+            ],
+        )
+        .expect("issue 4467 fixture batch should be valid");
+
+        prepare_table(
+            vec![batch],
+            SaveMode::Overwrite,
+            vec!["scenario".to_string()],
+        )
+        .await
+    }
+
+    async fn issue_4467_register_tables(
+        ctx: &SessionContext,
+    ) -> Result<(tempfile::TempDir, tempfile::TempDir)> {
+        let (left_dir, left_table) = issue_4467_prepare_table(0).await;
+        let (right_dir, right_table) = issue_4467_prepare_table(1_000_000).await;
+
+        ctx.register_table("issue_4467_left", left_table.table_provider().await?)?;
+        ctx.register_table("issue_4467_right", right_table.table_provider().await?)?;
+
+        Ok((left_dir, right_dir))
+    }
+
+    async fn issue_4467_count(ctx: &SessionContext, sql: &str) -> Result<i64> {
+        let batches = ctx.sql(sql).await?.collect().await?;
+        let schema = batches[0].schema();
+        let batch = arrow::compute::concat_batches(&schema, &batches)?;
+        Ok(batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("count column should be Int64")
+            .value(0))
+    }
+
+    #[tokio::test]
+    async fn issue_4467_join_dynamic_filter_partition_key_keeps_expected_rows() -> Result<()> {
+        let ctx = SessionContext::new();
+        let (_left_dir, _right_dir) = issue_4467_register_tables(&ctx).await?;
+
+        let scenario_in = issue_4467_quoted_values("s", ISSUE_4467_FILTERED_SCENARIO_COUNT);
+        let zone_in = issue_4467_quoted_values("z", ISSUE_4467_FILTERED_ZONE_COUNT);
+        let count = issue_4467_count(
+            &ctx,
+            &format!(
+                "
+            SELECT COUNT(*) AS count
+            FROM issue_4467_left l
+            INNER JOIN issue_4467_right r
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            WHERE l.scenario IN ({scenario_in})
+              AND l.price_zone IN ({zone_in})
+            "
+            ),
+        )
+        .await?;
+
+        assert_eq!(count, ISSUE_4467_FILTERED_EXPECTED_ROWS);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn issue_4467_join_dynamic_filter_idx_only_keeps_expected_rows() -> Result<()> {
+        let ctx = SessionContext::new();
+        let (_left_dir, _right_dir) = issue_4467_register_tables(&ctx).await?;
+
+        let idx_in = (0..ISSUE_4467_FILTERED_IDX_COUNT)
+            .map(|idx| idx.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let count = issue_4467_count(
+            &ctx,
+            &format!(
+                "
+            SELECT COUNT(*) AS count
+            FROM issue_4467_left l
+            INNER JOIN issue_4467_right r
+              ON l.scenario = r.scenario
+             AND l.idx = r.idx
+            WHERE l.idx IN ({idx_in})
+            "
+            ),
+        )
+        .await?;
+
+        // `price_zone` is absent from the join keys. Each matching scenario and idx row
+        // joins every left zone to every right zone.
+        let expected_fanout = ISSUE_4467_SCENARIO_COUNT
+            * ISSUE_4467_FILTERED_IDX_COUNT
+            * ISSUE_4467_ZONE_COUNT.pow(2);
+        assert_eq!(count, expected_fanout as i64);
+        Ok(())
+    }
+
     #[ignore]
     #[tokio::test]
     async fn test_files_scanned_pushdown_limit() -> Result<()> {
