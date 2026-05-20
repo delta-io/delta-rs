@@ -1185,6 +1185,64 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
     assert expected == actual
 
 
+@pytest.mark.pyarrow
+def test_querybuilder_partition_join_issue_4467_dynamic_filter(tmp_path):
+    import pyarrow as pa
+
+    scenarios = [f"s{i}" for i in range(3)]
+    zones = [f"z{i}" for i in range(2)]
+    rows_per_zone = 5
+    scenario_values = []
+    zone_values = []
+    idx_values = []
+    for scenario in scenarios:
+        for zone in zones:
+            scenario_values.extend([scenario] * rows_per_zone)
+            zone_values.extend([zone] * rows_per_zone)
+            idx_values.extend(range(rows_per_zone))
+
+    data = pa.table(
+        {
+            "scenario": pa.array(scenario_values, type=pa.string()),
+            "price_zone": pa.array(zone_values, type=pa.string()),
+            "idx": pa.array(idx_values, type=pa.int64()),
+            "val": pa.array(range(len(idx_values)), type=pa.int64()),
+        }
+    )
+
+    left_path = tmp_path / "left"
+    right_path = tmp_path / "right"
+    write_deltalake(left_path, data, partition_by="scenario")
+    write_deltalake(right_path, data, partition_by="scenario")
+
+    filtered_scenarios = scenarios[:2]
+    filtered_zones = zones[:1]
+    scenario_in = ", ".join(repr(scenario) for scenario in filtered_scenarios)
+    zone_in = ", ".join(repr(zone) for zone in filtered_zones)
+    actual = (
+        QueryBuilder()
+        .register("left_tbl", DeltaTable(left_path))
+        .register("right_tbl", DeltaTable(right_path))
+        .execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM left_tbl l
+            INNER JOIN right_tbl r
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            WHERE l.scenario IN ({scenario_in})
+              AND l.price_zone IN ({zone_in})
+            """
+        )
+        .read_all()
+    )
+
+    assert actual["count"].to_pylist() == [
+        len(filtered_scenarios) * len(filtered_zones) * rows_per_zone
+    ]
+
+
 def test_deletion_vectors_api_smoke():
     table_path = "../crates/test/tests/data/table-with-dv-small"
     dt = DeltaTable(table_path)
