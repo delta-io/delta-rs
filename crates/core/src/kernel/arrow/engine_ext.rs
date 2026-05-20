@@ -358,6 +358,22 @@ impl BaseStatsTransform {
 impl<'a> SchemaTransform<'a> for BaseStatsTransform {
     transform_output_type!(|'a, T| Option<Cow<'a, T>>);
 
+    // Arrays, maps, and variants are opaque leaves for data skipping purposes:
+    // we keep the field so it can carry a null count, but their inner schema
+    // does not get traversed and its leaves do not count against
+    // `dataSkippingNumIndexedCols`. This matches Delta/Spark, which excludes
+    // nested fields inside arrays and maps from stats collection.
+    // See delta-io/delta-rs#3172.
+    fn transform_array(&mut self, atype: &'a ArrayType) -> Option<Cow<'a, ArrayType>> {
+        Some(Cow::Borrowed(atype))
+    }
+    fn transform_map(&mut self, mtype: &'a MapType) -> Option<Cow<'a, MapType>> {
+        Some(Cow::Borrowed(mtype))
+    }
+    fn transform_variant(&mut self, stype: &'a StructType) -> Option<Cow<'a, StructType>> {
+        Some(Cow::Borrowed(stype))
+    }
+
     fn transform_struct_field(&mut self, field: &'a StructField) -> Option<Cow<'a, StructField>> {
         use Cow::*;
 
