@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-azure"
-version = "0.15.0"
+version = "0.15.1"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.0", path = "../core", default-features = false, features = ["cloud"] }
+deltalake-core = { version = "0.32.3", path = "../core", default-features = false, features = ["cloud"] }
 
 # workspace depenndecies
 bytes = { workspace = true }
