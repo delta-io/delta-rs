@@ -143,6 +143,7 @@ def test_microsecond_truncation_parquet_stats(tmp_path, use_stats_struct):
 
 
 @pytest.mark.polars
+@pytest.mark.pyarrow
 def test_struct_stats_3172(tmp_path: pathlib.Path) -> None:
     """
     Regression test for computing stats of struct leaf nodes
