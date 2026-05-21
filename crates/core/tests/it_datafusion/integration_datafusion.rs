@@ -417,19 +417,25 @@ mod local {
         Ok(())
     }
 
-    const ISSUE_4467_SCENARIO_COUNT: usize = 3;
-    const ISSUE_4467_ZONE_COUNT: usize = 2;
+    const ISSUE_4467_SCENARIOS: &[&str] = &["s0", "s1", "s2"];
+    const ISSUE_4467_ZONES: &[&str] = &["z0", "z1"];
     const ISSUE_4467_ROWS_PER_ZONE: usize = 5;
-    const ISSUE_4467_FILTERED_SCENARIO_COUNT: usize = 2;
-    const ISSUE_4467_FILTERED_ZONE_COUNT: usize = 1;
-    const ISSUE_4467_FILTERED_IDX_COUNT: usize = 3;
-    const ISSUE_4467_FILTERED_EXPECTED_ROWS: i64 = (ISSUE_4467_FILTERED_SCENARIO_COUNT
-        * ISSUE_4467_FILTERED_ZONE_COUNT
-        * ISSUE_4467_ROWS_PER_ZONE) as i64;
+    const ISSUE_4467_FILTERED_SCENARIOS: &[&str] = &["s0", "s1"];
+    const ISSUE_4467_FILTERED_ZONES: &[&str] = &["z0"];
+    const ISSUE_4467_FILTERED_IDXS: &[i64] = &[0, 1, 2];
 
-    fn issue_4467_quoted_values(prefix: &str, count: usize) -> String {
-        (0..count)
-            .map(|value| format!("'{prefix}{value}'"))
+    fn issue_4467_quoted_values(values: &[&str]) -> String {
+        values
+            .iter()
+            .map(|value| format!("'{value}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn issue_4467_int_values(values: &[i64]) -> String {
+        values
+            .iter()
+            .map(|value| value.to_string())
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -440,11 +446,11 @@ mod local {
         let mut idx = vec![];
         let mut values = vec![];
 
-        for scenario in 0..ISSUE_4467_SCENARIO_COUNT {
-            for zone in 0..ISSUE_4467_ZONE_COUNT {
+        for scenario in ISSUE_4467_SCENARIOS {
+            for zone in ISSUE_4467_ZONES {
                 for row_idx in 0..ISSUE_4467_ROWS_PER_ZONE {
-                    scenarios.push(format!("s{scenario}"));
-                    zones.push(format!("z{zone}"));
+                    scenarios.push((*scenario).to_string());
+                    zones.push((*zone).to_string());
                     idx.push(row_idx as i64);
                     values.push(offset + values.len() as i64);
                 }
@@ -505,8 +511,8 @@ mod local {
         let ctx = SessionContext::new();
         let (_left_dir, _right_dir) = issue_4467_register_tables(&ctx).await?;
 
-        let scenario_in = issue_4467_quoted_values("s", ISSUE_4467_FILTERED_SCENARIO_COUNT);
-        let zone_in = issue_4467_quoted_values("z", ISSUE_4467_FILTERED_ZONE_COUNT);
+        let scenario_in = issue_4467_quoted_values(ISSUE_4467_FILTERED_SCENARIOS);
+        let zone_in = issue_4467_quoted_values(ISSUE_4467_FILTERED_ZONES);
         let count = issue_4467_count(
             &ctx,
             &format!(
@@ -524,7 +530,10 @@ mod local {
         )
         .await?;
 
-        assert_eq!(count, ISSUE_4467_FILTERED_EXPECTED_ROWS);
+        let expected_rows = (ISSUE_4467_FILTERED_SCENARIOS.len()
+            * ISSUE_4467_FILTERED_ZONES.len()
+            * ISSUE_4467_ROWS_PER_ZONE) as i64;
+        assert_eq!(count, expected_rows);
         Ok(())
     }
 
@@ -533,10 +542,7 @@ mod local {
         let ctx = SessionContext::new();
         let (_left_dir, _right_dir) = issue_4467_register_tables(&ctx).await?;
 
-        let idx_in = (0..ISSUE_4467_FILTERED_IDX_COUNT)
-            .map(|idx| idx.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let idx_in = issue_4467_int_values(ISSUE_4467_FILTERED_IDXS);
         let count = issue_4467_count(
             &ctx,
             &format!(
@@ -554,9 +560,9 @@ mod local {
 
         // `price_zone` is absent from the join keys. Each matching scenario and idx row
         // joins every left zone to every right zone.
-        let expected_fanout = ISSUE_4467_SCENARIO_COUNT
-            * ISSUE_4467_FILTERED_IDX_COUNT
-            * ISSUE_4467_ZONE_COUNT.pow(2);
+        let expected_fanout = ISSUE_4467_SCENARIOS.len()
+            * ISSUE_4467_FILTERED_IDXS.len()
+            * ISSUE_4467_ZONES.len().pow(2);
         assert_eq!(count, expected_fanout as i64);
         Ok(())
     }
