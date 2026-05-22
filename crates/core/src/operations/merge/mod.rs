@@ -1907,6 +1907,7 @@ mod tests {
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
     use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder};
+    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion::physical_plan::metrics::MetricBuilder;
     use datafusion::physical_plan::{collect, displayable};
@@ -2242,9 +2243,43 @@ mod tests {
             .await
             .expect("physical plan builds");
         let plan = displayable(physical.as_ref()).indent(true).to_string();
-        assert!(plan.contains("DeltaScanExec"));
+        assert_retained_row_index_scan_has_single_partition_child(&physical);
         assert!(!plan.contains("BoundedWindowAggExec"));
         assert!(!plan.contains("SortExec"));
+    }
+
+    #[tokio::test]
+    async fn test_target_row_ordinal_scan_plan_coalesces_repartitioned_input() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        let config = SessionConfig::new()
+            .with_batch_size(2)
+            .with_target_partitions(4)
+            .with_repartition_file_min_size(0);
+        let state = SessionContext::new_with_config(config).state();
+
+        let target_provider = provider_as_source(
+            DeltaScanNext::builder()
+                .with_eager_snapshot(table.snapshot().unwrap().snapshot().clone())
+                .with_log_store(table.log_store.clone())
+                .with_session(state.clone().into())
+                .with_file_column(PATH_COLUMN)
+                .with_row_index_column(TARGET_ROW_ORDINAL_IN_FILE_COLUMN)
+                .await
+                .expect("target provider builds"),
+        );
+        let target =
+            LogicalPlanBuilder::scan(TableReference::bare("target"), target_provider, None)
+                .expect("scan builds")
+                .build()
+                .expect("scan plan builds");
+
+        let physical = state
+            .create_physical_plan(&target)
+            .await
+            .expect("physical plan builds");
+        assert_retained_row_index_scan_coalesces_partitioned_child(&physical, 4);
     }
 
     #[tokio::test]
@@ -2363,6 +2398,78 @@ mod tests {
     fn count_unions(plan: &LogicalPlan) -> usize {
         let current = usize::from(matches!(plan, LogicalPlan::Union(_)));
         current + plan.inputs().into_iter().map(count_unions).sum::<usize>()
+    }
+
+    fn collect_retained_row_index_scan_inputs<'a>(
+        plan: &'a Arc<dyn ExecutionPlan>,
+        scan_children: &mut Vec<&'a Arc<dyn ExecutionPlan>>,
+    ) {
+        if plan.name() == "DeltaScanExec"
+            && format!("{}", displayable(plan.as_ref()).indent(false)).contains("row_index_column=")
+        {
+            let children = plan.children();
+            assert_eq!(children.len(), 1, "DeltaScanExec should have one child");
+            scan_children.push(children[0]);
+        }
+
+        for child in plan.children() {
+            collect_retained_row_index_scan_inputs(child, scan_children);
+        }
+    }
+
+    fn assert_retained_row_index_scan_has_single_partition_child(plan: &Arc<dyn ExecutionPlan>) {
+        let child = retained_row_index_delta_scan_child(plan);
+        assert_eq!(
+            child.properties().partitioning.partition_count(),
+            1,
+            "retained row-index DeltaScanExec must receive a single-partition child: {}",
+            displayable(plan.as_ref()).indent(true)
+        );
+    }
+
+    fn assert_retained_row_index_scan_coalesces_partitioned_child(
+        plan: &Arc<dyn ExecutionPlan>,
+        expected_partition_count: usize,
+    ) {
+        let child = retained_row_index_delta_scan_child(plan);
+        assert_eq!(
+            child.name(),
+            "CoalescePartitionsExec",
+            "retained row-index DeltaScanExec should coalesce partitioned input: {}",
+            displayable(plan.as_ref()).indent(true)
+        );
+
+        let coalesce_children = child.children();
+        assert_eq!(
+            coalesce_children.len(),
+            1,
+            "CoalescePartitionsExec should have one child"
+        );
+        assert_eq!(
+            coalesce_children[0]
+                .properties()
+                .partitioning
+                .partition_count(),
+            expected_partition_count,
+            "expected retained row-index scan to coalesce a partitioned child: {}",
+            displayable(plan.as_ref()).indent(true)
+        );
+    }
+
+    fn retained_row_index_delta_scan_child<'a>(
+        plan: &'a Arc<dyn ExecutionPlan>,
+    ) -> &'a Arc<dyn ExecutionPlan> {
+        let mut scan_children = Vec::new();
+        collect_retained_row_index_scan_inputs(plan, &mut scan_children);
+
+        assert_eq!(
+            scan_children.len(),
+            1,
+            "expected exactly one retained-row-index DeltaScanExec in plan: {}",
+            displayable(plan.as_ref()).indent(true)
+        );
+
+        scan_children[0]
     }
 
     async fn assert_merge_encoded_partition_value_removes_original_file(
