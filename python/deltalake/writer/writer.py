@@ -39,6 +39,7 @@ def write_deltalake(
     writer_properties: WriterProperties = ...,
     commit_properties: CommitProperties | None = ...,
     post_commithook_properties: PostCommitHookProperties | None = ...,
+    read_version: int | None = ...,
 ) -> None: ...
 
 
@@ -59,6 +60,7 @@ def write_deltalake(
     writer_properties: WriterProperties = ...,
     commit_properties: CommitProperties | None = ...,
     post_commithook_properties: PostCommitHookProperties | None = ...,
+    read_version: int | None = ...,
 ) -> None: ...
 
 
@@ -78,6 +80,7 @@ def write_deltalake(
     writer_properties: WriterProperties | None = None,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
+    read_version: int | None = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -104,6 +107,7 @@ def write_deltalake(
         writer_properties: Pass writer properties to the Rust parquet writer.
         commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
+        read_version: version of the table that was read to build the write. The commit fails with :class:`~deltalake.exceptions.CommitFailedError` if a concurrent writer committed a conflicting change after this version.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -144,7 +148,10 @@ def write_deltalake(
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
+            read_version=read_version,
         )
+        if read_version is not None:
+            table.update_incremental()
     else:
         write_deltalake_rust(
             table_uri=table_uri,
@@ -162,4 +169,5 @@ def write_deltalake(
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
+            read_version=read_version,
         )

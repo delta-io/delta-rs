@@ -707,6 +707,7 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        read_version: int | None = None,
     ) -> dict[str, Any]:
         """`UPDATE` records in the Delta Table that matches an optional predicate. Either updates or new_values needs
         to be passed for it to execute.
@@ -719,6 +720,7 @@ class DeltaTable:
             error_on_type_mismatch: specify if update returns an error when update expressions fail to cast to target column types :default = True
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            read_version: version of the table that was read to build the update. Will fail if the table has been updated since then in a way that conflicts with the update.
         Returns:
             the metrics from update
 
@@ -807,7 +809,10 @@ class DeltaTable:
             safe_cast=not error_on_type_mismatch,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
+            read_version=read_version,
         )
+        if read_version is not None:
+            self.update_incremental()
         return json.loads(metrics)
 
     @property
@@ -847,6 +852,7 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        read_version: int | None = None,
     ) -> TableMerger:
         """Pass the source data which you want to merge on the target delta table, providing a
         predicate in SQL query like format.
@@ -872,6 +878,7 @@ class DeltaTable:
             max_temp_directory_size: The maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
             commit_properties: properties for the commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            read_version: version of the table that was read to build the merge. The commit fails with :class:`~deltalake.exceptions.CommitFailedError` if a concurrent writer committed a conflicting change after this version.
 
         Returns:
             TableMerger: TableMerger Object
@@ -903,8 +910,9 @@ class DeltaTable:
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
+            read_version=read_version,
         )
-        return TableMerger(py_merge_builder, self._table)
+        return TableMerger(py_merge_builder, self._table, read_version=read_version)
 
     def restore(
         self,
@@ -1239,6 +1247,7 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        read_version: int | None = None,
     ) -> dict[str, Any]:
         """Delete records from a Delta Table that satisfy a predicate.
 
@@ -1252,6 +1261,7 @@ class DeltaTable:
             writer_properties: Pass writer properties to the Rust parquet writer.
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
+            read_version: version of the table that was read to build the delete. The commit fails with :class:`~deltalake.exceptions.CommitFailedError` if a concurrent writer committed a conflicting change after this version.
 
         Returns:
             A metrics dict. The ``num_deleted_rows`` key is omitted when this library
@@ -1272,7 +1282,10 @@ class DeltaTable:
             writer_properties,
             commit_properties,
             post_commithook_properties,
+            read_version=read_version,
         )
+        if read_version is not None:
+            self.update_incremental()
         return json.loads(metrics)
 
     def repair(
@@ -1420,9 +1433,11 @@ class TableMerger:
         self,
         builder: PyMergeBuilder,
         table: RawDeltaTable,
+        read_version: int | None = None,
     ) -> None:
         self._builder = builder
         self._table = table
+        self._read_version = read_version
 
     def when_matched_update(
         self, updates: dict[str, str], predicate: str | None = None
@@ -1860,6 +1875,8 @@ class TableMerger:
             Dict: metrics
         """
         metrics = self._table.merge_execute(self._builder)
+        if self._read_version is not None:
+            self._table.update_incremental()
         return json.loads(metrics)
 
 

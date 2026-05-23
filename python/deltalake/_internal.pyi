@@ -213,6 +213,7 @@ class RawDeltaTable:
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        read_version: int | None = None,
     ) -> str: ...
     def repair(
         self,
@@ -228,6 +229,7 @@ class RawDeltaTable:
         safe_cast: bool,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        read_version: int | None = None,
     ) -> str: ...
     def create_merge_builder(
         self,
@@ -244,6 +246,7 @@ class RawDeltaTable:
         streamed_exec: bool,
         max_spill_size: int | None,
         max_temp_directory_size: int | None,
+        read_version: int | None = None,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
@@ -295,6 +298,7 @@ class RawDeltaTable:
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
+        read_version: int | None = None,
     ) -> None: ...
 
 def rust_core_version() -> str: ...
@@ -329,6 +333,7 @@ def write_to_deltalake(
     writer_properties: WriterProperties | None,
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
+    read_version: int | None = None,
 ) -> None: ...
 def convert_to_deltalake(
     uri: str,
