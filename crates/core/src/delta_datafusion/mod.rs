@@ -266,9 +266,12 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = SessionContext::new()
-            .create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
+        let session: SessionContext = create_session().into();
+        let schema = log_data.read_schema();
+        let df_schema = Arc::new(schema.clone().to_dfschema()?);
+        let resolved = Expression::from(predicate).resolve(&session.state(), df_schema.clone())?;
+        let expr = session.create_physical_expr(resolved, &df_schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let mask = pruning_predicate.prune(&log_data)?;
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
