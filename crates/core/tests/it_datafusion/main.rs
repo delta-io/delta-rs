@@ -15,5 +15,7 @@ mod file_selection_bench_bridge;
 mod integration;
 mod integration_checkpoint;
 mod integration_datafusion;
+#[cfg(feature = "nanosecond-timestamps")]
+mod nanosecond_timestamps;
 mod read_delta_log_test;
 mod read_delta_partitions_test;
