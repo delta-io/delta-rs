@@ -2641,4 +2641,122 @@ mod tests {
         assert_eq!(table.version(), Some(2), "The delete failed to execute");
         Ok(())
     }
+
+    const START_TIMESTAMP_US: i64 = 1_704_067_200 * 1_000_000; // 2024-01-01 00:00:00 UTC
+    const DAY_US: i64 = 60 * 60 * 24 * 1_000_000;
+
+    async fn setup_timestamp_table() -> DeltaResult<(DeltaTable, Arc<Schema>)> {
+        use arrow::array::TimestampMicrosecondArray;
+
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "timestamp",
+                DeltaDataType::Primitive(PrimitiveType::Timestamp),
+                true,
+                None,
+            )
+            .await?;
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US,
+                    START_TIMESTAMP_US + DAY_US,
+                    START_TIMESTAMP_US + 2 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table = table.write(vec![batch]).await?;
+
+        Ok((table, arrow_schema))
+    }
+
+    /// Ensure conflict checking works when a delete operation with a timestamp predicate follows
+    /// a concurrent write operation. This requires arrow_cast expressions to be simplified.
+    #[tokio::test]
+    async fn test_concurrent_delete_with_timestamp_predicate_after_write() -> DeltaResult<()> {
+        use arrow::array::TimestampMicrosecondArray;
+        let (table, arrow_schema) = setup_timestamp_table().await?;
+
+        // Clone the table to make two concurrent operations
+        let table_for_op1 = table.clone();
+        let table_for_op2 = table;
+
+        // Successful commit: adds new data
+        let new_batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US + 3 * DAY_US,
+                    START_TIMESTAMP_US + 4 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table_after_append = table_for_op1
+            .write(vec![new_batch])
+            .await
+            .expect("Failed to append new data");
+        assert_eq!(table_after_append.version(), Some(2));
+
+        // Concurrent commit that deletes a range of data.
+        let result = table_for_op2
+            .delete()
+            .with_predicate("timestamp >= '2024-01-02T00:00:00Z'")
+            .await;
+
+        let err = result.expect_err(
+            "expected concurrent delete with a timestamp predicate to fail conflict checking",
+        );
+        assert!(
+            err.to_string()
+                .contains("concurrent transactions added new data"),
+            "unexpected error: {err}",
+        );
+        Ok(())
+    }
+
+    /// Ensure conflict checking works with two concurrent delete operations with timestamp
+    /// predicates. This requires arrow_cast expressions to be simplified.
+    #[tokio::test]
+    async fn test_concurrent_deletes_with_timestamp_predicates() -> DeltaResult<()> {
+        let (table, _) = setup_timestamp_table().await?;
+
+        // Clone the table to make two concurrent operations
+        let table_for_op1 = table.clone();
+        let table_for_op2 = table;
+
+        // Successful commit: delete with timestamp predicate
+        let (table_after_delete, _) = table_for_op1
+            .delete()
+            .with_predicate("timestamp >= '2024-01-02T00:00:00Z'")
+            .await
+            .expect("Failed to delete data");
+        assert_eq!(table_after_delete.version(), Some(2));
+
+        // Concurrent other delete with a different predicate
+        let result = table_for_op2
+            .delete()
+            .with_predicate("timestamp >= '2024-01-03T00:00:00Z'")
+            .await;
+
+        let err = result.expect_err(
+            "expected concurrent delete with a timestamp predicate to fail conflict checking",
+        );
+        assert!(
+            err.to_string()
+                .contains("concurrent transaction deleted data this operation read"),
+            "unexpected error: {err}",
+        );
+        Ok(())
+    }
 }
