@@ -39,7 +39,6 @@ use futures::{Future, StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use num_cpus;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
@@ -655,13 +654,16 @@ impl MergePlan {
         let operations = std::mem::take(&mut self.operations);
         info!("starting optimize execution");
         let object_store = log_store.object_store(Some(operation_id));
+        let compact_task_parameters = self.task_parameters.clone();
+        let log_store_for_compact = log_store.clone();
+        let compact_table_root = snapshot.table_configuration().table_root().clone();
 
         let stream = match operations {
             OptimizeOperations::Compact(bins) => futures::stream::iter(bins)
                 .flat_map(|(_, (partition, bins))| {
                     futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                 })
-                .map(|(partition, files)| {
+                .map(move |(partition, files)| {
                     debug!(
                         "merging a group of {} files in partition {partition:?}",
                         files.len(),
@@ -669,29 +671,51 @@ impl MergePlan {
                     for file in files.iter() {
                         debug!("  file {}", file.path);
                     }
-                    let object_store_ref = object_store.clone();
-                    let batch_stream = futures::stream::iter(files.clone())
-                        .then(move |file| {
-                            let object_store_ref = object_store_ref.clone();
-                            let meta = ObjectMeta::try_from(file).unwrap();
-                            async move {
-                                let file_reader =
-                                    ParquetObjectReader::new(object_store_ref, meta.location)
-                                        .with_file_size(meta.size);
-                                ParquetRecordBatchStreamBuilder::new(file_reader)
-                                    .await?
-                                    .build()
-                            }
+                    let batch_stream: BoxFuture<
+                        'static,
+                        Result<ParquetReadStream, DeltaTableError>,
+                    > = {
+                        use crate::delta_datafusion::{
+                            DeltaScanConfigBuilder, DeltaScanNext, FileSelection,
+                        };
+                        use datafusion::execution::context::SessionContext;
+                        let snapshot_for_stream = snapshot.clone();
+                        let files_clone = files.clone();
+                        let log_store_clone = log_store_for_compact.clone();
+                        let table_root_clone = compact_table_root.clone();
+                        Box::pin(async move {
+                            let ctx = Arc::new(SessionContext::new());
+                            let scan_config = DeltaScanConfigBuilder::default()
+                                .with_file_column(false)
+                                .build(&snapshot_for_stream)?;
+                            let selection = FileSelection::from_adds(
+                                files_clone.files.iter().cloned(),
+                                &table_root_clone,
+                            )?;
+                            let provider = Arc::new(
+                                DeltaScanNext::new(snapshot_for_stream, scan_config)?
+                                    .with_log_store(log_store_clone)
+                                    .with_file_selection(selection),
+                            )
+                                as Arc<dyn datafusion::catalog::TableProvider>;
+                            let stream = ctx
+                                .read_table(provider)?
+                                .execute_stream()
+                                .await?
+                                .map_err(|e| {
+                                    ParquetError::General(format!("Compact scan failed: {e}"))
+                                })
+                                .boxed();
+                            Ok(stream)
                         })
-                        .try_flatten()
-                        .boxed();
+                    };
 
                     let rewrite_result = tokio::task::spawn(Self::rewrite_files(
-                        self.task_parameters.clone(),
+                        compact_task_parameters.clone(),
                         partition,
                         files,
                         object_store.clone(),
-                        futures::future::ready(Ok(batch_stream)),
+                        batch_stream,
                         true,
                     ));
                     util::flatten_join_error(rewrite_result)
