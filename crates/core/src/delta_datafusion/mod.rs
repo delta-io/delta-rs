@@ -1468,8 +1468,8 @@ mod tests {
 
         let expected = vec![
             ObjectStoreOperation::Get(LocationType::Commit),
-            ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
-            ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
+            ObjectStoreOperation::GetRange(LocationType::Data, 943..951),
+            ObjectStoreOperation::GetRange(LocationType::Data, 312..943),
         ];
         let mut actual = Vec::new();
         operations.recv_many(&mut actual, 3).await;

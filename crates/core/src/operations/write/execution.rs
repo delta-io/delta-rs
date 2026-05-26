@@ -24,6 +24,10 @@ use tokio::task::JoinSet;
 use tracing::log::*;
 use uuid::Uuid;
 
+use super::encryption::{
+    WriterEncryptionConfig, WriterPropertiesFactoryRef, default_writer_properties_factory,
+    factory_from_writer_properties,
+};
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
@@ -527,6 +531,24 @@ pub(crate) async fn write_execution_plan_v2(
 
     let plan = DataValidationExec::try_new_with_predicates(session, plan, validations)?;
 
+    // Resolve the writer factory. Table encryption always takes precedence to prevent
+    // accidental plaintext writes: even when the caller supplies WriterProperties, the
+    // encrypted factory is used so files are always encrypted for encrypted tables.
+    // An unencrypted caller override is honoured only for truly unencrypted tables.
+    let writer_factory = {
+        let enc = snapshot
+            .map(|s| WriterEncryptionConfig::from_config(s.table_configuration(), session))
+            .transpose()?
+            .unwrap_or_default();
+        if enc.factory.is_some() {
+            enc.factory
+        } else if let Some(wp) = writer_properties {
+            Some(factory_from_writer_properties(wp))
+        } else {
+            None
+        }
+    };
+
     if !contains_cdc {
         write_data_plan(
             session,
@@ -535,7 +557,7 @@ pub(crate) async fn write_execution_plan_v2(
             object_store,
             target_file_size,
             write_batch_size,
-            writer_properties,
+            writer_factory,
             writer_stats_config,
         )
         .await
@@ -547,7 +569,7 @@ pub(crate) async fn write_execution_plan_v2(
             object_store,
             target_file_size,
             write_batch_size,
-            writer_properties,
+            writer_factory,
             writer_stats_config,
         )
         .await
@@ -563,13 +585,20 @@ pub(crate) async fn write_exec_plan(
     target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = session
-        .config_options()
-        .execution
-        .parquet
-        .into_writer_properties_builder()?
-        .build();
     let stats_config = WriterStatsConfig::from_config(table_config);
+    let writer_factory = match WriterEncryptionConfig::from_config(table_config, session) {
+        Ok(enc) if enc.factory.is_some() => enc.factory,
+        Ok(_) => {
+            let wp = session
+                .config_options()
+                .execution
+                .parquet
+                .into_writer_properties_builder()?
+                .build();
+            Some(factory_from_writer_properties(wp))
+        }
+        Err(e) => return Err(e),
+    };
     let object_store = log_store.object_store(operation_id);
     let partition_columns = table_config.metadata().partition_columns().clone();
 
@@ -581,7 +610,7 @@ pub(crate) async fn write_exec_plan(
             object_store,
             target_file_size,
             None,
-            Some(writer_properties),
+            writer_factory,
             stats_config,
         )
         .await
@@ -593,7 +622,7 @@ pub(crate) async fn write_exec_plan(
             object_store,
             target_file_size,
             None,
-            Some(writer_properties),
+            writer_factory,
             stats_config,
         )
         .await
@@ -775,13 +804,24 @@ async fn write_data_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    let writer_factory = if let Some(f) = writer_factory {
+        Some(f)
+    } else {
+        let wp = session
+            .config_options()
+            .execution
+            .parquet
+            .into_writer_properties_builder()?
+            .build();
+        Some(factory_from_writer_properties(wp))
+    };
     let config = WriterConfig::new(
         plan.schema().clone(),
         partition_columns.clone(),
-        writer_properties.clone(),
+        writer_factory,
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,
@@ -867,9 +907,10 @@ async fn write_cdc_plan(
     object_store: ObjectStoreRef,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    writer_factory: Option<WriterPropertiesFactoryRef>,
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
+    let writer_factory = writer_factory.unwrap_or_else(default_writer_properties_factory);
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
 
     let write_schema = Arc::new(Schema::new(
@@ -891,7 +932,7 @@ async fn write_cdc_plan(
     let normal_config = WriterConfig::new(
         write_schema.clone(),
         partition_columns.clone(),
-        writer_properties.clone(),
+        Some(writer_factory.clone()),
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,
@@ -901,7 +942,7 @@ async fn write_cdc_plan(
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),
         partition_columns.clone(),
-        writer_properties.clone(),
+        Some(writer_factory.clone()),
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,

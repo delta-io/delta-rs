@@ -19,6 +19,7 @@ pub mod json;
 pub mod record_batch;
 pub(crate) mod stats;
 pub mod utils;
+pub mod writer_factory;
 
 #[cfg(test)]
 pub mod test_utils;

@@ -31,7 +31,7 @@ arrow-ord = { workspace = true }
 arrow-row = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
-parquet = { workspace = true, features = ["async", "object_store"] }
+parquet = { workspace = true, features = ["async", "object_store", "encryption"] }
 object_store = { workspace = true }
 
 # datafusion
