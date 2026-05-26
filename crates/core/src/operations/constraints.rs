@@ -151,7 +151,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 .ensure_object_store_registered(this.log_store.as_ref(), Some(operation_id))?;
 
             let proivider = DeltaScanNext::builder()
-                .with_eager_snapshot(snapshot.clone())
+                .with_snapshot(snapshot.snapshot().clone())
                 .await?;
             let schema = proivider.schema().to_dfschema()?;
 

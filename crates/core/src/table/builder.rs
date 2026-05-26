@@ -12,6 +12,7 @@ use tracing::debug;
 use url::Url;
 
 use super::normalize_table_url;
+use crate::kernel::Version;
 use crate::logstore::storage::IORuntime;
 use crate::logstore::{LogStoreRef, StorageConfig, object_store_factories};
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -23,7 +24,7 @@ pub enum DeltaVersion {
     #[default]
     Newest,
     /// specify the version to load
-    Version(i64),
+    Version(Version),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
 }
@@ -52,6 +53,15 @@ pub struct DeltaTableConfig {
     /// when processing record batches.
     pub log_batch_size: usize,
 
+    /// Skip parsing per-file statistics while opening the table.
+    /// This defaults to `false`.
+    ///
+    /// Use for workflows that never need file pruning (vacuum, filesystem check,
+    /// append-only writes). Any predicated query on this instance will scan every
+    /// file because the cache has no stats. Partition pruning is unaffected.
+    #[serde(default)]
+    pub skip_stats: bool,
+
     #[serde(skip_serializing, skip_deserializing)]
     #[delta(skip)]
     /// When a runtime handler is provided, all IO tasks are spawn in that handle
@@ -64,6 +74,7 @@ impl Default for DeltaTableConfig {
             require_files: true,
             log_buffer_size: num_cpus::get() * 4,
             log_batch_size: 1024,
+            skip_stats: false,
             io_runtime: None,
         }
     }
@@ -74,6 +85,7 @@ impl PartialEq for DeltaTableConfig {
         self.require_files == other.require_files
             && self.log_buffer_size == other.log_buffer_size
             && self.log_batch_size == other.log_batch_size
+            && self.skip_stats == other.skip_stats
     }
 }
 
@@ -110,13 +122,6 @@ impl DeltaTableBuilder {
             )
         })?;
 
-        if table_url.scheme() == "file" {
-            let path = table_url.to_file_path().map_err(|_| {
-                DeltaTableError::InvalidTableLocation(table_url.as_str().to_string())
-            })?;
-            ensure_file_location_exists(path)?;
-        }
-
         debug!("creating table builder with {table_url}");
 
         Ok(Self {
@@ -135,8 +140,15 @@ impl DeltaTableBuilder {
         self
     }
 
+    /// Sets `skip_stats` to the builder. See [`DeltaTableConfig::skip_stats`]
+    /// for the impact on predicated queries.
+    pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
+        self.table_config.skip_stats = skip_stats;
+        self
+    }
+
     /// Sets `version` to the builder
-    pub fn with_version(mut self, version: i64) -> Self {
+    pub fn with_version(mut self, version: Version) -> Self {
         self.version = DeltaVersion::Version(version);
         self
     }
@@ -366,8 +378,6 @@ fn resolve_uri_type(table_uri: impl AsRef<str>) -> DeltaResult<UriType> {
 ///  * A valid URL, which will be parsed and returned
 ///  * A path to a directory, which will be created and then converted to a URL.
 ///
-/// If it is a local path, it will be created if it doesn't exist.
-///
 /// Extra slashes will be removed from the end path as well.
 ///
 /// Parse a table URI to a URL without creating directories.
@@ -435,19 +445,6 @@ pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     // load bearing with [Url] and this helps ensure that a [Url] always meets our internal
     // expectations of path segments and join-ability.
     Ok(normalize_table_url(&url))
-}
-
-/// Validate that the given [PathBuf] does exist, otherwise return a
-/// [DeltaTableError::InvalidTableLocation]
-fn ensure_file_location_exists(path: PathBuf) -> DeltaResult<()> {
-    if !path.exists() {
-        let msg = format!(
-            "Local path \"{}\" does not exist or you don't have access!",
-            path.as_path().display(),
-        );
-        return Err(DeltaTableError::InvalidTableLocation(msg));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -705,5 +702,26 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn test_create_builder_from_non_existent_path() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let new_path = tmp_path.join("new_table");
+        assert!(!new_path.exists());
+
+        let builder_result =
+            DeltaTableBuilder::from_url(Url::from_directory_path(&new_path).unwrap());
+        assert!(
+            builder_result.is_ok(),
+            "Builder should be created successfully even if the path does not exist"
+        );
+
+        let builder = builder_result.unwrap();
+        assert_eq!(
+            builder.table_url.as_str(),
+            Url::from_directory_path(&new_path).unwrap().as_str()
+        );
     }
 }

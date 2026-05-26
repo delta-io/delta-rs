@@ -3,8 +3,8 @@ use crate::error::PythonError;
 use crate::utils::{delete_dir, rt, walk_tree, warn};
 use deltalake::DeltaTableBuilder;
 use deltalake::logstore::object_store::{
-    DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload, PutPayloadMut,
-    path::Path,
+    DynObjectStore, Error as ObjectStoreError, ListResult, MultipartUpload, ObjectStoreExt as _,
+    PutPayloadMut, path::Path,
 };
 use parking_lot::Mutex;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
@@ -23,7 +23,7 @@ pub(crate) struct FsConfig {
     pub(crate) options: HashMap<String, String>,
 }
 
-#[pyclass(subclass, module = "deltalake._internal")]
+#[pyclass(subclass, module = "deltalake._internal", from_py_object)]
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
@@ -165,7 +165,7 @@ impl DeltaFileSystemHandler {
                             ),
                         ]);
                         infos.push(to_file_info(
-                            meta.location.as_ref(),
+                            path.as_ref(),
                             &file_types.getattr("File")?,
                             &kwargs,
                         )?);
@@ -339,7 +339,7 @@ impl DeltaFileSystemHandler {
 
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
 // TODO add buffer to store data ...
-#[pyclass(weakref, module = "deltalake._internal")]
+#[pyclass(weakref, module = "deltalake._internal", skip_from_py_object)]
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,

@@ -17,6 +17,7 @@ pub(crate) trait LogicalPlanBuilderExt: Sized {
     fn with_column(self, name: &str, expr: Expr) -> Result<Self>;
     fn drop_columns(self, cols: impl IntoIterator<Item = impl ColumnReference>) -> Result<Self>;
     /// Validate all data produced by the plan coforms to the passed predicates.
+    #[allow(dead_code)]
     fn validate(self, validations: impl IntoIterator<Item = Expr>) -> Result<Self>;
 }
 
@@ -61,9 +62,8 @@ impl LogicalPlanBuilderExt for LogicalPlanBuilder {
         let projection = self
             .schema()
             .iter()
-            .filter_map(|(_, f)| {
-                (!away_names.contains(f.name())).then(|| col(Column::from_name(f.col_name())))
-            })
+            .filter(|(_, f)| !away_names.contains(f.name()))
+            .map(|(_, f)| col(Column::from_name(f.col_name())))
             .collect_vec();
         self.project(projection)
     }

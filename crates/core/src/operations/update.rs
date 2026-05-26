@@ -11,7 +11,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = UpdateBuilder::new(table.object_store(), table.state)
 //!     .with_predicate(col("col1").eq(lit(1)))
 //!     .with_update("value", col("value") + lit(20))
@@ -28,12 +28,14 @@ use datafusion::{
     error::DataFusionError,
     execution::context::SessionState,
     logical_expr::{
-        Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
+        ExprSchemable as _, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+        case, cast, col, lit, try_cast, when,
     },
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -49,6 +51,7 @@ use super::{
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
 };
+use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
@@ -279,6 +282,7 @@ async fn execute(
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
     operation_id: Uuid,
+    safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -303,11 +307,12 @@ async fn execute(
         .try_collect()?;
 
     let current_metadata = snapshot.metadata();
-    let table_partition_cols = current_metadata.partition_columns().clone();
+    let table_partition_cols = current_metadata.partition_columns().to_vec();
 
     let scan_start = Instant::now();
 
-    let maybe_scan_plan = scan_files_where_matches(session, snapshot, predicate).await?;
+    let maybe_scan_plan =
+        scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
@@ -342,10 +347,20 @@ async fn execute(
         .into_iter()
         .map(|field| {
             let expr = match updates.get(field.name()) {
-                Some(expr) => case(col(UPDATE_PREDICATE_COLNAME))
-                    .when(lit(true), expr.to_owned())
-                    .otherwise(col(Column::from_name(field.name())))?
-                    .alias(field.name()),
+                Some(expr) => {
+                    let target_type = field.data_type().clone();
+                    let update_expr = if expr.get_type(plan_with_metrics.schema())? == target_type {
+                        expr.to_owned()
+                    } else if safe_cast {
+                        try_cast(expr.to_owned(), target_type)
+                    } else {
+                        cast(expr.to_owned(), target_type)
+                    };
+                    case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), update_expr)
+                        .otherwise(col(Column::from_name(field.name())))?
+                        .alias(field.name())
+                }
                 None => col(Column::from_name(field.name())),
             };
             Ok::<_, DataFusionError>(expr)
@@ -365,9 +380,9 @@ async fn execute(
         Some(snapshot),
         session,
         physical_plan.clone(),
-        table_partition_cols.clone(),
+        table_partition_cols.to_vec(),
         log_store.object_store(Some(operation_id)).clone(),
-        Some(snapshot.table_properties().target_file_size().get() as usize),
+        Some(snapshot.table_properties().target_file_size()),
         None,
         writer_properties.clone(),
         writer_stats_config.clone(),
@@ -415,9 +430,9 @@ async fn execute(
                     Some(snapshot),
                     session,
                     cdc_exec,
-                    table_partition_cols,
+                    table_partition_cols.to_vec(),
                     log_store.object_store(Some(operation_id)),
-                    Some(snapshot.table_properties().target_file_size().get() as usize),
+                    Some(snapshot.table_properties().target_file_size()),
                     None,
                     writer_properties,
                     writer_stats_config,
@@ -444,6 +459,9 @@ impl std::future::IntoFuture for UpdateBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(unsupported_column_mapping_write("UPDATE"));
+            }
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
@@ -460,7 +478,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                     cdc: false,
                 },
             )?;
-            update_datafusion_session(&this.log_store, &state, Some(operation_id))?;
+            update_datafusion_session(&state, &this.log_store, Some(operation_id))?;
             state.ensure_log_store_registered(this.log_store.as_ref())?;
 
             if this.updates.is_empty() {
@@ -494,6 +512,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 &state,
                 this.writer_properties,
                 operation_id,
+                this.safe_cast,
             )
             .await?;
 

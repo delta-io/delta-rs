@@ -595,6 +595,33 @@ async fn test_expected_failures() {
 }
 
 #[tokio::test]
+async fn test_update_safe_cast_converts_invalid_values_to_null() {
+    let table = prepare_values_table().await;
+    let (table, metrics) = table
+        .update()
+        .with_safe_cast(true)
+        .with_update("value", lit("a string"))
+        .await
+        .unwrap();
+
+    assert_eq!(metrics.num_updated_rows, 5);
+
+    let expected = [
+        "+-------+",
+        "| value |",
+        "+-------+",
+        "|       |",
+        "|       |",
+        "|       |",
+        "|       |",
+        "|       |",
+        "+-------+",
+    ];
+    let actual = get_data(&table).await;
+    assert_batches_sorted_eq!(&expected, &actual);
+}
+
+#[tokio::test]
 async fn test_update_with_array() {
     let schema = StructType::try_new(vec![
         StructField::new(
@@ -702,7 +729,7 @@ async fn test_update_with_array_that_must_be_coerced() {
         ],
     )
     .expect("Failed to create record batch");
-    let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
+    let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&batch));
 
     let table = DeltaTable::new_in_memory()
         .create()

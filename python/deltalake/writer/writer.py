@@ -37,8 +37,8 @@ def write_deltalake(
     storage_options: dict[str, str] | None = ...,
     target_file_size: int | None = ...,
     writer_properties: WriterProperties = ...,
-    post_commithook_properties: PostCommitHookProperties | None = ...,
     commit_properties: CommitProperties | None = ...,
+    post_commithook_properties: PostCommitHookProperties | None = ...,
 ) -> None: ...
 
 
@@ -57,8 +57,8 @@ def write_deltalake(
     predicate: str | None = ...,
     target_file_size: int | None = ...,
     writer_properties: WriterProperties = ...,
-    post_commithook_properties: PostCommitHookProperties | None = ...,
     commit_properties: CommitProperties | None = ...,
+    post_commithook_properties: PostCommitHookProperties | None = ...,
 ) -> None: ...
 
 
@@ -76,8 +76,8 @@ def write_deltalake(
     predicate: str | None = None,
     target_file_size: int | None = None,
     writer_properties: WriterProperties | None = None,
-    post_commithook_properties: PostCommitHookProperties | None = None,
     commit_properties: CommitProperties | None = None,
+    post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -87,7 +87,9 @@ def write_deltalake(
         table_or_uri: URI of a table or a DeltaTable object.
         data: Data to write. If passing iterable, the schema must also be given.
         partition_by: List of columns to partition the table by. Only required
-            when creating a new table.
+            when creating a new table, or when replacing partition columns during a
+            full table ``mode="overwrite"`` with ``schema_mode="overwrite"`` and no
+            ``predicate``.
         mode: How to handle existing data. Default is to error if table already exists.
             If 'append', will add new data.
             If 'overwrite', will replace table with new data.
@@ -96,12 +98,12 @@ def write_deltalake(
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         schema_mode: If set to "overwrite", allows replacing the schema of the table. Set to "merge" to merge with existing schema.
-        storage_options: options passed to the native delta filesystem.
+        storage_options: Options passed to the native delta filesystem.
         predicate: When using `Overwrite` mode, replace data that matches a predicate.'
         target_file_size: Override for target file size for data files written to the delta table. If not passed, it's taken from `delta.targetFileSize`.
         writer_properties: Pass writer properties to the Rust parquet writer.
-        post_commithook_properties: properties for the post commit hook. If None, default values are used.
         commit_properties: properties of the transaction commit. If None, default values are used.
+        post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
     if table is not None:
@@ -115,7 +117,7 @@ def write_deltalake(
         return
 
     if isinstance(data, Sequence):
-        data = RecordBatchReader.from_batches(data[0], data)  # type: ignore
+        data = RecordBatchReader.from_batches(data[0].schema, data)  # type: ignore
     else:
         data = RecordBatchReader.from_arrow(data)
 

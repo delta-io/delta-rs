@@ -2,7 +2,7 @@
 //!
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::stream::BoxStream;
-use futures::{Future, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
@@ -57,7 +57,7 @@ pub type SendableRBStream = Pin<Box<dyn Stream<Item = DeltaResult<RecordBatch>> 
 ///
 /// Note that this is similar to  [`ReceiverStream` from tokio-stream], with the differences being:
 ///
-/// 1. Methods to bound and "detach"  tasks (`spawn()` and `spawn_blocking()`).
+/// 1. Methods to bound and "detach" tasks (`spawn_blocking()`).
 ///
 /// 2. Propagates panics, whereas the `tokio` version doesn't propagate panics to the receiver.
 ///
@@ -85,17 +85,6 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
     /// Get a handle for sending data to the output
     pub fn tx(&self) -> Sender<DeltaResult<O>> {
         self.tx.clone()
-    }
-
-    /// Spawn task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
-    #[allow(unused)]
-    pub fn spawn<F>(&mut self, task: F)
-    where
-        F: Future<Output = DeltaResult<()>>,
-        F: Send + 'static,
-    {
-        self.join_set.spawn(task);
     }
 
     /// Spawn a blocking task that will be aborted if this builder (or the stream

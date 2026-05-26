@@ -8,7 +8,9 @@ use crate::DeltaTableError;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction};
+use crate::kernel::{
+    Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction, Version,
+};
 use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -213,16 +215,14 @@ impl<'a> TransactionInfo<'a> {
                 })?,
             ))
         } else {
-            Ok(Either::Right(
-                self.read_snapshot.iter().map(|f| f.add_action()),
-            ))
+            Ok(Either::Right(self.read_snapshot.iter().map(|f| f.to_add())))
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.add_action()))
+        Ok(self.read_snapshot.iter().map(|f| f.to_add()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -241,8 +241,8 @@ pub(crate) struct WinningCommitSummary {
 impl WinningCommitSummary {
     pub async fn try_new(
         log_store: &dyn LogStore,
-        read_version: i64,
-        winning_commit_version: i64,
+        read_version: Version,
+        winning_commit_version: Version,
     ) -> DeltaResult<Self> {
         // NOTE using assert, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);
@@ -480,12 +480,13 @@ impl<'a> ConflictChecker<'a> {
                     self.txn_info.read_whole_table(),
                 ) {
                     let arrow_schema = self.txn_info.read_snapshot.read_schema();
-                    let partition_columns = &self
+                    let partition_columns = self
                         .txn_info
                         .read_snapshot
                         .metadata()
-                        .partition_columns();
-                    AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
+                        .partition_columns()
+                        .to_vec();
+                    AddContainer::new(&added_files_to_check, &partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),

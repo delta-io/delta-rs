@@ -14,7 +14,7 @@ from deltalake._internal import (
     shutdown_tracing as _shutdown_tracing,
 )
 from deltalake.query import QueryBuilder
-from deltalake.schema import DataType, Field, Schema
+from deltalake.schema import DataType, Field, Schema, VariantType
 from deltalake.table import DeltaTable, Metadata
 from deltalake.transaction import CommitProperties, PostCommitHookProperties
 from deltalake.writer import (
@@ -90,6 +90,7 @@ __all__ = [
     "Schema",
     "TableFeatures",
     "Transaction",
+    "VariantType",
     "WriterProperties",
     "__version__",
     "convert_to_deltalake",

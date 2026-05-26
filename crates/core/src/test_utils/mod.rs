@@ -2,9 +2,17 @@ mod factories;
 
 #[cfg(all(test, feature = "datafusion"))]
 pub(crate) mod datafusion;
+#[cfg(test)]
+pub(crate) mod object_store;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
+#[cfg(test)]
+use delta_kernel::{
+    actions::{Metadata, Protocol},
+    schema::{ColumnMetadataKey, DataType, MetadataValue, StructField, StructType},
+    table_configuration::TableConfiguration,
+};
 use url::Url;
 
 pub use self::factories::*;
@@ -29,6 +37,59 @@ pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
     DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
 }
 
+#[cfg(test)]
+pub(crate) fn build_test_table_configuration(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    configuration: HashMap<String, String>,
+) -> TableConfiguration {
+    let metadata = Metadata::try_new(
+        None,
+        None,
+        std::sync::Arc::new(schema),
+        partition_columns,
+        0,
+        configuration,
+    )
+    .unwrap();
+    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+        "minReaderVersion": 2,
+        "minWriterVersion": 5,
+    }))
+    .unwrap();
+    TableConfiguration::try_new(
+        metadata,
+        protocol,
+        Url::parse("file:///tmp/table").unwrap(),
+        0,
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field_with_type(
+    name: &str,
+    physical_name: &str,
+    id: i64,
+    data_type: DataType,
+) -> StructField {
+    StructField::nullable(name, data_type).with_metadata([
+        (
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            MetadataValue::Number(id),
+        ),
+        (
+            ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+            MetadataValue::String(physical_name.to_string()),
+        ),
+    ])
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field(name: &str, physical_name: &str, id: i64) -> StructField {
+    column_mapping_test_field_with_type(name, physical_name, id, DataType::INTEGER)
+}
+
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
 #[cfg(test)]
 pub(crate) async fn file_paths_from(
@@ -49,6 +110,7 @@ pub(crate) async fn file_paths_from(
 pub enum TestTables {
     Simple,
     SimpleWithCheckpoint,
+    SparkVariantCheckpoint,
     SimpleCommit,
     Golden,
     Delta0_8_0Partitioned,
@@ -65,6 +127,7 @@ impl TestTables {
         match self {
             Self::Simple => data_path.join("simple_table"),
             Self::SimpleWithCheckpoint => data_path.join("simple_table_with_checkpoint"),
+            Self::SparkVariantCheckpoint => data_path.join("spark-variant-checkpoint"),
             Self::SimpleCommit => data_path.join("simple_commit"),
             Self::Golden => data_path.join("golden/data-reader-array-primitives"),
             Self::Delta0_8_0Partitioned => data_path.join("delta-0.8.0-partitioned"),
@@ -81,6 +144,7 @@ impl TestTables {
         match self {
             Self::Simple => "simple".into(),
             Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
+            Self::SparkVariantCheckpoint => "spark-variant-checkpoint".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
@@ -186,6 +250,58 @@ macro_rules! assert_batches_sorted_eq {
 }
 
 pub use assert_batches_sorted_eq;
+
+/// Build a single add action fixture with default metadata values for tests.
+#[cfg(test)]
+pub(crate) fn make_test_add(
+    path: impl Into<String>,
+    partitions: &[(&str, &str)],
+    modification_time: i64,
+) -> crate::kernel::Add {
+    use crate::kernel::Add;
+
+    Add {
+        path: path.into(),
+        partition_values: partitions
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), Some((*v).to_string())))
+            .collect(),
+        size: 0,
+        modification_time,
+        data_change: true,
+        stats: None,
+        tags: None,
+        deletion_vector: None,
+        base_row_id: None,
+        default_row_commit_version: None,
+        clustering_provider: None,
+    }
+}
+
+/// Build add actions for a large partitioned fixture with alternating partition values.
+#[cfg(all(test, feature = "datafusion"))]
+pub(crate) fn multibatch_add_actions_for_partition(
+    action_count: usize,
+    partition_column: &str,
+    even_value: &str,
+    odd_value: &str,
+) -> Vec<crate::kernel::Action> {
+    use chrono::Utc;
+
+    use crate::kernel::Action;
+
+    let now_ms = Utc::now().timestamp_millis();
+    (0..action_count)
+        .map(|idx| {
+            let partition_value = if idx % 2 == 0 { even_value } else { odd_value };
+            Action::Add(make_test_add(
+                format!("{partition_column}={partition_value}/file-{idx:05}.parquet"),
+                &[(partition_column, partition_value)],
+                now_ms,
+            ))
+        })
+        .collect::<Vec<_>>()
+}
 
 #[cfg(test)]
 mod tests {

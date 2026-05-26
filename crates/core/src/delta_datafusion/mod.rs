@@ -46,46 +46,48 @@ use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::{ExecutionPlan, Statistics};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::table_provider::DeltaScanWire;
+use crate::delta_datafusion::table_provider::{DeltaScan, DeltaScanWire};
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
-use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options};
 
 pub(crate) use self::session::DeltaSessionExt;
 pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
-    create_session,
+    create_session, create_session_state_with_spill_config,
 };
-pub use self::table_provider::next::DeltaScan as DeltaScanNext;
+pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
 };
 pub(crate) use find_files::*;
+pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
-    DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
-    next::DeltaScanExec,
+    DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
 };
 pub(crate) use table_provider::{
-    DeltaScanBuilder, next::FILE_ID_COLUMN_DEFAULT, update_datafusion_session,
+    next::FILE_ID_COLUMN_DEFAULT, resolve_file_column_name, update_datafusion_session,
 };
 
 pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 
+#[doc(hidden)]
+pub mod bench_support;
 pub mod cdf;
 mod data_validation;
 pub mod engine;
 pub mod expr;
+mod file_id;
 mod find_files;
 pub mod logical;
 pub mod physical;
@@ -168,7 +170,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -182,7 +184,7 @@ impl DataFusionMixins for LogDataHandler<'_> {
         _arrow_schema(
             Arc::new(
                 self.table_configuration()
-                    .schema()
+                    .logical_schema()
                     .as_ref()
                     .try_into_arrow()
                     .unwrap(),
@@ -271,16 +273,12 @@ pub(crate) fn files_matching_predicate<'a>(
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
             |(file, keep_file)| {
-                if keep_file {
-                    Some(file.add_action())
-                } else {
-                    None
-                }
+                if keep_file { Some(file.to_add()) } else { None }
             },
         )))
     } else {
         Ok(Either::Right(
-            log_data.into_iter().map(|file| file.add_action()),
+            log_data.into_iter().map(|file| file.to_add()),
         ))
     }
 }
@@ -292,19 +290,12 @@ pub(crate) fn get_path_column<'a>(
     let err = || DeltaTableError::Generic("Unable to obtain Delta-rs path column".to_string());
     batch
         .column_by_name(path_column)
-        .unwrap()
+        .ok_or_else(err)?
         .as_any()
         .downcast_ref::<DictionaryArray<UInt16Type>>()
         .ok_or_else(err)?
         .downcast_dict::<StringArray>()
         .ok_or_else(err)
-}
-
-impl DeltaTableState {
-    /// Provide table level statistics to Datafusion
-    pub fn datafusion_table_statistics(&self) -> Option<Statistics> {
-        self.snapshot.log_data().statistics()
-    }
 }
 
 pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
@@ -445,10 +436,17 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-/// A codec for deltalake physical plans
+/// Legacy codec for serialized plans that still contain the retired physical
+/// [`DeltaScan`] wrapper.
+#[deprecated(
+    note = "DeltaPhysicalCodec only supports the retired physical DeltaScan wrapper. \
+            Use DeltaLogicalCodec for table-provider serialization until a DeltaScanExec \
+            physical codec is available."
+)]
 #[derive(Debug)]
 pub struct DeltaPhysicalCodec {}
 
+#[allow(deprecated)]
 impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_decode(
         &self,
@@ -458,12 +456,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
-        let delta_scan = DeltaScan::new(
-            &wire.table_url,
-            wire.config,
-            (*inputs)[0].clone(),
-            wire.logical_schema,
-        );
+        let delta_scan = wire.into_delta_scan((*inputs)[0].clone());
         Ok(Arc::new(delta_scan))
     }
 
@@ -475,11 +468,12 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         let delta_scan = node
             .as_any()
             .downcast_ref::<DeltaScan>()
-            .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
+            .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
         let wire = DeltaScanWire::from(delta_scan);
-        serde_json::to_writer(buf, &wire)
-            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
+        serde_json::to_writer(buf, &wire).map_err(|_| {
+            DataFusionError::Internal("Unable to encode legacy delta scan!".to_string())
+        })?;
         Ok(())
     }
 }
@@ -540,7 +534,7 @@ pub struct DeltaTableFactory {}
 impl TableProviderFactory for DeltaTableFactory {
     async fn create(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let table = if cmd.options.is_empty() {
@@ -550,7 +544,22 @@ impl TableProviderFactory for DeltaTableFactory {
             let table_url = ensure_table_uri(&cmd.to_owned().location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
-        Ok(table.table_provider().await?)
+        let table_uri = table.log_store().root_url().clone();
+        let (session_state, _) = resolve_session_state(
+            Some(ctx),
+            SessionFallbackPolicy::DeriveFromTrait,
+            || create_session().state(),
+            SessionResolveContext {
+                operation: "DeltaTableFactory::create",
+                table_uri: Some(&table_uri),
+                cdc: false,
+            },
+        )?;
+
+        Ok(table
+            .table_provider()
+            .with_session(Arc::new(session_state))
+            .await?)
     }
 }
 
@@ -601,42 +610,31 @@ impl From<Column> for DeltaColumn {
 #[cfg(test)]
 mod tests {
     use crate::DeltaTable;
-    use crate::logstore::ObjectStoreRef;
-    use crate::logstore::default_logstore::DefaultLogStore;
     use crate::operations::write::SchemaMode;
-    use crate::test_utils::open_fs_path;
+    use crate::test_utils::{
+        object_store::{
+            RecordedObjectStoreOperation as ObjectStoreOperation, RecordedPathKind as PathKind,
+            drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+        },
+        open_fs_path,
+    };
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
-    use arrow_array::cast::AsArray;
-    use bytes::Bytes;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::config::TableParquetOptions;
-    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
-    use datafusion::prelude::{SessionConfig, col};
-    use datafusion_datasource::file::FileSource as _;
+    use datafusion::prelude::SessionConfig;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
-    use delta_kernel::path::{LogPathFileType, ParsedLogPath};
     use delta_kernel::schema::ArrayType;
-    use futures::{StreamExt, stream::BoxStream};
-    use object_store::ObjectMeta;
-    use object_store::{
-        GetOptions, GetResult, ListResult, MultipartUpload, ObjectStore, PutMultipartOptions,
-        PutOptions, PutPayload, PutResult, path::Path,
-    };
+    use futures::{StreamExt, TryStreamExt};
+    use object_store::ObjectStoreExt as _;
     use serde_json::json;
-    use std::fmt::{self, Debug, Display, Formatter};
     use std::ops::Range;
-    use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
     use url::Url;
 
     use super::*;
-
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -712,6 +710,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn roundtrip_test_delta_exec_plan() {
         let ctx = SessionContext::new();
         let codec = DeltaPhysicalCodec {};
@@ -735,6 +734,84 @@ mod tests {
             .try_into_physical_plan(&task_ctx, &codec)
             .expect("from proto");
         assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_preserves_file_selection() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let table_root = snapshot
+            .scan_builder()
+            .build()
+            .unwrap()
+            .table_root()
+            .clone();
+        let selected_file_ids: Vec<String> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(selected_file_ids.len(), 1);
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(
+                FileSelection::new(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+            );
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaScanNext>()
+            .unwrap();
+
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let decoded_file_ids = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.as_array())
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        let decoded_policy = serialized
+            .get("file_selection")
+            .and_then(|value| value.get("missing_file_policy"))
+            .and_then(|value| value.as_str())
+            .unwrap();
+
+        assert_eq!(decoded_file_ids, selected_file_ids);
+        assert_eq!(decoded_policy, "Ignore");
     }
 
     #[tokio::test]
@@ -865,16 +942,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select ID, moDified, vaLue from test")
@@ -958,16 +1028,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx.sql("select col_1, col_2 from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1015,19 +1078,12 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
 
         let mut cfg = SessionConfig::default();
         cfg.options_mut().execution.parquet.pushdown_filters = true;
         let ctx = SessionContext::new_with_config(cfg);
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1, col_2 from test WHERE col_1 = 'A'")
@@ -1112,16 +1168,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1.col_1a, col_1.col_1b from test")
@@ -1188,129 +1237,6 @@ mod tests {
         df.collect().await.unwrap();
     }
 
-    #[tokio::test]
-    async fn test_delta_scan_builder_no_scan_config() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan = DeltaScanBuilder::new(
-            table.snapshot().unwrap().snapshot(),
-            table.log_store(),
-            &state,
-        )
-        .with_filter(Some(col("a").eq(lit("s"))))
-        .build()
-        .await
-        .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_builder_scan_config_disable_pushdown() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan = DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-            .with_filter(Some(col("a").eq(lit("s"))))
-            .with_scan_config(
-                DeltaScanConfigBuilder::new()
-                    .with_parquet_pushdown(false)
-                    .build(snapshot.snapshot())
-                    .unwrap(),
-            )
-            .build()
-            .await
-            .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert!(visitor.predicate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_applies_parquet_options() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-
-        let mut config = SessionConfig::default();
-        config.options_mut().execution.parquet.pushdown_filters = true;
-        let ctx = SessionContext::new_with_config(config);
-        let state = ctx.state();
-
-        let scan = DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-            .build()
-            .await
-            .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(ctx.copied_table_options().parquet, visitor.options.unwrap());
-    }
-
-    /// Extracts fields from the parquet scan
-    #[derive(Default)]
-    struct ParquetVisitor {
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        options: Option<TableParquetOptions>,
-    }
-
-    impl ExecutionPlanVisitor for ParquetVisitor {
-        type Error = DataFusionError;
-
-        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-                return Ok(true);
-            };
-
-            let Some(scan_config) = datasource_exec
-                .data_source()
-                .as_any()
-                .downcast_ref::<FileScanConfig>()
-            else {
-                return Ok(true);
-            };
-
-            if let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-            {
-                self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.filter();
-            }
-
-            Ok(true)
-        }
-    }
-
     // Run a query that filters out all files and sorts.
     // Verify that it returns an empty set of rows without panicking.
     //
@@ -1349,21 +1275,10 @@ mod tests {
             .build(table.snapshot().unwrap().snapshot())
             .unwrap();
 
-        let (object_store, mut operations) =
-            RecordingObjectStore::new(table.log_store().object_store(None));
-        // this uses an in memory store pointing at root...
-        let both_store = Arc::new(object_store);
-        let log_store = DefaultLogStore::new(
-            both_store.clone(),
-            both_store,
-            table.log_store().config().clone(),
-        );
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            Arc::new(log_store),
-            config,
-        )
-        .unwrap();
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let provider = DeltaScanNext::new(table.snapshot().unwrap().snapshot().clone(), config)
+            .unwrap()
+            .with_log_store(log_store.clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
         let state = ctx.state();
@@ -1378,17 +1293,69 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert_eq!(1, batch.num_columns());
         assert_eq!(1, batch.num_rows());
-        let small = batch.column_by_name("small").unwrap().as_string::<i32>();
-        assert_eq!("a", small.iter().next().unwrap().unwrap());
+        let small = ScalarValue::try_from_array(batch.column_by_name("small").unwrap(), 0).unwrap();
+        assert_eq!("a", small.to_string());
 
-        let expected = vec![
-            ObjectStoreOperation::Get(LocationType::Commit),
-            ObjectStoreOperation::GetRange(LocationType::Data, 957..965),
-            ObjectStoreOperation::GetRange(LocationType::Data, 326..957),
-        ];
-        let mut actual = Vec::new();
-        operations.recv_many(&mut actual, 3).await;
-        assert_eq!(expected, actual);
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(1, files.len());
+        let object_store = table.object_store();
+        let file_meta = object_store.head(&files[0]).await.unwrap();
+        let file_reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+            object_store,
+            file_meta.location.clone(),
+        )
+        .with_file_size(file_meta.size);
+        let parquet_metadata =
+            parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder::new(file_reader)
+                .await
+                .unwrap()
+                .metadata()
+                .as_ref()
+                .clone();
+        let (small_start, small_len) = parquet_metadata.row_group(0).column(0).byte_range();
+        let small_range = small_start..small_start + small_len;
+        let (large_start, large_len) = parquet_metadata.row_group(0).column(1).byte_range();
+        let large_range = large_start..large_start + large_len;
+
+        let actual = drain_recorded_ops(&mut operations).await;
+
+        let data_ranges = actual
+            .iter()
+            .flat_map(|operation| match operation {
+                ObjectStoreOperation::GetRange(PathKind::Data, range) => vec![range.clone()],
+                ObjectStoreOperation::GetRanges(PathKind::Data, ranges) => ranges.clone(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+
+        let overlaps = |left: &Range<u64>, right: &Range<u64>| {
+            left.start < right.end && right.start < left.end
+        };
+
+        assert!(
+            !data_ranges.is_empty(),
+            "expected ranged parquet data reads, saw {actual:?}"
+        );
+        assert!(
+            data_ranges
+                .iter()
+                .any(|range| overlaps(range, &small_range)),
+            "expected selected column chunk {small_range:?} to be read, saw {actual:?}"
+        );
+        assert!(
+            data_ranges
+                .iter()
+                .all(|range| !overlaps(range, &large_range)),
+            "expected unselected column chunk {large_range:?} to be pruned, saw {actual:?}"
+        );
+        assert!(
+            !actual.iter().any(|operation| matches!(
+                operation,
+                ObjectStoreOperation::Get(PathKind::Data)
+                    | ObjectStoreOperation::GetOpts(PathKind::Data)
+            )),
+            "expected no full data file reads, saw {actual:?}"
+        );
     }
 
     #[tokio::test]
@@ -1434,197 +1401,5 @@ mod tests {
 
         let _ = df.collect().await?;
         Ok(())
-    }
-
-    /// Records operations made by the inner object store on a channel obtained at construction
-    struct RecordingObjectStore {
-        inner: ObjectStoreRef,
-        operations: UnboundedSender<ObjectStoreOperation>,
-    }
-
-    impl RecordingObjectStore {
-        /// Returns an object store and a channel recording all operations made by the inner object store
-        fn new(inner: ObjectStoreRef) -> (Self, UnboundedReceiver<ObjectStoreOperation>) {
-            let (operations, operations_receiver) = unbounded_channel();
-            (Self { inner, operations }, operations_receiver)
-        }
-    }
-
-    impl Display for RecordingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            Display::fmt(&self.inner, f)
-        }
-    }
-
-    impl Debug for RecordingObjectStore {
-        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-            Debug::fmt(&self.inner, f)
-        }
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum ObjectStoreOperation {
-        GetRanges(LocationType, Vec<Range<u64>>),
-        GetRange(LocationType, Range<u64>),
-        GetOpts(LocationType),
-        Get(LocationType),
-    }
-
-    #[derive(Debug, PartialEq)]
-    enum LocationType {
-        Data,
-        Commit,
-    }
-
-    impl From<&Path> for LocationType {
-        fn from(value: &Path) -> Self {
-            let dummy_url = Url::parse("dummy:///").unwrap();
-            let parsed = ParsedLogPath::try_from(dummy_url.join(value.as_ref()).unwrap()).unwrap();
-            if let Some(parsed) = parsed
-                && matches!(parsed.file_type, LogPathFileType::Commit)
-            {
-                return LocationType::Commit;
-            }
-            if value.to_string().starts_with("part-") {
-                LocationType::Data
-            } else {
-                panic!("Unknown location type: {value:?}")
-            }
-        }
-    }
-
-    // Currently only read operations are recorded. Extend as necessary.
-    #[async_trait::async_trait]
-    impl ObjectStore for RecordingObjectStore {
-        async fn put(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-        ) -> object_store::Result<PutResult> {
-            self.inner.put(location, payload).await
-        }
-
-        async fn put_opts(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-            opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            self.inner.put_opts(location, payload, opts).await
-        }
-
-        async fn put_multipart(
-            &self,
-            location: &Path,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart(location).await
-        }
-
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
-            opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            self.inner.put_multipart_opts(location, opts).await
-        }
-
-        async fn get(&self, location: &Path) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::Get(location.into()))
-                .unwrap();
-            self.inner.get(location).await
-        }
-
-        async fn get_opts(
-            &self,
-            location: &Path,
-            options: GetOptions,
-        ) -> object_store::Result<GetResult> {
-            self.operations
-                .send(ObjectStoreOperation::GetOpts(location.into()))
-                .unwrap();
-            self.inner.get_opts(location, options).await
-        }
-
-        async fn get_range(
-            &self,
-            location: &Path,
-            range: Range<u64>,
-        ) -> object_store::Result<Bytes> {
-            self.operations
-                .send(ObjectStoreOperation::GetRange(
-                    location.into(),
-                    range.clone(),
-                ))
-                .unwrap();
-            self.inner.get_range(location, range).await
-        }
-
-        async fn get_ranges(
-            &self,
-            location: &Path,
-            ranges: &[Range<u64>],
-        ) -> object_store::Result<Vec<Bytes>> {
-            self.operations
-                .send(ObjectStoreOperation::GetRanges(
-                    location.into(),
-                    ranges.to_vec(),
-                ))
-                .unwrap();
-            self.inner.get_ranges(location, ranges).await
-        }
-
-        async fn head(&self, location: &Path) -> object_store::Result<ObjectMeta> {
-            self.inner.head(location).await
-        }
-
-        async fn delete(&self, location: &Path) -> object_store::Result<()> {
-            self.inner.delete(location).await
-        }
-
-        fn delete_stream<'a>(
-            &'a self,
-            locations: BoxStream<'a, object_store::Result<Path>>,
-        ) -> BoxStream<'a, object_store::Result<Path>> {
-            self.inner.delete_stream(locations)
-        }
-
-        fn list(
-            &self,
-            prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list(prefix)
-        }
-
-        fn list_with_offset(
-            &self,
-            prefix: Option<&Path>,
-            offset: &Path,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-            self.inner.list_with_offset(prefix, offset)
-        }
-
-        async fn list_with_delimiter(
-            &self,
-            prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
-            self.inner.list_with_delimiter(prefix).await
-        }
-
-        async fn copy(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy(from, to).await
-        }
-
-        async fn rename(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename(from, to).await
-        }
-
-        async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.copy_if_not_exists(from, to).await
-        }
-
-        async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
-            self.inner.rename_if_not_exists(from, to).await
-        }
     }
 }

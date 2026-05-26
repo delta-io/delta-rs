@@ -14,6 +14,7 @@ from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
 from deltalake import DeltaTable, WriterProperties, write_deltalake
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -51,9 +52,16 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
         sleep(spacing)
 
 
+def _s3_bucket_name(worker_id: str) -> str:
+    if worker_id == "master":
+        return "deltars"
+    return f"deltars-{worker_id}"
+
+
 @pytest.fixture(scope="session")
-def s3_localstack_creds():
+def s3_localstack_creds(worker_id: str):
     endpoint_url = "http://localhost:4566"
+    bucket_name = _s3_bucket_name(worker_id)
 
     config = dict(
         AWS_REGION="us-east-1",
@@ -71,7 +79,7 @@ def s3_localstack_creds():
             "s3api",
             "create-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -81,7 +89,7 @@ def s3_localstack_creds():
             "sync",
             "--quiet",
             "../crates/test/tests/data/simple_table",
-            "s3://deltars/simple",
+            f"s3://{bucket_name}/simple",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -104,7 +112,7 @@ def s3_localstack_creds():
             "rm",
             "--quiet",
             "--recursive",
-            "s3://deltars",
+            f"s3://{bucket_name}",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -113,7 +121,7 @@ def s3_localstack_creds():
             "s3api",
             "delete-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -131,9 +139,26 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
 
 
 @pytest.fixture(scope="session")
+def s3_localstack_bucket_name(worker_id: str):
+    return _s3_bucket_name(worker_id)
+
+
+@pytest.fixture()
+def s3_localstack_bucket_root_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}"
+
+
+@pytest.fixture()
+def s3_localstack_simple_table_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}/simple"
+
+
+@pytest.fixture(scope="session")
 def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
+    import azure.core
+
     account_name = "devstoreaccount1"
     config = dict(
         AZURE_STORAGE_ACCOUNT_NAME=account_name,
@@ -154,14 +179,21 @@ def azurite_creds():
     )
     env["AZURE_STORAGE_CONNECTION_STRING"] = conn_str
     wait_till_host_is_available(config["AZURE_STORAGE_ENDPOINT"])
+    container = None
     try:
         blob_client = blob.BlobServiceClient.from_connection_string(conn_str=conn_str)
+        print(blob_client)
         container = blob_client.create_container(
             name=config["AZURE_STORAGE_CONTAINER_NAME"]
         )
+        print(f"Container provisioned: {container}")
+        yield config
+    except azure.core.exceptions.ResourceExistsError:
+        # The container is already created, meh
         yield config
     finally:
-        container.delete_container()
+        if container:
+            container.delete_container()
 
 
 @pytest.fixture()
@@ -205,6 +237,12 @@ def sample_data_pyarrow() -> "pa.Table":
     nrows = 5
     import pyarrow as pa
 
+    extras = {}
+    if _NANOSECOND_TIMESTAMPS:
+        extras["timestamp_ns"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
+        )
+
     return pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
@@ -231,6 +269,7 @@ def sample_data_pyarrow() -> "pa.Table":
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
+        | extras
     )
 
 

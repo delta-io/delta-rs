@@ -180,4 +180,4 @@ Delta Lake allows for file skipping, which is a powerful performance optimizatio
 
 Delta Lake also provides built-in utilities to colocate data in the same files like partitioning, Z Ordering, and compaction to improve file skipping.
 
-Delta Lake users need to know how to assess the tradeoffs of these techniques to optimize file skipping.  Users also need to understand the most frequent query patterns of their tables to best allow for file maximal file skipping.
+Delta Lake users need to know how to assess the tradeoffs of these techniques to optimize file skipping.  Users also need to understand the most frequent query patterns of their tables to best allow for maximal file skipping.

@@ -7,14 +7,13 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 
 use crate::DeltaTable;
-use crate::errors::DeltaTableError;
+use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, Add};
+use crate::kernel::{Action, Add, Version};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
-pub use stats::create_add;
 
 pub mod json;
 pub mod record_batch;
@@ -23,6 +22,22 @@ pub mod utils;
 
 #[cfg(test)]
 pub mod test_utils;
+
+pub(crate) fn ensure_legacy_writer_supports_table(
+    table: &DeltaTable,
+    operation: &str,
+) -> Result<(), DeltaTableError> {
+    if table
+        .snapshot()?
+        .table_config()
+        .column_mapping_mode
+        .is_some_and(|mode| mode != delta_kernel::table_features::ColumnMappingMode::None)
+    {
+        return Err(unsupported_column_mapping_write(operation));
+    }
+
+    Ok(())
+}
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
@@ -152,7 +167,10 @@ pub trait DeltaWriter<T> {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
+    async fn flush_and_commit(
+        &mut self,
+        table: &mut DeltaTable,
+    ) -> Result<Version, DeltaTableError> {
         let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
         flush_and_commit(adds, table, None).await
     }
@@ -163,9 +181,9 @@ pub(crate) async fn flush_and_commit(
     adds: Vec<Action>,
     table: &mut DeltaTable,
     commit_properties: Option<CommitProperties>,
-) -> Result<i64, DeltaTableError> {
+) -> Result<Version, DeltaTableError> {
     let snapshot = table.snapshot()?;
-    let partition_cols = snapshot.metadata().partition_columns().clone();
+    let partition_cols: Vec<String> = snapshot.metadata().partition_columns().into();
     let partition_by = if !partition_cols.is_empty() {
         Some(partition_cols)
     } else {

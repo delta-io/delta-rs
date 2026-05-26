@@ -7,6 +7,19 @@ permissions:
   issues: write
 
 jobs:
+  # When a comment is created on an issue, we can automatically remove the
+  # awaiting-feedback label to make it more clear which issues need to be
+  # revisited
+  remove-labels:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Remove awaiting-feedback label if present
+        run: |
+          gh issue edit \
+            ${{ github.event.issue_number }} \
+            --remove-label "awaiting-feedback" \
+            -R $${ github.repository }}
+
   issue_assign:
     runs-on: ubuntu-slim
     if: (!github.event.issue.pull_request) && github.event.comment.body == 'take'

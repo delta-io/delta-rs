@@ -54,12 +54,10 @@ impl DataFusionStorageHandler {
             RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-                None,
             )),
             RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioBackgroundExecutor::new()),
-                None,
             )),
             _ => panic!("unsupported runtime flavor"),
         };
@@ -99,6 +97,11 @@ impl StorageHandler for DataFusionStorageHandler {
     fn copy_atomic(&self, _from: &Url, _to: &Url) -> DeltaResult<()> {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("copy_atomic not implemented"))
+    }
+
+    fn put(&self, path: &Url, data: Bytes, overwrite: bool) -> DeltaResult<()> {
+        self.get_or_create(path.as_object_store_url())?
+            .put(path, data, overwrite)
     }
 
     fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
@@ -161,7 +164,7 @@ mod tests {
     use std::ops::Range;
 
     use datafusion::prelude::SessionContext;
-    use object_store::{ObjectStore, local::LocalFileSystem, path::Path};
+    use object_store::{ObjectStoreExt as _, local::LocalFileSystem, path::Path};
     use rstest::*;
 
     use crate::test_utils::TestResult;

@@ -437,12 +437,20 @@ impl UnityCatalogBuilder {
         Ok(self)
     }
 
-    /// Hydrate builder from key value pairs
+    /// Hydrate builder from key value pairs.
+    ///
+    /// Keys that are not recognised as Unity Catalog options are skipped, so
+    /// callers can pass a mixed config map that also contains object store
+    /// options (e.g. `aws_region`, `timeout`) destined for downstream
+    /// consumers. Use [`Self::try_with_option`] to fail on unknown keys.
     pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
     ) -> DataCatalogResult<Self> {
         for (key, value) in options {
+            if UnityCatalogConfigKey::from_str(key.as_ref()).is_err() {
+                continue;
+            }
             self = self.try_with_option(key, value)?;
         }
         Ok(self)
@@ -1143,13 +1151,38 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_config_key() {
+    fn test_try_with_options_skips_unknown_keys() {
+        // Regression for #4225: try_with_options must tolerate non-Unity
+        // keys so callers can pass a mixed map that also contains object
+        // store options destined for DeltaTableBuilder downstream.
         let mut storage_options = HashMap::new();
-        storage_options.insert("invalid_key".to_string(), "test_value".to_string());
+        storage_options.insert(
+            "databricks_host".to_string(),
+            "https://test.databricks.com".to_string(),
+        );
+        storage_options.insert("databricks_token".to_string(), "test_token".to_string());
+        storage_options.insert("aws_region".to_string(), "us-west-2".to_string());
+        storage_options.insert("timeout".to_string(), "30s".to_string());
 
+        let builder = UnityCatalogBuilder::builder()
+            .build()
+            .try_with_options(&storage_options)
+            .expect("non-Unity keys should be ignored, not error");
+
+        assert_eq!(
+            builder.workspace_url,
+            Some("https://test.databricks.com".to_string())
+        );
+        assert_eq!(builder.bearer_token, Some("test_token".to_string()));
+    }
+
+    #[test]
+    fn test_try_with_option_rejects_unknown_key() {
+        // try_with_option (singular) remains strict so single-key callers
+        // still surface typos.
         let result = UnityCatalogBuilder::builder()
             .build()
-            .try_with_options(&storage_options);
+            .try_with_option("invalid_key", "test_value");
         assert!(result.is_err());
     }
 

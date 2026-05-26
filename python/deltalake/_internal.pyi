@@ -12,7 +12,7 @@ from typing import (
 
 from arro3.core import DataType as ArrowDataType
 from arro3.core import Field as ArrowField
-from arro3.core import RecordBatch, RecordBatchReader
+from arro3.core import RecordBatchReader, Table
 from arro3.core import Schema as ArrowSchema
 from arro3.core.types import ArrowSchemaExportable
 
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         WriterProperties,
     )
 __version__: str
+_NANOSECOND_TIMESTAMPS: bool
 
 class TableFeatures(Enum):
     # Mapping of one column to another
@@ -56,6 +57,10 @@ class TableFeatures(Enum):
     DomainMetadata = "DomainMetadata"
     # Iceberg compatibility support
     IcebergCompatV1 = "IcebergCompatV1"
+    # Variant type support
+    VariantType = "VariantType"
+    # Preview variant type support
+    VariantTypePreview = "VariantTypePreview"
 
 class RawDeltaTableMetaData:
     id: int
@@ -75,6 +80,7 @@ class RawDeltaTable:
         storage_options: dict[str, str] | None,
         without_files: bool,
         log_buffer_size: int | None,
+        skip_stats: bool,
     ) -> None: ...
     @staticmethod
     def get_table_uri_from_data_catalog(
@@ -97,7 +103,7 @@ class RawDeltaTable:
     def protocol_versions(
         self,
     ) -> tuple[int, int, Optional[list[str]], Optional[list[str]]]: ...
-    def table_config(self) -> tuple[bool, int]: ...
+    def table_config(self) -> tuple[bool, int, bool]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
     def files(self, partition_filters: PartitionFilterType | None) -> list[str]: ...
@@ -169,16 +175,19 @@ class RawDeltaTable:
         properties: dict[str, str],
         raise_if_not_exists: bool,
         commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
     def set_table_name(
         self,
         name: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def set_table_description(
         self,
         description: str,
         commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None: ...
     def restore(
         self,
@@ -186,6 +195,7 @@ class RawDeltaTable:
         ignore_missing_files: bool,
         protocol_downgrade_allowed: bool,
         commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
     def history(self, limit: int | None) -> list[str]: ...
     def update_incremental(self) -> None: ...
@@ -195,7 +205,8 @@ class RawDeltaTable:
         partition_filters: FilterConjunctionType | None,
     ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
-    def get_add_actions(self, flatten: bool) -> RecordBatch: ...
+    def compact_logs(self, starting_version: int, ending_version: int) -> None: ...
+    def get_add_actions(self, flatten: bool) -> Table: ...
     def delete(
         self,
         predicate: str | None,
@@ -231,6 +242,8 @@ class RawDeltaTable:
         post_commithook_properties: PostCommitHookProperties | None,
         safe_cast: bool,
         streamed_exec: bool,
+        max_spill_size: int | None,
+        max_temp_directory_size: int | None,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
@@ -257,6 +270,7 @@ class RawDeltaTable:
         ending_timestamp: str | None = None,
         allow_out_of_range: bool = False,
     ) -> RecordBatchReader: ...
+    def deletion_vectors(self) -> RecordBatchReader: ...
     def transaction_version(self, app_id: str) -> int | None: ...
     def set_column_metadata(
         self,
@@ -265,7 +279,7 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
-    def __datafusion_table_provider__(self) -> Any: ...
+    def __datafusion_table_provider__(self, session: Any | None = None) -> Any: ...
     def write(
         self,
         data: RecordBatchReader,
@@ -367,7 +381,27 @@ class PyMergeBuilder:
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
-DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
+DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType", "VariantType"]
+
+class VariantType:
+    """The Delta VARIANT datatype, represented as the unshredded `variant` logical type."""
+
+    def __init__(self) -> None: ...
+    type: Literal["variant"]
+
+    def to_json(self) -> str: ...
+    @staticmethod
+    def from_json(json: str) -> VariantType: ...
+    def to_arrow(self) -> ArrowDataType: ...
+    @staticmethod
+    def from_arrow(type: ArrowSchemaExportable) -> VariantType: ...
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+        """
 
 class PrimitiveType:
     """A primitive datatype, such as a string or number.

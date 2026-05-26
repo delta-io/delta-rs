@@ -2,7 +2,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let builder = CdfLoadBuilder::new(table.log_store(), table.snapshot())
 //!     .with_starting_version(3);
 //!
@@ -31,7 +31,9 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{
+    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
+};
 use crate::logstore::{LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 
@@ -43,9 +45,9 @@ pub struct CdfLoadBuilder {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to read from
-    starting_version: Option<i64>,
+    starting_version: Option<Version>,
     /// Version to stop reading at
-    ending_version: Option<i64>,
+    ending_version: Option<Version>,
     /// Starting timestamp of commits to accept
     starting_timestamp: Option<DateTime<Utc>>,
     /// Ending timestamp of commits to accept
@@ -86,13 +88,13 @@ impl CdfLoadBuilder {
     }
 
     /// Version to start at (version 0 if not provided)
-    pub fn with_starting_version(mut self, starting_version: i64) -> Self {
+    pub fn with_starting_version(mut self, starting_version: Version) -> Self {
         self.starting_version = Some(starting_version);
         self
     }
 
     /// Version (inclusive) to end at
-    pub fn with_ending_version(mut self, ending_version: i64) -> Self {
+    pub fn with_ending_version(mut self, ending_version: Version) -> Self {
         self.ending_version = Some(ending_version);
         self
     }
@@ -121,7 +123,7 @@ impl CdfLoadBuilder {
         self
     }
 
-    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<i64> {
+    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
@@ -340,7 +342,7 @@ impl CdfLoadBuilder {
     }
 
     /// Executes the scan
-    pub(crate) async fn build(
+    pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
@@ -351,7 +353,7 @@ impl CdfLoadBuilder {
         let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
 
-        let partition_values = snapshot.metadata().partition_columns().clone();
+        let partition_values = snapshot.metadata().partition_columns();
         let schema = snapshot.input_schema();
         let schema_fields: Vec<Arc<Field>> = schema
             .fields()
@@ -380,18 +382,17 @@ impl CdfLoadBuilder {
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let cdc_file_groups =
-            create_partition_values(schema.clone(), cdc, &partition_values, None)?;
+        let cdc_file_groups = create_partition_values(schema.clone(), cdc, partition_values, None)?;
         let add_file_groups = create_partition_values(
             schema.clone(),
             add,
-            &partition_values,
+            partition_values,
             Self::get_add_action_type(),
         )?;
         let remove_file_groups = create_partition_values(
             schema.clone(),
             remove,
-            &partition_values,
+            partition_values,
             Self::get_remove_action_type(),
         )?;
 

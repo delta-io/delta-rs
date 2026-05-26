@@ -1,13 +1,12 @@
 import multiprocessing
 import os
-import tempfile
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
-from random import random
 from threading import Barrier, Thread
 from typing import Any
 from unittest.mock import Mock
+from urllib.parse import urlparse
 
 import pytest
 from arro3.core import Array, DataType, Table
@@ -19,6 +18,14 @@ from deltalake.exceptions import DeltaProtocolError
 from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
+
+S3_SIMPLE_TABLE_FILES = [
+    "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+    "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+    "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+    "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+    "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+]
 
 
 @pytest.mark.pyarrow
@@ -771,39 +778,36 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=5, method="thread")
-def test_read_multiple_tables_from_s3(s3_localstack):
+def test_read_multiple_tables_from_s3(s3_localstack, s3_localstack_simple_table_uri):
     """Should be able to create multiple cloud storage based DeltaTable instances
     without blocking on async crates/test function calls.
     """
-    for path in ["s3://deltars/simple", "s3://deltars/simple"]:
+    expected_file_uris = [
+        f"{s3_localstack_simple_table_uri}/{path}" for path in S3_SIMPLE_TABLE_FILES
+    ]
+
+    for path in [s3_localstack_simple_table_uri, s3_localstack_simple_table_uri]:
         t = DeltaTable(path)
-        assert t.file_uris() == [
-            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-        ]
+        assert t.file_uris() == expected_file_uris
 
 
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
-def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
+def test_read_multiple_tables_from_s3_multi_threaded(
+    s3_localstack, s3_localstack_simple_table_uri
+):
     thread_count = 10
     b = Barrier(thread_count, timeout=5)
+    expected_file_uris = [
+        f"{s3_localstack_simple_table_uri}/{path}" for path in S3_SIMPLE_TABLE_FILES
+    ]
 
     # make sure it works within multiple threads as well
     def read_table():
         b.wait()
-        t = DeltaTable("s3://deltars/simple")
-        assert t.file_uris() == [
-            "s3://deltars/simple/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-            "s3://deltars/simple/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-            "s3://deltars/simple/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-            "s3://deltars/simple/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-            "s3://deltars/simple/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-        ]
+        t = DeltaTable(s3_localstack_simple_table_uri)
+        assert t.file_uris() == expected_file_uris
 
     threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
     for t in threads:
@@ -1000,10 +1004,10 @@ def test_partitions_filtering_partitioned_table():
 
 
 @pytest.mark.pyarrow
-def test_partitions_date_partitioned_table():
+def test_partitions_date_partitioned_table(tmp_path: Path):
     import pyarrow as pa
 
-    table_path = tempfile.gettempdir() + "/date_partition_table"
+    table_path = tmp_path / "date_partition_table"
     date_partitions = [
         date(2024, 8, 1),
         date(2024, 8, 2),
@@ -1059,11 +1063,22 @@ def test_is_deltatable_valid_path():
     assert DeltaTable.is_deltatable(table_path)
 
 
-def test_is_deltatable_invalid_path():
-    # Nonce ensures that the table_path always remains an invalid table path.
-    nonce = int(random() * 10000)
-    table_path = f"../crates/test/tests/data/simple_table_invalid_{nonce}"
-    assert not DeltaTable.is_deltatable(table_path)
+def test_is_deltatable_empty_path(tmp_path: Path):
+    not_delta_path = tmp_path / "not_delta_table"
+    # Ensure path exists
+    not_delta_path.mkdir()
+    assert not DeltaTable.is_deltatable(str(not_delta_path))
+
+
+def test_is_deltatable_invalid_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+
+
+def test_is_deltatable_does_not_create_path(tmp_path: Path):
+    not_existing_path = tmp_path / "not_existing_path"
+    assert not DeltaTable.is_deltatable(str(not_existing_path))
+    assert not not_existing_path.exists()
 
 
 def test_is_deltatable_with_storage_opts():
@@ -1170,12 +1185,248 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
     assert expected == actual
 
 
+@pytest.mark.pyarrow
+def test_querybuilder_partition_join_issue_4467_dynamic_filter(tmp_path):
+    scenarios = [f"s{i}" for i in range(3)]
+    zones = [f"z{i}" for i in range(2)]
+    rows_per_zone = 5
+    data = _issue_4467_table(scenarios, zones, rows_per_zone)
+
+    left_path = tmp_path / "left"
+    right_path = tmp_path / "right"
+    write_deltalake(left_path, data, partition_by="scenario")
+    write_deltalake(right_path, data, partition_by="scenario")
+
+    filtered_scenarios = scenarios[:2]
+    filtered_zones = zones[:1]
+    scenario_in = ", ".join(repr(scenario) for scenario in filtered_scenarios)
+    zone_in = ", ".join(repr(zone) for zone in filtered_zones)
+    actual = (
+        QueryBuilder()
+        .register("left_tbl", DeltaTable(left_path))
+        .register("right_tbl", DeltaTable(right_path))
+        .execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM left_tbl l
+            INNER JOIN right_tbl r
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            WHERE l.scenario IN ({scenario_in})
+              AND l.price_zone IN ({zone_in})
+            """
+        )
+        .read_all()
+    )
+
+    assert actual["count"].to_pylist() == [
+        len(filtered_scenarios) * len(filtered_zones) * rows_per_zone
+    ]
+
+
+def _issue_4467_table(scenarios, zones, rows_per_zone, *, with_period_type=False):
+    import pyarrow as pa
+
+    scenario_values = []
+    zone_values = []
+    idx_values = []
+    for scenario in scenarios:
+        for zone in zones:
+            scenario_values.extend([scenario] * rows_per_zone)
+            zone_values.extend([zone] * rows_per_zone)
+            idx_values.extend(range(rows_per_zone))
+
+    columns = {
+        "scenario": pa.array(scenario_values, type=pa.string()),
+        "price_zone": pa.array(zone_values, type=pa.string()),
+        "idx": pa.array(idx_values, type=pa.int64()),
+        "val": pa.array(range(len(idx_values)), type=pa.int64()),
+    }
+    if with_period_type:
+        columns["period_type"] = pa.array(["hour"] * len(idx_values), type=pa.string())
+
+    return pa.table(columns)
+
+
+@pytest.mark.parametrize(
+    "join_predicate",
+    [
+        pytest.param(
+            """
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            """,
+            id="case_5_right_filter",
+        ),
+        pytest.param(
+            """
+              ON CAST(l.scenario AS VARCHAR) = CAST(r.scenario AS VARCHAR)
+             AND CAST(l.price_zone AS VARCHAR) = CAST(r.price_zone AS VARCHAR)
+             AND l.idx = r.idx
+            """,
+            id="case_6_cast_right_filter",
+        ),
+    ],
+)
+@pytest.mark.pyarrow
+def test_querybuilder_partition_join_issue_4467_right_filter_cases_5_and_6(
+    tmp_path, join_predicate
+):
+    scenarios = [f"s{i}" for i in range(5)]
+    zones = [f"z{i}" for i in range(3)]
+    rows_per_zone = 100
+    left_path = tmp_path / "left"
+    right_path = tmp_path / "right"
+    write_deltalake(
+        left_path,
+        _issue_4467_table(scenarios, zones, rows_per_zone),
+        partition_by="scenario",
+    )
+    write_deltalake(
+        right_path,
+        _issue_4467_table(scenarios, zones, rows_per_zone, with_period_type=True),
+        partition_by="scenario",
+    )
+
+    zone_in = ", ".join(repr(zone) for zone in zones)
+    actual = (
+        QueryBuilder()
+        .register("left_tbl", DeltaTable(left_path))
+        .register("right_tbl", DeltaTable(right_path))
+        .execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM left_tbl l
+            INNER JOIN right_tbl r
+            {join_predicate}
+            WHERE l.price_zone IN ({zone_in})
+              AND r.period_type = 'hour'
+            """
+        )
+        .read_all()
+    )
+
+    assert actual["count"].to_pylist() == [len(scenarios) * len(zones) * rows_per_zone]
+
+
+def test_deletion_vectors_api_smoke():
+    table_path = "../crates/test/tests/data/table-with-dv-small"
+    dt = DeltaTable(table_path)
+    expected_selection_vector = [
+        [False, True, True, True, True, True, True, True, True, False]
+    ]
+    expected_suffix = (
+        "part-00000-fae5310a-a37d-4e51-827b-c3d5516560ca-c000.snappy.parquet"
+    )
+    expected_filepath = next(
+        Path(path).resolve().as_uri()
+        for path in dt.file_uris()
+        if path.endswith(expected_suffix)
+    )
+    assert expected_filepath.endswith(expected_suffix)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+
+    table = vectors.read_all()
+    assert table.num_rows == 1
+    assert table["filepath"].to_pylist() == [expected_filepath]
+    assert table["selection_vector"].to_pylist() == expected_selection_vector
+
+    table_second = dt.deletion_vectors().read_all()
+    assert table_second["filepath"].to_pylist() == [expected_filepath]
+    assert table_second["selection_vector"].to_pylist() == expected_selection_vector
+
+
+def test_deletion_vectors_empty_table():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors()
+    assert vectors.schema.names == ["filepath", "selection_vector"]
+    assert vectors.read_all().num_rows == 0
+
+
+def test_deletion_vectors_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(Exception, match="without files"):
+        dt.deletion_vectors()
+
+
+@pytest.mark.pyarrow
+def test_read_variant_fixture():
+    table_path = "../crates/test/tests/data/spark-variant-checkpoint"
+    dt = DeltaTable(table_path)
+
+    schema = dt.schema()
+    assert schema.fields[1].name == "v"
+    assert schema.fields[1].type.type == "variant"
+    assert dt.protocol().reader_features == ["variantType-preview"]
+
+    table = dt.to_pyarrow_dataset().to_table()
+    assert table.num_rows == 102
+
+
 def test_read_deletion_vectors():
     table_path = "../crates/test/tests/data/table-with-dv-small"
     dt = DeltaTable(table_path)
     assert QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()[
         "value"
     ].to_pylist() == [1, 2, 3, 4, 5, 6, 7, 8]
+
+
+def test_deletion_vectors_table_with_deletion_logs():
+    table_path = "../crates/test/tests/data/table_with_deletion_logs"
+    dt = DeltaTable(table_path)
+
+    vectors = dt.deletion_vectors().read_all()
+    assert vectors.num_rows > 0
+
+    add_actions = dt.get_add_actions(flatten=True)
+    table_root = Path(table_path).resolve()
+    add_paths = add_actions["path"].to_pylist()
+    add_num_records = add_actions["num_records"].to_pylist()
+    num_records_by_file_path: dict[str, int] = {}
+    for add_path, num_records in zip(add_paths, add_num_records, strict=True):
+        file_path = (table_root / add_path).resolve().as_posix()
+        assert file_path not in num_records_by_file_path
+        num_records_by_file_path[file_path] = num_records
+
+    found_deleted_row = False
+    known_file_suffix = (
+        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
+    )
+    known_file_mask = None
+    known_file_num_records = None
+
+    for filepath, mask in zip(
+        vectors["filepath"].to_pylist(),
+        vectors["selection_vector"].to_pylist(),
+        strict=True,
+    ):
+        file_path = Path(urlparse(filepath).path).as_posix()
+        assert file_path in num_records_by_file_path
+
+        num_records = num_records_by_file_path[file_path]
+        filename = Path(file_path).name
+        assert len(mask) == num_records
+
+        if False in mask:
+            found_deleted_row = True
+        if filename == known_file_suffix:
+            known_file_mask = mask
+            known_file_num_records = num_records
+
+    assert found_deleted_row
+    assert known_file_mask is not None
+    assert known_file_num_records is not None
+    assert len(known_file_mask) == known_file_num_records
+    assert False in known_file_mask
+    assert known_file_mask[-1] is True
 
 
 @pytest.mark.pandas
@@ -1191,3 +1442,27 @@ def test_nested_runtimes(tmp_path):
     con.execute(f"CREATE EXTERNAL TABLE raw_csv STORED AS CSV LOCATION '{csv_path}'")
     df = con.execute("SELECT * FROM raw_csv")
     write_deltalake(tmp_path / "delta", df, mode="overwrite")
+
+
+@pytest.mark.polars
+def test_read_bool_stats_in_polars(tmp_path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/4224>
+    """
+    import polars as pl
+
+    df = pl.DataFrame(
+        {"p": [10, 10, 20, 20], "a": [1, 2, 3, None], "b": [False, False, True, None]}
+    )
+
+    df.write_delta(
+        tmp_path,
+        delta_write_options={"partition_by": "p"},
+    )
+
+    table = DeltaTable(tmp_path)
+    with pl.Config(tbl_cols=-1):
+        pdf = pl.DataFrame(table.get_add_actions(flatten=True))
+        assert pdf.schema["max.b"] is not None, (
+            "The boolean column stats should be there"
+        )

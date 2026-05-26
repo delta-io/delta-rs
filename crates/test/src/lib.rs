@@ -6,12 +6,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::{ensure_table_uri, ObjectStore, Path};
+use deltalake_core::{ensure_table_uri, Path};
 use tempfile::TempDir;
 
 pub mod acceptance;

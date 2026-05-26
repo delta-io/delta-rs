@@ -30,7 +30,7 @@ pub(crate) struct LazyTableProvider {
 }
 
 impl LazyTableProvider {
-    /// Build a DeltaTableProvider
+    /// Build a LazyTableProvider
     pub fn try_new(
         schema: Arc<ArrowSchema>,
         batches: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,

@@ -4,7 +4,14 @@ from typing import TYPE_CHECKING
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 
-from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    PostCommitHookProperties,
+    TableFeatures,
+    write_deltalake,
+)
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
@@ -403,6 +410,24 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
 
 
 def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", {"timestampNtz"})
+
+
+@pytest.mark.skipif(
+    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+)
+def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(
+        tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}
+    )
+
+
+def check_timestamp_column(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    primitive_type: str,
+    rw_feature: set[str],
+):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -411,7 +436,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     dt = DeltaTable(tmp_path)
     current_fields = dt.schema().fields
 
-    new_fields_to_add = DeltaField("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
+    new_fields_to_add = DeltaField("new_col", PrimitiveType(primitive_type))
 
     dt.alter.add_columns(new_fields_to_add)
     new_fields = dt.schema().fields
@@ -422,8 +447,8 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     )
     assert new_protocol.min_reader_version == 3
     assert new_protocol.min_writer_version == 7
-    assert new_protocol.reader_features == ["timestampNtz"]
-    assert new_protocol.writer_features == ["timestampNtz"]
+    assert set(new_protocol.reader_features) == rw_feature
+    assert set(new_protocol.writer_features) == rw_feature
 
 
 features = [
@@ -559,6 +584,32 @@ def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_metadata_with_post_commithook_properties(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+    post_commithook_properties = PostCommitHookProperties(cleanup_expired_logs=False)
+
+    dt.alter.set_table_properties(
+        {"delta.appendOnly": "false"},
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_name(
+        "hook_enabled_table",
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_description(
+        "table description with hook props",
+        post_commithook_properties=post_commithook_properties,
+    )
+
+    metadata = dt.metadata()
+    assert metadata.configuration["delta.appendOnly"] == "false"
+    assert metadata.name == "hook_enabled_table"
+    assert metadata.description == "table description with hook props"
 
 
 def test_set_table_name_overwrite(tmp_path: pathlib.Path, sample_table: Table):

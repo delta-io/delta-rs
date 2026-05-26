@@ -9,7 +9,8 @@ jobs:
     name: Spell Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Check spelling
-        uses: crate-ci/typos@v1
+        # <https://github.com/crate-ci/typos/releases/tag/v1.44.0>
+        uses: crate-ci/typos@631208b7aac2daa8b707f55e7331f9112b0e062d

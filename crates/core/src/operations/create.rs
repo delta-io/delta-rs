@@ -4,14 +4,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use delta_kernel::schema::MetadataValue;
+use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
     Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
@@ -48,6 +48,30 @@ impl From<CreateError> for DeltaTableError {
             source: Box::new(err),
         }
     }
+}
+
+fn data_type_has_column_mapping_metadata(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Array(array) => data_type_has_column_mapping_metadata(array.element_type()),
+        DataType::Map(map) => {
+            data_type_has_column_mapping_metadata(map.key_type())
+                || data_type_has_column_mapping_metadata(map.value_type())
+        }
+        DataType::Struct(fields) | DataType::Variant(fields) => {
+            fields.fields().any(field_has_column_mapping_metadata)
+        }
+        DataType::Primitive(_) => false,
+    }
+}
+
+fn field_has_column_mapping_metadata(field: &StructField) -> bool {
+    field
+        .metadata()
+        .contains_key(ColumnMetadataKey::ColumnMappingId.as_ref())
+        || field
+            .metadata()
+            .contains_key(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+        || data_type_has_column_mapping_metadata(field.data_type())
 }
 
 /// Build an operation to create a new [DeltaTable]
@@ -259,6 +283,20 @@ impl CreateBuilder {
         if self.columns.is_empty() {
             return Err(CreateError::MissingSchema.into());
         }
+        if self
+            .configuration
+            .get(TableProperty::ColumnMappingMode.as_ref())
+            .is_some_and(|value| value.is_some())
+        {
+            return Err(unsupported_column_mapping_write(
+                "CREATE TABLE with delta.columnMapping.mode",
+            ));
+        }
+        if self.columns.iter().any(field_has_column_mapping_metadata) {
+            return Err(unsupported_column_mapping_write(
+                "CREATE TABLE with column mapping metadata",
+            ));
+        }
 
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
@@ -407,6 +445,7 @@ mod tests {
     use super::*;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
+    use delta_kernel::table_features::TableFeature;
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -516,6 +555,35 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(String::from("true"), append)
+    }
+
+    #[tokio::test]
+    async fn test_create_table_auto_enables_variant_type() {
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::INTEGER, true),
+            StructField::new("v", DataType::unshredded_variant(), true),
+        ])
+        .unwrap();
+
+        let table = CreateBuilder::new()
+            .with_location("memory:///")
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+
+        let protocol = table.snapshot().unwrap().protocol();
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(
+            protocol
+                .reader_features()
+                .is_some_and(|features| features.contains(&TableFeature::VariantType))
+        );
+        assert!(
+            protocol
+                .writer_features()
+                .is_some_and(|features| features.contains(&TableFeature::VariantType))
+        );
     }
 
     #[cfg(feature = "datafusion")]

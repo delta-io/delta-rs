@@ -198,11 +198,11 @@ This transaction adds a data file and marks the two existing data files for remo
 
 ## How Delta table operations differ from data lakes
 
-Data lakes consist of data files persisted in storage. They don't have a transaction log that retain metadata about the transactions.
+Data lakes consist of data files persisted in storage. They don't have a transaction log that retains metadata about the transactions.
 
 Data lakes perform transactions differently than Delta tables.
 
-When you perform an overwrite transaction with a Delta table, you logically delete the exiting data without physically removing it.
+When you perform an overwrite transaction with a Delta table, you logically delete the existing data without physically removing it.
 
 Data lakes don't support logical deletes, so you have to physically delete the data from storage.
 

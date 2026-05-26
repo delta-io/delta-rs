@@ -5,7 +5,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use deltalake_core::logstore::*;
 use deltalake_core::{
-    DeltaResult, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
+    DeltaResult, kernel::Version, kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use url::Url;
@@ -62,7 +62,7 @@ impl LogStore for S3LogStore {
         "S3LogStore".into()
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
         read_commit_entry(self.object_store(None).as_ref(), version).await
     }
 
@@ -73,7 +73,7 @@ impl LogStore for S3LogStore {
     /// with retry logic.
     async fn write_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -99,7 +99,7 @@ impl LogStore for S3LogStore {
 
     async fn abort_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -111,7 +111,7 @@ impl LogStore for S3LogStore {
         }
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
         get_latest_version(self, current_version).await
     }
 

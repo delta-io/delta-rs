@@ -198,7 +198,7 @@ pl.scan_parquet("~/data/G1_1e9_1e2_0_0.parquet").filter(
 
 This query runs in 8.3 seconds.  It's much faster because Polars is optimized to skip row groups in Parquet files that don't contain data that's relevant for the query.
 
-Then run the query on newly created Delta table:
+Then run the query on a newly created Delta table:
 
 ```python
 pl.scan_delta("~/data/deltalake/G1_1e9_1e2_0_0", version=1).filter(
@@ -226,7 +226,7 @@ Delta tables consist of metadata in a transaction log and data stored in Parquet
 
 When Polars queries a Delta table, it starts by consulting the transaction log to understand the metadata of each file in the Delta table.  This allows for Polars to quickly identify which files should be skipped by the query.
 
-CSV files don't contain any such metadata, so file skipping isn't an option.  Polars can skip Parquet files based on metadata, but it needs to open up each file and read the metadata, which is slower that grabbing the file-level metadata directly from the transaction log.
+CSV files don't contain any such metadata, so file skipping isn't an option.  Polars can skip Parquet files based on metadata, but it needs to open up each file and read the metadata, which is slower than grabbing the file-level metadata directly from the transaction log.
 
 Parquet doesn't allow users to easily Z Order the data and colocate similar data in the same row groups.  The Z Order optimizations are only supported in Delta tables.
 

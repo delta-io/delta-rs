@@ -1,4 +1,4 @@
-# Using Delta Lake with Dagster¶
+# Using Delta Lake with Dagster
 
 Delta Lake is a great storage format for Dagster workflows. This page will explain why and how to use Delta Lake with Dagster.
 
@@ -10,7 +10,7 @@ Here are some of the benefits that Delta Lake provides Dagster users:
 - more efficient querying with file skipping via Z Ordering and liquid clustering
 - built-in vacuuming to remove unnecessary files and versions
 - ACID transactions for reliable writes
-- smooth versioning integration so that versions can be use to trigger downstream updates.
+- smooth versioning integration so that versions can be used to trigger downstream updates.
 - surfacing table stats based on the file statistics
 
 ## Dagster I/O Managers

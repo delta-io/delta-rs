@@ -1,13 +1,13 @@
 [package]
 name = "deltalake-python"
-version = "1.4.1"
+version = "1.6.0"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
 ]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
-description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
+description = "Native Delta Lake Python binding based on delta-rs"
 readme = "README.md"
 edition = "2024"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
@@ -17,11 +17,14 @@ name = "deltalake"
 crate-type = ["cdylib"]
 doc = false
 
+[package.metadata.cargo-machete]
+ignored = ["deltalake-catalog-unity"]
+
 [dependencies]
 delta_kernel.workspace = true
 url.workspace = true
 
-pyo3-arrow = { version = "0.14.0", default-features = false }
+pyo3-arrow = { version = "0.17.0", default-features = false }
 
 # arrow
 arrow-schema = { workspace = true, features = ["serde"] }
@@ -29,7 +32,7 @@ arrow-cast = { workspace = true }
 
 # datafusion
 datafusion-ffi = { workspace = true }
-datafusion-execution = { version = "52.1.0" }
+datafusion-execution = { version = "53.0.0" }
 
 # serde
 serde = { workspace = true }
@@ -50,6 +53,14 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
 
+# catalog-unity
+deltalake-catalog-unity = { path = "../crates/catalog-unity", features = [
+    "aws",
+    "azure",
+    "gcp",
+    "r2",
+] }
+
 # opentelemetry
 tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
@@ -61,8 +72,13 @@ tracing-subscriber = { workspace = true }
 [target.'cfg(any(not(target_family = "unix"), target_os = "emscripten"))'.dependencies]
 mimalloc = { version = "0.1", default-features = false }
 
-# Unix (excluding macOS & emscripten) → jemalloc
-[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten")))'.dependencies]
+# Unix (excluding macOS, emscripten & FreeBSD) → jemalloc
+# FreeBSD's system malloc is already jemalloc-derived, and the bundled
+# jemallocator's `dlsym(RTLD_NEXT, "pthread_create")` initialization fails on
+# FreeBSD (jemalloc aborts during DSO init). Fall back to the system allocator
+# on FreeBSD instead — no performance regression since the system allocator
+# is the same family.
+[target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten"), not(target_os = "freebsd")))'.dependencies]
 jemallocator = { version = "0.5", features = [
     "disable_initial_exec_tls",
     "background_threads",
@@ -73,7 +89,7 @@ jemallocator = { version = "0.5", features = [
 jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
-version = "0.26"
+version = "0.28"
 features = ["extension-module", "abi3", "abi3-py310"]
 
 [dependencies.deltalake]
@@ -81,15 +97,16 @@ path = "../crates/deltalake"
 version = "0"
 features = [
     "azure",
-    "gcs",
-    "python",
     "datafusion",
-    "unity-experimental",
+    "gcs",
     "hdfs",
     "lakefs",
+    "python",
+    "unity-experimental",
 ]
 
 [features]
 default = ["rustls"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue"]
 rustls = ["deltalake/s3", "deltalake/glue"]
+nanosecond-timestamps = ["deltalake/nanosecond-timestamps"]

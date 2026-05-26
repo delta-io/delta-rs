@@ -10,10 +10,7 @@ use delta_kernel::expressions::Scalar;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use object_store::path::Path;
-use parquet::{
-    arrow::ArrowWriter, basic::Compression, errors::ParquetError,
-    file::properties::WriterProperties,
-};
+use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tracing::*;
 use url::Url;
@@ -24,11 +21,12 @@ use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions,
 };
-use super::{DeltaWriter, DeltaWriterError, WriteMode};
+use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
 use crate::errors::DeltaTableError;
 use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
 use crate::logstore::ObjectStoreRetryExt;
+use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
 use crate::writer::utils::ShareableBuffer;
@@ -197,11 +195,10 @@ impl JsonWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
+        ensure_legacy_writer_supports_table(&table, "JsonWriter")?;
+
         // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
 
         Ok(Self {
             table,
@@ -214,15 +211,14 @@ impl JsonWriter {
 
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
+        ensure_legacy_writer_supports_table(table, "JsonWriter")?;
+
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.snapshot()?.metadata();
-        let partition_columns = metadata.partition_columns().clone();
+        let partition_columns = metadata.partition_columns().into();
 
         // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
 
         Ok(Self {
             table: table.clone(),
@@ -547,6 +543,40 @@ mod tests {
         assert_eq!(columns, vec!["id".to_string(), "value".to_string()]);
     }
 
+    #[tokio::test]
+    async fn test_json_writer_for_table_defaults_include_delta_rs_created_by() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_test_table(&table_dir).await;
+
+        let writer = JsonWriter::for_table(&table).unwrap();
+
+        assert_eq!(
+            writer.writer_properties.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_json_writer_try_new_defaults_include_delta_rs_created_by() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_test_table(&table_dir).await;
+        let arrow_schema = table.snapshot().unwrap().snapshot().arrow_schema();
+
+        let writer = JsonWriter::try_new(
+            table.table_url().clone(),
+            arrow_schema,
+            Some(vec!["modified".to_string()]),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            writer.writer_properties.created_by(),
+            format!("delta-rs version {}", crate::crate_version())
+        );
+    }
+
     #[test]
     fn test_extract_partition_values() {
         let record_batch = RecordBatch::try_new(
@@ -699,7 +729,7 @@ mod tests {
     }
 
     #[cfg(feature = "datafusion")]
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_json_write_checkpoint() {
         use std::fs;
 

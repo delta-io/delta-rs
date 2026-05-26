@@ -23,12 +23,12 @@ use datafusion::{
 use delta_kernel::{
     Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
+    engine_data::FilteredEngineData,
     expressions::{Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
         state::{DvInfo, ScanFile},
     },
-    schema::{DataType, Schema, StructField},
 };
 use futures::Stream;
 use itertools::Itertools;
@@ -36,11 +36,11 @@ use pin_project_lite::pin_project;
 use url::Url;
 
 use crate::{
-    DeltaResult,
+    DeltaResult, DeltaTableError,
     delta_datafusion::{DeltaScanConfig, engine::to_datafusion_scalar},
     kernel::{
-        LogicalFileView, ReceiverStreamBuilder, Scan, StructDataExt,
-        arrow::engine_ext::stats_schema, parse_stats_column_with_schema,
+        LogicalFileView, ReceiverStreamBuilder, Scan, StatsProjection, StructDataExt,
+        parse_stats_column_with_schema,
     },
 };
 
@@ -55,69 +55,6 @@ impl ReplayStats {
     }
 }
 
-/// Extracts column names referenced in the scan's physical predicate.
-///
-/// Returns a set of column names that are actually used in predicates, which helps
-/// optimize statistics parsing to only process relevant columns.
-fn extract_predicate_columns(scan: &KernelScan) -> Option<HashSet<String>> {
-    scan.physical_predicate().map(|predicate| {
-        predicate
-            .references()
-            .into_iter()
-            .map(|col_name| col_name.to_string().trim_matches('`').to_string())
-            .collect()
-    })
-}
-
-/// Create a stats schema containing only columns needed for predicate evaluation
-///
-/// Returns:
-/// - If no predicate: Schema with just `numRecords`
-/// - If predicate exists: Schema with `numRecords` + stats for referenced columns only
-fn create_minimal_stats_schema(
-    scan: &KernelScan,
-    predicate_columns: Option<&HashSet<String>>,
-) -> Arc<Schema> {
-    match predicate_columns {
-        None => {
-            // No predicate - only need numRecords for file statistics
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
-        }
-        Some(cols) if cols.is_empty() => {
-            // Empty predicate columns - minimal schema
-            Arc::new(
-                Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)]).unwrap(),
-            )
-        }
-        Some(cols) => {
-            // Filter physical schema to only referenced columns
-            let physical_schema = scan.physical_schema();
-            let filtered_fields: Vec<_> = physical_schema
-                .fields()
-                .filter(|field| cols.contains(field.name()))
-                .cloned()
-                .collect();
-
-            if filtered_fields.is_empty() {
-                // Predicate references only partition columns - minimal schema
-                Arc::new(
-                    Schema::try_new(vec![StructField::nullable("numRecords", DataType::LONG)])
-                        .unwrap(),
-                )
-            } else {
-                // Create stats schema for filtered fields
-                let filtered_schema = Schema::try_new(filtered_fields).unwrap();
-                Arc::new(stats_schema(
-                    &filtered_schema,
-                    scan.snapshot().table_properties(),
-                ))
-            }
-        }
-    }
-}
-
 pin_project! {
     /// Stream that processes kernel scan metadata into file contexts with statistics.
     ///
@@ -128,7 +65,7 @@ pin_project! {
     /// - **Deletion vectors**: Asynchronously loaded and cached
     /// - **Partition values**: Extracted from file metadata
     /// - **Transforms**: Column mapping expressions for physical-to-logical translation
-    pub(crate) struct ScanFileStream<S> {
+    pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
 
         engine: Arc<dyn Engine>,
@@ -139,33 +76,37 @@ pin_project! {
 
         scan_config: DeltaScanConfig,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>)>,
+        file_selection: Option<&'a HashSet<String>>,
+
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
 
         #[pin]
         stream: S,
     }
 }
 
-impl<S> ScanFileStream<S> {
+impl<'a, S> ScanFileStream<'a, S> {
     pub(crate) fn new(
         engine: Arc<dyn Engine>,
         scan: &Arc<Scan>,
         scan_config: DeltaScanConfig,
+        file_selection: Option<&'a HashSet<String>>,
         stream: S,
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
             stream,
             scan_config,
+            file_selection,
         }
     }
 }
 
-impl<S> Stream for ScanFileStream<S>
+impl<'a, S> Stream for ScanFileStream<'a, S>
 where
     S: Stream<Item = DeltaResult<ScanMetadata>>,
 {
@@ -178,11 +119,27 @@ where
             .physical_schema()
             .as_ref()
             .try_into_arrow()
-            .unwrap();
+            .map_err(DeltaTableError::from);
+        let physical_arrow = match physical_arrow {
+            Ok(schema) => schema,
+            Err(err) => return Poll::Ready(Some(Err(err))),
+        };
         match this.stream.poll_next(cx) {
             Poll::Ready(Some(Ok(scan_data))) => {
-                let mut ctx = ScanContext::new(this.table_root.clone());
-                ctx = match scan_data.visit_scan_files(ctx, visit_scan_file) {
+                let scan_data = if let Some(selection) = this.file_selection {
+                    match apply_file_selection(scan_data, this.table_root, selection) {
+                        Ok(scan_data) => scan_data,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    }
+                } else {
+                    scan_data
+                };
+
+                let ctx = match scan_data
+                    .visit_scan_files(ScanContext::new(this.table_root.clone()), visit_scan_file)
+                    .map_err(|err| DataFusionError::from(DeltaTableError::from(err)))
+                    .and_then(ScanContext::error_or)
+                {
                     Ok(ctx) => ctx,
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
@@ -193,12 +150,13 @@ where
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
                         let file_url = file.file_url.clone();
+                        let num_records = file.num_records;
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -212,28 +170,25 @@ where
                 let scan_files =
                     filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
 
-                // Extract columns referenced in predicate (if any)
-                let predicate_columns = extract_predicate_columns(this.kernel_scan.as_ref());
-
-                // Create minimal stats schema based on predicate columns
-                let stats_schema = create_minimal_stats_schema(
-                    this.kernel_scan.as_ref(),
-                    predicate_columns.as_ref(),
-                );
+                let stats_projection = match StatsProjection::for_scan(this.kernel_scan.as_ref()) {
+                    Ok(projection) => projection,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                };
+                let snapshot = this.kernel_scan.snapshot();
+                let stats_schema = match stats_projection.stats_schema(snapshot) {
+                    Ok(schema) => schema,
+                    Err(err) => return Poll::Ready(Some(Err(err))),
+                };
 
                 // Parse statistics (will skip parsing for unreferenced columns)
-                let parsed_stats = parse_stats_column_with_schema(
-                    this.kernel_scan.snapshot().as_ref(),
-                    &scan_files,
-                    stats_schema,
-                )?;
+                let parsed_stats =
+                    parse_stats_column_with_schema(snapshot.as_ref(), &scan_files, stats_schema)?;
 
-                // TODO: do we need to mnake the stats inexact if deletion vectors are present?
                 let mut file_statistics = extract_file_statistics(
                     this.kernel_scan,
-                    &this.scan_config,
+                    this.scan_config,
                     parsed_stats,
-                    predicate_columns.as_ref(),
+                    &stats_projection,
                 );
 
                 Poll::Ready(Some(Ok(ctx
@@ -260,27 +215,22 @@ where
 
 /// Extracts DataFusion statistics from parsed file metadata.
 ///
-/// Converts Delta Kernel's file statistics into DataFusion's [`Statistics`] format,
-/// which is used for query optimization and predicate pushdown. This function implements
-/// an important optimization: it only extracts statistics for columns that appear in
-/// predicates, avoiding expensive parsing for unused columns.
+/// Convert Delta Kernel file statistics into DataFusion [`Statistics`].
 ///
-/// # Arguments
+/// Only statistics for predicate columns are extracted.
 ///
-/// * `scan` - The kernel scan containing schema and predicate information
-/// * `parsed_stats` - RecordBatch containing parsed statistics for all files
-/// * `predicate_columns` - Optional set of columns referenced in predicates
+/// The scan provides schema and predicate information. `parsed_stats` contains parsed
+/// statistics for all files. `stats_projection` names the stats fields materialized
+/// for this scan.
 ///
 /// # Returns
 ///
-/// A map from file URL to tuple of:
-/// - [`Statistics`]: DataFusion statistics for query optimization
-/// - [`StructData`]: Partition values to be materialized in the output
+/// A map from file URL to DataFusion statistics and optional partition values.
 fn extract_file_statistics(
     scan: &KernelScan,
     scan_config: &DeltaScanConfig,
     parsed_stats: RecordBatch,
-    predicate_columns: Option<&HashSet<String>>,
+    stats_projection: &StatsProjection,
 ) -> HashMap<Url, (Statistics, Option<StructData>)> {
     (0..parsed_stats.num_rows())
         .map(move |idx| LogicalFileView::new(parsed_stats.clone(), idx))
@@ -299,10 +249,8 @@ fn extract_file_statistics(
                 .physical_schema()
                 .fields()
                 .map(|f| {
-                    // Check if we should extract stats for this column
-                    let should_extract_stats = predicate_columns
-                        .map(|cols| cols.contains(f.name()))
-                        .unwrap_or(false); // No predicate = no stats needed for pruning
+                    let should_extract_stats =
+                        stats_projection.emits_top_level_column_stats(f.name());
 
                     if !should_extract_stats {
                         // Return unknown statistics for non-predicate columns
@@ -416,8 +364,6 @@ pub(crate) struct ScanFileContext {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
     /// Statistics about the data in the file.
@@ -447,10 +393,10 @@ struct ScanFileContextInner {
     pub file_url: Url,
     /// Size of the file on disk.
     pub size: u64,
-    /// Selection vector to filter the data in the file.
-    // pub selection_vector: Option<Vec<bool>>,
     /// Transformations to apply to the data in the file.
     pub transform: Option<ExpressionRef>,
+    /// Number of records in the file from Add-file stats.
+    pub num_records: Option<u64>,
 
     pub dv_info: DvInfo,
 }
@@ -478,6 +424,22 @@ impl ScanContext {
     fn parse_path(&self, path: &str) -> DeltaResult<Url, DataFusionError> {
         parse_path(&self.table_root, path)
     }
+
+    fn error_or(self) -> DeltaResult<Self, DataFusionError> {
+        let ScanContext {
+            table_root,
+            files,
+            errs,
+            count,
+        } = self;
+        errs.error_or(())?;
+        Ok(ScanContext {
+            table_root,
+            files,
+            errs: DataFusionErrorBuilder::new(),
+            count,
+        })
+    }
 }
 
 fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
@@ -489,6 +451,32 @@ fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     })
 }
 
+fn apply_file_selection(
+    mut scan_data: ScanMetadata,
+    table_root: &Url,
+    file_selection: &HashSet<String>,
+) -> DeltaResult<ScanMetadata> {
+    let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+    let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)?.into();
+
+    // Kernel allows a shorter selection vector; missing entries are implicitly true.
+    selection_vector.resize(batch.num_rows(), true);
+
+    for (idx, select) in selection_vector.iter_mut().enumerate() {
+        if *select {
+            let file_url = parse_path(
+                table_root,
+                LogicalFileView::new(batch.clone(), idx).path_raw(),
+            )?;
+            *select = file_selection.contains(file_url.as_str());
+        }
+    }
+
+    scan_data.scan_files =
+        FilteredEngineData::try_new(Box::new(ArrowEngineData::new(batch)), selection_vector)?;
+    Ok(scan_data)
+}
+
 fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
     let file_url = match ctx.parse_path(&scan_file.path) {
         Ok(v) => v,
@@ -497,11 +485,55 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
             return;
         }
     };
+
     ctx.files.push(ScanFileContextInner {
         dv_info: scan_file.dv_info,
         transform: scan_file.transform,
         file_url,
         size: scan_file.size as u64,
+        num_records: scan_file.stats.map(|stats| stats.num_records),
     });
     ctx.count += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use delta_kernel::scan::state::{DvInfo, ScanFile};
+    use url::Url;
+
+    use super::{ScanContext, visit_scan_file};
+
+    fn scan_file(path: impl Into<String>) -> ScanFile {
+        ScanFile {
+            path: path.into(),
+            size: 1,
+            modification_time: 0,
+            stats: None,
+            dv_info: DvInfo::default(),
+            transform: None,
+            partition_values: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_scan_context_error_or_returns_error_for_invalid_path() {
+        let mut ctx = ScanContext::new(Url::parse("mailto:delta@example.com").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+        assert!(ctx.error_or().is_err());
+    }
+
+    #[test]
+    fn test_scan_context_error_or_keeps_valid_path() {
+        let mut ctx = ScanContext::new(Url::parse("file:///tmp/delta/").unwrap());
+        visit_scan_file(&mut ctx, scan_file("part-000.parquet"));
+
+        let ctx = ctx.error_or().unwrap();
+        assert_eq!(ctx.files.len(), 1);
+        assert_eq!(
+            ctx.files[0].file_url.as_str(),
+            "file:///tmp/delta/part-000.parquet"
+        );
+    }
 }

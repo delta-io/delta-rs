@@ -329,12 +329,21 @@ fn merge_arrow_vec_fields(
                         Err(e)
                     }
                     Ok(mut f) => {
-                        // UNDO the implicit schema merging of batch fields into table fields that is done by
-                        // field.try_merge
-                        f.set_metadata(right_field.metadata().clone());
+                        // Preserve existing (table) column metadata (e.g. generated column
+                        // expressions) as the base, then merge in compatible metadata from the
+                        // batch. This prevents batch-side schemas (which often lack table-defined
+                        // metadata) from overwriting table metadata that `Field::try_merge` may
+                        // have merged in.
+                        f.set_metadata(field.metadata().clone());
 
                         let mut field_metadata = f.metadata().clone();
-                        try_merge_metadata(&mut field_metadata, right_field.metadata())?;
+                        // Column generation expressions are table-defined metadata and should not
+                        // be inferred or overridden by incoming batch schemas. Ignore them when
+                        // merging Arrow field metadata to avoid spurious schema errors when the
+                        // input includes conflicting `delta.generationExpression` metadata.
+                        let mut right_metadata = right_field.metadata().clone();
+                        right_metadata.remove(ColumnMetadataKey::GenerationExpression.as_ref());
+                        try_merge_metadata(&mut field_metadata, &right_metadata)?;
                         f.set_metadata(field_metadata);
                         Ok(f)
                     }

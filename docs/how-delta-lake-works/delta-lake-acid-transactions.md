@@ -2,7 +2,7 @@
 
 This page teaches you about Delta Lake transactions and why transactions are important in production data settings. Data lakes don’t support transactions and this is a huge downside because they offer a poor user experience, lack functionality, and can easily be corrupted.
 
-Transactions on Delta Lake tables are operations that change the state of table and record descriptive entries (metadata) of those changes to the Delta Lake transaction log. Here are some examples of transactions:
+Transactions on Delta Lake tables are operations that change the state of the table and record descriptive entries (metadata) of those changes to the Delta Lake transaction log. Here are some examples of transactions:
 
 - Deleting rows
 - Appending to the table
@@ -14,7 +14,7 @@ All Delta Lake write operations are transactions in Delta tables. Reads actually
 
 ## What are transactions?
 
-Transactions are any Delta operation that change the underlying files of a Delta table and result in new entries metadata entries in the transaction log. Some Delta operations rearrange data in the existing table (like Z Ordering the table or compacting the small files) and these are also transactions. Let’s look at a simple example.
+Transactions are any Delta operation that change the underlying files of a Delta table and result in new metadata entries in the transaction log. Some Delta operations rearrange data in the existing table (like Z Ordering the table or compacting the small files) and these are also transactions. Let’s look at a simple example.
 
 Suppose you have a Delta table with the following data:
 
@@ -117,6 +117,10 @@ We can see that this transaction includes two components:
 - Remove file `0-fea2de92-861a-423e-9708-a9e91dafb27b-0.parquet`
 - Add file `part-00001-90312b96-b487-4a8f-9edc-1b9b3963f136-c000.snappy.parquet`
 
+The `num_deleted_rows` metric is available for row rewrite deletes like this one. For
+metadata only full file deletes, Delta clients may omit `num_deleted_rows` when the
+exact count cannot be derived from file metadata without scanning data files.
+
 Transactions are recorded in the transaction log. The transaction log is also referred to as the table metadata and is the `_delta_log` directory in storage.
 
 Let’s see how Delta Lake implements transactions.
@@ -160,7 +164,7 @@ Delta Lake transactions prevent users from making changes that would corrupt the
 
 ## Transactions rely on atomic primitives storage guarantees
 
-Suppose you have two transactions that are finishishing at the same exact time. Both of these transactions look at the existing Delta Lake transaction log, see that the latest transaction was `003.json` and determine that the next entry should be `004.json`.
+Suppose you have two transactions that are finishing at the same exact time. Both of these transactions look at the existing Delta Lake transaction log, see that the latest transaction was `003.json` and determine that the next entry should be `004.json`.
 
 If both transactions are recorded in the `004.json` file, then one of them will be clobbered, and the transaction log entry for the clobbered metadata entry will be lost.
 

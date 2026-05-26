@@ -7,8 +7,6 @@ pub mod constants;
 mod credentials;
 pub mod errors;
 pub mod logstore;
-#[cfg(feature = "native-tls")]
-mod native;
 pub mod storage;
 
 use aws_config::Region;
@@ -26,7 +24,7 @@ use aws_sdk_dynamodb::{
         ScalarAttributeType,
     },
 };
-use deltalake_core::logstore::object_store::aws::AmazonS3ConfigKey;
+use deltalake_core::kernel::Version;
 use deltalake_core::logstore::{
     LogStore, LogStoreFactory, ObjectStoreRef, StorageConfig, default_logstore, logstore_factories,
     object_store_factories,
@@ -42,8 +40,7 @@ use std::{
 };
 use storage::S3StorageOptionsConversion;
 use storage::{S3ObjectStoreFactory, S3StorageOptions};
-use tracing::debug;
-use tracing::warn;
+use tracing::log::*;
 use typed_builder::TypedBuilder;
 use url::Url;
 
@@ -61,28 +58,6 @@ impl LogStoreFactory for S3LogStoreFactory {
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
         let s3_options = self.with_env_s3(&options.raw.clone());
-        if s3_options.keys().any(|key| {
-            let key = key.to_ascii_lowercase();
-            [
-                AmazonS3ConfigKey::CopyIfNotExists.as_ref(),
-                "copy_if_not_exists",
-            ]
-            .contains(&key.as_str())
-        }) {
-            debug!(
-                "S3LogStoreFactory has been asked to create a LogStore where the underlying store has copy-if-not-exists enabled - no locking provider required"
-            );
-            warn!(
-                "Most S3 object store support conditional put, remove copy_if_not_exists parameter to use a more performant conditional put."
-            );
-            return Ok(logstore::default_s3_logstore(
-                prefixed_store,
-                root_store,
-                location,
-                options,
-            ));
-        }
-
         let s3_options = S3StorageOptions::from_map(&s3_options)?;
         if s3_options.locking_provider.as_deref() == Some("dynamodb") {
             debug!(
@@ -121,7 +96,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
 /// Representation of a log entry stored in DynamoDb
 /// dynamo db item consists of:
 /// - table_path: String - tracked in the log store implementation
-/// - file_name: String - commit version.json (part of primary key), stored as i64 in this struct
+/// - file_name: String - commit version.json (part of primary key), stored as u64 in this struct
 /// - temp_path: String - name of temporary file containing commit info
 /// - complete: bool - operation completed, i.e. atomic rename from `tempPath` to `fileName` succeeded
 /// - expire_time: `Option<SystemTime>` - epoch seconds at which this external commit entry is safe to be deleted
@@ -129,7 +104,7 @@ pub fn register_handlers(_additional_prefixes: Option<Url>) {
 #[builder(doc)]
 pub struct CommitEntry {
     /// Commit version, stored as file name (e.g., 00000N.json) in dynamodb (relative to `_delta_log/`)
-    pub version: i64,
+    pub version: Version,
     /// Path to temp file for this commit, relative to the `_delta_log` directory
     #[builder(setter(into))]
     pub temp_path: Path,
@@ -336,7 +311,7 @@ impl DynamoDbLockClient {
     pub async fn get_commit_entry(
         &self,
         table_path: &str,
-        version: i64,
+        version: Version,
     ) -> Result<Option<CommitEntry>, LockClientError> {
         let item = self
             .retry(
@@ -424,7 +399,7 @@ impl DynamoDbLockClient {
     pub async fn get_latest_entries(
         &self,
         table_path: &str,
-        limit: i64,
+        limit: u64,
     ) -> Result<Vec<CommitEntry>, LockClientError> {
         let query_result = self
             .retry(
@@ -471,7 +446,7 @@ impl DynamoDbLockClient {
     /// Update existing log entry
     pub async fn update_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         table_path: &str,
     ) -> Result<UpdateLogEntryResult, LockClientError> {
         let seconds_since_epoch = (SystemTime::now()
@@ -524,7 +499,7 @@ impl DynamoDbLockClient {
     /// Delete existing log entry if it is not already complete
     pub async fn delete_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         table_path: &str,
     ) -> Result<(), LockClientError> {
         self.retry(
@@ -633,7 +608,7 @@ fn epoch_to_system_time(s: u64) -> SystemTime {
 ///
 /// The `table_path` needs to be sent into DynamoDB without a trailing slash for the [Url] since
 /// that is a load-bearing part of the contract with Delta/Spark's implementation.
-fn get_primary_key(version: i64, table_path: &str) -> HashMap<String, AttributeValue> {
+fn get_primary_key(version: Version, table_path: &str) -> HashMap<String, AttributeValue> {
     HashMap::from([
         (
             constants::ATTR_TABLE_PATH.to_owned(),
@@ -761,7 +736,7 @@ static DELTA_LOG_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d{20})\.(json|checkpoint).*$").unwrap());
 
 /// Extract version from a file name in the delta log
-fn extract_version_from_filename(name: &str) -> Option<i64> {
+fn extract_version_from_filename(name: &str) -> Option<Version> {
     DELTA_LOG_REGEX
         .captures(name)
         .map(|captures| captures.get(1).unwrap().as_str().parse().unwrap())

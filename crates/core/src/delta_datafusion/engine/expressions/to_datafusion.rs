@@ -7,7 +7,7 @@ use datafusion::common::{
 use datafusion::functions::core::expr_ext::FieldAccessor;
 use datafusion::functions::expr_fn::named_struct;
 use datafusion::logical_expr::expr::ScalarFunction;
-use datafusion::logical_expr::{BinaryExpr, Expr, Operator, col, lit};
+use datafusion::logical_expr::{BinaryExpr, Expr, Operator, expr_fn::ident, lit};
 use datafusion::prelude::coalesce;
 use delta_kernel::Predicate;
 use delta_kernel::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
@@ -34,10 +34,14 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
             let base_name = name_iter
                 .next()
                 .ok_or_else(|| internal_datafusion_err!("Expected at least one column name"))?;
-            Ok(name_iter.fold(col(base_name), |acc, n| acc.field(n)))
+            // Kernel column paths are already exact segments. Using `ident` avoids DataFusion SQL
+            // identifier normalization (e.g. lowercasing), and treats `.` as a literal character
+            // rather than a qualifier separator. This is required for correctness with camelCase
+            // and other non-normalized column names (see #4082).
+            Ok(name_iter.fold(ident(base_name), |acc, n| acc.field(n)))
         }
         Expression::Predicate(expr) => predicate_to_df(expr, output_type),
-        Expression::Struct(fields) => struct_to_df(fields, output_type),
+        Expression::Struct(fields, _) => struct_to_df(fields, output_type),
         Expression::Binary(expr) => binary_to_df(expr, output_type),
         Expression::Unary(expr) => unary_to_df(expr, output_type),
         Expression::Variadic(expr) => {
@@ -53,6 +57,10 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
         Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
         Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
         Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
+        Expression::ParseJson(_) => not_impl_err!("ParseJson expressions are not yet supported"),
+        Expression::MapToStruct(_) => {
+            not_impl_err!("MapToStruct expressions are not yet supported")
+        }
     }
 }
 
@@ -72,6 +80,10 @@ pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
         Scalar::Double(value) => ScalarValue::Float64(Some(*value)),
         Scalar::Timestamp(value) => {
             ScalarValue::TimestampMicrosecond(Some(*value), Some("UTC".into()))
+        }
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanos(value) => {
+            ScalarValue::TimestampNanosecond(Some(*value), Some("UTC".into()))
         }
         Scalar::TimestampNtz(value) => ScalarValue::TimestampMicrosecond(Some(*value), None),
         Scalar::Date(value) => ScalarValue::Date32(Some(*value)),
@@ -222,7 +234,7 @@ fn struct_to_df(fields: &[Arc<Expression>], output_type: &DataType) -> DFResult<
 mod tests {
     use std::ops::Not;
 
-    use datafusion::logical_expr::{col, lit};
+    use datafusion::logical_expr::{col, expr_fn::ident, lit};
     use delta_kernel::expressions::ColumnName;
     use delta_kernel::expressions::{ArrayData, BinaryExpression, MapData, Scalar, StructData};
     use delta_kernel::schema::{ArrayType, DataType, MapType, StructField, StructType};
@@ -381,11 +393,25 @@ mod tests {
     fn test_column_expression() {
         let expr = Expression::Column(ColumnName::new(["test_col"]));
         let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
-        assert_eq!(result, col("test_col"));
+        assert_eq!(result, ident("test_col"));
 
         let expr = Expression::Column(ColumnName::new(["test_col", "field_1", "field_2"]));
         let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
-        assert_eq!(result, col("test_col").field("field_1").field("field_2"));
+        assert_eq!(result, ident("test_col").field("field_1").field("field_2"));
+    }
+
+    #[test]
+    fn test_column_expression_preserves_case() {
+        let expr = Expression::Column(ColumnName::new(["submittedAt"]));
+        let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
+        assert_eq!(result, ident("submittedAt"));
+    }
+
+    #[test]
+    fn test_column_expression_preserves_dots_in_segments() {
+        let expr = Expression::Column(ColumnName::new(["a.b"]));
+        let result = to_datafusion_expr(&expr, &DataType::BOOLEAN).unwrap();
+        assert_eq!(result, ident("a.b"));
     }
 
     /// Test various literal values:
@@ -564,10 +590,13 @@ mod tests {
 
     #[test]
     fn test_struct_expression() {
-        let expr = Expression::Struct(vec![
-            Expression::Column(ColumnName::new(["a"])).into(),
-            Expression::Column(ColumnName::new(["b"])).into(),
-        ]);
+        let expr = Expression::Struct(
+            vec![
+                Expression::Column(ColumnName::new(["a"])).into(),
+                Expression::Column(ColumnName::new(["b"])).into(),
+            ],
+            None,
+        );
         let result = to_datafusion_expr(
             &expr,
             &DataType::Struct(Box::new(
@@ -846,15 +875,18 @@ mod tests {
         assert_eq!(result, col("a").gt(lit(0)).and(col("b").or(col("c"))));
 
         // Test struct expressions with nested fields
-        let expr = Expression::Struct(vec![
-            Expression::Column(ColumnName::new(["a"])).into(),
-            Expression::Binary(BinaryExpression {
-                left: Box::new(Expression::Column(ColumnName::new(["b"]))),
-                op: BinaryExpressionOp::Plus,
-                right: Box::new(Expression::Column(ColumnName::new(["c"]))),
-            })
-            .into(),
-        ]);
+        let expr = Expression::Struct(
+            vec![
+                Expression::Column(ColumnName::new(["a"])).into(),
+                Expression::Binary(BinaryExpression {
+                    left: Box::new(Expression::Column(ColumnName::new(["b"]))),
+                    op: BinaryExpressionOp::Plus,
+                    right: Box::new(Expression::Column(ColumnName::new(["c"]))),
+                })
+                .into(),
+            ],
+            None,
+        );
         let result = to_datafusion_expr(
             &expr,
             &DataType::Struct(Box::new(

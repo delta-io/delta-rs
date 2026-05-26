@@ -5,10 +5,7 @@ use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
-use arrow_schema::{
-    ArrowError, DataType as ArrowDataType, Field as ArrowField, Fields, Schema as ArrowSchema,
-    TimeUnit,
-};
+use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::schema::StructType;
 use futures::TryStreamExt;
@@ -22,6 +19,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::CommitProperties;
 use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
@@ -35,50 +33,6 @@ use crate::{
     table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
 };
-
-fn convert_timestamps_to_microseconds(schema: ArrowSchema) -> Result<ArrowSchema, ArrowError> {
-    let mut converted_fields = Vec::with_capacity(schema.fields().len());
-
-    for field in schema.fields() {
-        converted_fields.push(convert_field_timestamps(field)?);
-    }
-
-    Ok(ArrowSchema::new(converted_fields))
-}
-
-/// Recursively convert timestamp fields to microseconds
-fn convert_field_timestamps(field: &ArrowField) -> Result<ArrowField, ArrowError> {
-    let converted_data_type = match field.data_type() {
-        ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz)
-        | ArrowDataType::Timestamp(TimeUnit::Millisecond, tz)
-        | ArrowDataType::Timestamp(TimeUnit::Second, tz) => {
-            Some(ArrowDataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
-        }
-        // Recursively handle nested structures
-        ArrowDataType::Struct(fields) => {
-            let converted_fields = fields
-                .iter()
-                .map(|field| convert_field_timestamps(field))
-                .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
-            Some(ArrowDataType::Struct(Fields::from(converted_fields)))
-        }
-        // Handle lists that might contain timestamps
-        ArrowDataType::List(field_ref) => {
-            let converted_field = convert_field_timestamps(field_ref)?;
-            Some(ArrowDataType::List(Arc::new(converted_field)))
-        }
-        _ => None,
-    };
-
-    if let Some(data_type) = converted_data_type {
-        Ok(
-            ArrowField::new(field.name(), data_type, field.is_nullable())
-                .with_metadata(field.metadata().clone()),
-        )
-    } else {
-        Ok(field.clone())
-    }
-}
 
 /// Error converting a Parquet table to a Delta table
 #[derive(Debug, thiserror::Error)]
@@ -466,8 +420,8 @@ impl ConvertToDeltaBuilder {
         // Merge parquet file schemas
         // This step is needed because timestamp will not be preserved when copying files in S3. We can't use the schema of the latest parquet file as Delta table's schema
         let merged_schema = ArrowSchema::try_merge(arrow_schemas)?;
-        let converted_schema = convert_timestamps_to_microseconds(merged_schema)?;
-        let schema: StructType = (&converted_schema).try_into_kernel()?;
+        let converted_schema = normalize_for_delta(&Arc::new(merged_schema));
+        let schema: StructType = converted_schema.as_ref().try_into_kernel()?;
 
         let mut schema_fields = schema.fields().collect_vec();
         schema_fields.append(&mut partition_schema_fields.values().collect::<Vec<_>>());
@@ -531,8 +485,10 @@ mod tests {
     use std::fs::File;
     use tempfile::tempdir;
 
+    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, TimeUnit};
+
     use super::*;
-    use crate::kernel::{DataType, PrimitiveType};
+    use crate::kernel::{DataType, PrimitiveType, Version};
     use crate::open_table;
     use crate::test_utils::file_paths_from;
 
@@ -626,7 +582,7 @@ mod tests {
         table: DeltaTable,
         // Test data location in the repo
         test_data_from: &str,
-        expected_version: i64,
+        expected_version: Version,
         expected_paths: Vec<String>,
         expected_schema: Vec<StructField>,
         expected_partition_values: &[(String, Scalar)],
@@ -1015,164 +971,6 @@ mod tests {
             .expect_err("The given location is already a delta table location. Should error");
     }
 
-    #[test]
-    fn test_convert_timestamps_to_microseconds_no_change() {
-        let schema = ArrowSchema::new(vec![
-            ArrowField::new("id", ArrowDataType::Int32, false),
-            ArrowField::new("name", ArrowDataType::Utf8, true),
-            ArrowField::new(
-                "timestamp_micro",
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-        ]);
-
-        let result = convert_timestamps_to_microseconds(schema.clone()).unwrap();
-
-        // Should return the same schema instance when no conversion needed
-        assert_eq!(result.fields().len(), 3);
-        assert_eq!(result.field(0).data_type(), &ArrowDataType::Int32);
-        assert_eq!(result.field(1).data_type(), &ArrowDataType::Utf8);
-        assert_eq!(
-            result.field(2).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-    }
-
-    #[test]
-    fn test_convert_timestamps_to_microseconds_conversions() {
-        let inner_struct = ArrowDataType::Struct(Fields::from(vec![
-            ArrowField::new(
-                "ts_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            ),
-            ArrowField::new(
-                "ts_milli",
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new("value", ArrowDataType::Int32, false),
-        ]));
-
-        let list_element = ArrowField::new(
-            "element",
-            ArrowDataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-            true,
-        );
-        let list_type = ArrowDataType::List(Arc::new(list_element));
-
-        let schema = ArrowSchema::new(vec![
-            ArrowField::new(
-                "ts_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
-                true,
-            ),
-            ArrowField::new(
-                "ts_milli",
-                ArrowDataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new(
-                "ts_sec",
-                ArrowDataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
-                true,
-            ),
-            ArrowField::new(
-                "ts_micro",
-                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-                true,
-            ),
-            ArrowField::new("nested_struct", inner_struct, true),
-            ArrowField::new("timestamp_list", list_type, true),
-            ArrowField::new("regular_field", ArrowDataType::Utf8, true),
-        ]);
-
-        let result = convert_timestamps_to_microseconds(schema).unwrap();
-
-        assert_eq!(
-            result.field(0).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-        assert_eq!(
-            result.field(1).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(
-            result.field(2).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(
-            result.field(3).data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-        );
-
-        if let ArrowDataType::Struct(fields) = result.field(4).data_type() {
-            assert_eq!(
-                fields[0].data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
-            );
-            assert_eq!(
-                fields[1].data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-            );
-            assert_eq!(fields[2].data_type(), &ArrowDataType::Int32);
-        } else {
-            panic!("Expected struct type");
-        }
-
-        if let ArrowDataType::List(element) = result.field(5).data_type() {
-            assert_eq!(
-                element.data_type(),
-                &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-            );
-        } else {
-            panic!("Expected list type");
-        }
-
-        assert_eq!(result.field(6).data_type(), &ArrowDataType::Utf8);
-    }
-
-    #[test]
-    fn test_convert_field_timestamps_no_conversion() {
-        let field = ArrowField::new("test", ArrowDataType::Int32, false);
-        let result = convert_field_timestamps(&field).unwrap();
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Int32,
-            "Should return original field for non-timestamp fields"
-        );
-
-        let micro_field = ArrowField::new(
-            "test",
-            ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-            true,
-        );
-        let result = convert_field_timestamps(&micro_field).unwrap();
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
-            "Should return original field for already-microsecond timestamps"
-        );
-    }
-
-    #[test]
-    fn test_convert_field_timestamps_with_conversion() {
-        let field = ArrowField::new(
-            "test",
-            ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            true,
-        );
-        let result = convert_field_timestamps(&field).unwrap();
-
-        assert_eq!(result.name(), "test");
-        assert_eq!(
-            result.data_type(),
-            &ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
-        );
-        assert_eq!(result.is_nullable(), true);
-    }
-
     #[tokio::test]
     async fn test_convert_to_delta_with_timestamp_conversion() {
         let temp_dir = tempdir().expect("Failed to create temp directory");
@@ -1188,7 +986,7 @@ mod tests {
             ),
             ArrowField::new(
                 "timestamp_nano",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 true,
             ),
             ArrowField::new(
@@ -1210,11 +1008,14 @@ mod tests {
                     ])
                     .with_timezone("UTC"),
                 ),
-                Arc::new(arrow::array::TimestampNanosecondArray::from(vec![
-                    Some(1609459200000000000),
-                    Some(1609545600000000000),
-                    Some(1609632000000000000),
-                ])),
+                Arc::new(
+                    arrow::array::TimestampNanosecondArray::from(vec![
+                        Some(1609459200000000000),
+                        Some(1609545600000000000),
+                        Some(1609632000000000000),
+                    ])
+                    .with_timezone("UTC"),
+                ),
                 Arc::new(
                     arrow::array::TimestampMicrosecondArray::from(vec![
                         Some(1609459200000000),
@@ -1241,6 +1042,19 @@ mod tests {
 
         assert_eq!(state.version(), 0);
 
+        #[cfg(not(feature = "nanosecond-timestamps"))]
+        fn maybe_nano(_dtype: &DataType) -> bool {
+            false
+        }
+
+        #[cfg(feature = "nanosecond-timestamps")]
+        fn maybe_nano(dtype: &DataType) -> bool {
+            matches!(
+                dtype,
+                crate::kernel::DataType::Primitive(crate::kernel::PrimitiveType::TimestampNanos)
+            )
+        }
+
         let delta_schema = state.schema();
         let fields: Vec<_> = delta_schema.fields().collect();
         let timestamp_fields: Vec<_> = fields
@@ -1252,7 +1066,7 @@ mod tests {
                         | crate::kernel::DataType::Primitive(
                             crate::kernel::PrimitiveType::TimestampNtz
                         )
-                )
+                ) || maybe_nano(f.data_type())
             })
             .collect();
 

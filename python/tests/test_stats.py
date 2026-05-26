@@ -1,3 +1,4 @@
+import pathlib
 from datetime import datetime, timezone
 
 import pytest
@@ -139,3 +140,79 @@ def test_microsecond_truncation_parquet_stats(tmp_path, use_stats_struct):
         ]
     )
     assert batch1 == result
+
+
+@pytest.mark.polars
+@pytest.mark.pyarrow
+def test_struct_stats_3172(tmp_path: pathlib.Path) -> None:
+    """
+    Regression test for computing stats of struct leaf nodes
+    <https://github.com/delta-io/delta-rs/issues/3172>
+    """
+    import polars as pl
+    from polars import Int64, List, Schema, String, Struct
+
+    from deltalake import DeltaTable, write_deltalake
+
+    schema = Schema(
+        {
+            "1": String,
+            "nested": List(
+                Struct(
+                    {
+                        "2": Int64,
+                        "3": Int64,
+                        "4": Int64,
+                        "5": Int64,
+                        "6": String,
+                        "7": String,
+                        "8": String,
+                        "9": String,
+                        "10": String,
+                        "11": String,
+                        "12": String,
+                        "13": String,
+                        "14": String,
+                        "15": String,
+                        "16": String,
+                        "17": String,
+                        "18": String,
+                        "19": String,
+                        "20": String,
+                        "21": String,
+                        "22": String,
+                        "23": String,
+                        "24": String,
+                        "25": String,
+                        "26": String,
+                        "27": String,
+                        "28": String,
+                        "29": String,
+                        "30": String,
+                        "31": String,
+                        "32": String,
+                    }
+                )
+            ),
+            "year": Int64,
+            "month": Int64,
+            "day": Int64,
+        }
+    )
+
+    df = pl.DataFrame(
+        {
+            "1": ["foo"],
+            "nested": [[]],
+            "year": [2024],
+            "month": [12],
+            "day": [1],
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, df.to_arrow())
+    dt = DeltaTable(tmp_path)
+    actions = dt.get_add_actions()
+    min_stats = actions["min"][0].as_py()
+    assert "year" in min_stats

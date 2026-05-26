@@ -35,7 +35,7 @@ poetry add deltalake
 ```
 
 NOTE: official binary wheels are linked against openssl statically for remote
-objection store communication. Please file Github issue to request for critical
+object store communication. Please file a Github issue to request a critical
 openssl upgrade.
 
 ## Tracing and Observability
@@ -72,14 +72,15 @@ unreleased features. Or maybe you want to tweak the optimization of the Rust cod
 
 To compile the package, you will need the Rust compiler and [maturin](https://github.com/PyO3/maturin):
 
-````sh
+```sh
 curl https://sh.rustup.rs -sSf | sh -s
+```
 
 Then you can build wheels for your own platform like so:
 
 ```sh
 uvx maturin build --release --out wheels
-````
+```
 
 Note:
 

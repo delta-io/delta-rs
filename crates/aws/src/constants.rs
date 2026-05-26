@@ -1,6 +1,10 @@
 //! Constants used for modifying and configuring various AWS S3 (or similar) connections with
 //! delta-rs
 //!
+//! Storage option keys to use when creating [`S3StorageOptions`].
+//!
+//! The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
+//! Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
 
 use std::sync::LazyLock;
 use std::time::Duration;

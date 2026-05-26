@@ -55,4 +55,13 @@ impl TombstoneView {
             .as_boolean()
             .value(self.index)
     }
+
+    pub fn size(&self) -> Option<i64> {
+        static FIELD_INDEX: LazyLock<usize> =
+            LazyLock::new(|| Remove::to_schema().field_with_index("size").unwrap().0);
+        self.data
+            .column(*FIELD_INDEX)
+            .as_primitive_opt::<Int64Type>()
+            .map(|a| a.value(self.index))
+    }
 }

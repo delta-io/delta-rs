@@ -44,7 +44,7 @@ pub fn create_spec_partition_values<F: FileAction>(
     action_type: Option<&ScalarValue>,
 ) -> Vec<ScalarValue> {
     let mut spec_partition_values = action_type.cloned().map(|at| vec![at]).unwrap_or_default();
-    spec_partition_values.push(ScalarValue::Int64(Some(spec.version)));
+    spec_partition_values.push(ScalarValue::UInt64(Some(spec.version)));
     spec_partition_values.push(ScalarValue::TimestampMillisecond(
         Some(spec.timestamp),
         None,
@@ -81,9 +81,10 @@ pub fn create_partition_values<F: FileAction>(
                     version: None,
                 },
                 partition_values: new_part_values.clone(),
-                extensions: None,
                 range: None,
                 statistics: None,
+                ordering: None,
+                extensions: None,
                 metadata_size_hint: None,
             };
 

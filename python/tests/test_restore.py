@@ -4,7 +4,12 @@ import pathlib
 import pytest
 from arro3.core import Table
 
-from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    PostCommitHookProperties,
+    write_deltalake,
+)
 
 
 @pytest.mark.parametrize("use_relative", [True, False])
@@ -88,3 +93,29 @@ def test_restore_with_datetime(
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "RESTORE"
     assert dt.version() == old_version + 1
+
+
+def test_restore_with_post_commithook_properties(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+):
+    write_deltalake(str(tmp_path), sample_table, mode="append")
+    write_deltalake(str(tmp_path), sample_table, mode="append")
+    write_deltalake(str(tmp_path), sample_table, mode="append")
+
+    dt = DeltaTable(str(tmp_path))
+    old_version = dt.version()
+    dt.restore(
+        1,
+        post_commithook_properties=PostCommitHookProperties(
+            create_checkpoint=False,
+            cleanup_expired_logs=False,
+        ),
+    )
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "RESTORE"
+    assert dt.version() == old_version + 1
+
+    log_dir = tmp_path / "_delta_log"
+    checkpoint_files = list(log_dir.glob("*.checkpoint.parquet"))
+    assert len(checkpoint_files) == 0

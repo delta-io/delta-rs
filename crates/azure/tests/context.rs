@@ -2,7 +2,7 @@ use azure_storage_blobs::prelude::*;
 use chrono::Utc;
 use deltalake_azure::register_handlers;
 use deltalake_test::utils::*;
-use rand::RngCore;
+use rand::prelude::*;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use tokio::runtime::Handle;
@@ -18,7 +18,7 @@ pub enum MsftIntegration {
 impl Default for MsftIntegration {
     fn default() -> Self {
         register_handlers(None);
-        let task_id = format!("{}", rand::thread_rng().next_u64());
+        let task_id = format!("{}", rand::rng().next_u64());
         Self::Azure(format!("delta-table-{}-{task_id}", Utc::now().timestamp()))
     }
 }

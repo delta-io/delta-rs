@@ -8,7 +8,7 @@ If you want to start contributing, first look at our good first issues: https://
 
 If you want to contribute something more substantial, see our "Projects seeking contributors" section on our roadmap: https://github.com/delta-io/delta-rs/issues/1128
 
-## AI-generated code
+## Using AI-generated code
 
 We recognise that AI coding assistants are now a regular part of many
 developers' workflows and can improve productivity. Thoughtful use of these
@@ -40,7 +40,7 @@ the following:
 * Break down large PRs into smaller ones to make review easier
 
 PR authors are also responsible for disclosing any copyrighted materials in
-submitted contributions. See the `[Apache Software
+submitted contributions. See the [Apache Software
 Foundation's](https://apache.org) [guidance on AI-generated
 code](https://www.apache.org/legal/generative-tooling.html) for further
 information on licensing considerations.
@@ -52,7 +52,7 @@ If you want to claim an issue to work on, you can write the word `take` as a com
 
 ## Quick start
 
-- Install Rust, e.g. as described [here](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- Install [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
 
 - Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
@@ -72,16 +72,29 @@ If you want to claim an issue to work on, you can write the word `take` as a com
     cargo run --example basic_operations --features="datafusion"
     ```
 
-## Run the docs locally
-*This serves your local contents of docs via a web browser, handy for checking what they look like if you are making changes to docs or docstings*
+## Running the docs locally
 
-```sh
-(cd python; make develop)
-pip install -r docs/requirements.txt
-mkdocs serve
-```
+Preview your doc and docstring changes in a web browser:
 
-## To make a pull request (PR)
+- Install [Rust](https://doc.rust-lang.org/cargo/getting-started/installation.html).
+- Install the [uv Python package manager](https://docs.astral.sh/uv/getting-started/installation/).
+
+- Build the project for development. This will install `deltalake` into the Python virtual environment managed by uv.
+    ```sh
+    cd python
+    make develop
+    ```
+
+- From the root directory, activate the uv environment and install the Python docs requirements.
+    ```sh
+    cd ..
+    source python/.venv/bin/activate
+    pip install -r docs/requirements.txt
+    ```
+
+- Run `mkdocs serve` to preview your doc changes at http://127.0.0.1:8000/delta-io/delta-rs/.
+
+## Making a pull request (PR)
 Make sure all the following steps run/pass locally before submitting a PR
 
 ```sh
@@ -93,6 +106,60 @@ make develop
 make unit-test
 make build-docs
 ```
+
+Pull requests should be in lower case and conform to [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/#summary).
+
+### Sign your work
+The sign-off is a simple line at the end of the explanation for the patch. Your signature certifies that you wrote the patch or otherwise have the right to pass it on as an open-source patch. The rules are pretty simple: if you can certify the below (from [developercertificate.org](https://developercertificate.org)):
+
+```
+Developer Certificate of Origin
+Version 1.1
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+1 Letterman Drive
+Suite D4700
+San Francisco, CA, 94129
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+
+Developer's Certificate of Origin 1.1
+
+By making a contribution to this project, I certify that:
+
+(a) The contribution was created in whole or in part by me and I
+    have the right to submit it under the open source license
+    indicated in the file; or
+
+(b) The contribution is based upon previous work that, to the best
+    of my knowledge, is covered under an appropriate open source
+    license and I have the right under that license to submit that
+    work with modifications, whether created in whole or in part
+    by me, under the same open source license (unless I am
+    permitted to submit under a different license), as indicated
+    in the file; or
+
+(c) The contribution was provided directly to me by some other
+    person who certified (a), (b) or (c) and I have not modified
+    it.
+
+(d) I understand and agree that this project and the contribution
+    are public and that a record of the contribution (including all
+    personal information I submit with it, including my sign-off) is
+    maintained indefinitely and may be redistributed consistent with
+    this project or the open source license(s) involved.
+```
+
+Then you just add a line to every git commit message:
+
+```
+Signed-off-by: Jane Smith <jane.smith@email.com>
+Use your real name (sorry, no pseudonyms or anonymous contributions.)
+```
+
+If you set your `user.name` and `user.email` git configs, you can sign your commit automatically with `git commit -s`.
 
 ## Developing in VSCode
 
@@ -106,7 +173,7 @@ make build-docs
 {
             "type": "lldb",
             "request": "attach",
-            "name": "LLDB Attach to Python'",
+            "name": "LLDB Attach to Python",
             "program": "${command:python.interpreterPath}",
             "pid": "${command:pickMyProcess}",
             "args": [],
@@ -122,7 +189,7 @@ make build-docs
 4. Run the relevant Python code function in your terminal, execution should drop into the Python debugger showing `PDB` prompt
 5. Run the following in that prompt to get the Python process ID: `import os; os.getpid()`
 6. Run the `LLDB Attach to Python` from the `Run and Debug` panel of VSCode. This will prompt you for a Process ID to attach to, enter the Python process ID obtained earlier (this will also be in the dropdown but that dropdown will have many process IDs)
-7. LLDB make take couple of seconds to attach to the process
+7. LLDB may take a couple of seconds to attach to the process
 8. When the debugger is attached to the process (you will notice the debugger panels get filled with extra info), enter `c`+Enter in the `PDB` prompt in your terminal - the execution should continue until the breakpoint in Rust code is hit. From this point it's a standard debugging process.
 
 

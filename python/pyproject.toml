@@ -22,7 +22,7 @@ dependencies = ["arro3-core>=0.5.0", "deprecated>=1.2.18"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
-pyarrow = ["pyarrow>=16"]
+pyarrow = ["pyarrow>=21"]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"
@@ -97,6 +97,7 @@ source = ["deltalake"]
 
 [dependency-groups]
 dev = [
+    "arro3-io",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",
@@ -110,7 +111,7 @@ dev = [
 ]
 opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.32"]
-datafusion = ["datafusion==51.0.0"]
+datafusion = ["datafusion==53.*"]
 lakefs = ["lakefs==0.8.0"]
 pyspark = [
     "pyspark==4.0.1",

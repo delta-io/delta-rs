@@ -18,25 +18,16 @@ jobs:
       DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt,clippy
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
 
       - name: load DAT
         run: make setup-dat
 
       - name: Rustfmt Check
-        uses: actions-rust-lang/rustfmt@v1
+        # <https://github.com/actions-rust-lang/rustfmt/releases/tag/v1.1.2>
+        uses: actions-rust-lang/rustfmt@4066006ec54a31931b9b1fddfd38f2fdf2d27143
 
       - name: build and lint with clippy
         run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
@@ -71,23 +62,14 @@ jobs:
       DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: clippy
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
       
       - name: Set up Python 3.13
         if: matrix.os == 'windows-latest'
-        uses: actions/setup-python@v4
+        # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: 3.13
 
@@ -115,18 +97,9 @@ jobs:
       DEFAULT_FEATURES: "datafusion"
 
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
 
       - name: Claim disk space
         if: matrix.os == 'ubuntu-latest'
@@ -141,7 +114,8 @@ jobs:
 
       - name: Set up Python 3.13
         if: matrix.os == 'windows-latest'
-        uses: actions/setup-python@v4
+        # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: 3.13
 

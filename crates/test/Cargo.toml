@@ -1,16 +1,16 @@
 [package]
 name = "deltalake-test"
-version = "0.13.0"
+version = "0.15.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-deltalake-core = { version = "0.30.0", path = "../core", features = [
+deltalake-core = { version = "0.32.0", path = "../core", features = [
     "integration_test",
 ] }
 
 arrow-array = { workspace = true, features = ["chrono-tz"] }
-arrow-cast = { workspace = true }
+arrow-cast = { workspace = true, features = ["prettyprint"] }
 arrow-ord = { workspace = true }
 arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }

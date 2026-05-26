@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::TableProperty;
 use crate::kernel::{DeltaResult, error::Error};
-use crate::kernel::{StructType, StructTypeExt};
+use crate::kernel::{StructType, StructTypeExt, Version};
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
@@ -146,16 +146,47 @@ impl MetadataExt for Metadata {
     }
 }
 
-/// checks if table contains timestamp_ntz in any field including nested fields.
-pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
-    fn _check_type(dtype: &DataType) -> bool {
-        match dtype {
-            &DataType::TIMESTAMP_NTZ => true,
-            DataType::Array(inner) => _check_type(inner.element_type()),
-            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+/// checks if table contains a datatype in any field including nested fields.
+fn contains_datatype<'a>(
+    mut fields: impl Iterator<Item = &'a StructField>,
+    dtype: &DataType,
+) -> bool {
+    fn _check_type(dtype_to_check: &DataType, dtype: &DataType) -> bool {
+        match dtype_to_check {
+            to_check if dtype == to_check => true,
+            DataType::Array(inner) => _check_type(inner.element_type(), dtype),
+            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type(), dtype)),
             _ => false,
         }
     }
+    fields.any(|f| _check_type(f.data_type(), dtype))
+}
+
+/// checks if table contains timestamp_ntz in any field including nested fields.
+pub fn contains_timestampntz<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
+    contains_datatype(fields, &DataType::TIMESTAMP_NTZ)
+}
+
+#[cfg(feature = "nanosecond-timestamps")]
+/// checks if table contains timestamp_nanos in any field including nested fields.
+pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
+    contains_datatype(fields, &DataType::TIMESTAMP_NANOS)
+}
+
+/// checks if table contains variant in any field including nested fields.
+pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fn _check_type(dtype: &DataType) -> bool {
+        match dtype {
+            DataType::Variant(_) => true,
+            DataType::Array(inner) => _check_type(inner.element_type()),
+            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+            DataType::Map(inner) => {
+                _check_type(inner.key_type()) || _check_type(inner.value_type())
+            }
+            _ => false,
+        }
+    }
+
     fields.any(|f| _check_type(f.data_type()))
 }
 
@@ -407,9 +438,23 @@ impl ProtocolInner {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+        #[cfg(feature = "nanosecond-timestamps")]
+        let contains_timestamp_nanos = self.contains_timestamp_nanos(schema.fields());
+        let contains_variant = self.contains_variant(schema.fields());
 
         if contains_timestamp_ntz {
             self = self.enable_timestamp_ntz()
+        }
+
+        #[cfg(feature = "nanosecond-timestamps")]
+        if contains_timestamp_nanos {
+            // Per the protocol RFC, non-timezone timestamps need to be required
+            // too, since there will eventually be a
+            // nanoseconds-without-timezones primitive type too.
+            self = self.enable_timestamp_nanos().enable_timestamp_ntz()
+        }
+        if contains_variant {
+            self = self.enable_variant_type()
         }
 
         if !generated_cols.is_empty() {
@@ -558,10 +603,36 @@ impl ProtocolInner {
         contains_timestampntz(fields)
     }
 
+    /// checks if table contains variant in any field including nested fields.
+    fn contains_variant<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_variant(fields)
+    }
+
     /// Enable timestamp_ntz in the protocol
     fn enable_timestamp_ntz(mut self) -> Self {
         self = self.append_reader_features([TableFeature::TimestampWithoutTimezone]);
         self = self.append_writer_features([TableFeature::TimestampWithoutTimezone]);
+        self
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// checks if table contains timestamp_nanos in any field including nested fields.
+    fn contains_timestamp_nanos<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_timestamp_nanos(fields)
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// Enable timestamp_nanos in the protocol
+    fn enable_timestamp_nanos(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::TimestampNanos]);
+        self = self.append_writer_features([TableFeature::TimestampNanos]);
+        self
+    }
+
+    /// Enable variantType in the protocol
+    fn enable_variant_type(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::VariantType]);
+        self = self.append_writer_features([TableFeature::VariantType]);
         self
     }
 
@@ -596,6 +667,10 @@ pub enum TableFeatures {
     /// timestamps without timezone support
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[serde(rename = "timestampNanos")]
+    /// Timestamps that are nanosecond resolution
+    TimestampNanos,
     /// version 2 of checkpointing
     V2Checkpoint,
     /// Append Only Tables
@@ -616,6 +691,12 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
+    /// Preview shredded variant support
+    VariantShreddingPreview,
     MaterializePartitionColumns,
 }
 
@@ -627,6 +708,8 @@ impl FromStr for TableFeatures {
             "columnMapping" => Ok(TableFeatures::ColumnMapping),
             "deletionVectors" => Ok(TableFeatures::DeletionVectors),
             "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            #[cfg(feature = "nanosecond-timestamps")]
+            "timestampNanos" => Ok(TableFeatures::TimestampNanos),
             "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
             "appendOnly" => Ok(TableFeatures::AppendOnly),
             "invariants" => Ok(TableFeatures::Invariants),
@@ -637,6 +720,9 @@ impl FromStr for TableFeatures {
             "rowTracking" => Ok(TableFeatures::RowTracking),
             "domainMetadata" => Ok(TableFeatures::DomainMetadata),
             "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            "variantType" => Ok(TableFeatures::VariantType),
+            "variantType-preview" => Ok(TableFeatures::VariantTypePreview),
+            "variantShredding-preview" => Ok(TableFeatures::VariantShreddingPreview),
             "materializePartitionColumns" => Ok(TableFeatures::MaterializePartitionColumns),
             _ => Err(()),
         }
@@ -649,6 +735,8 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::ColumnMapping => "columnMapping",
             TableFeatures::DeletionVectors => "deletionVectors",
             TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeatures::TimestampNanos => "timestampNanos",
             TableFeatures::V2Checkpoint => "v2Checkpoint",
             TableFeatures::AppendOnly => "appendOnly",
             TableFeatures::Invariants => "invariants",
@@ -659,6 +747,9 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::RowTracking => "rowTracking",
             TableFeatures::DomainMetadata => "domainMetadata",
             TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+            TableFeatures::VariantType => "variantType",
+            TableFeatures::VariantTypePreview => "variantType-preview",
+            TableFeatures::VariantShreddingPreview => "variantShredding-preview",
             TableFeatures::MaterializePartitionColumns => "materializePartitionColumns",
         }
     }
@@ -717,8 +808,15 @@ impl TableFeatures {
                         (Some(feature.clone()), Some(feature))
                     }
 
+                    // Optional ReaderWriter features
+                    #[cfg(feature = "nanosecond-timestamps")]
+                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
+
                     // Unknown features
                     TableFeature::Unknown(_) => (None, None),
+                    others => {
+                        panic!("This table has unsupported table features: {others:?}");
+                    }
                 }
             }
             None => (None, None),
@@ -861,18 +959,18 @@ pub struct Add {
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
-    /// that should be added to the table. The path is a URI as specified by
+    /// that should be removed from the table. The path is a URI as specified by
     /// [RFC 2396 URI Generic Syntax], which needs to be decoded to get the data file path.
     ///
     /// [RFC 2396 URI Generic Syntax]: https://www.ietf.org/rfc/rfc2396.txt
     #[serde(with = "serde_path")]
     pub path: String,
 
-    /// When `false` the logical file must already be present in the table or the records
-    /// in the added file must be contained in one or more remove actions in the same version.
+    /// When `false` the records in the removed file must be contained
+    /// in one or more add file actions in the same version
     pub data_change: bool,
 
-    /// The time this logical file was created, as milliseconds since the epoch.
+    /// The time the deletion occurred, represented as milliseconds since the epoch
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_timestamp: Option<i64>,
 
@@ -892,7 +990,7 @@ pub struct Remove {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 
-    /// Information about deletion vector (DV) associated with this add action
+    /// Information about deletion vector (DV) associated with this remove action
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_vector: Option<DeletionVectorDescriptor>,
 
@@ -994,7 +1092,7 @@ pub struct CommitInfo {
 
     /// Version of the table when the operation was started
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
+    pub read_version: Option<Version>,
 
     /// The isolation level of the commit
     #[serde(skip_serializing_if = "Option::is_none")]

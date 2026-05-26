@@ -45,7 +45,9 @@ use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
 use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
-use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::expr::{
+    parse_generated_column_expression, parse_predicate_expression,
+};
 use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
@@ -75,6 +77,7 @@ impl PartialOrd for DataValidation {
 }
 
 impl DataValidation {
+    #[allow(dead_code)]
     pub(crate) fn try_new(
         input: LogicalPlan,
         validations: impl IntoIterator<Item = Expr>,
@@ -116,6 +119,7 @@ impl DataValidation {
 ///
 /// This is used to update the schema of the data after validation to
 /// reflect the non-nullability of these columns.
+#[allow(dead_code)]
 struct NotNullExtractor {
     non_nullable_columns: Vec<ColumnName>,
 }
@@ -129,21 +133,15 @@ impl TreeNodeVisitor<'_> for NotNullExtractor {
                 // we dont't actually need a kernel expression here, but DF field access
                 // if somewhat tedious to extract and the kernel ColumnName is convenient
                 // for this purpose.
-                match to_delta_expression(expr) {
-                    Ok(Expression::Column(col_name)) => {
-                        self.non_nullable_columns.push(col_name);
-                    }
-                    _ => {}
+                if let Ok(Expression::Column(col_name)) = to_delta_expression(expr) {
+                    self.non_nullable_columns.push(col_name);
                 }
                 Ok(TreeNodeRecursion::Continue)
             }
             Expr::Not(expr) => match expr.as_ref() {
                 Expr::IsNull(inner_expr) => {
-                    match to_delta_expression(inner_expr) {
-                        Ok(Expression::Column(col_name)) => {
-                            self.non_nullable_columns.push(col_name);
-                        }
-                        _ => {}
+                    if let Ok(Expression::Column(col_name)) = to_delta_expression(inner_expr) {
+                        self.non_nullable_columns.push(col_name);
                     }
                     Ok(TreeNodeRecursion::Continue)
                 }
@@ -265,7 +263,10 @@ pub(crate) fn validation_predicates(
 ) -> Result<Vec<Expr>> {
     // find all columns that are non-nullable in the table schema but nullable
     // in the source schema and add IS NOT NULL checks for them.
-    let table_schema: Schema = table_configuration.schema().as_ref().try_into_arrow()?;
+    let table_schema: Schema = table_configuration
+        .logical_schema()
+        .as_ref()
+        .try_into_arrow()?;
     let non_nullable_table: HashSet<_> = collect_non_nullable_fields(&table_schema)
         .into_iter()
         .collect();
@@ -285,7 +286,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration
-            .schema()
+            .logical_schema()
             .get_invariants()
             .map_err(|e| plan_datafusion_err!("Failed to read invariants from schema: {}", e))?;
         for invariant in invariants {
@@ -302,7 +303,7 @@ pub(crate) fn validation_predicates(
 
     if table_configuration.is_feature_enabled(&TableFeature::GeneratedColumns) {
         let generated = table_configuration
-            .schema()
+            .logical_schema()
             .get_generated_columns()
             .map_err(|e| {
                 plan_datafusion_err!("Failed to read generated columns from schema: {}", e)
@@ -336,7 +337,7 @@ pub(crate) fn generated_columns_to_exprs<'a>(
     generated_columns
         .into_iter()
         .map(|gen_col| {
-            let expr = parse_predicate_expression(df_schema, &gen_col.generation_expr, session)?;
+            let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
             let col_expr = col(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
             Ok::<_, DataFusionError>(validation_expr)
@@ -363,7 +364,7 @@ pub struct DataValidationExec {
     check_expression: Arc<dyn PhysicalExpr>,
     /// Plan properties including the schema after validation
     /// (may have updated nullability)
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl DataValidationExec {
@@ -414,12 +415,12 @@ impl DataValidationExec {
             );
         }
         let schema = validated_schema.unwrap_or_else(|| input.schema());
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
-        );
+        ));
         Ok(Self {
             input,
             check_expression,
@@ -453,7 +454,7 @@ impl ExecutionPlan for DataValidationExec {
         "DataValidationExec"
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -492,10 +493,6 @@ impl ExecutionPlan for DataValidationExec {
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.input.partition_statistics(partition)
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -594,7 +591,7 @@ where
                             .filter(|v| matches!(v, Some(false) | None))
                             .count();
                         if invalid_count > 0 {
-                            let invalid_data = filter_record_batch(&batch, &not(&validity_mask)?)?;
+                            let invalid_data = filter_record_batch(&batch, &not(validity_mask)?)?;
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
@@ -618,7 +615,7 @@ where
                 }
                 let (_, arrays, _) = batch.into_parts();
                 Poll::Ready(Some(Ok(RecordBatch::try_new(
-                    Arc::clone(&this.schema),
+                    Arc::clone(this.schema),
                     arrays,
                 )?)))
             }
@@ -727,11 +724,12 @@ fn collect_non_nullable_fields_recursive(
 /// ];
 /// let new_schema = make_fields_non_nullable(schema.as_ref(), &paths);
 /// ```
+#[allow(dead_code)]
 pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) -> Schema {
     // Convert ColumnName paths to Vec<String> for easier comparison
     let target_paths: HashSet<Vec<String>> = paths
         .iter()
-        .map(|col_name| col_name.path().iter().map(|s| s.clone()).collect())
+        .map(|col_name| col_name.path().to_vec())
         .collect();
 
     // Recursively update fields
@@ -748,6 +746,7 @@ pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) ->
 }
 
 /// Recursively make fields non-nullable based on target paths.
+#[allow(dead_code)]
 fn make_fields_non_nullable_recursive(
     field: &arrow_schema::Field,
     current_path: Vec<String>,

@@ -8,7 +8,7 @@ mod tests {
         writer::test_utils::get_record_batch,
     };
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_app_txn_workload() {
         // Test that the transaction ids can be read from different scenarios
         // 1. Write new table to storage

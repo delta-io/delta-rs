@@ -4,12 +4,14 @@ use bytes::Bytes;
 use deltalake_aws::storage::S3StorageBackend;
 use deltalake_core::logstore::object_store::{
     DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, ObjectMeta,
-    PutOptions, PutResult, Result as ObjectStoreResult,
+    ObjectStoreExt as _, PutOptions, PutResult, Result as ObjectStoreResult,
 };
 use deltalake_core::{DeltaTableBuilder, ObjectStore, Path};
 use deltalake_test::utils::IntegrationContext;
 use futures::stream::BoxStream;
-use object_store::{MultipartUpload, PutMultipartOptions, PutPayload};
+use object_store::{
+    CopyMode, CopyOptions, MultipartUpload, PutMultipartOptions, PutPayload, RenameOptions,
+};
 use serial_test::serial;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
@@ -156,25 +158,6 @@ impl std::fmt::Display for DelayedObjectStore {
 
 #[async_trait::async_trait]
 impl ObjectStore for DelayedObjectStore {
-    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        if let Some(ref path) = self.pause_before_copy_path {
-            if path == to {
-                pause(&self.pause_until_true);
-            }
-        }
-        self.copy(from, to).await?;
-        if let Some(ref path) = self.pause_before_delete_path {
-            if path == from {
-                pause(&self.pause_until_true);
-            }
-        }
-        self.delete(from).await
-    }
-
-    async fn put(&self, location: &Path, bytes: PutPayload) -> ObjectStoreResult<PutResult> {
-        self.inner.put(location, bytes).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -184,24 +167,31 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.put_opts(location, bytes, options).await
     }
 
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        self.inner.get(location).await
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        options: PutMultipartOptions,
+    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
+        self.inner.put_multipart_opts(location, options).await
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.inner.get_opts(location, options).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
-        self.inner.get_range(location, range).await
+    async fn get_ranges(
+        &self,
+        location: &Path,
+        ranges: &[Range<u64>],
+    ) -> ObjectStoreResult<Vec<Bytes>> {
+        self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, ObjectStoreResult<Path>>,
+    ) -> BoxStream<'static, ObjectStoreResult<Path>> {
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
@@ -220,28 +210,45 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.rename_if_not_exists(from, to).await
-    }
-
-    async fn put_multipart(&self, location: &Path) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart(location).await
-    }
-
-    async fn put_multipart_opts(
+    async fn copy_opts(
         &self,
-        location: &Path,
-        options: PutMultipartOptions,
-    ) -> ObjectStoreResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, options).await
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> ObjectStoreResult<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+
+    async fn rename_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: RenameOptions,
+    ) -> ObjectStoreResult<()> {
+        if let Some(ref path) = self.pause_before_copy_path {
+            if path == to {
+                pause(&self.pause_until_true);
+            }
+        }
+        let copy_mode = match options.target_mode {
+            object_store::RenameTargetMode::Overwrite => CopyMode::Overwrite,
+            object_store::RenameTargetMode::Create => CopyMode::Create,
+        };
+        self.inner
+            .copy_opts(
+                from,
+                to,
+                CopyOptions::new()
+                    .with_mode(copy_mode)
+                    .with_extensions(options.extensions.clone()),
+            )
+            .await?;
+        if let Some(ref path) = self.pause_before_delete_path {
+            if path == from {
+                pause(&self.pause_until_true);
+            }
+        }
+        self.inner.delete(from).await
     }
 }
 

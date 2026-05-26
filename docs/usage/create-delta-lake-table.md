@@ -27,13 +27,12 @@ You can easily write a DataFrame to a Delta table.
 === "Rust"
 
     ```rust
-    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
-    let mut table = delta_ops
-        .create()
-        .with_table_name("some-table")
+    let table = CreateBuilder::new()
+        .with_location(path)
+        .with_table_name("/tmp/some-table")
         .with_save_mode(SaveMode::Overwrite)
         .with_columns(
-            StructType::new(vec![
+            StructType::try_new(vec![
                 StructField::new(
                     "num".to_string(),
                     DataType::Primitive(PrimitiveType::Integer),
@@ -44,31 +43,28 @@ You can easily write a DataFrame to a Delta table.
                     DataType::Primitive(PrimitiveType::String),
                     true,
                 ),
-            ])
+            ])?
             .fields()
             .cloned(),
         )
         .await?;
 
-    let mut record_batch_writer =
-        deltalake::writer::RecordBatchWriter::for_table(&mut table)?;
-    record_batch_writer
-        .write(
-            RecordBatch::try_new(
-                Arc::new(Schema::new(vec![
-                    Field::new("num", DataType::Int32, true),
-                    Field::new("letter", Utf8, true),
-                ])),
-                vec![
-                    Arc::new(Int32Array::from(vec![1, 2, 3])),
-                    Arc::new(StringArray::from(vec![
-                        "a", "b", "c",
-                    ])),
-                ],
-            )?,
-        )
+    use arrow_schema::{Field, Schema, DataType as ArrowDataType};
+    let data = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![
+            Field::new("num", ArrowDataType::Int32, true),
+            Field::new("letter", ArrowDataType::Utf8, true),
+        ])),
+        vec![
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3])),
+            Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c"])),
+        ],
+    )?;
+    
+    table
+        .write(vec![data])
+        .with_save_mode(SaveMode::Overwrite)
         .await?;
-    record_batch_writer.flush_and_commit(&mut table).await?;
     ```
 
 Here are the contents of the Delta table in storage:

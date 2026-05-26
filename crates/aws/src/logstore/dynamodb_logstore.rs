@@ -15,8 +15,8 @@ use url::Url;
 use deltalake_core::logstore::*;
 use deltalake_core::table::normalize_table_url;
 use deltalake_core::{
-    DeltaResult, DeltaTableError, ObjectStoreError, kernel::transaction::TransactionError,
-    logstore::ObjectStoreRef,
+    DeltaResult, DeltaTableError, ObjectStoreError, kernel::Version,
+    kernel::transaction::TransactionError, logstore::ObjectStoreRef,
 };
 use uuid::Uuid;
 
@@ -198,7 +198,7 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
-    async fn read_commit_entry(&self, version: i64) -> DeltaResult<Option<Bytes>> {
+    async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
         let entry = self
             .lock_client
             .get_commit_entry(self.table_path.as_ref(), version)
@@ -216,7 +216,7 @@ impl LogStore for S3DynamoDbLogStore {
     /// with retry logic.
     async fn write_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -269,7 +269,7 @@ impl LogStore for S3DynamoDbLogStore {
     /// Tries to abort an entry by first deleting the commit log entry, then deleting the temp commit file
     async fn abort_commit_entry(
         &self,
-        version: i64,
+        version: Version,
         commit_or_bytes: CommitOrBytes,
         _operation_id: Uuid,
     ) -> Result<(), TransactionError> {
@@ -301,7 +301,7 @@ impl LogStore for S3DynamoDbLogStore {
         Ok(())
     }
 
-    async fn get_latest_version(&self, current_version: i64) -> DeltaResult<i64> {
+    async fn get_latest_version(&self, current_version: Version) -> DeltaResult<Version> {
         debug!("Retrieving latest version of {self:?} at v{current_version}");
         let entry = self
             .lock_client

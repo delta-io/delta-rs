@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from deltalake import Schema
 from deltalake._internal import Transaction as Transaction
 from deltalake._internal import (
     create_table_with_add_actions as _create_table_with_add_actions,
 )
+from deltalake._util import deprecate_positional_commit_args
 
 
 @dataclass
@@ -49,14 +50,25 @@ class CommitProperties:
 
     def __init__(
         self,
-        custom_metadata: dict[str, str] | None = None,
+        custom_metadata: dict[str, Any] | None = None,
         max_commit_retries: int | None = None,
         app_transactions: list[Transaction] | None = None,
     ) -> None:
         """Custom metadata to be stored in the commit. Controls the number of retries for the commit.
 
         Args:
-            custom_metadata: custom metadata that will be added to the transaction commit.
+            custom_metadata: custom metadata that will be added to the transaction
+                commit. Top level keys must be strings and values must be JSON
+                serializable. Values such as NaN and Infinity are rejected.
+                Reserved commit info keys have stricter requirements:
+                "operationParameters" must be a JSON object; "readVersion" must
+                be an integer greater than or equal to zero, not a float;
+                "userId", "userName", and "userMetadata" must be strings;
+                "isolationLevel" must be one of "Serializable",
+                "WriteSerializable", or "SnapshotIsolation"; "isBlindAppend"
+                must be a boolean. The generated keys "timestamp", "operation",
+                and "engineInfo" cannot be set through custom metadata. Callers
+                may set "clientVersion", and it is preserved when provided.
             max_commit_retries: maximum number of times to retry the transaction commit.
         """
         self.custom_metadata = custom_metadata
@@ -74,9 +86,16 @@ def create_table_with_add_actions(
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
+    *args: Any,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
+    commit_properties, post_commithook_properties = deprecate_positional_commit_args(
+        "create_table_with_add_actions",
+        args,
+        commit_properties,
+        post_commithook_properties,
+    )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
     _create_table_with_add_actions(

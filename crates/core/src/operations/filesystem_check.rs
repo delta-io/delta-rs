@@ -8,7 +8,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let mut table = open_table("../path/to/table")?;
+//! let mut table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = FileSystemCheckBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
@@ -144,9 +144,7 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let mut file_stream = snapshot
-            .file_views(&log_store, None)
-            .map_ok(|f| f.add_action());
+        let mut file_stream = snapshot.file_views(&log_store, None).map_ok(|f| f.to_add());
         while let Some(active) = file_stream.next().await {
             let active = active?;
             if is_absolute_path(&active.path)? {
