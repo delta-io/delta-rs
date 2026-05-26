@@ -18,7 +18,7 @@ anyhow = "1"
 
 [dependencies.deltalake-core]
 path = "../core"
-version = "0"
+version = "1"
 features = ["datafusion"]
 
 [dev-dependencies]
