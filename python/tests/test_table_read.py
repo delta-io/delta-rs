@@ -1087,8 +1087,6 @@ def test_is_deltatable_with_storage_opts():
         "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
         "AWS_ALLOW_HTTP": "true",
-        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
-        "AWS_S3_LOCKING_PROVIDER": "dynamodb",
         "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
     }
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
