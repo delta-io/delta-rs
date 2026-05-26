@@ -135,7 +135,7 @@ impl BlindDeltaTable {
     }
 
     /// Get the table version.
-    pub fn version(&self) -> i64 {
+    pub fn version(&self) -> u64 {
         self.snapshot.version()
     }
 
@@ -186,7 +186,7 @@ impl BlindDeltaTable {
     /// # Returns
     ///
     /// The new version number after the commit.
-    pub async fn commit(&mut self, adds: Vec<Add>) -> DeltaResult<i64> {
+    pub async fn commit(&mut self, adds: Vec<Add>) -> DeltaResult<u64> {
         use crate::DeltaTableError;
         use crate::kernel::spawn_blocking_with_span;
 
@@ -198,8 +198,8 @@ impl BlindDeltaTable {
         let commit_version = spawn_blocking_with_span(move || {
             let committer = Box::new(FileSystemCommitter::new());
             let mut txn = kernel_snapshot
-                .transaction(committer)
-                .map_err(|e| DeltaTableError::from(e))?
+                .transaction(committer, engine.as_ref())
+                .map_err(DeltaTableError::from)?
                 .with_operation("WRITE".to_string())
                 .with_engine_info(format!("delta-rs:{}", env!("CARGO_PKG_VERSION")))
                 .with_data_change(true);
@@ -210,11 +210,11 @@ impl BlindDeltaTable {
             loop {
                 match txn.commit(engine.as_ref()) {
                     Ok(CommitResult::CommittedTransaction(committed)) => {
-                        return Ok(committed.commit_version() as i64);
+                        return Ok(committed.commit_version());
                     }
                     Ok(CommitResult::ConflictedTransaction(conflict)) => {
                         return Err(DeltaTableError::VersionAlreadyExists(
-                            conflict.conflict_version() as i64,
+                            conflict.conflict_version(),
                         ));
                     }
                     Ok(CommitResult::RetryableTransaction(retryable)) => {
@@ -546,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn test_consecutive_commits() {
         use crate::writer::{DeltaWriter, RecordBatchWriter};
-        use arrow::array::Int32Array;
+        use arrow::array::Int64Array;
         use arrow::datatypes::{Field, Schema as ArrowSchema};
         use std::sync::Arc;
 
@@ -558,7 +558,7 @@ mod tests {
             .with_table_name("consecutive-test")
             .with_columns(vec![StructField::new(
                 "id".to_string(),
-                DataType::Primitive(PrimitiveType::Integer),
+                DataType::Primitive(PrimitiveType::Long),
                 true,
             )])
             .await
@@ -569,14 +569,14 @@ mod tests {
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "id",
-            arrow::datatypes::DataType::Int32,
+            arrow::datatypes::DataType::Int64,
             true,
         )]));
 
-        for i in 1..=3 {
+        for i in 1..=3u64 {
             let batch = RecordBatch::try_new(
                 schema.clone(),
-                vec![Arc::new(Int32Array::from(vec![i * 10, i * 10 + 1]))],
+                vec![Arc::new(Int64Array::from(vec![10, 20]))],
             )
             .unwrap();
 
@@ -585,8 +585,8 @@ mod tests {
             let adds = writer.flush().await.unwrap();
 
             let new_version = blind.commit(adds).await.unwrap();
-            assert_eq!(new_version, i as i64);
-            assert_eq!(blind.version(), i as i64);
+            assert_eq!(new_version, i);
+            assert_eq!(blind.version(), i);
         }
     }
 

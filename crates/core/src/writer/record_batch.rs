@@ -180,10 +180,10 @@ impl RecordBatchWriter {
         let metadata = table.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
         let arrow_schema_ref = Arc::new(arrow_schema);
-        let partition_columns = metadata.partition_columns().clone();
+        let partition_columns = metadata.partition_columns().to_vec();
 
         let writer_properties = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
+            .set_compression(parquet::basic::Compression::SNAPPY)
             .build();
         let configuration = metadata.configuration().clone();
 
@@ -210,6 +210,7 @@ impl RecordBatchWriter {
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
             commit_properties: None,
         })
+    }
 
     fn new_with_table(
         delta_table: DeltaTable,
