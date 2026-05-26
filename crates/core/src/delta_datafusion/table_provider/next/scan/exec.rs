@@ -21,8 +21,8 @@ use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_expr::utils::collect_columns;
+use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -272,6 +272,15 @@ impl ExecutionPlan for DeltaScanExec {
         vec![&self.input]
     }
 
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.scan_plan.contract.retained_row_index_field().is_some() {
+            // Retained row indexes depend on one stream seeing each file's rows.
+            vec![Distribution::SinglePartition]
+        } else {
+            vec![Distribution::UnspecifiedDistribution]
+        }
+    }
+
     // TODO: setting this will fail certain tests, but why
     // fn maintains_input_order(&self) -> Vec<bool> {
     //     vec![true]
@@ -300,8 +309,8 @@ impl ExecutionPlan for DeltaScanExec {
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if self.scan_plan.contract.retained_row_index_field().is_some() {
-            // DeltaScanStream stores row ordinal counters per execution partition. Repartitioning
-            // can split a file's rows across streams and break ordinal contiguity.
+            // Each DeltaScanStream keeps row ordinal counters for one execution partition.
+            // Repartitioning can split one file across streams and break ordinal contiguity.
             return Ok(None);
         }
 
@@ -320,6 +329,17 @@ impl ExecutionPlan for DeltaScanExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // Normal planning enforces this through EnforceDistribution. Keep this check for
+        // callers that build DeltaScanExec directly or replace its child plan.
+        if self.scan_plan.contract.retained_row_index_field().is_some() {
+            let input_partition_count = self.input.properties().partitioning.partition_count();
+            if input_partition_count > 1 {
+                return plan_err!(
+                    "DeltaScanExec retained row indexes require a single input partition, got {input_partition_count}"
+                );
+            }
+        }
+
         Ok(Box::pin(DeltaScanStream {
             scan_plan: Arc::clone(&self.scan_plan),
             kernel_type: Arc::clone(self.scan_plan.scan.logical_schema()).into(),
@@ -747,9 +767,11 @@ mod tests {
         physical_expr::expressions::{
             BinaryExpr, Column, DynamicFilterPhysicalExpr, lit as physical_lit,
         },
+        physical_expr::{Distribution, Partitioning},
         physical_plan::{
             PhysicalExpr, collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
+            repartition::RepartitionExec,
         },
         prelude::{col, lit},
         scalar::ScalarValue,
@@ -1638,6 +1660,85 @@ mod tests {
             .as_primitive::<UInt64Type>()
             .values()
             .to_vec()
+    }
+
+    #[tokio::test]
+    async fn test_required_input_distribution_tracks_retained_row_index_contract() -> TestResult {
+        let (_kernel_type, scan_plan) = int32_scan_plan().await?;
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let distribution = exec.required_input_distribution();
+        assert!(
+            matches!(
+                distribution.as_slice(),
+                [Distribution::UnspecifiedDistribution]
+            ),
+            "unexpected distribution: {distribution:?}"
+        );
+
+        let retained_exec = DeltaScanExec::new(
+            retain_row_index(scan_plan, "row_ordinal"),
+            Arc::clone(&exec.input),
+            Arc::clone(&exec.transforms),
+            Arc::clone(&exec.selection_vectors),
+            exec.partition_stats.clone(),
+            exec.metrics.clone(),
+        );
+
+        let distribution = retained_exec.required_input_distribution();
+        assert!(
+            matches!(distribution.as_slice(), [Distribution::SinglePartition]),
+            "unexpected distribution: {distribution:?}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_retained_row_index_execute_rejects_multi_partition_child() -> TestResult {
+        let (_kernel_type, scan_plan) = int32_scan_plan().await?;
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let repartitioned_input = Arc::new(RepartitionExec::try_new(
+            Arc::clone(&exec.input),
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let retained_exec = DeltaScanExec::new(
+            retain_row_index(scan_plan, "row_ordinal"),
+            repartitioned_input,
+            Arc::clone(&exec.transforms),
+            Arc::clone(&exec.selection_vectors),
+            exec.partition_stats.clone(),
+            exec.metrics.clone(),
+        );
+
+        let err = match retained_exec.execute(0, session.task_ctx()) {
+            Ok(_) => panic!("retained row-index scans must reject multi-partition children"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("retained row indexes require a single input partition"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
     }
 
     #[tokio::test]
