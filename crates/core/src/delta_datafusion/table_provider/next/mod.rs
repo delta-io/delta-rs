@@ -25,9 +25,8 @@
 //! - planning the physical data file reads based on Datafusion's abstractions
 //! - applying Delta features by transforming the physical data into the table's logical schema
 //!
-use std::any::Any;
 use std::collections::HashSet;
-use std::{borrow::Cow, sync::Arc};
+use std::{any::Any, borrow::Cow, fmt, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result};
@@ -54,111 +53,161 @@ use crate::delta_datafusion::DeltaScanConfig;
 use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::delta_datafusion::table_provider::TableProviderBuilder;
 use crate::kernel::transaction::{PROTOCOL, TransactionError};
-use crate::kernel::{EagerSnapshot, SendableScanMetadataStream, Snapshot};
+use crate::kernel::{Add, EagerSnapshot, SendableScanMetadataStream, Snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::SaveMode;
 use crate::table::normalize_table_url;
 
 mod scan;
 
-mod serde_file_id_set {
-    use std::collections::HashSet;
-
-    use serde::{Deserialize as _, Deserializer, Serializer};
-
-    pub(crate) fn serialize<S>(set: &HashSet<String>, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut values: Vec<_> = set.iter().collect();
-        values.sort();
-        serializer.collect_seq(values)
-    }
-
-    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<HashSet<String>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let values = Vec::<String>::deserialize(deserializer)?;
-        Ok(values.into_iter().collect())
-    }
-}
-
 /// Default column name for the file id column we add to files read from disk.
 pub(crate) use crate::delta_datafusion::file_id::FILE_ID_COLUMN_DEFAULT;
 
+/// Policy for selected files that are not active in a scan snapshot.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) enum MissingFilePolicy {
-    /// Return an error if any selected file IDs are not found in the scan.
+pub enum MissingSelectedFilePolicy {
+    /// Return an error when a selected file is not active in the scan snapshot.
     #[default]
     Error,
-    /// Silently skip file IDs that are not found in the scan.
-    /// Useful for operations like compaction where files may have been concurrently removed.
-    #[allow(dead_code)]
+    /// Skip selected files that are not active in the scan snapshot.
+    ///
+    /// Malformed paths, paths outside the table root, protocol failures, object store failures,
+    /// and query planning failures still return errors.
     Ignore,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct FileSelection {
-    #[serde(with = "serde_file_id_set")]
-    file_ids: HashSet<String>,
-    missing_file_policy: MissingFilePolicy,
+/// File selection for a [`DeltaScan`] snapshot.
+///
+/// A selection limits a scan to explicit files, for example paths returned by
+/// [`crate::DeltaTable::get_files_by_partitions`] or Add actions produced by maintenance tasks.
+///
+/// The input identifies files. Metadata comes from the scan snapshot, including
+/// deletion vectors, partition values, statistics, column mapping, and tags.
+///
+/// Empty selections produce empty scans. Duplicate inputs are deduplicated after the scan snapshot
+/// is known. Add inputs contribute only their path. The default policy returns an error for files
+/// that are not active in the scan snapshot. [`MissingSelectedFilePolicy::Ignore`] skips those
+/// files. Query pruning does not mark a selected file as missing.
+///
+/// Absolute URLs must be under the table root. Paths outside the table root are rejected during
+/// scan planning with redacted error output.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct FileSelection {
+    paths: Vec<String>,
+    missing_file_policy: MissingSelectedFilePolicy,
+}
+
+#[derive(Clone, Debug)]
+struct ResolvedFileSelection {
+    active_file_ids: HashSet<String>,
+    missing_file_ids: Vec<String>,
+    missing_file_policy: MissingSelectedFilePolicy,
 }
 
 impl FileSelection {
-    /// Create a selection from pre-normalized file IDs.
+    /// Select files from Add actions.
     ///
-    /// This constructor does not normalize or validate the input IDs.
-    /// Callers with relative file paths or Add actions should prefer:
-    /// - [`FileSelection::from_file_paths`]
-    /// - [`FileSelection::from_adds`]
-    /// - [`normalize_path_as_file_id`]
-    #[cfg(test)]
-    pub(crate) fn new(file_ids: impl IntoIterator<Item = String>) -> Self {
+    /// Only the path is used. File metadata is loaded from the scan snapshot.
+    pub fn from_adds(adds: impl IntoIterator<Item = Add>) -> Self {
         Self {
-            file_ids: file_ids.into_iter().collect(),
-            missing_file_policy: MissingFilePolicy::Error,
+            paths: adds.into_iter().map(add_path_for_selection).collect(),
+            missing_file_policy: MissingSelectedFilePolicy::Error,
         }
     }
 
-    pub(crate) fn with_missing_file_policy(mut self, policy: MissingFilePolicy) -> Self {
+    /// Select files by path.
+    ///
+    /// Paths may be relative to the table root or absolute URLs under the same table root.
+    /// Path validation happens when a scan is planned against a concrete table root.
+    pub fn from_file_paths(paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            paths: paths.into_iter().map(Into::into).collect(),
+            missing_file_policy: MissingSelectedFilePolicy::Error,
+        }
+    }
+
+    /// Set the policy for selected files that are not active in the scan snapshot.
+    pub fn with_missing_file_policy(mut self, policy: MissingSelectedFilePolicy) -> Self {
         self.missing_file_policy = policy;
         self
     }
 
-    pub(crate) fn from_file_paths(
-        file_paths: impl IntoIterator<Item = impl AsRef<str>>,
-        table_root_url: &Url,
-    ) -> crate::DeltaResult<Self> {
+    fn resolve_input_file_ids(&self, table_root_url: &Url) -> crate::DeltaResult<HashSet<String>> {
         let table_root_url = ensure_table_root_url(table_root_url);
-        let mut file_ids = HashSet::new();
-        for path in file_paths {
-            let file_id = normalize_path_as_file_id_with_table_root(
-                path.as_ref(),
-                &table_root_url,
-                "file path",
-            )?;
-            file_ids.insert(file_id);
-        }
+        self.paths
+            .iter()
+            .map(|path| {
+                normalize_path_as_file_id_with_table_root(
+                    path,
+                    &table_root_url,
+                    "selected file path",
+                )
+            })
+            .collect()
+    }
+}
 
-        Ok(Self {
-            file_ids,
-            missing_file_policy: MissingFilePolicy::Error,
-        })
+impl fmt::Debug for FileSelection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileSelection")
+            .field("paths", &redacted_paths_for_debug(&self.paths))
+            .field("missing_file_policy", &self.missing_file_policy)
+            .finish()
+    }
+}
+
+fn redacted_paths_for_debug(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| redact_url_str_for_error(path))
+        .collect()
+}
+
+impl ResolvedFileSelection {
+    fn new(
+        active_file_ids: HashSet<String>,
+        missing_file_ids: Vec<String>,
+        missing_file_policy: MissingSelectedFilePolicy,
+    ) -> Self {
+        Self {
+            active_file_ids,
+            missing_file_ids,
+            missing_file_policy,
+        }
     }
 
-    pub(crate) fn from_adds(
-        adds: impl IntoIterator<Item = crate::kernel::Add>,
-        table_root_url: &Url,
-    ) -> crate::DeltaResult<Self> {
-        Self::from_file_paths(
-            adds.into_iter()
-                // Add.path is URI-decoded once, while scan file IDs are keyed by the
-                // object-store/raw path form. Route through Path so literal '%' bytes in
-                // partition directories are escaped back to the canonical file-id form.
-                .map(|add| String::from(Path::from(add.path))),
-            table_root_url,
-        )
+    fn validate_missing(&self) -> Result<()> {
+        if self.missing_file_policy == MissingSelectedFilePolicy::Ignore
+            || self.missing_file_ids.is_empty()
+        {
+            return Ok(());
+        }
+
+        let missing_total = self.missing_file_ids.len();
+        let missing: Vec<_> = self
+            .missing_file_ids
+            .iter()
+            .take(10)
+            .map(|id| redact_url_str_for_error(id))
+            .collect();
+        let extra = if missing_total > missing.len() {
+            format!(" (and {} more)", missing_total - missing.len())
+        } else {
+            String::new()
+        };
+        Err(DataFusionError::Plan(format!(
+            "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
+            missing.join(", ")
+        )))
+    }
+}
+
+fn add_path_for_selection(add: Add) -> String {
+    let path = add.path;
+    if Url::parse(&path).is_ok() {
+        path
+    } else {
+        String::from(Path::from(path))
     }
 }
 
@@ -173,16 +222,18 @@ pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
 }
 
 pub(crate) fn canonical_table_root_identity(root: &url::Url) -> url::Url {
-    let mut root = ensure_table_root_url(&normalize_table_url(root));
-    let _ = root.set_username("");
-    let _ = root.set_password(None);
-    root.set_query(None);
-    root.set_fragment(None);
+    let root = table_root_identity(root);
 
     if root.scheme() == "file" {
         return canonical_local_table_root_url(&root).unwrap_or(root);
     }
 
+    root
+}
+
+fn table_root_identity(root: &url::Url) -> url::Url {
+    let mut root = ensure_table_root_url(&normalize_table_url(root));
+    strip_url_sensitive_parts(&mut root);
     root
 }
 
@@ -194,25 +245,61 @@ fn canonical_local_table_root_url(root: &url::Url) -> Option<url::Url> {
     Some(ensure_table_root_url(&normalize_table_url(&canonical_root)))
 }
 
+fn canonical_local_file_url(url: &url::Url) -> Option<url::Url> {
+    if url.scheme() != "file" {
+        return None;
+    }
+    let path = url.to_file_path().ok()?;
+    let canonical_path = std::fs::canonicalize(path).ok()?;
+    Url::from_file_path(canonical_path).ok()
+}
+
+fn strip_url_sensitive_parts(url: &mut Url) {
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    url.set_query(None);
+    url.set_fragment(None);
+}
+
 pub(crate) fn redact_url_for_error(url: &Url) -> String {
     let mut redacted = url.clone();
-    let _ = redacted.set_password(None);
-    let _ = redacted.set_username("");
-    redacted.set_query(None);
-    redacted.set_fragment(None);
+    strip_url_sensitive_parts(&mut redacted);
     redacted.to_string()
 }
 
 pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
     Url::parse(urlish).map_or_else(
-        |_| {
-            urlish
-                .split(['?', '#'])
-                .next()
-                .unwrap_or(urlish)
-                .to_string()
-        },
+        |_| redact_unparsed_url_str_for_error(urlish),
         |url| redact_url_for_error(&url),
+    )
+}
+
+fn redact_unparsed_url_str_for_error(urlish: &str) -> String {
+    let without_query = urlish
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(urlish)
+        .to_string();
+    // Redact authority for strings that Url cannot parse, including malformed URLs
+    // and Windows style `scheme://userinfo@host\path` values.
+    let Some(authority_start) = without_query.find("://").map(|idx| idx + 3) else {
+        return without_query;
+    };
+    let authority_len = without_query[authority_start..]
+        .find(['/', '\\'])
+        .unwrap_or(without_query.len() - authority_start);
+    let authority_end = authority_start + authority_len;
+    let Some(userinfo_end) = without_query[authority_start..authority_end]
+        .rfind('@')
+        .map(|idx| authority_start + idx + 1)
+    else {
+        return without_query;
+    };
+
+    format!(
+        "{}{}",
+        &without_query[..authority_start],
+        &without_query[userinfo_end..]
     )
 }
 
@@ -226,6 +313,12 @@ fn normalize_path_as_file_id_with_table_root(
         "table_root_url must end with '/' before normalization"
     );
 
+    if path.is_empty() {
+        return Err(DeltaTableError::InvalidTableLocation(format!(
+            "{context} is empty"
+        )));
+    }
+
     let file_url = Url::parse(path)
         .or_else(|_| table_root_url.join(path))
         .map_err(|e| {
@@ -236,7 +329,67 @@ fn normalize_path_as_file_id_with_table_root(
             ))
         })?;
 
-    Ok(file_url.to_string())
+    validate_selected_file_url_under_table_root(&file_url, table_root_url, context, path)
+}
+
+fn validate_selected_file_url_under_table_root(
+    file_url: &Url,
+    table_root_url: &Url,
+    context: &'static str,
+    original: &str,
+) -> crate::DeltaResult<String> {
+    let original_root_identity = table_root_identity(table_root_url);
+    let canonical_root_identity = canonical_table_root_identity(table_root_url);
+    let root_identities = if canonical_root_identity == original_root_identity {
+        vec![original_root_identity]
+    } else {
+        vec![original_root_identity, canonical_root_identity]
+    };
+
+    let mut file_identity = file_url.clone();
+    strip_url_sensitive_parts(&mut file_identity);
+    let mut file_identities = vec![file_identity.clone()];
+    if let Some(canonical_file_identity) = canonical_local_file_url(&file_identity)
+        && canonical_file_identity != file_identity
+    {
+        file_identities.push(canonical_file_identity);
+    }
+
+    let relative_path = file_identities
+        .iter()
+        .flat_map(|file_identity| {
+            root_identities
+                .iter()
+                .map(move |root_identity| (file_identity, root_identity))
+        })
+        .find_map(|(file_identity, root_identity)| {
+            let same_store = file_identity.scheme() == root_identity.scheme()
+                && file_identity.host_str() == root_identity.host_str()
+                && file_identity.port_or_known_default() == root_identity.port_or_known_default();
+            same_store
+                .then(|| file_identity.path().strip_prefix(root_identity.path()))
+                .flatten()
+        })
+        .ok_or_else(|| {
+            DeltaTableError::InvalidTableLocation(format!(
+                "{context} '{}' is outside table root '{}'",
+                redact_url_str_for_error(original),
+                redact_url_for_error(&canonical_table_root_identity(table_root_url))
+            ))
+        })?;
+
+    let mut normalized = table_root_url.join(relative_path).map_err(|err| {
+        DeltaTableError::InvalidTableLocation(format!(
+            "Failed to normalize {context} '{}' against '{}': {err}",
+            redact_url_str_for_error(original),
+            redact_url_for_error(table_root_url),
+        ))
+    })?;
+
+    // File IDs do not carry query or fragment parts from the input table root.
+    normalized.set_query(None);
+    normalized.set_fragment(None);
+    Ok(normalized.to_string())
 }
 
 pub(crate) fn normalize_path_as_file_id(
@@ -324,6 +477,8 @@ impl DeltaScan {
     // create new delta scan
     pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
         let snapshot = snapshot.into();
+        Self::validate_supported_reader_features(&snapshot)
+            .map_err(crate::DeltaTableError::from)?;
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
         let full_schema = if let Some(file_id_column) =
             config.provider_file_id_column(None, scan_schema.as_ref())
@@ -357,7 +512,21 @@ impl DeltaScan {
         self
     }
 
-    pub(crate) fn with_file_selection(mut self, selection: FileSelection) -> Self {
+    /// Restrict reads to Add action paths. File metadata comes from the scan snapshot.
+    pub fn with_files(self, files: impl IntoIterator<Item = Add>) -> Self {
+        self.with_file_selection(FileSelection::from_adds(files))
+    }
+
+    /// Restrict reads to file paths.
+    pub fn with_file_paths(self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.with_file_selection(FileSelection::from_file_paths(paths))
+    }
+
+    /// Restrict reads to a file selection resolved against this scan's snapshot.
+    ///
+    /// Path validation runs during scan or deletion vector planning. Malformed paths, paths
+    /// outside the table root, and missing selected files are reported there.
+    pub fn with_file_selection(mut self, selection: FileSelection) -> Self {
         self.file_selection = Some(selection);
         self
     }
@@ -381,17 +550,6 @@ impl DeltaScan {
         Ok(self)
     }
 
-    /// Restrict reads to the provided add actions by normalizing them into a
-    /// [`FileSelection`], so callers can pass kernel `Add`s directly.
-    pub(crate) fn with_selected_adds(
-        mut self,
-        adds: impl IntoIterator<Item = crate::kernel::Add>,
-    ) -> crate::DeltaResult<Self> {
-        let table_root = self.snapshot.table_configuration().table_root().clone();
-        self.file_selection = Some(FileSelection::from_adds(adds, &table_root)?);
-        Ok(self)
-    }
-
     /// Attach the runtime log store handle required for session setup on read paths and writes.
     pub(crate) fn with_log_store(mut self, log_store: impl Into<LogStoreRef>) -> Self {
         self.log_store = Some(log_store.into());
@@ -405,13 +563,14 @@ impl DeltaScan {
         self
     }
 
-    fn ensure_supported_reader_features(&self) -> std::result::Result<(), TransactionError> {
-        match PROTOCOL.can_read_from_protocol(self.snapshot.snapshot().protocol()) {
+    fn validate_supported_reader_features(
+        snapshot: &SnapshotWrapper,
+    ) -> std::result::Result<(), TransactionError> {
+        match PROTOCOL.can_read_from_protocol(snapshot.snapshot().protocol()) {
             Ok(()) => Ok(()),
             Err(TransactionError::UnsupportedTableFeatures(features))
                 if features.as_slice() == [TableFeature::ColumnMapping]
-                    && self
-                        .snapshot
+                    && snapshot
                         .table_configuration()
                         .is_feature_enabled(&TableFeature::ColumnMapping) =>
             {
@@ -422,7 +581,9 @@ impl DeltaScan {
     }
 
     fn ensure_read_ready(&self, session: &dyn Session) -> Result<()> {
-        self.ensure_supported_reader_features()
+        // DataFusion codec deserialization bypasses DeltaScan::new.
+        // Keep protocol checks on read entry points.
+        Self::validate_supported_reader_features(&self.snapshot)
             .map_err(crate::DeltaTableError::from)?;
         if let Some(log_store) = &self.log_store {
             super::update_datafusion_session(session, log_store.as_ref(), self.read_operation_id)?;
@@ -452,8 +613,18 @@ impl DeltaScan {
         )?;
 
         let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
+        let resolved_file_selection = self
+            .resolve_file_selection(self.file_selection.as_ref(), engine.clone())
+            .await?;
 
-        scan::replay_deletion_vectors(engine, &scan_plan, &self.config, stream).await
+        scan::replay_deletion_vectors(
+            engine,
+            &scan_plan,
+            &self.config,
+            stream,
+            resolved_file_selection.as_ref(),
+        )
+        .await
     }
 
     fn scan_metadata_stream(
@@ -464,6 +635,24 @@ impl DeltaScan {
         scan_plan
             .scan
             .scan_metadata_seeded(engine, self.snapshot.snapshot().materialized_files())
+    }
+
+    async fn resolve_file_selection(
+        &self,
+        selection: Option<&FileSelection>,
+        engine: Arc<dyn Engine>,
+    ) -> Result<Option<ResolvedFileSelection>> {
+        let Some(selection) = selection else {
+            return Ok(None);
+        };
+
+        let scan_plan =
+            KernelScanPlan::try_new(self.snapshot.snapshot(), None, &[], &self.config, None)?;
+        let stream = self.scan_metadata_stream(&scan_plan, engine);
+
+        scan::resolve_file_selection(selection, &scan_plan, stream)
+            .await
+            .map(Some)
     }
 
     pub fn builder() -> TableProviderBuilder {
@@ -519,6 +708,9 @@ impl TableProvider for DeltaScan {
         )?;
 
         let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
+        let resolved_file_selection = self
+            .resolve_file_selection(self.file_selection.as_ref(), engine.clone())
+            .await?;
 
         scan::execution_plan(
             &self.config,
@@ -527,7 +719,7 @@ impl TableProvider for DeltaScan {
             stream,
             engine,
             limit,
-            self.file_selection.as_ref(),
+            resolved_file_selection.as_ref(),
         )
         .await
     }
@@ -665,7 +857,7 @@ mod tests {
         logstore::get_actions,
         operations::create::CreateBuilder,
         test_utils::{
-            TestResult, TestTables,
+            TestResult, TestTables, make_test_add,
             object_store::{
                 drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
             },
@@ -684,6 +876,21 @@ mod tests {
         assert!(canonical.password().is_none());
         assert!(canonical.query().is_none());
         assert!(canonical.fragment().is_none());
+    }
+
+    #[test]
+    fn test_redact_url_str_for_error_redacts_unparsed_authority() {
+        let redacted = redact_url_str_for_error(
+            "bad scheme://urluser:urlpassword@example.com\\table\\part.parquet?token=urltoken#frag",
+        );
+
+        assert_eq!(redacted, "bad scheme://example.com\\table\\part.parquet");
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !redacted.contains(forbidden),
+                "redacted unparsed URL contains {forbidden}: {redacted}"
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -839,9 +1046,8 @@ mod tests {
         table.write(vec![batch]).await
     }
 
-    async fn create_in_memory_id_table_with_reader_protocol(
-        min_reader_version: i32,
-    ) -> crate::DeltaResult<crate::DeltaTable> {
+    async fn create_in_memory_id_table_with_unsupported_reader_protocol()
+    -> crate::DeltaResult<crate::DeltaTable> {
         let schema = StructType::try_new(vec![StructField::new(
             "id".to_string(),
             DataType::Primitive(PrimitiveType::Long),
@@ -851,9 +1057,48 @@ mod tests {
             .create()
             .with_columns(schema.fields().cloned())
             .with_actions(vec![Action::Protocol(
-                ProtocolInner::new(min_reader_version, 2).as_kernel(),
+                ProtocolInner::new(3, 7)
+                    .append_reader_features([TableFeature::V2Checkpoint])
+                    .append_writer_features([TableFeature::V2Checkpoint])
+                    .as_kernel(),
             )])
             .await
+    }
+
+    #[tokio::test]
+    async fn test_direct_scan_rejects_unsupported_reader_protocol() -> TestResult {
+        let table = create_in_memory_id_table_with_unsupported_reader_protocol().await?;
+        let err = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )
+        .unwrap_err();
+
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("Unsupported table features"),
+            "unexpected error: {err_str}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_rejects_unsupported_reader_protocol() -> TestResult {
+        let table = create_in_memory_id_table_with_unsupported_reader_protocol().await?;
+        let err = DeltaScan::builder()
+            .with_snapshot(table.snapshot()?.snapshot().snapshot().clone())
+            .build()
+            .await
+            .unwrap_err();
+
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("Unsupported table features"),
+            "unexpected error: {err_str}"
+        );
+
+        Ok(())
     }
 
     async fn build_insert_input(
@@ -1197,6 +1442,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_delta_scan_serde_accepts_missing_file_selection_field() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::builder().with_snapshot(snapshot).build().await?;
+        let mut serialized = serde_json::to_value(&provider)?;
+
+        serialized
+            .as_object_mut()
+            .expect("serialized provider was not a JSON object")
+            .remove("file_selection");
+
+        let _decoded: DeltaScan = serde_json::from_value(serialized)?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_query_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
@@ -1481,13 +1743,12 @@ mod tests {
             })
             .sum();
 
-        let selection = FileSelection::new(selected_file_ids.clone());
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_file_column(FILE_ID_COLUMN_DEFAULT)
             .build()
             .await?
-            .with_file_selection(selection);
+            .with_file_paths(selected_file_ids.clone());
 
         let plan = provider.scan(&state, None, &[], None).await?;
 
@@ -1511,8 +1772,6 @@ mod tests {
     async fn test_scan_with_file_selection_from_file_paths_reads_selected_file() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
-
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
 
@@ -1525,7 +1784,7 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let selection = FileSelection::from_file_paths([selected_path.as_str()], &table_root)?;
+        let selection = FileSelection::from_file_paths([selected_path.as_str()]);
 
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
@@ -1543,7 +1802,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_with_selected_adds_reads_file_with_encoded_partition_path() -> TestResult {
+    async fn test_scan_with_file_selection_files_uses_snapshot_metadata_for_mutated_add()
+    -> TestResult {
         let schema = Arc::new(ArrowSchema::new(vec![
             ArrowField::new("modified", ArrowDataType::Utf8, true),
             ArrowField::new("country", ArrowDataType::Utf8, true),
@@ -1587,16 +1847,25 @@ mod tests {
                     .then_some(add)
             })
             .expect("expected a file in the Dominican Republic partition");
+        let mut selected_add = selected_add;
+        selected_add
+            .partition_values
+            .insert("country".to_string(), Some("WRONG".to_string()));
+        selected_add.size = 1;
+        selected_add.stats = Some(r#"{"numRecords":999999}"#.to_string());
+        selected_add.tags = Some(std::collections::HashMap::from([(
+            "trusted".to_string(),
+            Some("false".to_string()),
+        )]));
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
-            .with_file_column(FILE_ID_COLUMN_DEFAULT)
             .build()
             .await?
             .with_log_store(log_store)
-            .with_selected_adds([selected_add])?;
+            .with_files([selected_add]);
 
         let plan = provider.scan(&state, None, &[], None).await?;
         let mut visitor = DeltaScanVisitor::default();
@@ -1610,6 +1879,14 @@ mod tests {
             .collect();
         let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
         assert_eq!(returned_rows, 1);
+        let expected = vec![
+            "+------------+--------------------+-------+",
+            "| modified   | country            | value |",
+            "+------------+--------------------+-------+",
+            "| 2021-02-02 | Dominican Republic | 100   |",
+            "+------------+--------------------+-------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }
@@ -1648,13 +1925,12 @@ mod tests {
         assert_eq!(raw_rows, expected_raw_rows);
         assert!(deleted_rows > 0);
 
-        let selection = FileSelection::new([selected_file_url.to_string()]);
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_file_column(FILE_ID_COLUMN_DEFAULT)
             .build()
             .await?
-            .with_file_selection(selection);
+            .with_file_paths([selected_file_url.to_string()]);
 
         let plan = provider.scan(&state, None, &[], None).await?;
 
@@ -1677,6 +1953,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_with_file_selection_mutated_add_uses_snapshot_deletion_vector_metadata()
+    -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+
+        let (mut selected_add, expected_raw_rows, deleted_rows) = snapshot
+            .file_views(log_store.as_ref(), None)
+            .map_ok(|view| {
+                view.deletion_vector_descriptor().map(|dv| {
+                    (
+                        view.to_add(),
+                        view.num_records()
+                            .expect("expected numRecords stats for table-with-dv file"),
+                        dv.cardinality as usize,
+                    )
+                })
+            })
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("expected at least one file with a deletion vector");
+        selected_add.deletion_vector = None;
+        selected_add.size = 1;
+        selected_add.stats = Some(r#"{"numRecords":999999}"#.to_string());
+        selected_add.tags = Some(std::collections::HashMap::from([(
+            "trusted".to_string(),
+            Some("false".to_string()),
+        )]));
+
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await?
+            .with_log_store(log_store)
+            .with_files([selected_add]);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, expected_raw_rows - deleted_rows);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_with_file_selection_strict_missing_files_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
@@ -1691,18 +2020,14 @@ mod tests {
             .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
             .try_collect()
             .await?;
-        selected_file_ids.push(
-            "https://urluser:urlpassword@example.com/__does_not_exist__.parquet?token=urltoken"
-                .to_string(),
-        );
+        selected_file_ids.push(table_root.join("__does_not_exist__.parquet")?.to_string());
 
-        let selection = FileSelection::new(selected_file_ids);
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_file_column(FILE_ID_COLUMN_DEFAULT)
             .build()
             .await?
-            .with_file_selection(selection);
+            .with_file_paths(selected_file_ids);
 
         let err = provider.scan(&state, None, &[], None).await.unwrap_err();
         let err_str = err.to_string();
@@ -1714,10 +2039,6 @@ mod tests {
             err_str.contains("missing files"),
             "unexpected error: {err_str}"
         );
-        assert!(!err_str.contains("urluser"));
-        assert!(!err_str.contains("urlpassword"));
-        assert!(!err_str.contains("urltoken"));
-
         Ok(())
     }
 
@@ -1736,12 +2057,10 @@ mod tests {
             .map_ok(|view| table_root.join(view.path_raw()).unwrap().to_string())
             .try_collect()
             .await?;
-        selected_file_ids.push(
-            "https://example.com/__does_not_exist__.parquet?token=should_not_matter".to_string(),
-        );
+        selected_file_ids.push(table_root.join("__does_not_exist__.parquet")?.to_string());
 
-        let selection = FileSelection::new(selected_file_ids)
-            .with_missing_file_policy(MissingFilePolicy::Ignore);
+        let selection = FileSelection::from_file_paths(selected_file_ids)
+            .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_file_column(FILE_ID_COLUMN_DEFAULT)
@@ -1757,18 +2076,249 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_scan_with_empty_file_selection_returns_empty_scan() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_file_paths(Vec::<String>::new());
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_file_selection_empty_file_path_errors() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_file_paths([""]);
+
+        let err = provider.scan(&state, None, &[], None).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(err_str.contains("empty"), "unexpected error: {err_str}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_with_duplicate_file_selection_deduplicates() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let log_store = table.log_store();
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let selected_path = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .build()
+            .await?
+            .with_file_paths([selected_path.clone(), selected_path]);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let mut visitor = DeltaScanVisitor::default();
+        visit_execution_plan(plan.as_ref(), &mut visitor).unwrap();
+        assert_eq!(visitor.num_scanned, Some(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_wrong_root_file_selection_errors_under_ignore_policy() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let wrong_root =
+            "https://urluser:urlpassword@example.com/other/part.parquet?token=urltoken#frag";
+
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_file_selection(
+                FileSelection::from_file_paths([wrong_root])
+                    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore),
+            );
+
+        let err = provider.scan(&state, None, &[], None).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("outside table root"),
+            "unexpected error: {err_str}"
+        );
+        assert!(!err_str.contains("urluser"));
+        assert!(!err_str.contains("urlpassword"));
+        assert!(!err_str.contains("urltoken"));
+        assert!(!err_str.contains("frag"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_wrong_root_file_selection_errors_under_default_policy() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let wrong_root =
+            "https://urluser:urlpassword@example.com/other/part.parquet?token=urltoken#frag";
+
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_file_paths([wrong_root]);
+
+        let err = provider.scan(&state, None, &[], None).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("outside table root"),
+            "unexpected error: {err_str}"
+        );
+        assert!(!err_str.contains("urluser"));
+        assert!(!err_str.contains("urlpassword"));
+        assert!(!err_str.contains("urltoken"));
+        assert!(!err_str.contains("frag"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_selected_active_file_pruned_by_data_skipping_returns_empty_scan() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let log_store = table.log_store();
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let selected_path = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let provider = DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .with_file_skipping_predicates([col("id").eq(lit(999i64))])
+            .build()
+            .await?
+            .with_file_paths([selected_path]);
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        assert_eq!(returned_rows, 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_selection_resolves_against_provider_snapshot_not_latest() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let log_store = table.log_store();
+        let old_version = table.version();
+        let old_snapshot = table.snapshot()?.snapshot().snapshot().clone();
+        let selected_path = old_snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+
+        let overwrite_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![ArrowField::new(
+                "id",
+                ArrowDataType::Int64,
+                true,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![3, 4]))],
+        )?;
+        let latest_table = table
+            .write(vec![overwrite_batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await?;
+        assert!(latest_table.version() > old_version);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let old_provider = DeltaScan::builder()
+            .with_snapshot(old_snapshot)
+            .with_log_store(log_store.clone())
+            .build()
+            .await?
+            .with_file_paths([selected_path.clone()]);
+        let old_plan = old_provider.scan(&state, None, &[], None).await?;
+        let old_batches: Vec<_> = collect_partitioned(old_plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let expected = vec!["+----+", "| id |", "+----+", "| 1  |", "| 2  |", "+----+"];
+        assert_batches_sorted_eq!(&expected, &old_batches);
+
+        let latest_provider = DeltaScan::builder()
+            .with_snapshot(latest_table.snapshot()?.snapshot().snapshot().clone())
+            .with_log_store(log_store)
+            .build()
+            .await?
+            .with_file_paths([selected_path]);
+        let err = latest_provider
+            .scan(&state, None, &[], None)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("missing files"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
     #[test]
-    fn test_file_selection_from_file_paths_normalizes_urls() -> TestResult {
+    fn test_normalize_path_as_file_id_accepts_table_root_paths() -> TestResult {
         let cases = vec![
             (
                 "file:///tmp/delta",
                 "data/part-000.parquet",
                 "file:///tmp/delta/data/part-000.parquet",
-            ),
-            (
-                "file:///tmp/delta/",
-                "file:///other/table/part-000.parquet",
-                "file:///other/table/part-000.parquet",
             ),
             (
                 "s3://my-bucket/warehouse/my_table",
@@ -1794,39 +2344,92 @@ mod tests {
 
         for (table_root, input, expected) in cases {
             let table_root = Url::parse(table_root).unwrap();
-            let selection = FileSelection::from_file_paths([input], &table_root)?;
-            assert!(selection.file_ids.contains(expected));
-            assert_eq!(selection.missing_file_policy, MissingFilePolicy::Error);
+            let file_id = normalize_path_as_file_id(input, &table_root, "file path")?;
+            assert_eq!(file_id, expected);
         }
 
         Ok(())
     }
 
     #[test]
-    fn test_file_selection_serde_is_deterministic() -> TestResult {
-        let selection = FileSelection::new([
+    fn test_file_selection_serde_preserves_unresolved_input() -> TestResult {
+        let selection = FileSelection::from_file_paths([
             "file:///tmp/delta/b.parquet".to_string(),
             "file:///tmp/delta/a.parquet".to_string(),
-        ]);
+        ])
+        .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
 
         let value = serde_json::to_value(&selection)?;
-        let file_ids = value
-            .get("file_ids")
+        let file_paths = value
+            .get("paths")
             .and_then(|v| v.as_array())
             .unwrap()
             .iter()
             .map(|v| v.as_str().unwrap().to_string())
             .collect::<Vec<_>>();
+        let policy = value
+            .get("missing_file_policy")
+            .and_then(|v| v.as_str())
+            .unwrap();
 
         assert_eq!(
-            file_ids,
+            file_paths,
             vec![
-                "file:///tmp/delta/a.parquet".to_string(),
                 "file:///tmp/delta/b.parquet".to_string(),
+                "file:///tmp/delta/a.parquet".to_string(),
             ]
         );
+        assert_eq!(policy, "Ignore");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_from_adds_serializes_identity_only() -> TestResult {
+        let mut add = make_test_add("part=a/part-000.parquet", &[("part", "a")], 123);
+        add.stats = Some(r#"{"numRecords":999}"#.to_string());
+        add.tags = Some(std::collections::HashMap::from([(
+            "secret-tag".to_string(),
+            Some("secret-value".to_string()),
+        )]));
+        add.size = 999;
+
+        let selection = FileSelection::from_adds([add]);
+        let serialized = serde_json::to_string(&selection)?;
+
+        assert!(serialized.contains("part=a/part-000.parquet"));
+        for forbidden in [
+            "partitionValues",
+            "numRecords",
+            "secret-tag",
+            "secret-value",
+            "modificationTime",
+            "\"size\"",
+        ] {
+            assert!(
+                !serialized.contains(forbidden),
+                "FileSelection::from_adds serialized Add metadata field {forbidden}: {serialized}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_debug_redacts_sensitive_url_parts() {
+        let selection = FileSelection::from_file_paths([
+            "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+        ]);
+
+        let debug = format!("{selection:?}");
+
+        assert!(debug.contains("example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !debug.contains(forbidden),
+                "FileSelection debug output must redact {forbidden}: {debug}"
+            );
+        }
     }
 
     fn expected_dv_small()
@@ -1859,6 +2462,92 @@ mod tests {
 
         assert_eq!(deletion_vectors, expected);
         assert_eq!(deletion_vectors_second, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_file_selection_selects_dv_file() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let expected = expected_dv_small()?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
+            .with_file_paths([expected[0].filepath.clone()]);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        assert_eq!(deletion_vectors, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_file_selection_without_dv_is_empty() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let selected_path = snapshot
+            .file_views(log_store.as_ref(), None)
+            .take(1)
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap();
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
+            .with_log_store(log_store)
+            .with_file_paths([selected_path]);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        assert!(deletion_vectors.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_file_selection_strict_missing_errors() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
+            .with_log_store(log_store)
+            .with_file_paths([missing_path]);
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let err = provider.deletion_vectors(&state).await.unwrap_err();
+        let err_str = err.to_string();
+        assert!(
+            err_str.contains("File selection contains"),
+            "unexpected error: {err_str}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vectors_file_selection_ignore_missing_is_empty() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
+            .with_log_store(log_store)
+            .with_file_selection(
+                FileSelection::from_file_paths([missing_path])
+                    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore),
+            );
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+        assert!(deletion_vectors.is_empty());
 
         Ok(())
     }

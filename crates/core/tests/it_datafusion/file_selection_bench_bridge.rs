@@ -7,6 +7,9 @@ use datafusion::physical_plan::collect;
 use datafusion::prelude::{SessionContext, col, lit};
 use deltalake_core::DeltaTable;
 use deltalake_core::delta_datafusion::bench_support;
+use deltalake_core::delta_datafusion::{
+    DeltaScanConfig, DeltaScanNext, FileSelection, MissingSelectedFilePolicy,
+};
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField};
 use deltalake_core::protocol::SaveMode;
 use deltalake_test::TestResult;
@@ -114,6 +117,75 @@ async fn test_out_of_crate_bridge_exposes_file_selection_paths() -> TestResult {
     assert_eq!(matched_scan.predicate(), &col("id").gt(lit(50i32)));
 
     let plan = session.create_physical_plan(matched_scan.scan()).await?;
+    let batches = collect(plan, session.task_ctx()).await?;
+    let row_count = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+    assert_eq!(row_count, 2);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_public_file_selection_api_selects_paths() -> TestResult {
+    let table = DeltaTable::new_in_memory()
+        .create()
+        .with_columns(vec![
+            StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            ),
+            StructField::new(
+                "part".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+        ])
+        .await?;
+    let table = table
+        .write(vec![batch(vec![1, 2], vec!["a", "a"])?])
+        .with_save_mode(SaveMode::Append)
+        .await?;
+
+    let path = table
+        .get_files_by_partitions(&[])
+        .await?
+        .into_iter()
+        .next()
+        .expect("expected one active file")
+        .to_string();
+
+    let direct_provider = DeltaScanNext::new(
+        table.snapshot()?.snapshot().clone(),
+        DeltaScanConfig::default(),
+    )?
+    .with_file_paths([path.clone()]);
+    let session = SessionContext::new().state();
+    table.update_datafusion_session(&session)?;
+    let plan = direct_provider.scan(&session, None, &[], None).await?;
+    let batches = collect(plan, session.task_ctx()).await?;
+    let row_count = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+    assert_eq!(row_count, 2);
+
+    let provider = table
+        .table_provider()
+        .with_file_selection(
+            FileSelection::from_file_paths([path.clone()])
+                .with_missing_file_policy(MissingSelectedFilePolicy::Error),
+        )
+        .build()
+        .await?;
+
+    let plan = provider.scan(&session, None, &[], None).await?;
+    let batches = collect(plan, session.task_ctx()).await?;
+    let row_count = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
+    assert_eq!(row_count, 2);
+
+    let provider = table
+        .table_provider()
+        .with_file_paths([path])
+        .build()
+        .await?;
+    let plan = provider.scan(&session, None, &[], None).await?;
     let batches = collect(plan, session.task_ctx()).await?;
     let row_count = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
     assert_eq!(row_count, 2);

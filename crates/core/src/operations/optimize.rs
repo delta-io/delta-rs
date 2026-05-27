@@ -644,7 +644,7 @@ impl SelectedFileScanFactory {
         } else {
             provider
         };
-        provider.with_selected_adds(adds)
+        Ok(provider.with_files(adds))
     }
 }
 

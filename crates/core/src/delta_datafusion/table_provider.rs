@@ -24,8 +24,7 @@ use uuid::Uuid;
 
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
-use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{EagerSnapshot, Snapshot, Version};
+use crate::kernel::{Add, EagerSnapshot, Snapshot, Version};
 use crate::logstore::{LogStore, LogStoreExt as _};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -248,6 +247,7 @@ pub struct TableProviderBuilder {
     table_version: Option<Version>,
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
+    file_selection: Option<next::FileSelection>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -260,6 +260,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("row_index_column", &self.row_index_column)
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
+            .field("file_selection", &self.file_selection)
             .finish()
     }
 }
@@ -280,6 +281,7 @@ impl TableProviderBuilder {
             row_index_column: None,
             table_version: None,
             file_skipping_predicates: None,
+            file_selection: None,
         }
     }
 
@@ -348,6 +350,25 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Restrict reads to Add action paths. File metadata comes from the selected snapshot.
+    pub fn with_files(self, files: impl IntoIterator<Item = Add>) -> Self {
+        self.with_file_selection(next::FileSelection::from_adds(files))
+    }
+
+    /// Restrict reads to file paths.
+    pub fn with_file_paths(self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.with_file_selection(next::FileSelection::from_file_paths(paths))
+    }
+
+    /// Restrict reads to a file selection resolved against the selected snapshot.
+    ///
+    /// Path validation runs during scan or deletion vector planning. Malformed paths, paths
+    /// outside the table root, and missing selected files are reported there.
+    pub fn with_file_selection(mut self, selection: next::FileSelection) -> Self {
+        self.file_selection = Some(selection);
+        self
+    }
+
     pub async fn build(self) -> Result<next::DeltaScan> {
         let TableProviderBuilder {
             log_store,
@@ -357,6 +378,7 @@ impl TableProviderBuilder {
             row_index_column,
             table_version,
             file_skipping_predicates,
+            file_selection,
         } = self;
 
         let mut config = session
@@ -384,10 +406,6 @@ impl TableProviderBuilder {
                 }
             }
         };
-
-        PROTOCOL
-            .can_read_from_protocol(snapshot.snapshot().protocol())
-            .map_err(|err| DataFusionError::Plan(err.to_string()))?;
 
         if let Some(log_store) = log_store.as_ref() {
             let snapshot_root_identity = next::canonical_table_root_identity(
@@ -422,6 +440,10 @@ impl TableProviderBuilder {
                 visitor.result?;
             }
             provider = provider.with_file_skipping_predicate(skipping);
+        }
+
+        if let Some(selection) = file_selection {
+            provider = provider.with_file_selection(selection);
         }
 
         Ok(provider)
@@ -1010,10 +1032,10 @@ mod tests {
 
         let provider = next::DeltaScan::builder()
             .with_snapshot(snapshot)
+            .with_file_paths([missing_file_id])
             .build()
             .await
-            .unwrap()
-            .with_file_selection(next::FileSelection::new([missing_file_id]));
+            .unwrap();
 
         let session = Arc::new(crate::delta_datafusion::create_session().into_inner());
         let state = session.state_ref().read().clone();
