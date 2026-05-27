@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Array, BooleanArray, RecordBatch};
+use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use chrono::TimeZone;
 use datafusion::common::ScalarValue;
@@ -183,7 +183,19 @@ impl PartitionPruningPredicate {
             }
         }
 
-        let batch = RecordBatch::try_new(Arc::clone(&self.partition_schema), columns)?;
+        // A constant partition-only predicate (e.g. `false` after simplification)
+        // references no columns, so `columns` is empty. Arrow rejects a zero-column
+        // batch without an explicit row count, so evaluate it over one synthetic row;
+        // the predicate is constant, so a single row decides all files identically.
+        let batch = if columns.is_empty() {
+            RecordBatch::try_new_with_options(
+                Arc::clone(&self.partition_schema),
+                columns,
+                &RecordBatchOptions::new().with_row_count(Some(1)),
+            )?
+        } else {
+            RecordBatch::try_new(Arc::clone(&self.partition_schema), columns)?
+        };
         let evaluated = self.predicate.evaluate(&batch)?;
         let matches = match evaluated {
             ColumnarValue::Array(array) => {
@@ -369,13 +381,45 @@ mod tests {
         );
     }
 
-    /// A malformed value in a partition column the predicate does NOT reference must
-    /// not affect pruning. Because the pruning schema only contains the referenced
-    /// column (`id`), the unreferenced `region` value is never coerced and cannot make
-    /// the file fail open: `id = 5` still prunes a file whose `id` is 7.
+    /// Integration guard for the referenced-columns-only fix: the pruning schema is
+    /// *derived from the helper* over a table with two partition columns, and the
+    /// predicate references only `id`. A malformed value in the unreferenced `region`
+    /// column (here `Int32`, so `"not_an_int"` is a real coercion failure) must not
+    /// keep the file. With the original bug — building the schema from *all* partition
+    /// columns — `region` would be coerced, fail, and fail open, keeping `id=7`.
     #[test]
-    fn pruning_ignores_malformed_value_in_unreferenced_column() {
-        let predicate = id_eq_5_predicate();
+    fn pruning_schema_excludes_unreferenced_columns_so_malformed_values_are_ignored() {
+        use crate::delta_datafusion::extract_partition_only_predicate;
+
+        let partition_columns = vec!["id".to_string(), "region".to_string()];
+        let table_schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("region", DataType::Int32, true),
+        ]));
+
+        // Build the pruning predicate exactly as the load_cdf builder does: derive the
+        // schema from the helper's referenced columns, not from every partition column.
+        let (pred_expr, referenced) =
+            extract_partition_only_predicate(col("id").eq(lit(5_i32)), &partition_columns)
+                .unwrap()
+                .expect("partition-only predicate");
+        assert_eq!(referenced, vec!["id".to_string()], "region must not be referenced");
+
+        let partition_fields = referenced
+            .iter()
+            .map(|name| table_schema.field_with_name(name).cloned().unwrap())
+            .collect::<Vec<_>>();
+        let partition_schema: SchemaRef = Arc::new(Schema::new(partition_fields));
+        let df_schema = partition_schema.as_ref().clone().try_into().unwrap();
+        let predicate = SessionContext::new()
+            .state()
+            .create_physical_expr(pred_expr, &df_schema)
+            .unwrap();
+        let predicate = PartitionPruningPredicate {
+            predicate,
+            partition_schema,
+            table_schema,
+        };
 
         let mut partition_values = HashMap::new();
         partition_values.insert("id".to_string(), Some("7".to_string()));
@@ -393,8 +437,45 @@ mod tests {
         let kept = kept_paths(prune_specs_by_partition(specs, &predicate).unwrap());
         assert!(
             kept.is_empty(),
-            "file with id=7 must be pruned by id = 5; a malformed value in the \
-             unreferenced `region` column must not keep it"
+            "id=7 must be pruned by id=5; the unreferenced malformed `region` must be \
+             absent from the pruning schema and must not keep the file: {kept:?}"
+        );
+    }
+
+    /// A partition-only *constant* predicate (e.g. `WHERE false`, or `p = 'x' AND false`
+    /// after simplification) references no partition columns, so the pruning schema is
+    /// empty. Evaluation must still work and prune correctly instead of erroring on a
+    /// zero-column `RecordBatch` (which would fail open and wrongly keep every file).
+    #[test]
+    fn pruning_handles_constant_predicate_with_no_referenced_columns() {
+        let table_schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        // Empty pruning schema, mirroring what the builder produces for a constant predicate.
+        let partition_schema: SchemaRef = Arc::new(Schema::new(Vec::<Field>::new()));
+        let df_schema = partition_schema.as_ref().clone().try_into().unwrap();
+        let predicate = SessionContext::new()
+            .state()
+            .create_physical_expr(lit(false), &df_schema)
+            .unwrap();
+        let predicate = PartitionPruningPredicate {
+            predicate,
+            partition_schema,
+            table_schema,
+        };
+
+        let specs = vec![CdcDataSpec::new(
+            0,
+            0,
+            vec![
+                add_with_id_partition("a.parquet", Some(Some("5"))),
+                add_with_id_partition("b.parquet", Some(Some("7"))),
+            ],
+        )];
+
+        let kept = kept_paths(prune_specs_by_partition(specs, &predicate).unwrap());
+        assert!(
+            kept.is_empty(),
+            "a constant `false` predicate must prune every file, not fail open and keep them: {kept:?}"
         );
     }
 }
