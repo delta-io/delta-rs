@@ -75,11 +75,12 @@ fn map_action_to_scalar_for_pruning<F: FileAction>(
         // A non-null raw value. `to_correct_scalar_value` returns `Ok(None)` when
         // the value cannot be represented (e.g. array/object) and `Err` on parse
         // failures; both must be treated as "could not coerce".
-        Some(value) => Ok(
-            to_correct_scalar_value(&Value::String(value.to_string()), field.data_type())
-                .ok()
-                .flatten(),
-        ),
+        Some(value) => Ok(to_correct_scalar_value(
+            &Value::String(value.to_string()),
+            field.data_type(),
+        )
+        .ok()
+        .flatten()),
     }
 }
 
@@ -171,11 +172,7 @@ impl PartitionPruningPredicate {
     fn should_keep<F: FileAction>(&self, action: &F) -> DeltaResult<bool> {
         let mut columns = Vec::with_capacity(self.partition_schema.fields().len());
         for field in self.partition_schema.fields() {
-            match map_action_to_scalar_for_pruning(
-                action,
-                field.name(),
-                &self.table_schema,
-            )? {
+            match map_action_to_scalar_for_pruning(action, field.name(), &self.table_schema)? {
                 Some(scalar) => columns.push(scalar.to_array_of_size(1)?),
                 // Could not coerce this partition value: be conservative and keep
                 // the file instead of evaluating the predicate against a NULL.
@@ -228,14 +225,22 @@ pub fn prune_specs_by_partition<F: FileAction>(
     specs: Vec<CdcDataSpec<F>>,
     predicate: &PartitionPruningPredicate,
 ) -> DeltaResult<Vec<CdcDataSpec<F>>> {
+    // A constant predicate has an empty pruning schema and needs no partition values,
+    // so the "unreadable partition values -> keep" pre-check below must be skipped:
+    // otherwise a `WHERE false` predicate would keep files (e.g. a Remove without
+    // extended metadata) it could safely prune. When the schema references columns,
+    // keep the pre-check so we don't route every such action through should_keep's
+    // error/fail-open path.
+    let needs_partition_values = !predicate.partition_schema.fields().is_empty();
     let mut pruned = Vec::with_capacity(specs.len());
     for spec in specs {
         let (version, timestamp, actions) = spec.into_parts();
         let mut kept = Vec::with_capacity(actions.len());
         for action in actions {
-            // Unknown partition values (e.g. Remove without extended metadata)
+            // For a predicate that references partition columns, an action that cannot
+            // expose its partition values (e.g. a Remove without extended metadata)
             // cannot be evaluated, so keep the file to stay correct.
-            if action.partition_values().is_err() {
+            if needs_partition_values && action.partition_values().is_err() {
                 kept.push(action);
                 continue;
             }
@@ -263,10 +268,27 @@ pub fn prune_specs_by_partition<F: FileAction>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kernel::Add;
+    use crate::kernel::{Add, Remove};
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
     use std::collections::HashMap;
+
+    /// A constant `false` pruning predicate over an empty schema.
+    fn constant_false_predicate() -> PartitionPruningPredicate {
+        let table_schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let partition_schema: SchemaRef = Arc::new(Schema::new(Vec::<Field>::new()));
+        let df_schema = partition_schema.as_ref().clone().try_into().unwrap();
+        let predicate = SessionContext::new()
+            .state()
+            .create_physical_expr(lit(false), &df_schema)
+            .unwrap();
+        PartitionPruningPredicate {
+            predicate,
+            partition_schema,
+            table_schema,
+        }
+    }
 
     /// Build an `Add` with a single `id` partition value (or no `id` key when
     /// `value` is `None` via the outer `Option`).
@@ -403,7 +425,11 @@ mod tests {
             extract_partition_only_predicate(col("id").eq(lit(5_i32)), &partition_columns)
                 .unwrap()
                 .expect("partition-only predicate");
-        assert_eq!(referenced, vec!["id".to_string()], "region must not be referenced");
+        assert_eq!(
+            referenced,
+            vec!["id".to_string()],
+            "region must not be referenced"
+        );
 
         let partition_fields = referenced
             .iter()
@@ -448,20 +474,7 @@ mod tests {
     /// zero-column `RecordBatch` (which would fail open and wrongly keep every file).
     #[test]
     fn pruning_handles_constant_predicate_with_no_referenced_columns() {
-        let table_schema: SchemaRef =
-            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
-        // Empty pruning schema, mirroring what the builder produces for a constant predicate.
-        let partition_schema: SchemaRef = Arc::new(Schema::new(Vec::<Field>::new()));
-        let df_schema = partition_schema.as_ref().clone().try_into().unwrap();
-        let predicate = SessionContext::new()
-            .state()
-            .create_physical_expr(lit(false), &df_schema)
-            .unwrap();
-        let predicate = PartitionPruningPredicate {
-            predicate,
-            partition_schema,
-            table_schema,
-        };
+        let predicate = constant_false_predicate();
 
         let specs = vec![CdcDataSpec::new(
             0,
@@ -476,6 +489,38 @@ mod tests {
         assert!(
             kept.is_empty(),
             "a constant `false` predicate must prune every file, not fail open and keep them: {kept:?}"
+        );
+    }
+
+    /// A constant `false` predicate has an empty pruning schema, so it needs no partition
+    /// values and must prune even a `Remove` that lacks extended partition metadata (whose
+    /// `partition_values()` errors). The pre-check that keeps actions with unreadable
+    /// partition values must be bypassed when the pruning schema has no fields.
+    #[test]
+    fn constant_false_predicate_prunes_remove_without_partition_metadata() {
+        let predicate = constant_false_predicate();
+
+        let remove = Remove {
+            path: "r.parquet".to_string(),
+            data_change: true,
+            extended_file_metadata: Some(false),
+            partition_values: None,
+            size: None,
+            ..Default::default()
+        };
+        // This Remove genuinely cannot expose partition values.
+        assert!(remove.partition_values().is_err());
+
+        let specs = vec![CdcDataSpec::new(0, 0, vec![remove])];
+        let kept: Vec<String> = prune_specs_by_partition(specs, &predicate)
+            .unwrap()
+            .into_iter()
+            .flat_map(|s| s.into_parts().2)
+            .map(|r| r.path)
+            .collect();
+        assert!(
+            kept.is_empty(),
+            "constant `false` must prune even a Remove without partition metadata: {kept:?}"
         );
     }
 }
