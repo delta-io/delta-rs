@@ -30,7 +30,9 @@ use datafusion::physical_plan::union::UnionExec;
 use tracing::log;
 
 use crate::DeltaTableError;
-use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate};
+use crate::delta_datafusion::{
+    DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
