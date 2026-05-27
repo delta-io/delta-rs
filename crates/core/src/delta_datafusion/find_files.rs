@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -119,6 +119,8 @@ pub(crate) struct FindFilesExprProperties {
 
     pub partition_only: bool,
     pub result: DeltaResult<()>,
+    /// Partition columns referenced by the visited expression.
+    pub referenced_partition_columns: BTreeSet<String>,
 }
 
 impl Default for FindFilesExprProperties {
@@ -127,6 +129,7 @@ impl Default for FindFilesExprProperties {
             partition_columns: Vec::new(),
             partition_only: true,
             result: Ok(()),
+            referenced_partition_columns: BTreeSet::new(),
         }
     }
 }
@@ -158,7 +161,9 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
 
         match expr {
             Expr::Column(c) => {
-                if !self.partition_columns.contains(&c.name) {
+                if self.partition_columns.contains(&c.name) {
+                    self.referenced_partition_columns.insert(c.name.clone());
+                } else {
                     self.partition_only = false;
                 }
             }
@@ -207,6 +212,54 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     }
 }
 
+/// Extract the partition-only conjuncts of `predicate`, together with the partition
+/// columns they reference.
+///
+/// `predicate` is split into conjuncts and simplified; only terms that reference
+/// partition columns exclusively (and contain no nondeterministic or unsupported
+/// expressions) are retained and re-joined with `AND`. Returns `None` when no such
+/// term survives.
+///
+/// The returned column list is the subset of `partition_columns` actually referenced,
+/// in `partition_columns` order. Callers can use it to build a minimal pruning schema
+/// rather than materializing every partition column — which avoids coercing values the
+/// predicate never reads and prevents an unrelated/malformed partition value from
+/// weakening pruning.
+pub(crate) fn extract_partition_only_predicate(
+    predicate: Expr,
+    partition_columns: &[String],
+) -> DeltaResult<Option<(Expr, Vec<String>)>> {
+    let mut referenced = BTreeSet::new();
+    let partition_terms = simplify_predicates(split_conjunction_owned(predicate))?
+        .into_iter()
+        .filter(|term| {
+            let mut visitor = FindFilesExprProperties {
+                partition_columns: partition_columns.to_vec(),
+                ..Default::default()
+            };
+            let keep = term.visit(&mut visitor).is_ok()
+                && visitor.result.is_ok()
+                && visitor.partition_only;
+            if keep {
+                referenced.extend(visitor.referenced_partition_columns);
+            }
+            keep
+        })
+        .collect::<Vec<_>>();
+
+    let Some(predicate) = conjunction(partition_terms) else {
+        return Ok(None);
+    };
+
+    let referenced_columns = partition_columns
+        .iter()
+        .filter(|name| referenced.contains(*name))
+        .cloned()
+        .collect();
+
+    Ok(Some((predicate, referenced_columns)))
+}
+
 pub(crate) fn analyze_predicate_for_find_files(
     predicate: Expr,
     partition_columns: &[String],
@@ -214,8 +267,7 @@ pub(crate) fn analyze_predicate_for_find_files(
     let simplified_terms = simplify_predicates(split_conjunction_owned(predicate))?;
     let mut visitor = FindFilesExprProperties {
         partition_columns: partition_columns.to_vec(),
-        partition_only: true,
-        result: Ok(()),
+        ..Default::default()
     };
 
     for term in &simplified_terms {
@@ -647,6 +699,38 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn extract_partition_only_predicate_returns_only_referenced_columns() {
+        let partition_columns = vec!["p0".to_string(), "p1".to_string()];
+
+        // Predicate references only `p0`: the result must reference `p0` alone, never
+        // the unreferenced `p1`. Including `p1` would force a per-file coercion of a
+        // column the predicate never reads and let a malformed/missing `p1` value
+        // silently disable pruning by failing open.
+        let (_predicate, referenced) =
+            extract_partition_only_predicate(col("p0").eq(lit(5_i32)), &partition_columns)
+                .unwrap()
+                .expect("a partition-only predicate");
+        assert_eq!(referenced, vec!["p0".to_string()]);
+
+        // A mixed partition + data predicate keeps only the partition-only conjunct,
+        // and still reports only the partition column it references.
+        let (_predicate, referenced) = extract_partition_only_predicate(
+            col("p0").eq(lit(5_i32)).and(col("data").gt(lit(3_i32))),
+            &partition_columns,
+        )
+        .unwrap()
+        .expect("the partition-only conjunct survives");
+        assert_eq!(referenced, vec!["p0".to_string()]);
+
+        // No partition-only term -> no pruning predicate at all.
+        assert!(
+            extract_partition_only_predicate(col("data").gt(lit(3_i32)), &partition_columns)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn test_scan_files_where_matches_plan_can_be_planned() -> TestResult {

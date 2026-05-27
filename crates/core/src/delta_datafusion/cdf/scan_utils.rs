@@ -368,4 +368,33 @@ mod tests {
             "missing partition key must keep the file rather than prune on a NULL"
         );
     }
+
+    /// A malformed value in a partition column the predicate does NOT reference must
+    /// not affect pruning. Because the pruning schema only contains the referenced
+    /// column (`id`), the unreferenced `region` value is never coerced and cannot make
+    /// the file fail open: `id = 5` still prunes a file whose `id` is 7.
+    #[test]
+    fn pruning_ignores_malformed_value_in_unreferenced_column() {
+        let predicate = id_eq_5_predicate();
+
+        let mut partition_values = HashMap::new();
+        partition_values.insert("id".to_string(), Some("7".to_string()));
+        partition_values.insert("region".to_string(), Some("not_an_int".to_string()));
+        let add = Add {
+            path: "no_match.parquet".to_string(),
+            partition_values,
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            ..Default::default()
+        };
+
+        let specs = vec![CdcDataSpec::new(0, 0, vec![add])];
+        let kept = kept_paths(prune_specs_by_partition(specs, &predicate).unwrap());
+        assert!(
+            kept.is_empty(),
+            "file with id=7 must be pruned by id = 5; a malformed value in the \
+             unreferenced `region` column must not keep it"
+        );
+    }
 }
