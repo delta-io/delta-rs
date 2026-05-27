@@ -39,6 +39,15 @@ use crate::operations::write::WriterStatsConfig;
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
 
+/// Default [`WriterProperties`] for all Delta write paths.
+/// Uses SNAPPY compression and sets `created_by` to `"delta-rs version X.Y.Z"`.
+pub(crate) fn default_writer_properties() -> WriterProperties {
+    WriterProperties::builder()
+        .set_compression(parquet::basic::Compression::SNAPPY)
+        .set_created_by(format!("delta-rs version {}", crate::crate_version()))
+        .build()
+}
+
 fn parse_channel_size(raw: Option<&str>) -> usize {
     raw.and_then(|s| s.parse::<usize>().ok())
         .filter(|size| *size > 0)
@@ -460,12 +469,7 @@ pub(crate) async fn write_exec_plan(
     target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = session
-        .config_options()
-        .execution
-        .parquet
-        .into_writer_properties_builder()?
-        .build();
+    let writer_properties = default_writer_properties();
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
     let sink_config = WriteSinkConfig {
@@ -652,7 +656,7 @@ fn repartition_by_partition_columns(
     )?))
 }
 
-async fn write_data_plan(
+pub(crate) async fn write_data_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     sink_config: WriteSinkConfig,
