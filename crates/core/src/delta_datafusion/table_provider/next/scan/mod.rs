@@ -14,7 +14,11 @@
 //! The scan planning process in [`plan`] determines which files to read and how to apply
 //! predicates, while execution plans handle the actual data reading and transformation.
 
-use std::{collections::VecDeque, pin::Pin, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    pin::Pin,
+    sync::Arc,
+};
 
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_cast::{CastOptions, cast_with_options};
@@ -47,7 +51,8 @@ use datafusion_physical_expr_adapter::{
     PhysicalExprAdapterFactory,
 };
 use delta_kernel::{
-    Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
+    Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
+    scan::ScanMetadata, table_features::TableFeature,
 };
 use futures::{Stream, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
@@ -59,7 +64,7 @@ pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
-use super::FileSelection;
+use super::{FileSelection, ResolvedFileSelection};
 use crate::{
     DeltaTableError,
     delta_datafusion::{
@@ -68,6 +73,7 @@ use crate::{
         file_id::wrap_file_id_value,
         table_provider::next::DeletionVectorSelection,
     },
+    kernel::LogicalFileView,
 };
 
 mod exec;
@@ -84,7 +90,7 @@ pub(super) async fn execution_plan(
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
-    file_selection: Option<&FileSelection>,
+    file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let (files, transforms, dvs, metrics) =
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
@@ -143,8 +149,15 @@ pub(super) async fn replay_deletion_vectors(
     scan_plan: &KernelScanPlan,
     config: &DeltaScanConfig,
     stream: ScanMetadataStream,
+    file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<Vec<DeletionVectorSelection>> {
-    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, config.clone(), None, stream);
+    let mut stream = ScanFileStream::new(
+        engine,
+        &scan_plan.scan,
+        config.clone(),
+        file_selection.map(|selection| &selection.active_file_ids),
+        stream,
+    );
     while stream.try_next().await?.is_some() {}
 
     let dv_stream = stream.dv_stream.build();
@@ -175,12 +188,93 @@ pub(super) async fn replay_deletion_vectors(
     Ok(vectors)
 }
 
+pub(super) async fn resolve_file_selection(
+    selection: &FileSelection,
+    scan_plan: &KernelScanPlan,
+    stream: ScanMetadataStream,
+) -> Result<ResolvedFileSelection> {
+    let requested_file_ids =
+        resolve_input_file_ids_on_blocking_pool(selection, scan_plan.scan.table_root()).await?;
+    if requested_file_ids.is_empty() {
+        return Ok(ResolvedFileSelection::new(
+            HashSet::new(),
+            Vec::new(),
+            selection.missing_file_policy,
+        ));
+    }
+
+    let mut missing_file_ids = requested_file_ids;
+    let selected_active_file_ids = collect_selected_active_file_ids(
+        scan_plan.scan.table_root(),
+        stream,
+        &mut missing_file_ids,
+    )
+    .await?;
+    let mut missing_file_ids: Vec<_> = missing_file_ids.into_iter().collect();
+    missing_file_ids.sort_unstable();
+
+    let resolved = ResolvedFileSelection::new(
+        selected_active_file_ids,
+        missing_file_ids,
+        selection.missing_file_policy,
+    );
+    resolved.validate_missing()?;
+    Ok(resolved)
+}
+
+async fn resolve_input_file_ids_on_blocking_pool(
+    selection: &FileSelection,
+    table_root: &Url,
+) -> Result<HashSet<String>> {
+    let selection = selection.clone();
+    let table_root = table_root.clone();
+    tokio::task::spawn_blocking(move || selection.resolve_input_file_ids(&table_root))
+        .await
+        .map_err(|err| DataFusionError::External(Box::new(err)))?
+        .map_err(DataFusionError::from)
+}
+
+async fn collect_selected_active_file_ids(
+    table_root: &Url,
+    mut stream: ScanMetadataStream,
+    missing_file_ids: &mut HashSet<String>,
+) -> Result<HashSet<String>> {
+    let mut selected_active_file_ids = HashSet::new();
+
+    while let Some(scan_data) = stream.try_next().await? {
+        let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+        let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
+            .map_err(DeltaTableError::from)?
+            .into();
+        // Delta Kernel may return a short selection vector. Missing entries are selected.
+        selection_vector.resize(batch.num_rows(), true);
+
+        for (idx, selected) in selection_vector.into_iter().enumerate() {
+            if selected {
+                let file_url = replay::parse_path(
+                    table_root,
+                    LogicalFileView::new(batch.clone(), idx).path_raw(),
+                )?;
+                let file_id = file_url.to_string();
+                if missing_file_ids.remove(&file_id) {
+                    selected_active_file_ids.insert(file_id);
+                    if missing_file_ids.is_empty() {
+                        return Ok(selected_active_file_ids);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(selected_active_file_ids)
+}
+
 async fn replay_files(
     engine: Arc<dyn Engine>,
     scan_plan: &KernelScanPlan,
     scan_config: DeltaScanConfig,
     stream: ScanMetadataStream,
-    file_selection: Option<&FileSelection>,
+    file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<(
     Vec<ScanFileContext>,
     HashMap<String, Arc<Expression>>,
@@ -191,38 +285,12 @@ async fn replay_files(
         engine,
         &scan_plan.scan,
         scan_config,
-        file_selection.map(|selection| &selection.file_ids),
+        file_selection.map(|selection| &selection.active_file_ids),
         stream,
     );
     let mut files = Vec::new();
     while let Some(file) = stream.try_next().await? {
         files.extend(file);
-    }
-
-    if let Some(selection) = file_selection
-        && selection.missing_file_policy == super::MissingFilePolicy::Error
-    {
-        let found: std::collections::HashSet<_> =
-            files.iter().map(|f| f.file_url.to_string()).collect();
-        let all_missing: Vec<_> = selection.file_ids.difference(&found).sorted().collect();
-
-        if !all_missing.is_empty() {
-            let missing_total = all_missing.len();
-            let missing: Vec<_> = all_missing
-                .iter()
-                .take(10)
-                .map(|id| super::redact_url_str_for_error(id))
-                .collect();
-            let extra = if missing_total > missing.len() {
-                format!(" (and {} more)", missing_total - missing.len())
-            } else {
-                String::new()
-            };
-            return plan_err!(
-                "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
-                missing.join(", ")
-            );
-        }
     }
 
     let transforms: HashMap<_, _> = files

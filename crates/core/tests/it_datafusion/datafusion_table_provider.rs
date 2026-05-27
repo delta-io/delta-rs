@@ -317,7 +317,9 @@ async fn test_multi_partitioned() -> TestResult<()> {
 #[tokio::test]
 async fn test_column_mapping() -> TestResult<()> {
     let (snapshot, session) = scan_dat("column_mapping").await?;
-    let provider = DeltaScanNext::builder().with_snapshot(snapshot).await?;
+    let provider = DeltaScanNext::builder()
+        .with_snapshot(snapshot.clone())
+        .await?;
 
     let plan = provider.scan(&session.state(), None, &[], None).await?;
     let batches: Vec<_> = collect_plan(plan, &session).await?;
@@ -338,6 +340,45 @@ async fn test_column_mapping() -> TestResult<()> {
         "+--------+---------+------------+",
     ];
     assert_batches_sorted_eq!(&expected, &batches);
+
+    let file_id_provider: Arc<dyn TableProvider> = DeltaScanNext::builder()
+        .with_snapshot(snapshot.clone())
+        .with_file_column("file_id")
+        .await?;
+    let file_id_batches = session.read_table(file_id_provider)?.collect().await?;
+    let selected_file_id = file_id_batches
+        .iter()
+        .find_map(|batch| file_id_at_row(batch, 0))
+        .expect("expected at least one file id");
+
+    let selected_provider: Arc<dyn TableProvider> = DeltaScanNext::builder()
+        .with_snapshot(snapshot)
+        .with_file_column("file_id")
+        .with_file_paths([selected_file_id.clone()])
+        .await?;
+    let selected_batches = session.read_table(selected_provider)?.collect().await?;
+    let selected_rows = selected_batches
+        .iter()
+        .map(|batch| batch.num_rows())
+        .sum::<usize>();
+    assert!(selected_rows > 0);
+    let selected_schema = selected_batches
+        .first()
+        .expect("expected selected scan batches")
+        .schema();
+    for column in ["letter", "new_int", "date", "file_id"] {
+        selected_schema
+            .field_with_name(column)
+            .unwrap_or_else(|_| panic!("missing selected scan column {column}"));
+    }
+    for batch in &selected_batches {
+        for row in 0..batch.num_rows() {
+            assert_eq!(
+                file_id_at_row(batch, row).as_deref(),
+                Some(selected_file_id.as_str())
+            );
+        }
+    }
 
     Ok(())
 }

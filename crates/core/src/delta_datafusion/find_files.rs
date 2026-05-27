@@ -24,7 +24,7 @@ use tracing::*;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
-use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
+use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanNext, FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
     normalize_path_as_file_id, resolve_file_column_name,
@@ -644,19 +644,12 @@ pub(crate) async fn scan_files_where_matches(
 
     // Create a table scan limited to the matched files by forwarding an explicit
     // file selection into the table provider.
-    let table_root = snapshot
-        .snapshot()
-        .scan_builder()
-        .build()?
-        .table_root()
-        .clone();
     let file_selection = FileSelection::from_file_paths(
         valid_files
             .iter()
             .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string())),
-        &table_root,
-    )?
-    .with_missing_file_policy(MissingFilePolicy::Ignore);
+    )
+    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
     let selected_provider = DeltaScanNext::builder()
         .with_snapshot(snapshot.snapshot().clone())
         .with_file_skipping_predicates(file_skipping_predicates)

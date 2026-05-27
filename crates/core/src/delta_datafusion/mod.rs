@@ -64,7 +64,9 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session, create_session_state_with_spill_config,
 };
-pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
+pub use self::table_provider::next::{
+    DeletionVectorSelection, DeltaScan as DeltaScanNext, FileSelection, MissingSelectedFilePolicy,
+};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use data_validation::{
@@ -615,6 +617,7 @@ mod tests {
     use crate::DeltaTable;
     use crate::operations::write::SchemaMode;
     use crate::test_utils::{
+        make_test_add,
         object_store::{
             RecordedObjectStoreOperation as ObjectStoreOperation, RecordedPathKind as PathKind,
             drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
@@ -637,7 +640,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -772,8 +775,8 @@ mod tests {
             .await
             .unwrap()
             .with_file_selection(
-                FileSelection::new(selected_file_ids.clone())
-                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+                FileSelection::from_file_paths(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore),
             );
 
         let codec = DeltaLogicalCodec {};
@@ -801,7 +804,7 @@ mod tests {
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let decoded_file_ids = serialized
             .get("file_selection")
-            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.get("paths"))
             .and_then(|value| value.as_array())
             .unwrap()
             .iter()
@@ -815,6 +818,74 @@ mod tests {
 
         assert_eq!(decoded_file_ids, selected_file_ids);
         assert_eq!(decoded_policy, "Ignore");
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_serializes_file_selection_adds_as_identity_only() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let mut add = make_test_add("part=a/part-000.parquet", &[("part", "a")], 123);
+        add.stats = Some(r#"{"numRecords":999}"#.to_string());
+        add.tags = Some(std::collections::HashMap::from([(
+            "secret-tag".to_string(),
+            Some("secret-value".to_string()),
+        )]));
+        add.size = 999;
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_adds([add]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaScanNext>()
+            .unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("part=a/part-000.parquet"));
+        for forbidden in [
+            "partitionValues",
+            "numRecords",
+            "secret-tag",
+            "secret-value",
+            "modificationTime",
+            "\"size\"",
+        ] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "FileSelection::from_adds serialized Add metadata field {forbidden}: {file_selection_json}"
+            );
+        }
     }
 
     #[tokio::test]
