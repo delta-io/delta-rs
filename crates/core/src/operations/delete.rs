@@ -458,8 +458,7 @@ async fn execute(
         .to_vec();
     let mut props = crate::delta_datafusion::FindFilesExprProperties {
         partition_columns,
-        partition_only: true,
-        result: Ok(()),
+        ..Default::default()
     };
     for term in &skipping_pred {
         term.visit(&mut props)?;

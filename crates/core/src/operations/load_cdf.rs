@@ -18,14 +18,11 @@ use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
-use datafusion::common::tree_node::TreeNode;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::logical_expr::Expr;
-use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
-use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -33,7 +30,7 @@ use datafusion::physical_plan::union::UnionExec;
 use tracing::log;
 
 use crate::DeltaTableError;
-use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt, FindFilesExprProperties};
+use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate};
 use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
@@ -421,25 +418,17 @@ impl CdfLoadBuilder {
         partition_columns: &[String],
         filter: Expr,
     ) -> DeltaResult<Option<PartitionPruningPredicate>> {
-        let mut props = FindFilesExprProperties {
-            partition_columns: partition_columns.to_vec(),
-            partition_only: true,
-            result: Ok(()),
-        };
-        let partition_terms = simplify_predicates(split_conjunction_owned(filter))?
-            .into_iter()
-            .filter(|term| {
-                props.partition_only = true;
-                props.result = Ok(());
-                term.visit(&mut props).is_ok() && props.result.is_ok() && props.partition_only
-            })
-            .collect::<Vec<_>>();
-
-        let Some(partition_predicate) = conjunction(partition_terms) else {
+        let Some((partition_predicate, referenced_columns)) =
+            extract_partition_only_predicate(filter, partition_columns)?
+        else {
             return Ok(None);
         };
 
-        let partition_fields = partition_columns
+        // Materialize only the partition columns the predicate actually references.
+        // Coercing every partition column would waste work on columns the predicate
+        // never reads, and a malformed/missing value in an unreferenced column would
+        // make the file fail open and silently weaken pruning.
+        let partition_fields = referenced_columns
             .iter()
             .map(|name| schema.field_with_name(name).cloned())
             .collect::<Result<Vec<_>, ArrowError>>()?;
