@@ -55,6 +55,10 @@ impl<F: FileAction> CdcDataSpec<F> {
             actions,
         }
     }
+
+    pub fn into_parts(self) -> (Version, i64, Vec<F>) {
+        (self.version, self.timestamp, self.actions)
+    }
 }
 
 /// This trait defines a generic set of operations used by CDF Reader
