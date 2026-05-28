@@ -889,6 +889,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_strips_file_selection_url_credentials() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_file_paths([
+                "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+            ]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaScanNext>()
+            .unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("https://example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "encoded file selection contains {forbidden}: {file_selection_json}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn delta_table_provider_with_config() {
         let table = open_fs_path("../test/tests/data/delta-2.2.0-partitioned-types");
         let provider = table
