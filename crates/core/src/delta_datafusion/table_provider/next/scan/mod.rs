@@ -92,6 +92,14 @@ pub(super) async fn execution_plan(
     limit: Option<usize>,
     file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    if let Some(selection) = file_selection
+        && selection.active_file_ids.is_empty()
+    {
+        return Ok(Arc::new(EmptyExec::new(
+            scan_plan.contract.result_schema.clone(),
+        )));
+    }
+
     let (files, transforms, dvs, metrics) =
         replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
@@ -732,8 +740,14 @@ mod tests {
 
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::{session::create_session, table_provider::next::FILE_ID_COLUMN_DEFAULT},
-        test_utils::TestResult,
+        delta_datafusion::{
+            DeltaScanConfig, MissingSelectedFilePolicy,
+            engine::DataFusionEngine,
+            session::create_session,
+            table_provider::next::{FILE_ID_COLUMN_DEFAULT, FileSelection},
+        },
+        kernel::Snapshot,
+        test_utils::{TestResult, TestTables},
     };
 
     use super::{plan::build_parquet_predicate_schema, *};
@@ -748,6 +762,63 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
         assert_eq!(groups[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_empty_file_selection_does_not_poll_metadata_stream() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let scan_plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
+            panic!("unexpected metadata stream poll for empty file selection")
+        }));
+
+        let resolved = resolve_file_selection(
+            &FileSelection::from_file_paths(Vec::<String>::new()),
+            &scan_plan,
+            stream,
+        )
+        .await?;
+
+        assert!(resolved.active_file_ids.is_empty());
+        assert!(resolved.missing_file_ids.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_resolved_file_selection_plan_does_not_poll_metadata_stream() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let scan_plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
+            panic!("unexpected metadata stream poll for empty file selection execution")
+        }));
+        let session = create_session().into_inner();
+        let state = session.state();
+        let engine = DataFusionEngine::new_from_session(&state);
+        let selection = ResolvedFileSelection::new(
+            std::collections::HashSet::new(),
+            Vec::new(),
+            MissingSelectedFilePolicy::Error,
+        );
+
+        let plan = execution_plan(
+            &DeltaScanConfig::default(),
+            &state,
+            scan_plan,
+            stream,
+            engine,
+            None,
+            Some(&selection),
+        )
+        .await?;
+
+        assert!(plan.as_any().is::<EmptyExec>());
+
+        Ok(())
     }
 
     #[cfg(debug_assertions)]

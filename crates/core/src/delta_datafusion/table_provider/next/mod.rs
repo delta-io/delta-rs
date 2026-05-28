@@ -73,6 +73,9 @@ pub enum MissingSelectedFilePolicy {
     ///
     /// Malformed paths, paths outside the table root, protocol failures, object store failures,
     /// and query planning failures still return errors.
+    ///
+    /// Useful for maintenance rewrites where removed files may be skipped. Use
+    /// [`MissingSelectedFilePolicy::Error`] when every selected file must be present.
     Ignore,
 }
 
@@ -91,6 +94,10 @@ pub enum MissingSelectedFilePolicy {
 ///
 /// Absolute URLs must be under the table root. Paths outside the table root are rejected during
 /// scan planning with redacted error output.
+/// Username, password, query, and fragment are stripped from URLs before storage.
+///
+/// Selections with paths are resolved against snapshot metadata before the data scan. Each scan
+/// with a file selection requires that metadata pass.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct FileSelection {
     paths: Vec<String>,
@@ -118,10 +125,15 @@ impl FileSelection {
     /// Select files by path.
     ///
     /// Paths may be relative to the table root or absolute URLs under the same table root.
+    /// Username, password, query, and fragment are stripped from URLs.
     /// Path validation happens when a scan is planned against a concrete table root.
     pub fn from_file_paths(paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
-            paths: paths.into_iter().map(Into::into).collect(),
+            paths: paths
+                .into_iter()
+                .map(Into::into)
+                .map(sanitize_selection_path)
+                .collect(),
             missing_file_policy: MissingSelectedFilePolicy::Error,
         }
     }
@@ -205,9 +217,18 @@ impl ResolvedFileSelection {
 fn add_path_for_selection(add: Add) -> String {
     let path = add.path;
     if Url::parse(&path).is_ok() {
-        path
+        sanitize_selection_path(path)
     } else {
-        String::from(Path::from(path))
+        sanitize_selection_path(String::from(Path::from(path)))
+    }
+}
+
+fn sanitize_selection_path(path: String) -> String {
+    if let Ok(mut url) = Url::parse(&path) {
+        strip_url_sensitive_parts(&mut url);
+        url.to_string()
+    } else {
+        strip_unparsed_url_sensitive_parts(&path)
     }
 }
 
@@ -275,6 +296,10 @@ pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
 }
 
 fn redact_unparsed_url_str_for_error(urlish: &str) -> String {
+    strip_unparsed_url_sensitive_parts(urlish)
+}
+
+fn strip_unparsed_url_sensitive_parts(urlish: &str) -> String {
     let without_query = urlish
         .split(['?', '#'])
         .next()
@@ -612,11 +637,17 @@ impl DeltaScan {
             self.file_skipping_predicate.clone(),
         )?;
 
-        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
         let resolved_file_selection = self
             .resolve_file_selection(self.file_selection.as_ref(), engine.clone())
             .await?;
+        if resolved_file_selection
+            .as_ref()
+            .is_some_and(|selection| selection.active_file_ids.is_empty())
+        {
+            return Ok(Vec::new());
+        }
 
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
         scan::replay_deletion_vectors(
             engine,
             &scan_plan,
@@ -707,10 +738,10 @@ impl TableProvider for DeltaScan {
             self.file_skipping_predicate.clone(),
         )?;
 
-        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
         let resolved_file_selection = self
             .resolve_file_selection(self.file_selection.as_ref(), engine.clone())
             .await?;
+        let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
 
         scan::execution_plan(
             &self.config,
@@ -2078,14 +2109,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_with_empty_file_selection_returns_empty_scan() -> TestResult {
-        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let base = TestTables::Simple.table_builder()?.build_storage()?;
+        let (log_store, mut operations) = recording_log_store(base);
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        drain_recorded_ops(&mut operations).await;
+
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
 
-        let provider = DeltaScan::builder()
-            .with_log_store(table.log_store())
-            .build()
-            .await?
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
+            .with_log_store(log_store)
             .with_file_paths(Vec::<String>::new());
 
         let plan = provider.scan(&state, None, &[], None).await?;
@@ -2096,6 +2129,12 @@ mod tests {
             .collect();
         let returned_rows = batches.iter().map(|batch| batch.num_rows()).sum::<usize>();
         assert_eq!(returned_rows, 0);
+
+        let replay_ops = drain_recorded_ops(&mut operations).await;
+        assert!(
+            replay_ops.iter().all(|op| !op.is_log_replay_read()),
+            "empty file selection read log metadata: {replay_ops:?}"
+        );
 
         Ok(())
     }
@@ -2380,6 +2419,24 @@ mod tests {
             ]
         );
         assert_eq!(policy, "Ignore");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_serde_strips_url_credentials_query_and_fragment() -> TestResult {
+        let selection = FileSelection::from_file_paths([
+            "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+        ]);
+        let serialized = serde_json::to_string(&selection)?;
+
+        assert!(serialized.contains("https://example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !serialized.contains(forbidden),
+                "serialized file selection contains {forbidden}: {serialized}"
+            );
+        }
 
         Ok(())
     }
