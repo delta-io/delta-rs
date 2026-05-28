@@ -120,10 +120,11 @@ impl RecordBatchWriter {
 
     /// Creates a [`RecordBatchWriter`] to write data to the provided Delta Table
     pub fn for_table(table: &DeltaTable) -> Result<Self, DeltaTableError> {
+        super::ensure_legacy_writer_supports_table(table, "RecordBatchWriter")?;
         let metadata = table.snapshot()?.metadata();
         let arrow_schema: ArrowSchema = (&metadata.parse_schema()?).try_into_arrow()?;
         let arrow_schema_ref = Arc::new(arrow_schema);
-        let partition_columns = metadata.partition_columns().clone();
+        let partition_columns = metadata.partition_columns().to_vec();
 
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
@@ -150,6 +151,24 @@ impl RecordBatchWriter {
                 .map(|v| v.split(',').map(|s| s.to_string()).collect()),
             commit_properties: None,
         })
+    }
+
+    /// Creates a [`RecordBatchWriter`] for an existing table after loading and validating metadata.
+    pub async fn try_new_checked(
+        table_uri: impl AsRef<str>,
+        schema: ArrowSchemaRef,
+        partition_columns: Option<Vec<String>>,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> Result<Self, DeltaTableError> {
+        let table_url = url::Url::parse(table_uri.as_ref())
+            .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
+        let table = crate::table::builder::DeltaTableBuilder::from_url(table_url)?
+            .with_storage_options(storage_options.unwrap_or_default())
+            .load()
+            .await?;
+        super::ensure_legacy_writer_supports_table(&table, "RecordBatchWriter")?;
+        let _ = (schema, partition_columns);
+        Self::for_table(&table)
     }
 
     /// Returns the current byte length of the in memory buffer (approximate).
@@ -337,7 +356,7 @@ async fn flush_batches(writer: &mut RecordBatchWriter) -> Result<Vec<Add>, Delta
 
     use crate::kernel::Action;
     use crate::operations::write::configs::WriterStatsConfig;
-    use crate::operations::write::execution::write_data_plan;
+    use crate::operations::write::execution::write_execution_plan;
 
     let batches = std::mem::take(&mut writer.batches);
     if batches.is_empty() {
@@ -358,7 +377,8 @@ async fn flush_batches(writer: &mut RecordBatchWriter) -> Result<Vec<Add>, Delta
     let stats_config =
         WriterStatsConfig::new(writer.num_indexed_cols, writer.stats_columns.clone());
 
-    let (actions, _) = write_data_plan(
+    let actions = write_execution_plan(
+        None,
         &ctx.state(),
         exec,
         writer.partition_columns.clone(),

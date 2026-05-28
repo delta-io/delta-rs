@@ -54,6 +54,7 @@ impl JsonWriter {
             .with_storage_options(storage_options.unwrap_or_default())
             .load()
             .await?;
+        super::ensure_legacy_writer_supports_table(&table, "JsonWriter")?;
 
         Ok(Self {
             table,
@@ -65,6 +66,7 @@ impl JsonWriter {
 
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
+        super::ensure_legacy_writer_supports_table(table, "JsonWriter")?;
         let metadata = table.snapshot()?.metadata();
         let partition_columns = metadata.partition_columns().to_vec();
 
@@ -169,7 +171,7 @@ async fn flush_batches_to_store(writer: &mut JsonWriter) -> Result<Vec<Add>, Del
 
     use crate::kernel::Action;
     use crate::operations::write::configs::WriterStatsConfig;
-    use crate::operations::write::execution::{default_writer_properties, write_data_plan};
+    use crate::operations::write::execution::{default_writer_properties, write_execution_plan};
 
     let batches = std::mem::take(&mut writer.batches);
     if batches.is_empty() {
@@ -191,7 +193,8 @@ async fn flush_batches_to_store(writer: &mut JsonWriter) -> Result<Vec<Add>, Del
     let table_config = state.snapshot().table_configuration();
     let stats_config = WriterStatsConfig::from_config(table_config);
 
-    let (actions, _) = write_data_plan(
+    let actions = write_execution_plan(
+        None,
         &ctx.state(),
         exec,
         writer.partition_columns.clone(),
