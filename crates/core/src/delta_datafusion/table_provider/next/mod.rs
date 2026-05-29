@@ -104,10 +104,23 @@ pub struct FileSelection {
     missing_file_policy: MissingSelectedFilePolicy,
 }
 
+/// File selection resolved against the scan snapshot.
+///
+/// `FileSelection` stores caller input. `ResolvedFileSelection` stores canonical file IDs after
+/// that input has been normalized and compared with active files from Delta Kernel scan metadata.
 #[derive(Clone, Debug)]
 struct ResolvedFileSelection {
+    /// Canonical file IDs for selected files that are active in the scan snapshot.
+    ///
+    /// These values are full file URLs produced from snapshot metadata. They are used to filter
+    /// Delta Kernel scan metadata before building the DataFusion scan.
     active_file_ids: HashSet<String>,
+    /// Canonical file IDs requested by the user but not active in the scan snapshot.
+    ///
+    /// These values are produced from the input [`FileSelection`] before scan metadata replay.
+    /// They are only returned as errors when [`MissingSelectedFilePolicy::Error`] is set.
     missing_file_ids: Vec<String>,
+    /// Policy to apply when `missing_file_ids` is not empty.
     missing_file_policy: MissingSelectedFilePolicy,
 }
 
@@ -216,10 +229,11 @@ impl ResolvedFileSelection {
 
 fn add_path_for_selection(add: Add) -> String {
     let path = add.path;
-    if Url::parse(&path).is_ok() {
-        sanitize_selection_path(path)
+    if let Ok(mut url) = Url::parse(&path) {
+        strip_url_sensitive_parts(&mut url);
+        url.to_string()
     } else {
-        sanitize_selection_path(String::from(Path::from(path)))
+        String::from(Path::from(path))
     }
 }
 
@@ -243,18 +257,13 @@ pub(crate) fn ensure_table_root_url(table_root_url: &Url) -> Url {
 }
 
 pub(crate) fn canonical_table_root_identity(root: &url::Url) -> url::Url {
-    let root = table_root_identity(root);
+    let mut root = ensure_table_root_url(&normalize_table_url(root));
+    strip_url_sensitive_parts(&mut root);
 
     if root.scheme() == "file" {
         return canonical_local_table_root_url(&root).unwrap_or(root);
     }
 
-    root
-}
-
-fn table_root_identity(root: &url::Url) -> url::Url {
-    let mut root = ensure_table_root_url(&normalize_table_url(root));
-    strip_url_sensitive_parts(&mut root);
     root
 }
 
@@ -290,13 +299,9 @@ pub(crate) fn redact_url_for_error(url: &Url) -> String {
 
 pub(crate) fn redact_url_str_for_error(urlish: &str) -> String {
     Url::parse(urlish).map_or_else(
-        |_| redact_unparsed_url_str_for_error(urlish),
+        |_| strip_unparsed_url_sensitive_parts(urlish),
         |url| redact_url_for_error(&url),
     )
-}
-
-fn redact_unparsed_url_str_for_error(urlish: &str) -> String {
-    strip_unparsed_url_sensitive_parts(urlish)
 }
 
 fn strip_unparsed_url_sensitive_parts(urlish: &str) -> String {
@@ -363,7 +368,8 @@ fn validate_selected_file_url_under_table_root(
     context: &'static str,
     original: &str,
 ) -> crate::DeltaResult<String> {
-    let original_root_identity = table_root_identity(table_root_url);
+    let mut original_root_identity = ensure_table_root_url(&normalize_table_url(table_root_url));
+    strip_url_sensitive_parts(&mut original_root_identity);
     let canonical_root_identity = canonical_table_root_identity(table_root_url);
     let root_identities = if canonical_root_identity == original_root_identity {
         vec![original_root_identity]
@@ -538,8 +544,8 @@ impl DeltaScan {
     }
 
     /// Restrict reads to Add action paths. File metadata comes from the scan snapshot.
-    pub fn with_files(self, files: impl IntoIterator<Item = Add>) -> Self {
-        self.with_file_selection(FileSelection::from_adds(files))
+    pub fn with_adds(self, adds: impl IntoIterator<Item = Add>) -> Self {
+        self.with_file_selection(FileSelection::from_adds(adds))
     }
 
     /// Restrict reads to file paths.
@@ -1896,7 +1902,7 @@ mod tests {
             .build()
             .await?
             .with_log_store(log_store)
-            .with_files([selected_add]);
+            .with_adds([selected_add]);
 
         let plan = provider.scan(&state, None, &[], None).await?;
         let mut visitor = DeltaScanVisitor::default();
@@ -2020,7 +2026,7 @@ mod tests {
             .build()
             .await?
             .with_log_store(log_store)
-            .with_files([selected_add]);
+            .with_adds([selected_add]);
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -2428,6 +2434,27 @@ mod tests {
         let selection = FileSelection::from_file_paths([
             "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
         ]);
+        let serialized = serde_json::to_string(&selection)?;
+
+        assert!(serialized.contains("https://example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !serialized.contains(forbidden),
+                "serialized file selection contains {forbidden}: {serialized}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_file_selection_from_adds_strips_url_credentials_query_and_fragment() -> TestResult {
+        let add = make_test_add(
+            "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+            &[],
+            123,
+        );
+        let selection = FileSelection::from_adds([add]);
         let serialized = serde_json::to_string(&selection)?;
 
         assert!(serialized.contains("https://example.com/table/part.parquet"));
