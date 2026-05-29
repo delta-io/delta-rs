@@ -60,7 +60,7 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{Action, EagerSnapshot, StructType};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -159,6 +159,8 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+    /// Format options stored on `Metadata.format.options` (e.g. CDC settings)
+    format_options: HashMap<String, String>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
@@ -207,6 +209,7 @@ impl WriteBuilder {
             name: None,
             description: None,
             configuration: Default::default(),
+            format_options: Default::default(),
             custom_execute_handler: None,
         }
     }
@@ -297,6 +300,21 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Set the `format.options` map stored on the table's `Metadata`.
+    ///
+    /// Format options are passed to the parquet writer when files are produced (e.g. enabling
+    /// content-defined chunking via `contentDefinedChunking.enabled = "true"`).
+    pub fn with_format_options(
+        mut self,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.format_options = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
         self
     }
 
@@ -436,7 +454,8 @@ impl WriteBuilder {
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
-                    .with_configuration(self.configuration.clone());
+                    .with_configuration(self.configuration.clone())
+                    .with_format_options(self.format_options.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
@@ -498,6 +517,23 @@ impl std::future::IntoFuture for WriteBuilder {
                 update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
+                let writer_properties = this.writer_properties.clone().or_else(|| {
+                    let snapshot_format_options = this
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.snapshot().metadata().format_options().ok())
+                        .unwrap_or_default();
+                    crate::table::config::parquet_cdc_options(
+                        &snapshot_format_options,
+                        &this.format_options,
+                    )
+                    .map(|cdc| {
+                        WriterProperties::builder()
+                            .set_content_defined_chunking(Some(cdc))
+                            .build()
+                    })
+                });
+
                 let prepared_write = plan::prepare_write(plan::WritePreparationInput {
                     snapshot: this.snapshot.as_ref(),
                     session: &session,
@@ -509,7 +545,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                     target_file_size: this.target_file_size,
                     write_batch_size: this.write_batch_size,
-                    writer_properties: this.writer_properties.clone(),
+                    writer_properties,
                     configuration: &this.configuration,
                 })?;
 
