@@ -1018,6 +1018,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
         "float64": -0.0,
         "bool": False,
         "timestamp": "2022-01-01T00:00:00Z",
+        "timestamp_ntz": "2022-01-01 00:00:00",
         "struct": {
             "x": 0,
             "y": "0",
@@ -1041,6 +1042,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
         "float64": 4.0,
         "bool": True,
         "timestamp": "2022-01-01T04:00:00Z",
+        "timestamp_ntz": "2022-01-01 04:00:00",
         "struct": {"x": 4, "y": "4"},
     }
     # PyArrow added support for decimal and date32 in 8.0.0

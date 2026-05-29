@@ -259,7 +259,12 @@ def sample_data_pyarrow() -> "pa.Table":
                 [date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]
             ),
             "timestamp": pa.array(
-                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)],
+                type=pa.timestamp("us", "UTC"),
+            ),
+            "timestamp_ntz": pa.array(
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)],
+                type=pa.timestamp("us", None),
             ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
             "list": pa.array(
