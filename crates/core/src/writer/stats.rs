@@ -184,7 +184,7 @@ fn stats_from_metadata(
             }
             if !admitted.contains(&top) {
                 if admitted_count >= limit {
-                    continue;
+                    break;
                 }
                 admitted.insert(top);
                 admitted_count += 1;
