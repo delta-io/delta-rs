@@ -94,7 +94,7 @@ features = ["extension-module", "abi3", "abi3-py310"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
-version = "0"
+version = "1"
 features = [
     "azure",
     "datafusion",

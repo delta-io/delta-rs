@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.15.0"
+version = "1.0.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,7 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.32.0", path = "../core" , default-features = false, features = ["cloud"]}
+deltalake-core = { version = "1.0", path = "../core" , default-features = false, features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
@@ -22,8 +22,6 @@ chrono = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
-regex = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -37,15 +35,10 @@ aws-config = { version = "1.8", features = [
     "rt-tokio",
     "credentials-process",
 ] }
-aws-sdk-dynamodb = { version = "1.110.0", default-features = false, features = [
-    "behavior-version-latest",
-    "rt-tokio",
-] }
 aws-sdk-sts = { version = "1.101.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-backon = { version = "1", default-features = false, features = ["tokio-sleep"] }
 
 [dev-dependencies]
 chrono = { workspace = true }
@@ -67,8 +60,8 @@ native-tls = [
 rustls = [
     "deltalake-core/rustls",
     "aws-config/client-hyper",
-    # Use the new AWS SDK default HTTPS client stack (hyper 1.x + rustls via aws-lc-rs),
-    # not the legacy `rustls` feature which pins us to hyper 0.14.
-    "aws-sdk-dynamodb/default-https-client",
     "aws-sdk-sts/default-https-client",
 ]
+
+[package.metadata.cargo-machete]
+ignored = ["aws-sdk-sts", "aws-smithy-runtime-api"]

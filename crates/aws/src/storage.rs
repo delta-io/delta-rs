@@ -12,13 +12,13 @@ use deltalake_core::logstore::object_store::aws::{AmazonS3Builder, AmazonS3Confi
 use deltalake_core::logstore::object_store::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     ObjectStoreScheme, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
-    Result as ObjectStoreResult,
+    Result as ObjectStoreResult, path::Path,
 };
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
     config::str_is_truthy,
 };
-use deltalake_core::{DeltaResult, DeltaTableError, ObjectStoreError, Path};
+use deltalake_core::{DeltaResult, DeltaTableError};
 use futures::Future;
 use futures::stream::BoxStream;
 use object_store::aws::AmazonS3;
@@ -32,9 +32,6 @@ use crate::constants::{
     DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS,
 };
 use crate::credentials::AWSForObjectStore;
-use crate::errors::DynamoDbConfigError;
-
-const STORE_NAME: &str = "DeltaS3ObjectStore";
 
 #[derive(Clone, Default, Debug)]
 pub struct S3ObjectStoreFactory {}
@@ -317,12 +314,9 @@ where
                         cfg = Some(handle.block_on(future));
                     });
                 });
-                cfg.ok_or(DeltaTableError::ObjectStore {
-                    source: ObjectStoreError::Generic {
-                        store: STORE_NAME,
-                        source: Box::new(DynamoDbConfigError::InitializationError),
-                    },
-                })
+                cfg.ok_or(DeltaTableError::generic(
+                    "Failed to run some aws-sdk configuration",
+                ))
             }
         },
         Err(_) => {
@@ -506,6 +500,7 @@ mod tests {
     use super::*;
 
     use crate::constants;
+    use deltalake_core::ObjectStoreError;
     use object_store::ObjectStoreExt as _;
     use object_store::memory::InMemory;
     use serial_test::serial;
