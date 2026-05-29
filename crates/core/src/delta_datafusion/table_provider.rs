@@ -351,8 +351,8 @@ impl TableProviderBuilder {
     }
 
     /// Restrict reads to Add action paths. File metadata comes from the selected snapshot.
-    pub fn with_files(self, files: impl IntoIterator<Item = Add>) -> Self {
-        self.with_file_selection(next::FileSelection::from_adds(files))
+    pub fn with_adds(self, adds: impl IntoIterator<Item = Add>) -> Self {
+        self.with_file_selection(next::FileSelection::from_adds(adds))
     }
 
     /// Restrict reads to file paths.
