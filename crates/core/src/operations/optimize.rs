@@ -699,6 +699,7 @@ impl MergePlan {
             },
             None,
             None,
+            None,
         )?;
         let mut writer = PartitionWriter::try_with_config(
             object_store,

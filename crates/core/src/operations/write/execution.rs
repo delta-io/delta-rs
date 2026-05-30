@@ -16,7 +16,9 @@ use datafusion::physical_plan::{
     execute_stream_partitioned,
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::schema::SchemaRef as KernelSchemaRef;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -28,7 +30,7 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    DataValidationExec, generated_columns_to_exprs, validation_predicates,
+    ColumnMappingExec, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
@@ -277,6 +279,62 @@ struct WriteSinkConfig {
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    column_mapping: Option<ColumnMappingState>,
+}
+
+/// Random data-file directory prefix length on column-mapped tables (delta-spark default).
+const DEFAULT_RANDOM_PREFIX_LENGTH: usize = 2;
+
+/// State needed to rewrite logical data into its physical (column-mapped) form at write time.
+struct ColumnMappingState {
+    mode: ColumnMappingMode,
+    /// Kernel table schema carrying the `delta.columnMapping.*` annotations.
+    logical_schema: KernelSchemaRef,
+}
+
+impl ColumnMappingState {
+    /// Build the state from a table configuration, returning `None` when column mapping is off.
+    fn from_table_config(table_config: &TableConfiguration) -> Option<Self> {
+        let mode = table_config.column_mapping_mode();
+        (mode != ColumnMappingMode::None).then(|| Self {
+            mode,
+            logical_schema: table_config.logical_schema(),
+        })
+    }
+
+    /// Translate logical partition column names to their physical names.
+    fn physical_partition_columns(&self, partition_columns: &[String]) -> Vec<String> {
+        partition_columns
+            .iter()
+            .map(|name| {
+                self.logical_schema
+                    .field(name)
+                    .map(|field| field.physical_name(self.mode).to_string())
+                    .unwrap_or_else(|| name.clone())
+            })
+            .collect()
+    }
+}
+
+/// Wrap the plan in a [`ColumnMappingExec`], translate partition columns to physical names, and
+/// request a random file prefix. No-op (returns its inputs) when `column_mapping` is `None`.
+fn apply_column_mapping_to_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    column_mapping: &Option<ColumnMappingState>,
+) -> DeltaResult<(Arc<dyn ExecutionPlan>, Vec<String>, Option<usize>)> {
+    match column_mapping {
+        None => Ok((plan, partition_columns, None)),
+        Some(state) => {
+            let plan = ColumnMappingExec::try_new(plan, state.logical_schema.as_ref(), state.mode)?;
+            let physical_partition_columns = state.physical_partition_columns(&partition_columns);
+            Ok((
+                plan,
+                physical_partition_columns,
+                Some(DEFAULT_RANDOM_PREFIX_LENGTH),
+            ))
+        }
+    }
 }
 
 /// Metrics captured from draining streams through a writer.
@@ -419,6 +477,8 @@ pub(crate) async fn write_execution_plan_v2(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping: snapshot
+            .and_then(|s| ColumnMappingState::from_table_config(s.table_configuration())),
     };
 
     if !contains_cdc {
@@ -475,6 +535,7 @@ pub(crate) async fn write_exec_plan(
         write_batch_size: None,
         writer_properties: Some(writer_properties),
         writer_stats_config: stats_config,
+        column_mapping: ColumnMappingState::from_table_config(table_config),
     };
 
     if write_as_cdc {
@@ -664,7 +725,10 @@ async fn write_data_plan(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping,
     } = sink_config;
+    let (plan, partition_columns, random_prefix_length) =
+        apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     let config = WriterConfig::new(
         plan.schema().clone(),
         partition_columns.clone(),
@@ -673,7 +737,8 @@ async fn write_data_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
@@ -759,7 +824,10 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping,
     } = sink_config;
+    let (plan, partition_columns, random_prefix_length) =
+        apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
 
     let write_schema = Arc::new(Schema::new(
@@ -786,7 +854,8 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),
@@ -796,7 +865,8 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {
