@@ -2,9 +2,9 @@ name: integration
 
 on:
   push:
-    branches: [main, "rust-v*"]
+    branches: [main, "release/*", "rust-v*"]
   pull_request:
-    branches: [main, "rust-v*", next, next/*]
+    branches: [main, "release/*", "rust-v*", next, next/*]
   merge_group:
 
 env:
