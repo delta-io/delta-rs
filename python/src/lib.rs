@@ -97,7 +97,7 @@ use crate::writer::to_lazy_table;
     not(target_os = "emscripten"),
     not(target_os = "freebsd")
 ))]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]

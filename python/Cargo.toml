@@ -79,14 +79,14 @@ mimalloc = { version = "0.1", default-features = false }
 # on FreeBSD instead — no performance regression since the system allocator
 # is the same family.
 [target.'cfg(all(target_family = "unix", not(target_os = "macos"), not(target_os = "emscripten"), not(target_os = "freebsd")))'.dependencies]
-jemallocator = { version = "0.5", features = [
+tikv-jemallocator = { version = "0.7.0", features = [
     "disable_initial_exec_tls",
     "background_threads",
 ] }
 
 # macOS → jemalloc (without background_threads) (https://github.com/jemalloc/jemalloc/issues/843)
 [target.'cfg(all(target_family = "unix", target_os = "macos"))'.dependencies]
-jemallocator = { version = "0.5", features = ["disable_initial_exec_tls"] }
+tikv-jemallocator = { version = "0.7.0", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
 version = "0.28"

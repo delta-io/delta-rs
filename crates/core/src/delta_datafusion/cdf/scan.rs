@@ -71,9 +71,11 @@ impl TableProvider for DeltaCdfTableProvider {
         let schema: DFSchema = self.schema().try_into()?;
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
+            let physical_expr = session.create_physical_expr(filter_expr.clone(), &schema)?;
             let plan = self
                 .cdf_builder
+                .clone()
+                .with_partition_pruning_filter(filter_expr)
                 .build(session, Some(&physical_expr))
                 .await?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)
