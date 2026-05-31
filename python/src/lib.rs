@@ -1293,22 +1293,38 @@ impl RawDeltaTable {
 
     /// Run the History command on the Delta Table: Returns provenance information,
     /// including the operation, user, and so on, for each write to a table.
+    ///
+    /// Returns `(latest_version, commits)` where `latest_version` is the version of
+    /// the most recent commit in `commits`, captured atomically with the history
+    /// fetch so concurrent writes cannot shift the version numbering on the Python
+    /// side. See https://github.com/delta-io/delta-rs/issues/4488.
     #[pyo3(signature = (limit=None))]
-    pub fn history(&self, limit: Option<usize>) -> PyResult<Vec<String>> {
+    pub fn history(&self, limit: Option<usize>) -> PyResult<(Version, Vec<String>)> {
         #[allow(clippy::await_holding_lock)]
-        let history = rt().block_on(async {
+        rt().block_on(async {
             match self._table.lock() {
-                Ok(table) => table
-                    .history(limit)
-                    .await
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from),
+                Ok(table) => {
+                    let history = table
+                        .history(limit)
+                        .await
+                        .map_err(PythonError::from)
+                        .map_err(PyErr::from)?;
+                    // history() iterates the loaded snapshot, so version() is Some
+                    // here. Capturing it under the same lock guarantees it matches
+                    // the commits we just returned.
+                    let version = table.version().ok_or_else(|| {
+                        PyRuntimeError::new_err(
+                            "table snapshot is not loaded; cannot determine history version",
+                        )
+                    })?;
+                    let commits = history
+                        .map(|c| serde_json::to_string(&c).unwrap())
+                        .collect();
+                    Ok((version, commits))
+                }
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }
-        })?;
-        Ok(history
-            .map(|c| serde_json::to_string(&c).unwrap())
-            .collect())
+        })
     }
 
     /// Incrementally update the table snapshot to the latest committed version.
