@@ -128,3 +128,39 @@ impl ObjectStore for ConditionalPutShim {
         self.inner.put_multipart_opts(location, options).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use object_store::memory::InMemory;
+
+    #[tokio::test]
+    async fn create_is_exclusive() {
+        let store = ConditionalPutShim::new(Arc::new(InMemory::new()));
+        let path = Path::from("a/b.json");
+
+        let create = || PutOptions {
+            mode: PutMode::Create,
+            ..Default::default()
+        };
+
+        store
+            .put_opts(&path, "first".into(), create())
+            .await
+            .expect("first create succeeds");
+
+        let err = store
+            .put_opts(&path, "second".into(), create())
+            .await
+            .expect_err("second create must fail");
+        assert!(matches!(err, object_store::Error::AlreadyExists { .. }));
+
+        // Overwrite always succeeds and is visible.
+        store
+            .put_opts(&path, "third".into(), PutOptions::default())
+            .await
+            .expect("overwrite succeeds");
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"third");
+    }
+}

@@ -31,6 +31,7 @@ deltalake-azure = { version = "1.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "1.0", path = "../gcp", optional = true }
 deltalake-hdfs = { version = "1.0", path = "../hdfs", optional = true }
 deltalake-opendal = { version = "1.0", path = "../opendal", default-features = false, optional = true }
+deltalake-hf = { version = "1.0", path = "../hf", default-features = false, optional = true }
 deltalake-lakefs = { version = "1.0", path = "../lakefs", optional = true }
 deltalake-catalog-glue = { version = "1.0", path = "../catalog-glue", optional = true }
 deltalake-catalog-unity = { version = "1.0", path = "../catalog-unity", optional = true }
@@ -53,8 +54,26 @@ python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls", "native-tls"]
 s3 = ["deltalake-aws/rustls", "rustls"]
 unity-experimental = ["deltalake-catalog-unity"]
-hf = ["deltalake-opendal/hf", "deltalake-opendal/rustls"]
+hf = ["deltalake-hf/rustls"]
+# Generic OpenDAL plumbing (no service). Enable a specific backend with one of
+# the `opendal-*` features below; each auto-registers its scheme.
 opendal = ["deltalake-opendal"]
+opendal-fs = ["opendal", "deltalake-opendal/opendal-fs"]
+opendal-memory = ["opendal", "deltalake-opendal/opendal-memory"]
+opendal-s3 = ["opendal", "deltalake-opendal/opendal-s3", "deltalake-opendal/rustls"]
+opendal-gcs = ["opendal", "deltalake-opendal/opendal-gcs", "deltalake-opendal/rustls"]
+opendal-azblob = ["opendal", "deltalake-opendal/opendal-azblob", "deltalake-opendal/rustls"]
+opendal-azdls = ["opendal", "deltalake-opendal/opendal-azdls", "deltalake-opendal/rustls"]
+opendal-oss = ["opendal", "deltalake-opendal/opendal-oss", "deltalake-opendal/rustls"]
+opendal-obs = ["opendal", "deltalake-opendal/opendal-obs", "deltalake-opendal/rustls"]
+opendal-cos = ["opendal", "deltalake-opendal/opendal-cos", "deltalake-opendal/rustls"]
+opendal-tos = ["opendal", "deltalake-opendal/opendal-tos", "deltalake-opendal/rustls"]
+opendal-b2 = ["opendal", "deltalake-opendal/opendal-b2", "deltalake-opendal/rustls"]
+opendal-swift = ["opendal", "deltalake-opendal/opendal-swift", "deltalake-opendal/rustls"]
+opendal-webhdfs = ["opendal", "deltalake-opendal/opendal-webhdfs", "deltalake-opendal/rustls"]
+opendal-webdav = ["opendal", "deltalake-opendal/opendal-webdav", "deltalake-opendal/rustls"]
+opendal-ftp = ["opendal", "deltalake-opendal/opendal-ftp"]
+opendal-sftp = ["opendal", "deltalake-opendal/opendal-sftp"]
 lakefs = ["deltalake-lakefs"]
 native-tls = ["deltalake-core/native-tls"]
 rustls = ["deltalake-core/rustls"]

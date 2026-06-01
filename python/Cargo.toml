@@ -104,6 +104,23 @@ features = [
     "lakefs",
     "python",
     "unity-experimental",
+    # Generic OpenDAL backends (each auto-registers its URL scheme).
+    "opendal-fs",
+    "opendal-memory",
+    "opendal-s3",
+    "opendal-gcs",
+    "opendal-azblob",
+    "opendal-azdls",
+    "opendal-oss",
+    "opendal-obs",
+    "opendal-cos",
+    "opendal-tos",
+    "opendal-b2",
+    "opendal-swift",
+    "opendal-webhdfs",
+    "opendal-webdav",
+    "opendal-ftp",
+    "opendal-sftp",
 ]
 
 [features]
