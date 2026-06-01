@@ -25,11 +25,14 @@ use crate::logstore::{
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
+mod blind;
 pub mod builder;
 pub mod config;
 pub mod state;
 
 mod columns;
+
+pub use blind::BlindDeltaTable;
 
 // Re-exposing for backwards compatibility
 pub use columns::*;
