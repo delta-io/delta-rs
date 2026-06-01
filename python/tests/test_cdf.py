@@ -506,7 +506,7 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
     cdc_data = pq.read_table(cdc_path)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
-    assert cdc_data.to_pydict() == expected_data.to_pydict()
+    assert cdc_data == expected_data
 
 
 @pytest.mark.pyarrow
