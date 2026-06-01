@@ -10,16 +10,18 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::ColumnName;
 #[cfg(feature = "datafusion")]
 use delta_kernel::scan::Scan as KernelScan;
-use delta_kernel::schema::{DataType, SchemaRef as KernelSchemaRef, StructField, StructType};
+use delta_kernel::schema::{
+    DataType, PrimitiveType, SchemaRef as KernelSchemaRef, StructField, StructType,
+};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_features::ColumnMappingMode;
-use tracing::debug;
+use tracing::{debug, warn};
 
 #[cfg(test)]
 use super::Snapshot;
 use crate::DeltaResult;
 use crate::kernel::SCAN_ROW_ARROW_SCHEMA;
-use crate::kernel::arrow::engine_ext::SnapshotExt;
+use crate::kernel::arrow::engine_ext::{SnapshotExt, is_public_min_max_stats_eligible_primitive};
 
 pub(crate) const FIELD_MAX_VALUES: &str = "maxValues";
 pub(crate) const FIELD_MIN_VALUES: &str = "minValues";
@@ -165,9 +167,14 @@ impl StatsProjection {
         let columns = requested_columns
             .iter()
             .filter_map(|column| {
-                physicalize_column_path(logical_schema, column, column_mapping_mode)
+                if !schema_contains_min_max_data_path(logical_schema, column) {
+                    return None;
+                }
+                let physical =
+                    physicalize_column_path(logical_schema, column, column_mapping_mode)?;
+                stats_schema_contains_data_column(stats_schema.as_ref(), &physical)
+                    .then_some(physical)
             })
-            .filter(|column| stats_schema_contains_data_column(stats_schema.as_ref(), column))
             .collect::<BTreeSet<_>>();
 
         if columns.is_empty() {
@@ -213,6 +220,7 @@ impl StatsProjection {
         };
 
         let physical_schema = scan.physical_schema();
+        let stats_schema = scan.snapshot().table_configuration().stats_schema()?;
         let requested_columns = predicate
             .references()
             .into_iter()
@@ -221,8 +229,13 @@ impl StatsProjection {
 
         let columns = requested_columns
             .iter()
-            .filter(|column| schema_contains_path(physical_schema.as_ref(), column))
-            .cloned()
+            .filter_map(|column| {
+                if !schema_contains_min_max_data_path(physical_schema.as_ref(), column) {
+                    return None;
+                }
+                stats_schema_contains_data_column(stats_schema.as_ref(), column)
+                    .then(|| column.clone())
+            })
             .collect::<BTreeSet<_>>();
 
         if columns.is_empty() {
@@ -335,6 +348,55 @@ fn schema_contains_path(schema: &StructType, column: &ColumnName) -> bool {
     current.field(last).is_some()
 }
 
+/// Returns whether `schema` contains `column` with at least one min/max eligible leaf.
+fn schema_contains_min_max_data_path(schema: &StructType, column: &ColumnName) -> bool {
+    let Some((last, parents)) = column.path().split_last() else {
+        return false;
+    };
+
+    let mut current = schema;
+    for segment in parents {
+        let Some(field) = find_field_case_insensitive(current, segment) else {
+            return false;
+        };
+        let DataType::Struct(inner) = field.data_type() else {
+            return false;
+        };
+        current = inner;
+    }
+
+    current
+        .fields()
+        .find(|field| field.name().eq_ignore_ascii_case(last.as_str()))
+        .is_some_and(|field| data_type_has_min_max_stats_leaf(field.data_type()))
+}
+
+/// Returns whether `data_type` has at least one leaf that scan min/max stats can parse.
+fn data_type_has_min_max_stats_leaf(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Struct(inner) => inner
+            .fields()
+            .any(|field| data_type_has_min_max_stats_leaf(field.data_type())),
+        DataType::Primitive(primitive) => is_min_max_stats_eligible_primitive(primitive),
+        _ => false,
+    }
+}
+
+/// Scan min/max stats parsing requests a primitive when this returns true.
+///
+/// The public `Add` action stats schema keeps boolean min/max for compatibility. Scan
+/// projection excludes boolean for kernel parity.
+fn is_min_max_stats_eligible_primitive(data_type: &PrimitiveType) -> bool {
+    !matches!(data_type, &PrimitiveType::Boolean)
+        && is_public_min_max_stats_eligible_primitive(data_type)
+}
+
+fn find_field_case_insensitive<'a>(schema: &'a StructType, name: &str) -> Option<&'a StructField> {
+    schema
+        .fields()
+        .find(|field| field.name().eq_ignore_ascii_case(name))
+}
+
 fn physicalize_column_path(
     schema: &StructType,
     column: &ColumnName,
@@ -362,19 +424,48 @@ fn physicalize_column_path(
 }
 
 fn stats_schema_contains_data_column(stats_schema: &StructType, column: &ColumnName) -> bool {
-    let min_max_fields = [FIELD_MIN_VALUES, FIELD_MAX_VALUES]
-        .into_iter()
-        .filter_map(|field_name| stats_schema.field(field_name))
-        .filter_map(|field| match field.data_type() {
-            DataType::Struct(inner) => Some(inner.as_ref()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
+    let Some(min_max_fields) = min_max_stats_schemas(stats_schema, column) else {
+        return false;
+    };
 
-    min_max_fields.len() == 2
-        && min_max_fields
-            .iter()
-            .all(|schema| schema_contains_path(schema, column))
+    min_max_fields
+        .iter()
+        .all(|schema| schema_contains_path(schema, column))
+}
+
+/// Returns the min/max stats schemas when both sides are present as structs.
+///
+/// The stats builder emits minValues and maxValues as a pair. Require both sides; callers then
+/// use conservative scanning, and the log records the mismatch.
+fn min_max_stats_schemas<'a>(
+    stats_schema: &'a StructType,
+    column: &ColumnName,
+) -> Option<[&'a StructType; 2]> {
+    let min_values = stats_struct_schema(stats_schema, FIELD_MIN_VALUES);
+    let max_values = stats_struct_schema(stats_schema, FIELD_MAX_VALUES);
+
+    match (min_values, max_values) {
+        (Some(min_values), Some(max_values)) => Some([min_values, max_values]),
+        (min_values, max_values) => {
+            warn!(
+                column = %column,
+                has_min_values_schema = min_values.is_some(),
+                has_max_values_schema = max_values.is_some(),
+                "stats schema lacks a complete min/max field pair; using conservative scan"
+            );
+            None
+        }
+    }
+}
+
+fn stats_struct_schema<'a>(
+    stats_schema: &'a StructType,
+    field_name: &str,
+) -> Option<&'a StructType> {
+    match stats_schema.field(field_name)?.data_type() {
+        DataType::Struct(inner) => Some(inner.as_ref()),
+        _ => None,
+    }
 }
 
 fn display_columns(columns: &BTreeSet<ColumnName>) -> String {
@@ -406,6 +497,13 @@ fn filter_stats_schema(
             continue;
         };
         let Some(filtered) = filter_schema_by_paths(inner, paths)? else {
+            continue;
+        };
+        let filtered = match stats_field_name {
+            FIELD_MIN_VALUES | FIELD_MAX_VALUES => filter_min_max_schema(&filtered)?,
+            _ => Some(filtered),
+        };
+        let Some(filtered) = filtered else {
             continue;
         };
 
@@ -468,6 +566,38 @@ fn filter_schema_by_paths(
                 }
             }
             _ => fields.push(field.clone()),
+        }
+    }
+
+    if fields.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(StructType::try_new(fields)?))
+    }
+}
+
+/// Removes leaves unsupported by scan min/max stats parsing.
+fn filter_min_max_schema(schema: &StructType) -> DeltaResult<Option<StructType>> {
+    let mut fields = Vec::new();
+    for field in schema.fields() {
+        match field.data_type() {
+            DataType::Struct(inner) => {
+                let Some(filtered) = filter_min_max_schema(inner)? else {
+                    continue;
+                };
+                fields.push(
+                    StructField::new(
+                        field.name().clone(),
+                        DataType::Struct(Box::new(filtered)),
+                        field.is_nullable(),
+                    )
+                    .with_metadata(field.metadata().clone()),
+                );
+            }
+            DataType::Primitive(primitive) if is_min_max_stats_eligible_primitive(primitive) => {
+                fields.push(field.clone());
+            }
+            _ => {}
         }
     }
 
@@ -591,6 +721,34 @@ mod tests {
         Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
     }
 
+    async fn boolean_snapshot() -> DeltaResult<Snapshot> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("id", DataType::LONG),
+                StructField::nullable("active", DataType::BOOLEAN),
+                StructField::nullable("value", DataType::STRING),
+            ])
+            .await?;
+        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
+    async fn nested_boolean_snapshot() -> DeltaResult<Snapshot> {
+        let user = StructType::try_new([
+            StructField::nullable("name", DataType::STRING),
+            StructField::nullable("is_admin", DataType::BOOLEAN),
+            StructField::nullable("age", DataType::INTEGER),
+        ])?;
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("id", DataType::LONG),
+                StructField::nullable("user", DataType::Struct(Box::new(user))),
+            ])
+            .await?;
+        Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+    }
+
     async fn column_mapping_snapshot() -> DeltaResult<Snapshot> {
         let log_store = column_mapping_builder()?.build_storage()?;
         Snapshot::try_new(log_store.as_ref(), Default::default(), None).await
@@ -641,6 +799,36 @@ mod tests {
         assert_eq!(materialization.stats_projection(), &StatsProjection::none());
     }
 
+    #[test]
+    fn min_max_stats_schemas_requires_complete_pair() -> TestResult {
+        let value_stats = StructType::try_new([StructField::nullable("value", DataType::INTEGER)])?;
+        let partial = StructType::try_new([
+            StructField::nullable(FIELD_NUM_RECORDS, DataType::LONG),
+            StructField::nullable(FIELD_MIN_VALUES, value_stats.clone()),
+        ])?;
+
+        assert!(min_max_stats_schemas(&partial, &ColumnName::new(["value"])).is_none());
+
+        let complete = StructType::try_new([
+            StructField::nullable(FIELD_NUM_RECORDS, DataType::LONG),
+            StructField::nullable(FIELD_MIN_VALUES, value_stats.clone()),
+            StructField::nullable(FIELD_MAX_VALUES, value_stats),
+        ])?;
+        let schemas =
+            min_max_stats_schemas(&complete, &ColumnName::new(["value"])).expect("complete pair");
+
+        assert!(schema_contains_path(
+            schemas[0],
+            &ColumnName::new(["value"])
+        ));
+        assert!(schema_contains_path(
+            schemas[1],
+            &ColumnName::new(["value"])
+        ));
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn stats_projection_full_matches_snapshot_stats_schema() -> TestResult {
         let snapshot = synthetic_snapshot().await?;
@@ -665,13 +853,29 @@ mod tests {
         for field_name in ["minValues", "maxValues", "nullCount"] {
             let field = stats_schema
                 .field(field_name)
-                .unwrap_or_else(|| panic!("{field_name} should be projected"));
+                .unwrap_or_else(|| panic!("missing {field_name} projection"));
             let DataType::Struct(inner) = field.data_type() else {
-                panic!("{field_name} should be a struct");
+                panic!("expected {field_name} stats struct");
             };
             assert!(inner.field("value").is_some());
             assert!(inner.field("unreferenced_col").is_none());
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_predicate_matching_is_case_insensitive() -> TestResult {
+        let snapshot = synthetic_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["VALUE"]).gt(Scalar::Integer(10)));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(
+            projection,
+            StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new(["value"])]))
+        );
 
         Ok(())
     }
@@ -685,6 +889,109 @@ mod tests {
         let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
 
         assert_eq!(projection, StatsProjection::NumRecordsOnly);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_boolean_predicate_uses_num_records_only() -> TestResult {
+        let snapshot = boolean_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["active"]).eq(Scalar::Boolean(true)));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(projection, StatsProjection::NumRecordsOnly);
+
+        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+        assert!(stats_schema.field(FIELD_NUM_RECORDS).is_some());
+        assert!(stats_schema.field(FIELD_NULL_COUNT).is_none());
+        assert!(stats_schema.field(FIELD_MIN_VALUES).is_none());
+        assert!(stats_schema.field(FIELD_MAX_VALUES).is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_mixed_boolean_and_indexed_predicate_drops_boolean() -> TestResult {
+        let snapshot = boolean_snapshot().await?;
+        let predicate: PredicateRef = Arc::new(delta_kernel::Predicate::and(
+            Expression::column(["id"]).eq(Scalar::Long(2)),
+            Expression::column(["active"]).eq(Scalar::Boolean(true)),
+        ));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(
+            projection,
+            StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new(["id"])]))
+        );
+
+        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+        for field_name in [FIELD_MIN_VALUES, FIELD_MAX_VALUES, FIELD_NULL_COUNT] {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("missing {field_name} projection"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("expected {field_name} stats struct");
+            };
+            assert!(inner.field("id").is_some());
+            assert!(inner.field("active").is_none());
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_nested_boolean_predicate_uses_num_records_only() -> TestResult {
+        let snapshot = nested_boolean_snapshot().await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["user", "is_admin"]).eq(Scalar::Boolean(true)));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(projection, StatsProjection::NumRecordsOnly);
+
+        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+        assert!(stats_schema.field(FIELD_NUM_RECORDS).is_some());
+        assert!(stats_schema.field(FIELD_NULL_COUNT).is_none());
+        assert!(stats_schema.field(FIELD_MIN_VALUES).is_none());
+        assert!(stats_schema.field(FIELD_MAX_VALUES).is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stats_projection_mixed_nested_boolean_and_indexed_predicate_drops_boolean()
+    -> TestResult {
+        let snapshot = nested_boolean_snapshot().await?;
+        let predicate: PredicateRef = Arc::new(delta_kernel::Predicate::and(
+            Expression::column(["user", "age"]).gt(Scalar::Integer(21)),
+            Expression::column(["user", "is_admin"]).eq(Scalar::Boolean(true)),
+        ));
+
+        let projection = projection_for_predicate(&snapshot, Some(&predicate))?;
+
+        assert_eq!(
+            projection,
+            StatsProjection::PredicateColumns(BTreeSet::from([ColumnName::new(["user", "age"])]))
+        );
+
+        let stats_schema = projection.stats_schema(snapshot.inner.as_ref())?;
+        for field_name in [FIELD_MIN_VALUES, FIELD_MAX_VALUES, FIELD_NULL_COUNT] {
+            let field = stats_schema
+                .field(field_name)
+                .unwrap_or_else(|| panic!("missing {field_name} projection"));
+            let DataType::Struct(inner) = field.data_type() else {
+                panic!("expected {field_name} stats struct");
+            };
+            let user = inner.field("user").expect("missing user projection");
+            let DataType::Struct(user_inner) = user.data_type() else {
+                panic!("expected user stats struct");
+            };
+            assert!(user_inner.field("age").is_some());
+            assert!(user_inner.field("is_admin").is_none());
+        }
 
         Ok(())
     }
