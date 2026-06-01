@@ -2465,6 +2465,11 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             let value = value.serialize();
             format!("{value}Z").into_py_any(py)?
         }
+        #[cfg(feature = "nanosecond-timestamps")]
+        TimestampNanosNtz(_) => {
+            let value = value.serialize();
+            value.into_py_any(py)?
+        }
         TimestampNtz(_) => {
             let value = value.serialize();
             value.into_py_any(py)?

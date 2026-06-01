@@ -11,6 +11,7 @@ from deltalake import (
     TableFeatures,
     write_deltalake,
 )
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
@@ -416,6 +417,18 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
 def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
     check_timestamp_column(
         tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}
+    )
+
+
+@pytest.mark.skipif(
+    not _NANOSECOND_TIMESTAMPS, reason="nanosecond timestamps not enabled"
+)
+def test_add_timestamp_nanos_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(
+        tmp_path,
+        sample_table,
+        "timestamp_nanos_ntz",
+        {"timestampNanos", "timestampNtz"},
     )
 
 

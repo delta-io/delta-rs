@@ -152,31 +152,32 @@ impl MetadataExt for Metadata {
     }
 }
 
-/// checks if table contains a datatype in any field including nested fields.
-fn contains_datatype<'a>(
-    mut fields: impl Iterator<Item = &'a StructField>,
-    dtype: &DataType,
-) -> bool {
-    fn _check_type(dtype_to_check: &DataType, dtype: &DataType) -> bool {
-        match dtype_to_check {
-            to_check if dtype == to_check => true,
-            DataType::Array(inner) => _check_type(inner.element_type(), dtype),
-            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type(), dtype)),
-            _ => false,
-        }
+/// Checks if a datatype matches another type, or any of its inner fields match.
+fn matches_datatype(dtype_to_check: &DataType, dtype: &DataType) -> bool {
+    match dtype_to_check {
+        to_check if dtype == to_check => true,
+        DataType::Array(inner) => matches_datatype(inner.element_type(), dtype),
+        DataType::Struct(inner) => inner
+            .fields()
+            .any(|f| matches_datatype(f.data_type(), dtype)),
+        _ => false,
     }
-    fields.any(|f| _check_type(f.data_type(), dtype))
 }
 
 /// checks if table contains timestamp_ntz in any field including nested fields.
-pub fn contains_timestampntz<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
-    contains_datatype(fields, &DataType::TIMESTAMP_NTZ)
+pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| matches_datatype(f.data_type(), &DataType::TIMESTAMP_NTZ))
 }
 
 #[cfg(feature = "nanosecond-timestamps")]
-/// checks if table contains timestamp_nanos in any field including nested fields.
-pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
-    contains_datatype(fields, &DataType::TIMESTAMP_NANOS)
+/// checks if table contains timestamp_nanos or timestamp_nanos_ntz in any
+/// field including nested fields. Both primitive types require the same
+/// `timestampNanos` table feature.
+pub fn contains_timestamp_nanos<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| {
+        matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS)
+            || matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS_NTZ)
+    })
 }
 
 /// checks if table contains variant in any field including nested fields.
