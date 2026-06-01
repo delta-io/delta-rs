@@ -26,6 +26,12 @@ impl std::fmt::Display for ColumnMappingOperation {
     }
 }
 
+pub(crate) fn unsupported_column_mapping_read(operation: &str) -> DeltaTableError {
+    DeltaTableError::Generic(format!(
+        "column mapping is not supported for {operation} yet"
+    ))
+}
+
 /// Delta Table specific error
 #[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
