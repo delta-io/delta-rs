@@ -135,17 +135,20 @@ impl ProtocolChecker {
     }
 
     #[cfg(feature = "nanosecond-timestamps")]
-    /// Check can write_timestamp_nanos
+    /// Check can write_timestamp_nanos.
+    /// Requires both timestampNanos and timestampNtz features.
     pub fn check_can_write_timestamp_nanos(
         &self,
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampnanos");
+        let contains_nanos = contains_timestamp_nanos(schema.fields());
+        self.check_can_write_feature(snapshot, contains_nanos, TableFeature::TimestampNanos)?;
         self.check_can_write_feature(
             snapshot,
-            contains_timestamp_nanos(schema.fields()),
-            TableFeature::TimestampNanos,
+            contains_nanos,
+            TableFeature::TimestampWithoutTimezone,
         )
     }
 

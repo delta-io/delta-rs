@@ -3728,33 +3728,49 @@ mod tests {
     #[cfg(not(feature = "nanosecond-timestamps"))]
     #[tokio::test]
     async fn test_write_timestamp_ns_normalizes_to_us() {
-        test_write_timestamp_ns_maybe_normalization(TimeUnit::Microsecond).await;
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Microsecond, Some("UTC".into()))
+            .await;
+    }
+
+    #[cfg(not(feature = "nanosecond-timestamps"))]
+    #[tokio::test]
+    async fn test_write_timestamp_ns_ntz_normalizes_to_us() {
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Microsecond, None).await;
     }
 
     #[cfg(feature = "nanosecond-timestamps")]
     #[tokio::test]
     async fn test_write_timestamp_ns_stays_ns() {
-        test_write_timestamp_ns_maybe_normalization(TimeUnit::Nanosecond).await;
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Nanosecond, Some("UTC".into())).await;
     }
 
-    async fn test_write_timestamp_ns_maybe_normalization(unit: TimeUnit) {
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[tokio::test]
+    async fn test_write_timestamp_ns_ntz_stays_ns() {
+        test_write_timestamp_ns_maybe_normalization(TimeUnit::Nanosecond, None).await;
+    }
+
+    async fn test_write_timestamp_ns_maybe_normalization(unit: TimeUnit, tz: Option<Arc<str>>) {
         use arrow_array::TimestampNanosecondArray;
 
         let schema = Arc::new(ArrowSchema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new(
                 "ts",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                 true,
             ),
         ]));
         let nanos = 1_760_961_600_123_456_789_i64;
+
+        let ts_array = TimestampNanosecondArray::from(vec![nanos]);
+        let ts_array = match tz.as_ref() {
+            Some(tz) => ts_array.with_timezone(tz.clone()),
+            None => ts_array,
+        };
         let batch = RecordBatch::try_new(
             schema,
-            vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(TimestampNanosecondArray::from(vec![nanos]).with_timezone("UTC")),
-            ],
+            vec![Arc::new(Int32Array::from(vec![1])), Arc::new(ts_array)],
         )
         .unwrap();
 
@@ -3769,7 +3785,7 @@ mod tests {
         let result_field = schema.field_with_name("ts").unwrap();
         assert_eq!(
             result_field.data_type(),
-            &DataType::Timestamp(unit, Some("UTC".into())),
+            &DataType::Timestamp(unit, tz.clone()),
         );
     }
 

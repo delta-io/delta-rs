@@ -17,10 +17,10 @@ from deltalake import (
     DeltaTable,
     WriterProperties,
     _disable_nanosecond_timestamps,
+    _nanosecond_timestamps_enabled,
     enable_nanosecond_timestamps,
     write_deltalake,
 )
-from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -243,7 +243,9 @@ def azurite_sas_creds(azurite_creds):
     ids=["base", "with_nanos"],
 )
 def sample_data_pyarrow(request) -> "pa.Table":
-    nanosecond_timestamps = request.param["ns_timestamps"] and _NANOSECOND_TIMESTAMPS
+    nanosecond_timestamps = (
+        request.param["ns_timestamps"] and _nanosecond_timestamps_enabled()
+    )
     nrows = 5
     import pyarrow as pa
 
@@ -251,6 +253,9 @@ def sample_data_pyarrow(request) -> "pa.Table":
     if nanosecond_timestamps:
         extras["timestamp_ns"] = pa.array(
             [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
+        )
+        extras["timestamp_ns_ntz"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", None)) for i in range(nrows)]
         )
 
     table = pa.table(

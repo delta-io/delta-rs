@@ -420,6 +420,8 @@ where
     match value {
         #[cfg(feature = "nanosecond-timestamps")]
         Scalar::TimestampNanos(v) => Scalar::TimestampNanos(func(v, 1_000_000)),
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanosNtz(v) => Scalar::TimestampNanosNtz(func(v, 1_000_000)),
         Scalar::Timestamp(v) => Scalar::Timestamp(func(v, 1_000)),
         Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v, 1_000)),
         Scalar::Struct(struct_data) => {
@@ -896,6 +898,10 @@ mod tests {
             let timestamp = Scalar::TimestampNanos(1609459200000000);
             let rounded = round_ms_datetimes(timestamp, &ceil_fn);
             assert_eq!(rounded, Scalar::TimestampNanos(1609459201000000));
+
+            let timestamp_ntz = Scalar::TimestampNanosNtz(1609459200000000);
+            let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
+            assert_eq!(rounded, Scalar::TimestampNanosNtz(1609459201000000));
         }
 
         // Test non-timestamp scalar (should be unchanged)
