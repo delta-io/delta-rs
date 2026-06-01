@@ -848,7 +848,10 @@ pub(crate) fn test_multi_partitioned_override_schema() -> SchemaRef {
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{Date32Array, Int32Array, Int64Array, StringArray, TimestampMillisecondArray},
+        array::{
+            BooleanArray, Date32Array, Int32Array, Int64Array, StringArray,
+            TimestampMillisecondArray,
+        },
         datatypes::{
             DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
         },
@@ -1650,6 +1653,59 @@ mod tests {
                 "expected pruning predicate to reference {expected}, got {pruning_predicate}",
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_boolean_predicate_does_not_require_minmax_stats() -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, true),
+            ArrowField::new("active", ArrowDataType::Boolean, true),
+            ArrowField::new("value", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(StringArray::from(vec!["old-1", "old-2"])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let expected = vec![
+            "+----+--------+-------+",
+            "| id | active | value |",
+            "+----+--------+-------+",
+            "| 1  | true   | old-1 |",
+            "+----+--------+-------+",
+        ];
+
+        let batches = session
+            .sql("SELECT id, active, value FROM delta_table WHERE active = true")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        let batches = session
+            .sql("SELECT id, active, value FROM delta_table WHERE id = 1 AND active = true")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }

@@ -2273,6 +2273,62 @@ def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(
 
 
 @pytest.mark.parametrize("streaming", (True, False))
+def test_merge_boolean_target_predicate_4490(tmp_path: pathlib.Path, streaming: bool):
+    data = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "active": Array(
+                [True, False], ArrowField("active", type=DataType.bool(), nullable=True)
+            ),
+            "value": Array(
+                ["old-1", "old-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    source = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "value": Array(
+                ["new-1", "new-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        source_alias="source",
+        target_alias="target",
+        predicate="target.id = source.id and target.active = true",
+        streamed_exec=streaming,
+    ).when_matched_update(updates={"value": "source.value"}).execute()
+
+    actual = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, active, value from tbl order by id")
+        .read_all()
+    )
+    expected = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "active": Array(
+                [True, False], ArrowField("active", type=DataType.bool(), nullable=True)
+            ),
+            "value": Array(
+                ["new-1", "old-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = Table(
         {
