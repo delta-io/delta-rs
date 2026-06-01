@@ -99,6 +99,7 @@ use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use delta_kernel::table_features::ColumnMappingMode;
 
 mod barrier;
 mod filter;
@@ -1826,6 +1827,14 @@ impl std::future::IntoFuture for MergeBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
+
+            if this.merge_schema
+                && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+            {
+                return Err(DeltaTableError::Generic(
+                    "Schema evolution on column-mapped tables is not yet supported".to_string(),
+                ));
+            }
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;

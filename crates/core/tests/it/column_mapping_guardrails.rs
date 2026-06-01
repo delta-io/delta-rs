@@ -9,18 +9,17 @@ use deltalake_core::{DeltaTable, DeltaTableError, open_table};
 use tempfile::TempDir;
 use url::Url;
 
+#[cfg(feature = "datafusion")]
+use datafusion::common::assert_batches_sorted_eq;
+
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn assert_unsupported_column_mapping_write(err: &DeltaTableError, operation: &str) {
-    let message = err.to_string();
-    assert!(
-        message.contains("column mapping writes are not supported"),
-        "unexpected error: {message}"
-    );
-    assert!(
-        message.contains(operation),
-        "expected operation `{operation}` in error: {message}"
-    );
+    let expected = format!("column mapping writes are not supported for {operation} yet");
+    match err {
+        DeltaTableError::Generic(message) => assert_eq!(message, &expected),
+        other => panic!("expected a Generic column-mapping error, got: {other:?}"),
+    }
 }
 
 #[cfg(feature = "datafusion")]
@@ -103,11 +102,6 @@ async fn read_all(table: &DeltaTable) -> TestResult<Vec<arrow_array::RecordBatch
     Ok(ctx.sql("SELECT * FROM t").await?.collect().await?)
 }
 
-#[cfg(feature = "datafusion")]
-fn count_rows(batches: &[arrow_array::RecordBatch]) -> usize {
-    batches.iter().map(|b| b.num_rows()).sum()
-}
-
 /// Appending to a column-mapped table writes physical column names, keeps physical partition
 /// keys in `partitionValues`, uses random-prefixed (non-Hive) paths, and round-trips the data
 /// back under the logical schema.
@@ -140,7 +134,21 @@ async fn column_mapping_append_roundtrip() -> TestResult {
 
     // Data reads back under the logical schema, including the appended row.
     let batches = read_all(&table).await?;
-    assert_eq!(count_rows(&batches), 6, "5 fixture rows + 1 appended");
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BME                | Timothy Lamb           |",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | New Customer           |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
+        ],
+        &batches
+    };
 
     Ok(())
 }
@@ -159,11 +167,13 @@ async fn column_mapping_schema_evolution_rejected() -> TestResult {
         .with_schema_mode(SchemaMode::Merge)
         .await
         .expect_err("schema evolution should be rejected on column-mapped tables");
-    assert!(
-        err.to_string()
-            .contains("Schema evolution on column-mapped tables"),
-        "unexpected error: {err}"
-    );
+    match err {
+        DeltaTableError::Generic(message) => assert_eq!(
+            message,
+            "Schema evolution on column-mapped tables is not yet supported"
+        ),
+        other => panic!("expected a Generic schema-evolution error, got: {other:?}"),
+    }
     assert_eq!(before, collect_data_files(&table_path)?);
 
     Ok(())
@@ -201,7 +211,7 @@ async fn column_mapping_guardrails_legacy_writers_reject() -> TestResult {
 #[cfg(feature = "datafusion")]
 #[tokio::test]
 async fn column_mapping_update_roundtrip() -> TestResult {
-    use datafusion::prelude::{SessionContext, lit};
+    use datafusion::prelude::lit;
 
     let (_temp_dir, _table_path, table) = copied_column_mapping_table().await?;
     let (table, _metrics) = table
@@ -209,14 +219,21 @@ async fn column_mapping_update_roundtrip() -> TestResult {
         .with_update("Super Name", lit("Updated"))
         .await?;
 
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table.table_provider().await?)?;
-    let updated = ctx
-        .sql("SELECT * FROM t WHERE \"Super Name\" = 'Updated'")
-        .await?
-        .collect()
-        .await?;
-    assert_eq!(count_rows(&updated), 5, "every row should be updated");
+    let batches = read_all(&table).await?;
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+------------+",
+            "| Company Very Short | Super Name |",
+            "+--------------------+------------+",
+            "| BME                | Updated    |",
+            "| BMS                | Updated    |",
+            "| BMS                | Updated    |",
+            "| BMS                | Updated    |",
+            "| BMS                | Updated    |",
+            "+--------------------+------------+",
+        ],
+        &batches
+    };
 
     Ok(())
 }
@@ -234,7 +251,19 @@ async fn column_mapping_delete_roundtrip() -> TestResult {
         .await?;
 
     let batches = read_all(&table).await?;
-    assert_eq!(count_rows(&batches), 4, "one of five rows deleted");
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
+        ],
+        &batches
+    };
 
     Ok(())
 }
@@ -270,7 +299,21 @@ async fn column_mapping_merge_roundtrip() -> TestResult {
         .await?;
 
     let batches = read_all(&table).await?;
-    assert_eq!(count_rows(&batches), 6, "one row inserted via merge");
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BME                | Timothy Lamb           |",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | New Customer           |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
+        ],
+        &batches
+    };
 
     Ok(())
 }
@@ -314,7 +357,7 @@ async fn column_mapping_guardrails_metadata_operations() -> TestResult {
         )]))
         .await
         .expect_err("setting column mapping mode should be rejected");
-    assert_unsupported_column_mapping_write(&err, "SET TBLPROPERTIES");
+    assert_unsupported_column_mapping_write(&err, "SET TBLPROPERTIES delta.columnMapping.mode");
 
     Ok(())
 }
@@ -327,7 +370,7 @@ async fn column_mapping_guardrails_create_rejects_activation_and_reserved_metada
         .with_configuration([("delta.columnMapping.mode", Some("name"))])
         .await
         .expect_err("create should reject column mapping mode");
-    assert_unsupported_column_mapping_write(&err, "CREATE TABLE");
+    assert_unsupported_column_mapping_write(&err, "CREATE TABLE with delta.columnMapping.mode");
 
     let mapped_field = StructField::nullable("id", DataType::INTEGER).with_metadata([
         (
@@ -345,7 +388,7 @@ async fn column_mapping_guardrails_create_rejects_activation_and_reserved_metada
         .with_columns([mapped_field])
         .await
         .expect_err("create should reject column mapping metadata");
-    assert_unsupported_column_mapping_write(&err, "CREATE TABLE");
+    assert_unsupported_column_mapping_write(&err, "CREATE TABLE with column mapping metadata");
 
     Ok(())
 }
@@ -372,6 +415,7 @@ async fn column_mapping_cdf_write_is_kernel_readable() -> TestResult {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
     use datafusion::prelude::{col, lit};
@@ -431,36 +475,209 @@ async fn column_mapping_cdf_write_is_kernel_readable() -> TestResult {
     let table_changes = TableChanges::try_new(table_url, engine.as_ref(), 0, None)?;
     let scan = table_changes.into_scan_builder().build()?;
 
-    let mut delete_values = Vec::new();
+    // Collect the deterministic change-feed columns (the feed also carries a non-deterministic
+    // `_commit_timestamp`). Reading `id`/`value` by their LOGICAL names proves physical->logical
+    // resolution of the physically-named files.
+    let mut changes: Vec<(String, i32, String)> = Vec::new();
     for result in scan.execute(engine.clone())? {
         let batch: RecordBatch = ArrowEngineData::try_from_engine_data(result?)?.into();
-        // Logical column names are present (not the physical col-<uuid> names on disk).
-        assert!(
-            batch.schema().column_with_name("id").is_some()
-                && batch.schema().column_with_name("value").is_some(),
-            "change feed should expose logical columns, got {:?}",
-            batch.schema()
-        );
         let change_type = arrow::compute::cast(
             batch.column_by_name("_change_type").unwrap(),
             &ArrowDataType::Utf8,
         )?;
         let change_type = change_type.as_string::<i32>();
+        let ids = arrow::compute::cast(batch.column_by_name("id").unwrap(), &ArrowDataType::Int32)?;
+        let ids = ids.as_primitive::<Int32Type>();
         let values =
             arrow::compute::cast(batch.column_by_name("value").unwrap(), &ArrowDataType::Utf8)?;
         let values = values.as_string::<i32>();
         for i in 0..batch.num_rows() {
-            if change_type.value(i) == "delete" {
-                delete_values.push(values.value(i).to_string());
-            }
+            changes.push((
+                change_type.value(i).to_string(),
+                ids.value(i),
+                values.value(i).to_string(),
+            ));
         }
     }
+    changes.sort();
 
+    // The original insert of (1,'a'),(2,'b') and the delete of (2,'b').
     assert_eq!(
-        delete_values,
-        vec!["b".to_string()],
-        "expected exactly one delete change event for the row id=2 (value 'b')"
+        changes,
+        vec![
+            ("delete".to_string(), 2, "b".to_string()),
+            ("insert".to_string(), 1, "a".to_string()),
+            ("insert".to_string(), 2, "b".to_string()),
+        ]
     );
+
+    Ok(())
+}
+
+/// Create an empty column-mapped table (schema: `id INT, value STRING`) via kernel `create_table`,
+/// applying `properties` (which must include `delta.columnMapping.mode`). delta-rs can't create CM
+/// tables yet, so this is how the round-trip tests obtain one to write against.
+#[cfg(feature = "datafusion")]
+async fn create_kernel_cm_table(properties: &[(&str, &str)]) -> TestResult<(TempDir, Url)> {
+    use std::sync::Arc;
+
+    use delta_kernel::committer::FileSystemCommitter;
+    use delta_kernel::engine::default::DefaultEngineBuilder;
+    use delta_kernel::engine::default::executor::tokio::TokioMultiThreadExecutor;
+    use delta_kernel::object_store::DynObjectStore;
+    use delta_kernel::object_store::local::LocalFileSystem;
+    use delta_kernel::schema::{DataType as KernelDataType, StructField, StructType};
+    use delta_kernel::transaction::create_table::create_table;
+
+    let tmp = tempfile::tempdir()?;
+    let url = Url::from_directory_path(tmp.path()).unwrap();
+    let store: Arc<DynObjectStore> = Arc::new(LocalFileSystem::new());
+    let engine = DefaultEngineBuilder::new(store)
+        .with_task_executor(Arc::new(TokioMultiThreadExecutor::new(
+            tokio::runtime::Handle::current(),
+        )))
+        .build();
+    let schema = Arc::new(StructType::try_new([
+        StructField::nullable("id", KernelDataType::INTEGER),
+        StructField::nullable("value", KernelDataType::STRING),
+    ])?);
+    let _ = create_table(url.as_str(), schema, "delta-rs-test/1.0")
+        .with_table_properties(properties.iter().copied())
+        .build(&engine, Box::new(FileSystemCommitter::new()))?
+        .commit(&engine)?;
+    Ok((tmp, url))
+}
+
+/// A DataFusion `INSERT INTO` (the `DeltaDataSink` write path) must write physical column names on
+/// a column-mapped table, so the inserted rows round-trip. Currently FAILS: `DeltaDataSink` builds
+/// its `WriterConfig` from the logical schema and never applies the column-mapping rewrite, so the
+/// rows are written under logical names and a column-mapping-aware scan reads them back as nulls.
+#[cfg(feature = "datafusion")]
+#[tokio::test(flavor = "multi_thread")]
+async fn column_mapping_datafusion_insert_roundtrips() -> TestResult {
+    use datafusion::prelude::SessionContext;
+
+    let (_tmp, url) = create_kernel_cm_table(&[("delta.columnMapping.mode", "name")]).await?;
+
+    let table = open_table(url.clone()).await?;
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table.table_provider().await?)?;
+    ctx.sql("INSERT INTO t VALUES (1, 'x'), (2, 'y')")
+        .await?
+        .collect()
+        .await?;
+
+    // Reopen so the scan sees the committed insert, then read it back through the CM-aware path.
+    let table = open_table(url).await?;
+    let batches = read_all(&table).await?;
+    assert_batches_sorted_eq! {
+        [
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| 1  | x     |",
+            "| 2  | y     |",
+            "+----+-------+",
+        ],
+        &batches
+    };
+
+    Ok(())
+}
+
+/// `MERGE ... with_merge_schema(true)` on a column-mapped table must be rejected: that path builds
+/// replacement metadata without assigning column-mapping ids / physical names / maxColumnId.
+/// Currently FAILS: the merge schema-evolution path is not guarded (the WriteBuilder guard does
+/// not cover it), so it does not produce the expected error.
+#[cfg(feature = "datafusion")]
+#[tokio::test(flavor = "multi_thread")]
+async fn column_mapping_merge_schema_evolution_rejected() -> TestResult {
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use datafusion::prelude::{SessionContext, col};
+
+    let (_tmp, url) = create_kernel_cm_table(&[("delta.columnMapping.mode", "name")]).await?;
+    let table = open_table(url).await?;
+
+    // Source carries an extra column, so with_merge_schema(true) attempts to evolve the schema.
+    let source_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", ArrowDataType::Int32, true),
+        Field::new("value", ArrowDataType::Utf8, true),
+        Field::new("extra", ArrowDataType::Utf8, true),
+    ]));
+    let source_batch = RecordBatch::try_new(
+        source_schema,
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["x"])),
+            Arc::new(StringArray::from(vec!["new"])),
+        ],
+    )?;
+    let ctx = SessionContext::new();
+    let source = ctx.read_batch(source_batch)?;
+
+    let result = table
+        .merge(source, col("target.id").eq(col("source.id")))
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_merge_schema(true)
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", col("source.id"))
+                .set("value", col("source.value"))
+                .set("extra", col("source.extra"))
+        })?
+        .await;
+
+    let err =
+        result.expect_err("merge schema evolution should be rejected on column-mapped tables");
+    match err {
+        DeltaTableError::Generic(message) => assert_eq!(
+            message,
+            "Schema evolution on column-mapped tables is not yet supported"
+        ),
+        other => panic!("expected a Generic schema-evolution error, got: {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// DataFusion `INSERT INTO` a *string-partitioned* column-mapped table (the fixture is partitioned
+/// by a String column under `name` mapping). Exercises the DataSink path where `read_schema()`
+/// dict-encodes string partition columns while the stream is native — must still round-trip.
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn column_mapping_datafusion_insert_into_partitioned() -> TestResult {
+    use datafusion::prelude::SessionContext;
+
+    let (_temp_dir, table_path, table) = copied_column_mapping_table().await?;
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table.table_provider().await?)?;
+    ctx.sql("INSERT INTO t VALUES ('BMS', 'Inserted Row')")
+        .await?
+        .collect()
+        .await?;
+
+    let table_url = Url::from_directory_path(table_path.canonicalize()?).unwrap();
+    let table = open_table(table_url).await?;
+    let batches = read_all(&table).await?;
+    assert_batches_sorted_eq! {
+        [
+            "+--------------------+------------------------+",
+            "| Company Very Short | Super Name             |",
+            "+--------------------+------------------------+",
+            "| BME                | Timothy Lamb           |",
+            "| BMS                | Anthony Johnson        |",
+            "| BMS                | Inserted Row           |",
+            "| BMS                | Mr. Daniel Ferguson MD |",
+            "| BMS                | Nathan Bennett         |",
+            "| BMS                | Stephanie Mcgrath      |",
+            "+--------------------+------------------------+",
+        ],
+        &batches
+    };
 
     Ok(())
 }

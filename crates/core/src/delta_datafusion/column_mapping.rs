@@ -10,6 +10,7 @@
 //! survive), making the rewrite effectively zero-copy.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -22,21 +23,98 @@ use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskCo
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use delta_kernel::schema::{DataType as KernelDataType, StructField, StructType};
+use delta_kernel::schema::{
+    DataType as KernelDataType, SchemaRef as KernelSchemaRef, StructField, StructType,
+};
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::{Stream, StreamExt};
 
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, DeltaTableError};
 
 /// Arrow field metadata key recognized by the Parquet writer to emit a `field_id`.
 const PARQUET_FIELD_ID_META_KEY: &str = "PARQUET:field_id";
+
+/// Length of the random data-file directory prefix on column-mapped tables (delta-spark default).
+const DEFAULT_RANDOM_PREFIX_LENGTH: usize = 2;
+
+/// Shared column-mapping write state, derived once from the table configuration and reused by
+/// every write entry point — the DataFusion plan path (via [`ColumnMappingState::wrap_plan`]) and
+/// the `DeltaDataSink` stream path (via [`ColumnMappingState::transform_batch`]) — so they all
+/// emit physical names/ids, physical partition keys, and random-prefixed paths consistently.
+#[derive(Clone)]
+pub(crate) struct ColumnMappingState {
+    mode: ColumnMappingMode,
+    /// Kernel table schema carrying the `delta.columnMapping.*` annotations.
+    logical_schema: KernelSchemaRef,
+}
+
+impl ColumnMappingState {
+    /// Build the state from a table configuration, returning `None` when column mapping is off.
+    pub(crate) fn from_table_config(table_config: &TableConfiguration) -> Option<Self> {
+        let mode = table_config.column_mapping_mode();
+        (mode != ColumnMappingMode::None).then(|| Self {
+            mode,
+            logical_schema: table_config.logical_schema(),
+        })
+    }
+
+    /// Physical Arrow schema for `input`: table columns renamed to physical names with `field_id`
+    /// metadata, non-table columns passed through.
+    pub(crate) fn physical_schema(&self, input: &SchemaRef) -> SchemaRef {
+        Arc::new(Schema::new(physical_fields(
+            input.fields(),
+            &self.logical_schema,
+            self.mode,
+        )))
+    }
+
+    /// Wrap a write plan so its output batches are emitted physically.
+    pub(crate) fn wrap_plan(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        ColumnMappingExec::try_new(plan, self.logical_schema.as_ref(), self.mode)
+    }
+
+    /// Rewrite a single batch into its physical form (for stream-based writers like `DeltaDataSink`).
+    pub(crate) fn transform_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        apply_column_mapping(batch, &self.physical_schema(&batch.schema()))
+    }
+
+    /// Translate logical partition column names to physical. Errors (rather than silently using
+    /// the logical name) if a partition column is missing from the table schema.
+    pub(crate) fn physical_partition_columns(
+        &self,
+        partition_columns: &[String],
+    ) -> DeltaResult<Vec<String>> {
+        partition_columns
+            .iter()
+            .map(|name| {
+                self.logical_schema
+                    .field(name)
+                    .map(|field| field.physical_name(self.mode).to_string())
+                    .ok_or_else(|| {
+                        DeltaTableError::Generic(format!(
+                            "partition column '{name}' not found in the table schema"
+                        ))
+                    })
+            })
+            .collect()
+    }
+
+    /// Directory-prefix length for data files on column-mapped tables.
+    pub(crate) fn random_prefix_length(&self) -> usize {
+        DEFAULT_RANDOM_PREFIX_LENGTH
+    }
+}
 
 /// Execution node that casts logical record batches to their physical, column-mapped form.
 ///
 /// See the [module docs](self) for details. Constructed via [`ColumnMappingExec::try_new`],
 /// which is a no-op (returns the input plan unchanged) when column mapping is disabled.
 #[derive(Debug)]
-pub(crate) struct ColumnMappingExec {
+struct ColumnMappingExec {
     input: Arc<dyn ExecutionPlan>,
     /// Output schema with physical column names and `field_id` metadata.
     physical_schema: SchemaRef,
@@ -49,7 +127,7 @@ impl ColumnMappingExec {
     /// Returns `input` unchanged when `mode` is [`ColumnMappingMode::None`], so callers can
     /// invoke this unconditionally. `logical_schema` is the kernel table schema carrying the
     /// `delta.columnMapping.*` annotations used to resolve physical names and field ids.
-    pub(crate) fn try_new(
+    fn try_new(
         input: Arc<dyn ExecutionPlan>,
         logical_schema: &StructType,
         mode: ColumnMappingMode,
@@ -204,11 +282,24 @@ fn physical_fields(
         .collect()
 }
 
+/// Clone a field's metadata, dropping any inherited `PARQUET:field_id`. Field ids are table-owned
+/// (the column-mapping id is written as the Parquet `field_id`, per PROTOCOL.md), so a stale id
+/// carried in on input batches must not survive into the written file. All other metadata is kept.
+fn metadata_without_field_id(field: &Field) -> HashMap<String, String> {
+    field
+        .metadata()
+        .iter()
+        .filter(|(key, _)| key.as_str() != PARQUET_FIELD_ID_META_KEY)
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
 /// Build the physical Arrow field for a single logical field: rename to the physical name,
-/// attach the `field_id` metadata, and recurse into nested types — all while preserving the
-/// input Arrow data type.
+/// attach the table-owned `field_id` metadata, and recurse into nested types — all while
+/// preserving the input Arrow data type.
 fn physical_field(field: &Field, kernel_field: &StructField, mode: ColumnMappingMode) -> Field {
-    let mut metadata = field.metadata().clone();
+    // Strip parquet field ids
+    let mut metadata = metadata_without_field_id(field);
     if let Some(id) = kernel_field.column_mapping_id() {
         metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string());
     }
@@ -267,8 +358,13 @@ fn physical_data_type(
             };
             // Map entries are a struct of [key, value]; recurse into both by position,
             // keeping the synthetic "key"/"value"/"entries" names as-is.
-            let mut new_fields: Vec<Field> =
-                entry_fields.iter().map(|f| f.as_ref().clone()).collect();
+            let mut new_fields: Vec<Field> = entry_fields
+                .iter()
+                .map(|f| {
+                    Field::new(f.name(), f.data_type().clone(), f.is_nullable())
+                        .with_metadata(metadata_without_field_id(f))
+                })
+                .collect();
             if let Some(key) = new_fields.get_mut(0) {
                 *key = key.clone().with_data_type(physical_data_type(
                     key.data_type(),
@@ -288,7 +384,7 @@ fn physical_data_type(
                 DataType::Struct(new_fields.into()),
                 entries.is_nullable(),
             )
-            .with_metadata(entries.metadata().clone());
+            .with_metadata(metadata_without_field_id(entries));
             DataType::Map(Arc::new(new_entries), *sorted)
         }
         KernelDataType::Primitive(_) | KernelDataType::Variant(_) => arrow_type.clone(),
@@ -305,7 +401,7 @@ fn rebuild_element(
     let data_type = physical_data_type(element.data_type(), element_kernel, mode);
     Arc::new(
         Field::new(element.name(), data_type, element.is_nullable())
-            .with_metadata(element.metadata().clone()),
+            .with_metadata(metadata_without_field_id(element)),
     )
 }
 
@@ -413,8 +509,13 @@ mod tests {
             vec![Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef],
             None,
         );
+        // The list-element wrapper carries a stale field id on input; it must be stripped (the
+        // wrapper is not a column-mapped table field).
         let items = ListArray::new(
-            Arc::new(Field::new("item", item_struct.data_type().clone(), true)),
+            Arc::new(
+                Field::new("item", item_struct.data_type().clone(), true)
+                    .with_metadata(stale_field_id()),
+            ),
             OffsetBuffer::from_lengths([2usize, 1]),
             Arc::new(item_struct),
             None,
@@ -422,7 +523,8 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, true),
-            Field::new("name", DataType::Utf8View, true),
+            // `name` carries a stale field id on input; the table-owned id (2) must win.
+            Field::new("name", DataType::Utf8View, true).with_metadata(stale_field_id()),
             Field::new("addr", addr.data_type().clone(), true),
             Field::new("items", items.data_type().clone(), true),
         ]));
@@ -443,6 +545,11 @@ mod tests {
             .metadata()
             .get(PARQUET_FIELD_ID_META_KEY)
             .map(String::as_str)
+    }
+
+    /// A stale, wrong field id as it might arrive on an input batch (e.g. read from another file).
+    fn stale_field_id() -> HashMap<String, String> {
+        HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "999".to_string())])
     }
 
     /// Exercises the full nested rewrite: top-level + nested struct + struct-inside-list renames,
@@ -486,6 +593,9 @@ mod tests {
             let DataType::List(item_field) = fields.field(3).data_type() else {
                 panic!("items should be a list");
             };
+            // The synthetic element wrapper must not carry a field id (the stale input id is
+            // stripped and no table id applies to it).
+            assert_eq!(field_id(item_field), None, "{mode:?}");
             let DataType::Struct(item_fields) = item_field.data_type() else {
                 panic!("list element should be a struct");
             };
@@ -548,5 +658,33 @@ mod tests {
         assert_eq!(out.schema().field(0).name(), "col-id");
         assert_eq!(out.schema().field(1).name(), "_change_type");
         assert_eq!(field_id(out.schema().field(1)), None);
+    }
+
+    #[test]
+    fn physical_partition_columns_errors_on_unknown_column() {
+        let logical_schema =
+            Arc::new(StructType::try_new([column_mapping_test_field("p", "col-p", 1)]).unwrap());
+        let state = ColumnMappingState {
+            mode: ColumnMappingMode::Name,
+            logical_schema,
+        };
+        // Known columns translate to their physical names.
+        assert_eq!(
+            state
+                .physical_partition_columns(&["p".to_string()])
+                .unwrap(),
+            vec!["col-p".to_string()]
+        );
+        // An unknown partition column fails loudly instead of silently using the logical name.
+        let err = state
+            .physical_partition_columns(&["missing".to_string()])
+            .expect_err("unknown partition column should error");
+        match err {
+            DeltaTableError::Generic(message) => assert_eq!(
+                message,
+                "partition column 'missing' not found in the table schema"
+            ),
+            other => panic!("expected a Generic partition error, got: {other:?}"),
+        }
     }
 }

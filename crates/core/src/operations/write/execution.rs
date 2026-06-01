@@ -16,9 +16,7 @@ use datafusion::physical_plan::{
     execute_stream_partitioned,
 };
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use delta_kernel::schema::SchemaRef as KernelSchemaRef;
 use delta_kernel::table_configuration::TableConfiguration;
-use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
@@ -30,7 +28,7 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    ColumnMappingExec, DataValidationExec, generated_columns_to_exprs, validation_predicates,
+    ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
@@ -282,42 +280,9 @@ struct WriteSinkConfig {
     column_mapping: Option<ColumnMappingState>,
 }
 
-/// Random data-file directory prefix length on column-mapped tables (delta-spark default).
-const DEFAULT_RANDOM_PREFIX_LENGTH: usize = 2;
-
-/// State needed to rewrite logical data into its physical (column-mapped) form at write time.
-struct ColumnMappingState {
-    mode: ColumnMappingMode,
-    /// Kernel table schema carrying the `delta.columnMapping.*` annotations.
-    logical_schema: KernelSchemaRef,
-}
-
-impl ColumnMappingState {
-    /// Build the state from a table configuration, returning `None` when column mapping is off.
-    fn from_table_config(table_config: &TableConfiguration) -> Option<Self> {
-        let mode = table_config.column_mapping_mode();
-        (mode != ColumnMappingMode::None).then(|| Self {
-            mode,
-            logical_schema: table_config.logical_schema(),
-        })
-    }
-
-    /// Translate logical partition column names to their physical names.
-    fn physical_partition_columns(&self, partition_columns: &[String]) -> Vec<String> {
-        partition_columns
-            .iter()
-            .map(|name| {
-                self.logical_schema
-                    .field(name)
-                    .map(|field| field.physical_name(self.mode).to_string())
-                    .unwrap_or_else(|| name.clone())
-            })
-            .collect()
-    }
-}
-
-/// Wrap the plan in a [`ColumnMappingExec`], translate partition columns to physical names, and
-/// request a random file prefix. No-op (returns its inputs) when `column_mapping` is `None`.
+/// Apply column mapping to a write plan: wrap it so its batches are emitted physically, translate
+/// partition columns to physical names, and request a random file prefix. No-op (returns its
+/// inputs) when `column_mapping` is `None`.
 fn apply_column_mapping_to_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -326,12 +291,13 @@ fn apply_column_mapping_to_plan(
     match column_mapping {
         None => Ok((plan, partition_columns, None)),
         Some(state) => {
-            let plan = ColumnMappingExec::try_new(plan, state.logical_schema.as_ref(), state.mode)?;
-            let physical_partition_columns = state.physical_partition_columns(&partition_columns);
+            let plan = state.wrap_plan(plan)?;
+            let physical_partition_columns =
+                state.physical_partition_columns(&partition_columns)?;
             Ok((
                 plan,
                 physical_partition_columns,
-                Some(DEFAULT_RANDOM_PREFIX_LENGTH),
+                Some(state.random_prefix_length()),
             ))
         }
     }
