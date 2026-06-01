@@ -16,8 +16,8 @@ pub use deltalake_catalog_unity as unity_catalog;
 pub use deltalake_gcp as gcp;
 #[cfg(feature = "hdfs")]
 pub use deltalake_hdfs as hdfs;
-#[cfg(feature = "hf")]
-pub use deltalake_hf as hf;
+#[cfg(any(feature = "hf", feature = "opendal"))]
+pub use deltalake_opendal as opendal;
 #[cfg(feature = "lakefs")]
 pub use deltalake_lakefs as lakefs;
 
@@ -53,11 +53,11 @@ mod __deltalake_auto_register_hdfs {
     }
 }
 
-#[cfg(feature = "hf")]
-mod __deltalake_auto_register_hf {
+#[cfg(any(feature = "hf", feature = "opendal"))]
+mod __deltalake_auto_register_opendal {
     #[ctor::ctor]
     fn register() {
-        crate::hf::register_handlers(None);
+        crate::opendal::register_handlers(None);
     }
 }
 
