@@ -16,10 +16,12 @@ pub use deltalake_catalog_unity as unity_catalog;
 pub use deltalake_gcp as gcp;
 #[cfg(feature = "hdfs")]
 pub use deltalake_hdfs as hdfs;
-#[cfg(any(feature = "hf", feature = "opendal"))]
-pub use deltalake_opendal as opendal;
+#[cfg(feature = "hf")]
+pub use deltalake_hf as hf;
 #[cfg(feature = "lakefs")]
 pub use deltalake_lakefs as lakefs;
+#[cfg(feature = "opendal")]
+pub use deltalake_opendal as opendal;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 mod __deltalake_auto_register_s3 {
@@ -53,7 +55,15 @@ mod __deltalake_auto_register_hdfs {
     }
 }
 
-#[cfg(any(feature = "hf", feature = "opendal"))]
+#[cfg(feature = "hf")]
+mod __deltalake_auto_register_hf {
+    #[ctor::ctor]
+    fn register() {
+        crate::hf::register_handlers(None);
+    }
+}
+
+#[cfg(feature = "opendal")]
 mod __deltalake_auto_register_opendal {
     #[ctor::ctor]
     fn register() {

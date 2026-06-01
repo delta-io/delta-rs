@@ -28,12 +28,25 @@ arrow-array = { workspace = true }
 arrow-schema = { workspace = true }
 
 [features]
-default = ["rustls", "hf"]
+default = ["rustls", "opendal-fs", "opendal-memory"]
 native-tls = ["deltalake-core/native-tls", "rustls"]
 rustls = ["deltalake-core/rustls", "opendal/reqwest-rustls-tls"]
-# Per-service OpenDAL backends. `hf` is on by default for backwards compatibility
-# with the previous `deltalake-hf` crate; the rest are opt-in.
-hf = ["opendal/services-hf"]
+# Per-service OpenDAL backends. The lightweight local services (`opendal-fs`,
+# `opendal-memory`) are on by default; cloud backends are opt-in. Enabling a
+# service auto-registers its scheme via `register_handlers`.
 opendal-fs = ["opendal/services-fs"]
 opendal-memory = ["opendal/services-memory"]
 opendal-s3 = ["opendal/services-s3"]
+opendal-gcs = ["opendal/services-gcs"]
+opendal-azblob = ["opendal/services-azblob"]
+opendal-azdls = ["opendal/services-azdls"]
+opendal-oss = ["opendal/services-oss"]
+opendal-obs = ["opendal/services-obs"]
+opendal-cos = ["opendal/services-cos"]
+opendal-tos = ["opendal/services-tos"]
+opendal-b2 = ["opendal/services-b2"]
+opendal-swift = ["opendal/services-swift"]
+opendal-webhdfs = ["opendal/services-webhdfs"]
+opendal-webdav = ["opendal/services-webdav"]
+opendal-ftp = ["opendal/services-ftp"]
+opendal-sftp = ["opendal/services-sftp"]

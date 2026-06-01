@@ -13,6 +13,7 @@ use opendal::Operator;
 use url::Url;
 
 use crate::adapter::OpendalAdapter;
+use crate::shim::ConditionalPutShim;
 use crate::sorted::SortedListStore;
 
 /// [`ObjectStoreFactory`] that builds an OpenDAL operator via an [`OpendalAdapter`].
@@ -32,11 +33,24 @@ impl<A: OpendalAdapter + 'static> ObjectStoreFactory for OpendalObjectStoreFacto
         opendal::init_default_registry();
         let operator = Operator::via_iter(&spec.scheme, spec.config.clone())
             .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
+        // Whether the service can perform an atomic create-if-absent, which
+        // delta needs to commit `_delta_log/N.json`. Services that can't get
+        // the conditional-put shim applied below.
+        let needs_conditional_put_shim =
+            !operator.info().full_capability().write_with_if_not_exists;
         // Restore the lexicographic listing order that `object_store` (and
         // delta-kernel) require but `OpendalStore` does not guarantee.
         let sorted: ObjectStoreRef =
             Arc::new(SortedListStore::new(Arc::new(OpendalStore::new(operator))));
         let store = self.0.wrap_store(sorted, &spec);
+        // Emulate conditional creates for services that lack native support
+        // (e.g. HuggingFace). Outermost so its HEAD/PUT see adapter-rewritten
+        // paths.
+        let store = if needs_conditional_put_shim {
+            Arc::new(ConditionalPutShim::new(store)) as ObjectStoreRef
+        } else {
+            store
+        };
         Ok((store, spec.table_prefix))
     }
 }

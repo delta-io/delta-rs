@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'crates/opendal/**'
+      - 'crates/hf/**'
       - 'crates/core/src/operations/write/plan.rs'
       - 'python/tests/test_huggingface_and_cdc.py'
       - '.github/workflows/ci_hf_cdc.yml'
