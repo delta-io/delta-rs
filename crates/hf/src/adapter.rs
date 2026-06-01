@@ -1,8 +1,5 @@
 //! HuggingFace Hub specialization of the generic OpenDAL backend.
 
-mod config;
-mod url;
-
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -15,23 +12,20 @@ use deltalake_core::logstore::object_store::{
     Result as ObjectStoreResult,
 };
 use deltalake_core::logstore::{ObjectStoreRef, StorageConfig};
+use deltalake_opendal::{OpendalAdapter, OperatorSpec};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 
-use crate::adapter::{OpendalAdapter, OperatorSpec, spec_value};
-use crate::shim::ConditionalPutShim;
-
-use self::config::HfStorageConfig;
-use self::url::parse_hf_url;
+use crate::config::HfStorageConfig;
+use crate::url::parse_hf_url;
 
 /// Adapter for the HuggingFace Hub OpenDAL service.
 ///
-/// HF is special in two ways the generic path can't express:
-/// 1. The operator is scoped to `<owner>/<repo>`, deeper than the bucket root,
-///    so the in-repo table path (not `url.path()`) is the log-store prefix and
-///    every operation must have the repo prefix stripped.
-/// 2. The HF backend lacks `write_with_if_not_exists`, so conditional creates
-///    are emulated via [`ConditionalPutShim`].
+/// HF needs the operator's `<owner>/<repo>` scope stripped from paths, because
+/// the operator is scoped deeper than the bucket root while delta computes paths
+/// from the URL host onward. (Conditional-create emulation, also required since
+/// the HF backend lacks `write_with_if_not_exists`, is applied generically by
+/// the factory based on the operator's reported capabilities.)
 #[derive(Clone, Debug, Default)]
 pub struct HfAdapter;
 
@@ -61,14 +55,16 @@ impl OpendalAdapter for HfAdapter {
     }
 
     fn wrap_store(&self, store: ObjectStoreRef, spec: &OperatorSpec) -> ObjectStoreRef {
-        let strip_prefix = spec_value(spec, "repo_id").unwrap_or_default().to_string();
-        let stripped: ObjectStoreRef = Arc::new(HfPrefixStore {
+        let strip_prefix = spec
+            .config
+            .iter()
+            .find(|(k, _)| k == "repo_id")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default();
+        Arc::new(HfPrefixStore {
             inner: store,
             strip_prefix,
-        });
-        // The shim emulates conditional creates and delegates (unchanged paths)
-        // to the prefix-stripping store underneath.
-        Arc::new(ConditionalPutShim::new(stripped))
+        })
     }
 }
 

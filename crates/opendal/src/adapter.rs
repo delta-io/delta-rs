@@ -91,15 +91,6 @@ impl OpendalAdapter for GenericAdapter {
     }
 }
 
-/// Helper for adapters that need to read a single config value back out of an
-/// [`OperatorSpec`] (e.g. HF needs the `repo_id` for prefix stripping).
-pub(crate) fn spec_value<'a>(spec: &'a OperatorSpec, key: &str) -> Option<&'a str> {
-    spec.config
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,32 @@
+[package]
+name = "deltalake-hf"
+version = "0.16.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description = "HuggingFace Hub storage backend for delta-rs, built on deltalake-opendal"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = "0.32.1", path = "../core", default-features = false }
+deltalake-opendal = { version = "0.16.0", path = "../opendal", default-features = false }
+opendal = { version = "0.56", default-features = false, features = ["services-hf", "executors-tokio"] }
+object_store = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
+[features]
+default = ["rustls"]
+native-tls = ["deltalake-core/native-tls", "deltalake-opendal/native-tls", "rustls"]
+rustls = ["deltalake-core/rustls", "deltalake-opendal/rustls", "opendal/reqwest-rustls-tls"]
