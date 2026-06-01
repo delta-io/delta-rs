@@ -1,0 +1,39 @@
+[package]
+name = "deltalake-opendal"
+version = "0.16.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description = "Generic OpenDAL storage backend for delta-rs (including HuggingFace Hub)"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = "0.32.1", path = "../core", default-features = false }
+object_store_opendal = { version = "0.56", default-features = false }
+opendal = { version = "0.56", default-features = false, features = ["executors-tokio"] }
+object_store = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
+[features]
+default = ["rustls", "hf"]
+native-tls = ["deltalake-core/native-tls", "rustls"]
+rustls = ["deltalake-core/rustls", "opendal/reqwest-rustls-tls"]
+# Per-service OpenDAL backends. `hf` is on by default for backwards compatibility
+# with the previous `deltalake-hf` crate; the rest are opt-in.
+hf = ["opendal/services-hf"]
+opendal-fs = ["opendal/services-fs"]
+opendal-memory = ["opendal/services-memory"]
+opendal-s3 = ["opendal/services-s3"]
