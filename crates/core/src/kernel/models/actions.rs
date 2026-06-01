@@ -54,6 +54,15 @@ pub trait MetadataExt {
     fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
 
     fn remove_config_key(self, key: &str) -> DeltaResult<Metadata>;
+
+    /// Read the `format.options` map from this metadata.
+    fn format_options(&self) -> DeltaResult<HashMap<String, String>>;
+
+    /// Replace the `format.options` map on this metadata.
+    fn with_format_options(
+        self,
+        options: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+    ) -> DeltaResult<Metadata>;
 }
 
 impl MetadataExt for Metadata {
@@ -62,7 +71,7 @@ impl MetadataExt for Metadata {
             "id": table_id,
             "name": self.name(),
             "description": self.description(),
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
             "partitionColumns": self.partition_columns(),
             "configuration": self.configuration(),
@@ -76,7 +85,7 @@ impl MetadataExt for Metadata {
             "id": self.id(),
             "name": name,
             "description": self.description(),
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
             "partitionColumns": self.partition_columns(),
             "configuration": self.configuration(),
@@ -90,7 +99,7 @@ impl MetadataExt for Metadata {
             "id": self.id(),
             "name": self.name(),
             "description": description,
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
             "partitionColumns": self.partition_columns(),
             "configuration": self.configuration(),
@@ -104,7 +113,7 @@ impl MetadataExt for Metadata {
             "id": self.id(),
             "name": self.name(),
             "description": self.description(),
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(schema)?,
             "partitionColumns": self.partition_columns(),
             "configuration": self.configuration(),
@@ -120,7 +129,7 @@ impl MetadataExt for Metadata {
             "id": self.id(),
             "name": self.name(),
             "description": self.description(),
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
             "partitionColumns": self.partition_columns(),
             "configuration": config,
@@ -136,10 +145,42 @@ impl MetadataExt for Metadata {
             "id": self.id(),
             "name": self.name(),
             "description": self.description(),
-            "format": { "provider": "parquet", "options": {} },
+            "format": { "provider": "parquet", "options": self.format_options()? },
             "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
             "partitionColumns": self.partition_columns(),
             "configuration": config,
+            "createdTime": self.created_time(),
+        });
+        Ok(serde_json::from_value(value)?)
+    }
+
+    fn format_options(&self) -> DeltaResult<HashMap<String, String>> {
+        let value = serde_json::to_value(self)?;
+        Ok(value
+            .get("format")
+            .and_then(|f| f.get("options"))
+            .and_then(|o| serde_json::from_value::<HashMap<String, String>>(o.clone()).ok())
+            .unwrap_or_default())
+    }
+
+    fn with_format_options(
+        self,
+        options: impl IntoIterator<Item = (impl ToString, impl ToString)>,
+    ) -> DeltaResult<Metadata> {
+        let value = serde_json::json!({
+            "id": self.id(),
+            "name": self.name(),
+            "description": self.description(),
+            "format": {
+                "provider": "parquet",
+                "options": options
+                    .into_iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect::<HashMap<String, String>>(),
+            },
+            "schemaString": serde_json::to_string(&self.parse_schema().unwrap())?,
+            "partitionColumns": self.partition_columns(),
+            "configuration": self.configuration(),
             "createdTime": self.created_time(),
         });
         Ok(serde_json::from_value(value)?)
