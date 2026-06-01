@@ -377,7 +377,17 @@ impl DeltaScanMetaStream {
             batch
         };
 
-        let result = if let Some(transform) = self.transforms.get(&file_id) {
+        let result = if self
+            .scan_plan
+            .scan
+            .logical_schema()
+            .fields()
+            .next()
+            .is_none()
+        {
+            // Empty projection: the kernel transform can't build a zero-field struct, keep as-is.
+            batch
+        } else if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     EMPTY_KERNEL_SCHEMA.clone(),
