@@ -17,10 +17,10 @@ use uuid::Uuid;
 
 use crate::{
     cast_record_batch,
-    delta_datafusion::DataFusionMixins as _,
+    delta_datafusion::{ColumnMappingState, DataFusionMixins as _},
     kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
     logstore::LogStoreRef,
-    operations::write::{execution::write_streams, writer::WriterConfig},
+    operations::write::{WriterStatsConfig, execution::write_streams, writer::WriterConfig},
     protocol::{DeltaOperation, SaveMode},
     table::config::TablePropertiesExt as _,
 };
@@ -114,7 +114,7 @@ impl DataSink for DeltaDataSink {
 
         let operation_id = Uuid::new_v4();
         let stream = self.create_converted_stream(data, target_schema.clone());
-        let partition_columns = self.snapshot.metadata().partition_columns();
+        let logical_partition_columns = self.snapshot.metadata().partition_columns();
         let object_store = self.log_store.object_store(Some(operation_id));
         let total_rows_metric = MetricBuilder::new(&self.metrics).counter("total_rows", 0);
         let stream = {
@@ -129,18 +129,49 @@ impl DataSink for DeltaDataSink {
                 }),
             )) as SendableRecordBatchStream
         };
+        let column_mapping =
+            ColumnMappingState::from_table_config(self.snapshot.table_configuration());
+        let stats_config = WriterStatsConfig::from_config(self.snapshot.table_configuration());
+        let (stream, table_schema, physical_partition_columns, random_prefix_length) =
+            match &column_mapping {
+                None => (
+                    stream,
+                    self.snapshot.read_schema(),
+                    logical_partition_columns.to_vec(),
+                    None,
+                ),
+                Some(state) => {
+                    let physical_schema = state.physical_schema(&self.snapshot.read_schema());
+                    let physical_partition_columns = state
+                        .physical_partition_columns(logical_partition_columns)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let prefix_length = state.random_prefix_length();
+                    let state = state.clone();
+                    let stream: SendableRecordBatchStream =
+                        Box::pin(RecordBatchStreamAdapter::new(
+                            physical_schema.clone(),
+                            stream.map(move |batch| {
+                                batch.and_then(|batch| state.transform_batch(&batch))
+                            }),
+                        ));
+                    (
+                        stream,
+                        physical_schema,
+                        physical_partition_columns,
+                        Some(prefix_length),
+                    )
+                }
+            };
         let config = WriterConfig::new(
-            self.snapshot.read_schema(),
-            partition_columns.to_vec(),
+            table_schema,
+            physical_partition_columns,
             None,
             Some(table_props.target_file_size()),
             None,
-            table_props.num_indexed_cols(),
-            table_props
-                .data_skipping_stats_columns
-                .as_ref()
-                .map(|c| c.iter().map(|c| c.to_string()).collect_vec()),
-        );
+            stats_config.num_indexed_cols,
+            stats_config.stats_columns,
+        )
+        .with_random_prefix_length(random_prefix_length);
 
         let (adds, write_metrics) = write_streams(vec![stream], object_store, config)
             .await
@@ -162,10 +193,10 @@ impl DataSink for DeltaDataSink {
 
         let operation = DeltaOperation::Write {
             mode: self.save_mode,
-            partition_by: if partition_columns.is_empty() {
+            partition_by: if logical_partition_columns.is_empty() {
                 None
             } else {
-                Some(partition_columns.to_vec())
+                Some(logical_partition_columns.to_vec())
             },
             predicate: None,
         };
