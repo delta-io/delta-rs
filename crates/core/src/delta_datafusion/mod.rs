@@ -69,6 +69,7 @@ pub use self::table_provider::next::{
 };
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
 };
@@ -86,6 +87,7 @@ pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 #[doc(hidden)]
 pub mod bench_support;
 pub mod cdf;
+mod column_mapping;
 mod data_validation;
 pub mod engine;
 pub mod expr;
