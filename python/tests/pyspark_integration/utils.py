@@ -31,7 +31,7 @@ def assert_spark_read_equal(
     df = spark.read.format("delta").load(uri)
 
     # Spark and pyarrow don't convert these types to the same Pandas values
-    incompatible_types = ["timestamp", "struct"]
+    incompatible_types = ["timestamp", "timestamp_ntz", "struct"]
 
     assert_frame_equal(
         df.toPandas()
