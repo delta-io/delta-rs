@@ -1,0 +1,30 @@
+name: draft_pr
+
+# Mark newly opened pull requests as drafts by default
+on:
+  pull_request_target:
+    types:
+      - opened
+
+jobs:
+  mark-draft:
+    name: Mark new PR as draft
+    runs-on: ubuntu-slim
+    permissions:
+      pull-requests: write
+    # Only act on PRs that were opened as ready-for-review
+    if: github.event.pull_request.draft == false
+    steps:
+      # <https://github.com/actions/github-script/releases/tag/v8>
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            // The REST API cannot convert a PR to draft, so use GraphQL.
+            await github.graphql(
+              `mutation($id: ID!) {
+                convertPullRequestToDraft(input: { pullRequestId: $id }) {
+                  pullRequest { isDraft }
+                }
+              }`,
+              { id: context.payload.pull_request.node_id }
+            )
