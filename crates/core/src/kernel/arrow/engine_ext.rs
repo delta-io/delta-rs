@@ -165,7 +165,7 @@ fn stats_source_schema(
 /// Translates `dataSkippingStatsColumns` from logical to physical names.
 ///
 /// Columns that cannot be resolved against `logical_schema` are dropped.
-fn stats_table_properties<'a>(
+pub(crate) fn stats_table_properties<'a>(
     logical_schema: &StructType,
     table_properties: &'a TableProperties,
     column_mapping_mode: ColumnMappingMode,

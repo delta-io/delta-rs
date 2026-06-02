@@ -143,6 +143,9 @@ pub struct WriterConfig {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    /// When set, write data files under a random prefix directory of this length instead of
+    /// Hive-style partition dirs — keeps physical (UUID) column names out of paths under CM.
+    random_prefix_length: Option<usize>,
 }
 
 impl WriterConfig {
@@ -168,7 +171,15 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            random_prefix_length: None,
         }
+    }
+
+    /// Write data files under a random prefix of `length` chars instead of Hive-style dirs
+    /// (column-mapped tables); `None` keeps the Hive layout.
+    pub fn with_random_prefix_length(mut self, length: Option<usize>) -> Self {
+        self.random_prefix_length = length;
+        self
     }
 
     /// Schema of files written to disk
@@ -233,6 +244,10 @@ impl DeltaWriter {
                 writer.write(&record_batch).await?;
             }
             None => {
+                let prefix_override = match self.config.random_prefix_length {
+                    Some(length) => Some(Path::parse(random_prefix(length))?),
+                    None => None,
+                };
                 let config = PartitionWriterConfig::try_new(
                     self.config.file_schema(),
                     partition_values.clone(),
@@ -240,6 +255,7 @@ impl DeltaWriter {
                     self.config.target_file_size,
                     Some(self.config.write_batch_size),
                     None,
+                    prefix_override,
                 )?;
                 let mut writer = PartitionWriter::try_with_config(
                     self.object_store.clone(),
@@ -289,6 +305,13 @@ impl DeltaWriter {
     }
 }
 
+/// Random hex (URI-safe) directory prefix of `length` chars, used to keep physical column
+/// names out of data-file paths on column-mapped tables.
+fn random_prefix(length: usize) -> String {
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    uuid[..length.min(uuid.len())].to_string()
+}
+
 /// Write configuration for partition writers
 #[derive(Debug, Clone)]
 pub struct PartitionWriterConfig {
@@ -319,9 +342,12 @@ impl PartitionWriterConfig {
         target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
         max_concurrency_tasks: Option<usize>,
+        prefix_override: Option<Path>,
     ) -> DeltaResult<Self> {
-        let part_path = partition_values.hive_partition_path();
-        let prefix = Path::parse(part_path)?;
+        let prefix = match prefix_override {
+            Some(prefix) => prefix,
+            None => Path::parse(partition_values.hive_partition_path())?,
+        };
         let writer_properties =
             writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
@@ -581,6 +607,7 @@ mod tests {
             target_file_size,
             write_batch_size,
             None,
+            None,
         )
         .unwrap();
         PartitionWriter::try_with_config(
@@ -633,7 +660,7 @@ mod tests {
             true,
         )]));
         let config =
-            PartitionWriterConfig::try_new(schema, IndexMap::new(), None, None, None, None)
+            PartitionWriterConfig::try_new(schema, IndexMap::new(), None, None, None, None, None)
                 .unwrap();
 
         assert_default_created_by(&config.writer_properties);
