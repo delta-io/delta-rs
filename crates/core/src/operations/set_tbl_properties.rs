@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
-use crate::errors::unsupported_column_mapping_write;
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
 use crate::logstore::LogStoreRef;
@@ -98,7 +98,8 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let properties = this.properties;
 
             if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
-                return Err(unsupported_column_mapping_write(
+                return Err(DeltaTableError::unsupported_column_mapping(
+                    ColumnMappingOperation::Write,
                     "SET TBLPROPERTIES delta.columnMapping.mode",
                 ));
             }

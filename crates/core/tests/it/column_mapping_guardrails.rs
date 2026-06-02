@@ -5,7 +5,7 @@ use deltalake_core::kernel::{
     ColumnMetadataKey, DataType, MetadataValue, StructField, TableFeatures,
 };
 use deltalake_core::writer::{JsonWriter, RecordBatchWriter};
-use deltalake_core::{DeltaTable, DeltaTableError, open_table};
+use deltalake_core::{ColumnMappingOperation, DeltaTable, DeltaTableError, open_table};
 use tempfile::TempDir;
 use url::Url;
 
@@ -15,10 +15,12 @@ use datafusion::common::assert_batches_sorted_eq;
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 fn assert_unsupported_column_mapping_write(err: &DeltaTableError, operation: &str) {
-    let expected = format!("column mapping writes are not supported for {operation} yet");
     match err {
-        DeltaTableError::Generic(message) => assert_eq!(message, &expected),
-        other => panic!("expected a Generic column-mapping error, got: {other:?}"),
+        DeltaTableError::UnsupportedColumnMapping {
+            mode: ColumnMappingOperation::Write,
+            operation: op,
+        } => assert_eq!(op, operation),
+        other => panic!("expected an UnsupportedColumnMapping write error, got: {other:?}"),
     }
 }
 
