@@ -710,6 +710,7 @@ mod tests {
     use delta_kernel::schema::StructType;
     use object_store::ObjectStoreExt as _;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -2659,6 +2660,9 @@ mod tests {
             true,
         )]));
 
+        // Write two batches covering different time ranges,
+        // resulting in two data files.
+
         let batch = RecordBatch::try_new(
             arrow_schema.clone(),
             vec![Arc::new(
@@ -2672,13 +2676,29 @@ mod tests {
         )?;
         let table = table.write(vec![batch]).await?;
 
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US + 3 * DAY_US,
+                    START_TIMESTAMP_US + 4 * DAY_US,
+                    START_TIMESTAMP_US + 5 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table = table.write(vec![batch]).await?;
+
         Ok((table, arrow_schema))
     }
 
     /// Ensure conflict checking works when a delete operation with a timestamp predicate follows
     /// a concurrent write operation. This requires arrow_cast expressions to be simplified.
+    #[rstest]
     #[tokio::test]
-    async fn test_concurrent_delete_with_timestamp_predicate_after_write() -> DeltaResult<()> {
+    async fn test_concurrent_delete_with_timestamp_predicate_after_write(
+        #[values(true, false)] is_conflict: bool,
+    ) -> DeltaResult<()> {
         use arrow::array::TimestampMicrosecondArray;
         let (table, arrow_schema) = setup_timestamp_table().await?;
 
@@ -2691,8 +2711,8 @@ mod tests {
             arrow_schema.clone(),
             vec![Arc::new(
                 TimestampMicrosecondArray::from(vec![
-                    START_TIMESTAMP_US + 3 * DAY_US,
-                    START_TIMESTAMP_US + 4 * DAY_US,
+                    START_TIMESTAMP_US + 6 * DAY_US,
+                    START_TIMESTAMP_US + 7 * DAY_US,
                 ])
                 .with_timezone("UTC"),
             )],
@@ -2701,29 +2721,42 @@ mod tests {
             .write(vec![new_batch])
             .await
             .expect("Failed to append new data");
-        assert_eq!(table_after_append.version(), Some(2));
+        assert_eq!(table_after_append.version(), Some(3));
+
+        let predicate = if is_conflict {
+            // Delete would affect newly written data
+            "timestamp >= '2024-01-02T00:00:00Z'"
+        } else {
+            "timestamp < '2024-01-02T00:00:00Z'"
+        };
 
         // Concurrent commit that deletes a range of data.
-        let result = table_for_op2
-            .delete()
-            .with_predicate("timestamp >= '2024-01-02T00:00:00Z'")
-            .await;
+        let result = table_for_op2.delete().with_predicate(predicate).await;
 
-        let err = result.expect_err(
-            "expected concurrent delete with a timestamp predicate to fail conflict checking",
-        );
-        assert!(
-            err.to_string()
-                .contains("concurrent transactions added new data"),
-            "unexpected error: {err}",
-        );
+        if is_conflict {
+            let err = result.expect_err(
+                "expected concurrent delete with a timestamp predicate to fail conflict checking",
+            );
+            assert!(
+                err.to_string()
+                    .contains("concurrent transactions added new data"),
+                "unexpected error: {err}",
+            );
+        } else {
+            let (table, _) = result.expect("expected concurrent delete to succeed");
+            assert_eq!(table.version(), Some(4));
+        }
+
         Ok(())
     }
 
     /// Ensure conflict checking works with two concurrent delete operations with timestamp
     /// predicates. This requires arrow_cast expressions to be simplified.
+    #[rstest]
     #[tokio::test]
-    async fn test_concurrent_deletes_with_timestamp_predicates() -> DeltaResult<()> {
+    async fn test_concurrent_deletes_with_timestamp_predicates(
+        #[values(true, false)] is_conflict: bool,
+    ) -> DeltaResult<()> {
         let (table, _) = setup_timestamp_table().await?;
 
         // Clone the table to make two concurrent operations
@@ -2731,27 +2764,39 @@ mod tests {
         let table_for_op2 = table;
 
         // Successful commit: delete with timestamp predicate
+        // that only affects the second batch of written data.
         let (table_after_delete, _) = table_for_op1
             .delete()
-            .with_predicate("timestamp >= '2024-01-02T00:00:00Z'")
+            .with_predicate("timestamp >= '2024-01-05T00:00:00Z'")
             .await
             .expect("Failed to delete data");
-        assert_eq!(table_after_delete.version(), Some(2));
+        assert_eq!(table_after_delete.version(), Some(3));
 
         // Concurrent other delete with a different predicate
-        let result = table_for_op2
-            .delete()
-            .with_predicate("timestamp >= '2024-01-03T00:00:00Z'")
-            .await;
+        let predicate = if is_conflict {
+            // Predicate that also includes the second batch of written data
+            "timestamp >= '2024-01-06T00:00:00Z'"
+        } else {
+            // Predicate that only affects the first batch of written data
+            "timestamp < '2024-01-02T00:00:00Z'"
+        };
 
-        let err = result.expect_err(
-            "expected concurrent delete with a timestamp predicate to fail conflict checking",
-        );
-        assert!(
-            err.to_string()
-                .contains("concurrent transaction deleted data this operation read"),
-            "unexpected error: {err}",
-        );
+        let result = table_for_op2.delete().with_predicate(predicate).await;
+
+        if is_conflict {
+            let err = result.expect_err(
+                "expected concurrent delete with a timestamp predicate to fail conflict checking",
+            );
+            assert!(
+                err.to_string()
+                    .contains("concurrent transaction deleted data this operation read"),
+                "unexpected error: {err}",
+            );
+        } else {
+            let (table, _) = result.expect("expected concurrent delete to succeed");
+            assert_eq!(table.version(), Some(4));
+        }
+
         Ok(())
     }
 }
