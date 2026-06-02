@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::errors::unsupported_column_mapping_write;
+use crate::errors::ColumnMappingOperation;
 use crate::kernel::schema::merge_delta_struct;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -82,7 +82,10 @@ impl std::future::IntoFuture for AddColumnBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(unsupported_column_mapping_write("ADD COLUMN"));
+                return Err(DeltaTableError::unsupported_column_mapping(
+                    ColumnMappingOperation::Write,
+                    "ADD COLUMN",
+                ));
             }
 
             let mut metadata = snapshot.metadata().clone();

@@ -11,7 +11,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
     Action, DataType, MetadataExt, ProtocolExt as _, ProtocolInner, StructField, StructType,
@@ -288,12 +288,14 @@ impl CreateBuilder {
             .get(TableProperty::ColumnMappingMode.as_ref())
             .is_some_and(|value| value.is_some())
         {
-            return Err(unsupported_column_mapping_write(
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Write,
                 "CREATE TABLE with delta.columnMapping.mode",
             ));
         }
         if self.columns.iter().any(field_has_column_mapping_metadata) {
-            return Err(unsupported_column_mapping_write(
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Write,
                 "CREATE TABLE with column mapping metadata",
             ));
         }
