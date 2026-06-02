@@ -365,14 +365,50 @@ async fn column_mapping_guardrails_metadata_operations() -> TestResult {
 }
 
 #[tokio::test]
-async fn column_mapping_guardrails_create_rejects_activation_and_reserved_metadata() -> TestResult {
-    let err = DeltaTable::new_in_memory()
+async fn column_mapping_create_assigns_metadata_and_rejects_preannotated() -> TestResult {
+    let table = DeltaTable::new_in_memory()
         .create()
         .with_columns(simple_fields())
         .with_configuration([("delta.columnMapping.mode", Some("name"))])
-        .await
-        .expect_err("create should reject column mapping mode");
-    assert_unsupported_column_mapping_write(&err, "CREATE TABLE with delta.columnMapping.mode");
+        .await?;
+
+    let snapshot = table.snapshot()?;
+    assert_eq!(snapshot.protocol().min_reader_version(), 2);
+    assert_eq!(snapshot.protocol().min_writer_version(), 5);
+
+    let config = snapshot.metadata().configuration();
+    assert_eq!(
+        config.get("delta.columnMapping.mode").map(String::as_str),
+        Some("name")
+    );
+    assert_eq!(
+        config
+            .get("delta.columnMapping.maxColumnId")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let schema = snapshot.schema();
+    let field = schema
+        .fields()
+        .find(|f| f.name() == "id")
+        .expect("id field exists");
+    assert_eq!(
+        field
+            .metadata()
+            .get(ColumnMetadataKey::ColumnMappingId.as_ref()),
+        Some(&MetadataValue::Number(1))
+    );
+    match field
+        .metadata()
+        .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+    {
+        Some(MetadataValue::String(name)) => assert!(
+            name.starts_with("col-"),
+            "physical name should be a generated col-<uuid>, got: {name}"
+        ),
+        other => panic!("expected a physicalName string, got: {other:?}"),
+    }
 
     let mapped_field = StructField::nullable("id", DataType::INTEGER).with_metadata([
         (
@@ -389,8 +425,85 @@ async fn column_mapping_guardrails_create_rejects_activation_and_reserved_metada
         .create()
         .with_columns([mapped_field])
         .await
-        .expect_err("create should reject column mapping metadata");
+        .expect_err("create should reject pre-annotated column mapping metadata");
     assert_unsupported_column_mapping_write(&err, "CREATE TABLE with column mapping metadata");
+
+    Ok(())
+}
+
+/// Create, write and read wit delta-rs round trip
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn column_mapping_create_write_read_roundtrip() -> TestResult {
+    use deltalake_core::parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    for mode in ["name", "id"] {
+        // Create on disk so the physical Parquet layout can be inspected directly.
+        let temp_dir = tempfile::tempdir()?;
+        let table_path = temp_dir.path().join("created_cm_table");
+        let table_url = Url::from_directory_path(&table_path).unwrap();
+        let table = deltalake_core::DeltaTableBuilder::from_url(table_url)?
+            .build()?
+            .create()
+            .with_columns([
+                StructField::nullable("Company Very Short", DataType::STRING),
+                StructField::nullable("Super Name", DataType::STRING),
+            ])
+            .with_configuration([("delta.columnMapping.mode", Some(mode))])
+            .await?;
+
+        let table = table.write(vec![column_mapping_batch()]).await?;
+
+        // The data is stored on disk under the physical `col-<uuid>` names, never the logical ones.
+        let data_files = collect_data_files(&table_path)?;
+        let parquet_rel = data_files
+            .iter()
+            .find(|p| p.extension().is_some_and(|ext| ext == "parquet"))
+            .expect("a parquet data file was written");
+        let on_disk_columns: Vec<String> = ParquetRecordBatchReaderBuilder::try_new(
+            std::fs::File::open(table_path.join(parquet_rel))?,
+        )?
+        .schema()
+        .fields()
+        .iter()
+        .map(|field| field.name().to_string())
+        .collect();
+        // The on-disk parquet columns are exactly the physical names the create assigned
+        let snapshot = table.snapshot()?;
+        let schema = snapshot.schema();
+        let physical_names: Vec<String> = schema
+            .fields()
+            .map(|field| {
+                match field
+                    .metadata()
+                    .get(ColumnMetadataKey::ColumnMappingPhysicalName.as_ref())
+                {
+                    Some(MetadataValue::String(name)) => name.clone(),
+                    other => panic!(
+                        "[{mode} mode] field '{}' lacks a physicalName annotation, got: {other:?}",
+                        field.name()
+                    ),
+                }
+            })
+            .collect();
+        assert_eq!(
+            on_disk_columns, physical_names,
+            "[{mode} mode] on-disk parquet columns must be exactly the assigned physical names"
+        );
+
+        // ...yet the data reads back under the logical schema.
+        let batches = read_all(&table).await?;
+        assert_batches_sorted_eq! {
+            [
+                "+--------------------+--------------+",
+                "| Company Very Short | Super Name   |",
+                "+--------------------+--------------+",
+                "| BMS                | New Customer |",
+                "+--------------------+--------------+",
+            ],
+            &batches
+        };
+    }
 
     Ok(())
 }
