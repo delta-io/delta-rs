@@ -1102,9 +1102,8 @@ mod local {
             let column = column.to_owned();
             // TODO: The following types don't have proper stats written.
             // See issue #1208 for decimal type
-            // See issue #1209 for dates
             // Min and Max is not calculated for binary columns. This matches the Spark writer
-            if column == "decimal" || column == "date" || column == "binary" {
+            if column == "decimal" || column == "binary" {
                 continue;
             }
             println!("[Unwrapped] Test Column: {column} value: {file1_value}");
@@ -1203,7 +1202,6 @@ mod local {
             // TODO: Float and decimal partitions are not supported by the writer
             // binary fails since arrow does not implement a natural order
             // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
-            // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
             if column == "int64"
                 || column == "int32"
                 || column == "int16"
@@ -1212,7 +1210,6 @@ mod local {
                 || column == "float64"
                 || column == "decimal"
                 || column == "binary"
-                || column == "date"
             {
                 continue;
             }
