@@ -8,10 +8,22 @@ use crate::kernel::transaction::{CommitBuilderError, TransactionError};
 /// A result returned by delta-rs
 pub type DeltaResult<T, E = DeltaTableError> = Result<T, E>;
 
-pub(crate) fn unsupported_column_mapping_write(operation: &str) -> DeltaTableError {
-    DeltaTableError::Generic(format!(
-        "column mapping writes are not supported for {operation} yet"
-    ))
+/// Whether an unsupported column-mapping access was a read or a write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColumnMappingOperation {
+    /// A read-path operation.
+    Read,
+    /// A write-path operation.
+    Write,
+}
+
+impl std::fmt::Display for ColumnMappingOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ColumnMappingOperation::Read => f.write_str("read"),
+            ColumnMappingOperation::Write => f.write_str("write"),
+        }
+    }
 }
 
 /// Delta Table specific error
@@ -217,6 +229,16 @@ pub enum DeltaTableError {
 
     #[error("No starting version or timestamp provided for CDC")]
     NoStartingVersionOrTimestamp,
+
+    /// Error returned when an operation is attempted on a column-mapped table that does not
+    /// yet support column mapping.
+    #[error("Column mapping is not supported for {mode} operation '{operation}' yet")]
+    UnsupportedColumnMapping {
+        /// Whether the unsupported access was a read or a write.
+        mode: ColumnMappingOperation,
+        /// Human-readable description of the operation (e.g. "ADD COLUMN").
+        operation: String,
+    },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
@@ -246,5 +268,16 @@ impl DeltaTableError {
     /// Create a [Generic](DeltaTableError::Generic) error with the given message.
     pub fn generic(msg: impl ToString) -> Self {
         Self::Generic(msg.to_string())
+    }
+
+    /// Construct an [`UnsupportedColumnMapping`](DeltaTableError::UnsupportedColumnMapping) error.
+    pub fn unsupported_column_mapping(
+        mode: ColumnMappingOperation,
+        operation: impl ToString,
+    ) -> Self {
+        Self::UnsupportedColumnMapping {
+            mode,
+            operation: operation.to_string(),
+        }
     }
 }
