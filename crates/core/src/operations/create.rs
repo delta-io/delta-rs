@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
+use delta_kernel::table_features::{
+    ColumnMappingMode, assign_column_mapping_metadata, find_max_column_id_in_schema,
+};
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -283,15 +286,6 @@ impl CreateBuilder {
         if self.columns.is_empty() {
             return Err(CreateError::MissingSchema.into());
         }
-        if self
-            .configuration
-            .get(TableProperty::ColumnMappingMode.as_ref())
-            .is_some_and(|value| value.is_some())
-        {
-            return Err(unsupported_column_mapping_write(
-                "CREATE TABLE with delta.columnMapping.mode",
-            ));
-        }
         if self.columns.iter().any(field_has_column_mapping_metadata) {
             return Err(unsupported_column_mapping_write(
                 "CREATE TABLE with column mapping metadata",
@@ -318,7 +312,7 @@ impl CreateBuilder {
         let operation_id = self.get_operation_id();
         self.pre_execute(operation_id).await?;
 
-        let configuration = self
+        let mut configuration: HashMap<String, String> = self
             .configuration
             .iter()
             .filter_map(|(k, v)| Some((k.to_string(), v.as_ref()?.to_string())))
@@ -348,6 +342,29 @@ impl CreateBuilder {
             .apply_properties_to_protocol(&configuration, self.raise_if_key_not_exists)?
             .apply_column_metadata_to_protocol(&schema)?
             .move_table_properties_into_features(&configuration);
+
+        // Column mapping: when creating a column-mapped table, assign a physical name + id to every (nested) field, record the high-water mark
+        let column_mapping_mode = match configuration.get(TableProperty::ColumnMappingMode.as_ref())
+        {
+            Some(mode) => mode.parse::<ColumnMappingMode>().map_err(|_| {
+                DeltaTableError::Generic(format!("Invalid delta.columnMapping.mode: {mode}"))
+            })?,
+            None => ColumnMappingMode::None,
+        };
+        let schema = if matches!(
+            column_mapping_mode,
+            ColumnMappingMode::Name | ColumnMappingMode::Id
+        ) {
+            let mut max_id = find_max_column_id_in_schema(&schema).unwrap_or(0);
+            let mapped = assign_column_mapping_metadata(&schema, &mut max_id, false)?;
+            configuration.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                max_id.to_string(),
+            );
+            mapped
+        } else {
+            schema
+        };
 
         let mut metadata = new_metadata(
             &schema,
