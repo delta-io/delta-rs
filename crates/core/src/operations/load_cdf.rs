@@ -34,7 +34,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
 };
-use crate::errors::{DeltaResult, unsupported_column_mapping_read};
+use crate::errors::{ColumnMappingOperation, DeltaResult};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
@@ -455,7 +455,10 @@ impl CdfLoadBuilder {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
         if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-            return Err(unsupported_column_mapping_read("CHANGE DATA FEED scans"));
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Read,
+                "CHANGE DATA FEED scans",
+            ));
         }
 
         let partition_values = snapshot.metadata().partition_columns();
@@ -715,10 +718,8 @@ pub(crate) mod tests {
         Ok(())
     }
 
-    async fn copied_column_mapping_cdf_table() -> Result<
-        (tempfile::TempDir, DeltaTable),
-        Box<dyn std::error::Error + 'static>,
-    > {
+    async fn copied_column_mapping_cdf_table()
+    -> Result<(tempfile::TempDir, DeltaTable), Box<dyn std::error::Error + 'static>> {
         let fixture = Path::new("../test/tests/data/table_with_column_mapping");
         let temp_dir = tempfile::tempdir()?;
         fs_extra::dir::copy(fixture, temp_dir.path(), &Default::default())?;
@@ -752,15 +753,14 @@ pub(crate) mod tests {
             .build(&ctx.state(), None)
             .await
             .expect_err("cdf scan should reject column-mapped tables before planning files");
-        let message = err.to_string();
-        assert!(
-            message.contains("column mapping"),
-            "unexpected error: {message}"
-        );
-        assert!(
-            message.contains("CHANGE DATA FEED"),
-            "expected CDF operation in error: {message}"
-        );
+
+        match err {
+            DeltaTableError::UnsupportedColumnMapping {
+                mode: _,
+                operation: _,
+            } => {}
+            _ => panic!("Unexpected error: {err:?}"),
+        }
 
         Ok(())
     }
