@@ -28,7 +28,7 @@ use uuid::Uuid;
 use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
-    DataValidationExec, generated_columns_to_exprs, validation_predicates,
+    ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
@@ -277,6 +277,30 @@ struct WriteSinkConfig {
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
+    column_mapping: Option<ColumnMappingState>,
+}
+
+/// Apply column mapping to a write plan: wrap it so its batches are emitted physically, translate
+/// partition columns to physical names, and request a random file prefix. No-op (returns its
+/// inputs) when `column_mapping` is `None`.
+fn apply_column_mapping_to_plan(
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    column_mapping: &Option<ColumnMappingState>,
+) -> DeltaResult<(Arc<dyn ExecutionPlan>, Vec<String>, Option<usize>)> {
+    match column_mapping {
+        None => Ok((plan, partition_columns, None)),
+        Some(state) => {
+            let plan = state.wrap_plan(plan)?;
+            let physical_partition_columns =
+                state.physical_partition_columns(&partition_columns)?;
+            Ok((
+                plan,
+                physical_partition_columns,
+                Some(state.random_prefix_length()),
+            ))
+        }
+    }
 }
 
 /// Metrics captured from draining streams through a writer.
@@ -419,6 +443,8 @@ pub(crate) async fn write_execution_plan_v2(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping: snapshot
+            .and_then(|s| ColumnMappingState::from_table_config(s.table_configuration())),
     };
 
     if !contains_cdc {
@@ -475,6 +501,7 @@ pub(crate) async fn write_exec_plan(
         write_batch_size: None,
         writer_properties: Some(writer_properties),
         writer_stats_config: stats_config,
+        column_mapping: ColumnMappingState::from_table_config(table_config),
     };
 
     if write_as_cdc {
@@ -664,7 +691,10 @@ async fn write_data_plan(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping,
     } = sink_config;
+    let (plan, partition_columns, random_prefix_length) =
+        apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     let config = WriterConfig::new(
         plan.schema().clone(),
         partition_columns.clone(),
@@ -673,7 +703,8 @@ async fn write_data_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     // For unpartitioned writes, centralize writer behavior through write_streams.
     if partition_columns.is_empty() {
@@ -759,7 +790,10 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_properties,
         writer_stats_config,
+        column_mapping,
     } = sink_config;
+    let (plan, partition_columns, random_prefix_length) =
+        apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
     let cdf_store = Arc::new(PrefixStore::new(object_store.clone(), "_change_data"));
 
     let write_schema = Arc::new(Schema::new(
@@ -786,7 +820,8 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),
@@ -796,7 +831,8 @@ async fn write_cdc_plan(
         write_batch_size,
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
-    );
+    )
+    .with_random_prefix_length(random_prefix_length);
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {

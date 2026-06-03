@@ -915,17 +915,28 @@ mod local {
             )),
             Arc::new(decimal),
             //Convert to seconds
+            Arc::new(
+                TimestampMicrosecondArray::from_iter(
+                    (0..not_null_rows)
+                        .map(|x| Some(((x + offset) * 1_000_000) as i64))
+                        .chain((0..null_rows).map(|_| None)),
+                )
+                .with_timezone("UTC"),
+            ),
             Arc::new(TimestampMicrosecondArray::from_iter(
                 (0..not_null_rows)
                     .map(|x| Some(((x + offset) * 1_000_000) as i64))
                     .chain((0..null_rows).map(|_| None)),
             )),
             #[cfg(feature = "nanosecond-timestamps")]
-            Arc::new(TimestampNanosecondArray::from_iter(
-                (0..not_null_rows)
-                    .map(|x| Some(((x + offset) * 1_000_000_000) as i64))
-                    .chain((0..null_rows).map(|_| None)),
-            )),
+            Arc::new(
+                TimestampNanosecondArray::from_iter(
+                    (0..not_null_rows)
+                        .map(|x| Some(((x + offset) * 1_000_000_000) as i64))
+                        .chain((0..null_rows).map(|_| None)),
+                )
+                .with_timezone("UTC"),
+            ),
             Arc::new(Date32Array::from_iter(
                 (0..not_null_rows)
                     .map(|x| Some((x + offset) as i32))
@@ -946,13 +957,18 @@ mod local {
             ArrowField::new("decimal", ArrowDataType::Decimal128(10, 2), true),
             ArrowField::new(
                 "timestamp",
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+            ArrowField::new(
+                "timestamp_ntz",
                 ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
                 true,
             ),
             #[cfg(feature = "nanosecond-timestamps")]
             ArrowField::new(
                 "timestamp_nanos",
-                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
                 true,
             ),
             ArrowField::new("date", ArrowDataType::Date32, true),
@@ -1036,7 +1052,8 @@ mod local {
         assert_eq!(metrics.num_scanned_files(), 3);
         assert_eq!(metrics.num_scanned_files(), metrics.keep_count);
 
-        // (Column name, value from file 1, value from file 2, value from file 3, non existent value)
+        // For each type to test, provide the column name and a
+        // function to generate a valid value from an i64.
         let tests = [
             TestCase::new("utf8", |value| {
                 lit(ScalarValue::Utf8View(Some(value.to_string())))
@@ -1047,12 +1064,21 @@ mod local {
             TestCase::new("int8", |value| lit(value as i8)),
             TestCase::new("float64", |value| lit(value as f64)),
             TestCase::new("float32", |value| lit(value as f32)),
-            TestCase::new("timestamp", |value| {
+            TestCase::new("timestamp_ntz", |value| {
                 lit(TimestampMicrosecond(Some(value * 1_000_000), None))
+            }),
+            TestCase::new("timestamp", |value| {
+                lit(TimestampMicrosecond(
+                    Some(value * 1_000_000),
+                    Some("UTC".into()),
+                ))
             }),
             #[cfg(feature = "nanosecond-timestamps")]
             TestCase::new("timestamp_nanos", |value| {
-                lit(TimestampNanosecond(Some(value * 1_000_000_000), None))
+                lit(TimestampNanosecond(
+                    Some(value * 1_000_000_000),
+                    Some("UTC".into()),
+                ))
             }),
             // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
             // not the proper string representation as specified by the precision and scale
@@ -1076,14 +1102,8 @@ mod local {
             let column = column.to_owned();
             // TODO: The following types don't have proper stats written.
             // See issue #1208 for decimal type
-            // See issue #1209 for dates
             // Min and Max is not calculated for binary columns. This matches the Spark writer
-            if column == "decimal"
-                || column == "date"
-                || column == "binary"
-                || column == "timestamp"
-                || (cfg!(feature = "nanosecond-timestamps") && column == "timestamp_nanos")
-            {
+            if column == "decimal" || column == "binary" {
                 continue;
             }
             println!("[Unwrapped] Test Column: {column} value: {file1_value}");
@@ -1144,11 +1164,20 @@ mod local {
             TestCase::new_wrapped("float64", |value| lit(value as f64)),
             TestCase::new_wrapped("float32", |value| lit(value as f32)),
             TestCase::new_wrapped("timestamp", |value| {
+                lit(TimestampMicrosecond(
+                    Some(value * 1_000_000),
+                    Some("UTC".into()),
+                ))
+            }),
+            TestCase::new_wrapped("timestamp_ntz", |value| {
                 lit(TimestampMicrosecond(Some(value * 1_000_000), None))
             }),
             #[cfg(feature = "nanosecond-timestamps")]
             TestCase::new_wrapped("timestamp_nanos", |value| {
-                lit(TimestampNanosecond(Some(value * 1_000_000_000), None))
+                lit(TimestampNanosecond(
+                    Some(value * 1_000_000_000),
+                    Some("UTC".into()),
+                ))
             }),
             // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
             // not the proper string representation as specified by the precision and scale
@@ -1173,7 +1202,6 @@ mod local {
             // TODO: Float and decimal partitions are not supported by the writer
             // binary fails since arrow does not implement a natural order
             // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
-            // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
             if column == "int64"
                 || column == "int32"
                 || column == "int16"
@@ -1182,9 +1210,6 @@ mod local {
                 || column == "float64"
                 || column == "decimal"
                 || column == "binary"
-                || column == "timestamp"
-                || column == "date"
-                || (cfg!(feature = "nanosecond-timestamps") && column == "timestamp_nanos")
             {
                 continue;
             }

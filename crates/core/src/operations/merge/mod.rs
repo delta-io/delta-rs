@@ -61,7 +61,6 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
-use delta_kernel::table_features::ColumnMappingMode;
 use filter::try_construct_early_filter;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -85,7 +84,6 @@ use crate::delta_datafusion::{
     resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
-use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
@@ -101,6 +99,7 @@ use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use delta_kernel::table_features::ColumnMappingMode;
 
 mod barrier;
 mod filter;
@@ -1827,11 +1826,15 @@ impl std::future::IntoFuture for MergeBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(unsupported_column_mapping_write("MERGE"));
-            }
-
             PROTOCOL.can_write_to(&snapshot)?;
+
+            if this.merge_schema
+                && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+            {
+                return Err(DeltaTableError::Generic(
+                    "Schema evolution on column-mapped tables is not yet supported".to_string(),
+                ));
+            }
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
