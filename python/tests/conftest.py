@@ -238,7 +238,10 @@ def azurite_sas_creds(azurite_creds):
     return creds
 
 
-@pytest.fixture(params=[{"ns_timestamps": True}, {"ns_timestamps": False}])
+@pytest.fixture(
+    params=[{"ns_timestamps": True}, {"ns_timestamps": False}],
+    ids=["base", "with_nanos"],
+)
 def sample_data_pyarrow(request) -> "pa.Table":
     nanosecond_timestamps = request.param["ns_timestamps"] and _NANOSECOND_TIMESTAMPS
     nrows = 5
