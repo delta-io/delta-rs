@@ -88,6 +88,11 @@ _NANOSECOND_TIMESTAMPS: bool = False
 def enable_nanosecond_timestamps() -> None:
     """
     Enable experimental support for nanosecond timestamp primitive data types.
+
+    This takes effect process-wide.
+
+    Note that this feature may be changed or removed in a future release
+    without being considered a breaking change.
     """
     if not _INTERNAL_NANOSECOND_TIMESTAMPS:
         raise RuntimeError(
