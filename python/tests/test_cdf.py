@@ -503,7 +503,9 @@ def test_delete_unpartitioned_cdf(tmp_path, sample_data_pyarrow: "pa.Table"):
             column=[["delete"] * 2],
         )
     )
-    cdc_data = pq.read_table(cdc_path)
+    # Ensure the CDC data is read using the expected schema
+    # (eg. standard binary/string types rather than binary/string_view).
+    cdc_data = pq.read_table(cdc_path, schema=expected_data.schema)
 
     assert os.path.exists(cdc_path), "_change_data doesn't exist"
     assert cdc_data == expected_data
