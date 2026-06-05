@@ -428,12 +428,7 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
-    let table_root = snapshot
-        .snapshot()
-        .scan_builder()
-        .build()?
-        .table_root()
-        .clone();
+    let table_root = snapshot.snapshot().inner.table_root().clone();
     let mut candidate_map: HashMap<_, _> = snapshot
         .file_views(log_store.as_ref(), None)
         .try_fold(HashMap::new(), |mut candidate_map, view| {
@@ -795,12 +790,7 @@ mod tests {
         .await?;
         assert!(!by_id.is_empty());
         let expected_path = by_id[0].path.clone();
-        let table_root = snapshot
-            .snapshot()
-            .scan_builder()
-            .build()?
-            .table_root()
-            .clone();
+        let table_root = snapshot.snapshot().inner.table_root().clone();
         let expected_file_id = crate::delta_datafusion::normalize_path_as_file_id(
             &expected_path,
             &table_root,
