@@ -22,6 +22,7 @@ from deltalake import (
     write_deltalake,
 )
 from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS,
     CommitFailedError,
     Field,
     PrimitiveType,
@@ -119,6 +120,9 @@ def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.
     assert result == pa.table(
         {"timestamp_ns": [pa.scalar(700, type=pa.timestamp("us", "UTC"))]}
     )
+
+    if not _NANOSECOND_TIMESTAMPS:
+        return
 
     # If nanoseconds are enabled when writing, the data is written as
     # nanoseconds:
