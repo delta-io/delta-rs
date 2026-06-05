@@ -3398,3 +3398,77 @@ def test_merge_with_spill_config(tmp_path: pathlib.Path):
 
     assert result["num_target_rows_updated"] == 2
     assert result["num_target_rows_copied"] == 1
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("enable_nanos", [False, True])
+def test_merge_schema_evolution_with_nanosecond_timestamps(
+    tmp_path: pathlib.Path,
+    enable_nanos: bool,
+):
+    """A schema-evolving merge that adds a new nanosecond timestamp
+    column must truncate it to microseconds when the experimental nanosecond
+    timestamp feature is disabled (the default).
+    """
+    import pyarrow as pa
+
+    from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
+    from deltalake._internal import _NANOSECOND_TIMESTAMPS
+
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array(["1", "2"], pa.string())}),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["3"], pa.string()),
+            "ts": pa.array([123_456_789], pa.timestamp("ns", tz="UTC")),
+        }
+    )
+
+    def do_merge():
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+            merge_schema=True,
+        ).when_not_matched_insert_all().execute()
+
+    if enable_nanos:
+        if not _NANOSECOND_TIMESTAMPS:
+            pytest.skip("Rust library not built with nanosecond-timestamps enabled")
+        # This currently errors because a merge doesn't automatically add
+        # the nanosecond timestamps feature to the table.
+        enable_nanosecond_timestamps()
+        try:
+            with pytest.raises(
+                DeltaError, match="does not have the required 'timestampNanos' feature"
+            ):
+                do_merge()
+        finally:
+            _disable_nanosecond_timestamps()
+
+    else:
+        do_merge()
+
+        dt = DeltaTable(tmp_path)
+
+        # The committed table schema must record microsecond precision.
+        assert dt.schema().to_arrow().field("ts").type == DataType.timestamp(
+            "us", tz="UTC"
+        )
+
+        result = (
+            QueryBuilder()
+            .register("tbl", dt)
+            .execute("select * from tbl order by id asc")
+            .read_all()
+        )
+
+        expected_array = pa.array([None, None, 123_456], pa.timestamp("us", tz="UTC"))
+        assert pa.chunked_array(result.column("ts")).combine_chunks() == expected_array
