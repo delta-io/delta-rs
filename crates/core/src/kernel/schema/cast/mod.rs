@@ -242,7 +242,8 @@ pub fn cast_record_batch(
 /// unsupported Arrow types to their Delta-compatible equivalents:
 ///
 /// - `Date64` -> `Date32` (day precision)
-/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone), unless the `nanosecond-timestamps` Cargo feature is enabled.
+/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone),
+///   except for Nanosecond inputs when `CAST_NANOS_TS_TO_MICROS` is false.
 ///
 /// Recursively normalizes nested types (Struct, List, Map, etc.).
 fn normalize_datatype(dt: &DataType) -> Option<DataType> {
