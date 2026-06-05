@@ -9,7 +9,6 @@ from deltalake import (
     DeltaTable,
     PostCommitHookProperties,
     TableFeatures,
-    _nanosecond_timestamps_enabled,
     write_deltalake,
 )
 from deltalake.exceptions import DeltaError
@@ -413,9 +412,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", {"timestampNtz"})
 
 
-@pytest.mark.skipif(
-    not _nanosecond_timestamps_enabled(), reason="nanosecond timestamps not enabled"
-)
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
 def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
     check_timestamp_column(
         tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}

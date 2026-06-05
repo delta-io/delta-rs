@@ -2237,9 +2237,7 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
     assert protocol.writer_features == ["timestampNtz"]
 
 
-@pytest.mark.skipif(
-    not _nanosecond_timestamps_enabled(), reason="nanosecond timestamps not enabled"
-)
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
 @pytest.mark.pyarrow
 @pytest.mark.parametrize(
     "array",
