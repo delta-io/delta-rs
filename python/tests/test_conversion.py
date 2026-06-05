@@ -55,7 +55,7 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
             Schema(
                 fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
             ),
-            Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
+            Schema(fields=[Field("foo", DataType.timestamp("us", tz="UTC"))]),
         ),
         # Nullability variations
         (
@@ -393,6 +393,87 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
     ],
 )
 def test_schema_conversion(input_schema: Schema, expected_schema: Schema):
+    assert expected_schema == _convert_arro3_schema_to_delta(input_schema)
+
+
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
+@pytest.mark.parametrize(
+    "input_schema,expected_schema",
+    [
+        # Nanosecond timestamps with a timezone are preserved
+        (
+            Schema(
+                fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
+            ),
+            Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
+        ),
+        # Nanosecond timestamps without a timezone are still converted to microseconds
+        (
+            Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
+            Schema(fields=[Field("foo", DataType.timestamp("us"), nullable=True)]),
+        ),
+        # Nanosecond timestamp nested in a struct, with a timezone
+        (
+            Schema(
+                fields=[
+                    Field(
+                        "foo",
+                        DataType.struct(
+                            [
+                                Field("a", DataType.uint64()),
+                                Field(
+                                    "b",
+                                    DataType.timestamp("ns", tz="Europe/Amsterdam"),
+                                ),
+                                Field("c", DataType.uint32()),
+                            ]
+                        ),
+                    )
+                ]
+            ),
+            Schema(
+                fields=[
+                    Field(
+                        "foo",
+                        DataType.struct(
+                            [
+                                Field("a", DataType.int64()),
+                                Field("b", DataType.timestamp("ns", tz="UTC")),
+                                Field("c", DataType.int32()),
+                            ]
+                        ),
+                    )
+                ]
+            ),
+        ),
+        # Field metadata is preserved when keeping nanosecond timestamps
+        (
+            Schema(
+                fields=[
+                    Field(
+                        "bar",
+                        DataType.timestamp("ns", tz="Europe/Amsterdam"),
+                        nullable=True,
+                        metadata={"origin": "sensor_7"},
+                    )
+                ]
+            ),
+            Schema(
+                fields=[
+                    Field(
+                        "bar",
+                        DataType.timestamp("ns", tz="UTC"),
+                        nullable=True,
+                        metadata={"origin": "sensor_7"},
+                    )
+                ]
+            ),
+        ),
+    ],
+)
+def test_schema_conversion_nanoseconds_enabled(
+    input_schema: Schema, expected_schema: Schema
+):
     assert expected_schema == _convert_arro3_schema_to_delta(input_schema)
 
 
