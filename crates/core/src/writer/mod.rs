@@ -8,7 +8,6 @@ use serde_json::Value;
 
 use crate::DeltaTable;
 use crate::errors::{ColumnMappingOperation, DeltaTableError};
-use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
 use crate::kernel::schema::symmetric_differences;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Version};
@@ -152,7 +151,7 @@ fn format_schema_mismatch(record_batch_schema: &SchemaRef, expected_schema: &Sch
         differences.iter().partition(|f| {
             expected_schema
                 .field_with_name(f.name())
-                .map_or(false, |e| e == f.as_ref()) // It possible the type are mismatch but the names matches
+                .is_ok_and(|e| e == f.as_ref()) // It possible the types are mismatch given the names matches
         });
 
     match (differences.is_empty(), expected_fields.is_empty()) {
