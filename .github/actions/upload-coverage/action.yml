@@ -12,5 +12,6 @@ runs:
       with:
         files: codecov.json
         fail_ci_if_error: true
+        use_pypi: true
       env:
         CODECOV_TOKEN: ${{ inputs.token }}
