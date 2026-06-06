@@ -26,6 +26,7 @@ impl WriterStatsConfig {
         }
     }
 
+    /// Derive writer statistics configuration from a table's [`TableConfiguration`].
     pub fn from_config(config: &TableConfiguration) -> Self {
         let properties = stats_table_properties(
             config.logical_schema().as_ref(),

@@ -305,6 +305,11 @@ fn has_nanosecond_timestamp(dt: &DataType) -> bool {
     }
 }
 
+/// Normalize an Arrow schema so it can be safely written to a Delta table.
+///
+/// Delta does not support all Arrow types verbatim (for example nanosecond timestamps);
+/// this rewrites such fields to the closest Delta-compatible representation, returning the
+/// original schema untouched when no changes are required.
 pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     let mut changed = false;
     let new_fields: Vec<FieldRef> = schema

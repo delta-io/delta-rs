@@ -18,6 +18,7 @@ use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSo
 use crate::DeltaResult;
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 
+/// A boxed, `Send`able stream of [`ScanMetadata`] results produced while scanning a snapshot.
 pub type SendableScanMetadataStream = Pin<Box<dyn Stream<Item = DeltaResult<ScanMetadata>> + Send>>;
 
 /// Builder to scan a snapshot of a table.
@@ -100,6 +101,7 @@ impl ScanBuilder {
         self
     }
 
+    /// Finalize the builder into a [`Scan`], validating the configured schema and predicate.
     pub fn build(self) -> DeltaResult<Scan> {
         let Self {
             snapshot,
@@ -300,6 +302,10 @@ mod tests {
     }
 }
 
+/// A configured, executable scan over a table snapshot.
+///
+/// Produced by [`ScanBuilder::build`]; drives log replay to enumerate the data files (and the
+/// statistics materialization strategy) that satisfy the scan's schema and predicate.
 #[derive(Debug)]
 pub struct Scan {
     inner: Arc<KernelScan>,
@@ -380,10 +386,12 @@ impl Scan {
     }
 
     /// Get the predicate [`PredicateRef`] of the scan.
+    /// Returns the predicate pushed down to the physical scan, if any was derived.
     pub fn physical_predicate(&self) -> Option<PredicateRef> {
         self.inner.physical_predicate()
     }
 
+    /// Stream the per-file [`ScanMetadata`] for this scan, driving log replay on `engine`.
     pub fn scan_metadata(&self, engine: Arc<dyn Engine>) -> SendableScanMetadataStream {
         // TODO: which capacity to choose?
         let mut builder = ReceiverStreamBuilder::<ScanMetadata>::new(100);
@@ -425,6 +433,11 @@ impl Scan {
         }
     }
 
+    /// Stream [`ScanMetadata`] incrementally starting from a previously observed state.
+    ///
+    /// Given the data already known at `existing_version` (and the predicate used to produce it),
+    /// only the log changes since that version are replayed, avoiding a full scan when refreshing
+    /// an already-loaded snapshot.
     pub fn scan_metadata_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
         &self,
         engine: Arc<dyn Engine>,
