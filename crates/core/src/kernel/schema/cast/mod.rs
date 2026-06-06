@@ -351,7 +351,7 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     }
 }
 
-pub fn symmetric_differences<'a>(
+pub(crate) fn symmetric_differences<'a>(
     new_schema: &'a ArrowSchemaRef,
     expected_schema: &'a ArrowSchemaRef,
 ) -> Option<Fields> {
