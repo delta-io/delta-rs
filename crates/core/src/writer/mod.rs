@@ -1,6 +1,6 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use arrow::{datatypes::SchemaRef, error::ArrowError};
+use arrow::{datatypes::FieldRef, datatypes::SchemaRef, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
@@ -8,6 +8,8 @@ use serde_json::Value;
 
 use crate::DeltaTable;
 use crate::errors::{ColumnMappingOperation, DeltaTableError};
+use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
+use crate::kernel::schema::symmetric_differences;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Version};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
@@ -50,9 +52,7 @@ pub(crate) enum DeltaWriterError {
     MissingPartitionColumn(String),
 
     /// The Arrow RecordBatch schema does not match the expected schema.
-    #[error(
-        "Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}"
-    )]
+    #[error("{}", format_schema_mismatch(record_batch_schema, expected_schema))]
     SchemaMismatch {
         /// The record batch schema.
         record_batch_schema: SchemaRef,
@@ -144,6 +144,28 @@ impl From<DeltaWriterError> for DeltaTableError {
     }
 }
 
+fn format_schema_mismatch(record_batch_schema: &SchemaRef, expected_schema: &SchemaRef) -> String {
+    // We can safely assume this will succeed since we already know the schemas are different
+    let differences = symmetric_differences(record_batch_schema, expected_schema).unwrap();
+
+    let (expected_fields, different_fields): (Vec<&FieldRef>, Vec<&FieldRef>) =
+        differences.iter().partition(|f| {
+            expected_schema
+                .field_with_name(f.name())
+                .map_or(false, |e| e == f.as_ref()) // It possible the type are mismatch but the names matches
+        });
+
+    match (differences.is_empty(), expected_fields.is_empty()) {
+        (true, _) => "Arrow RecordBatch schema is in the wrong order".to_string(),
+        (false, false) => format!(
+            "Arrow RecordBatch schema does not match: Missing fields: {expected_fields:?} and Found fields {different_fields:?}"
+        ),
+        (false, true) => {
+            format!("Arrow RecordBatch schema does not match: Found extra fields {differences:?}")
+        }
+    }
+}
+
 /// Write mode for the [DeltaWriter]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum WriteMode {
@@ -212,7 +234,9 @@ mod tests {
 
     use super::*;
     use crate::DeltaResult;
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
     use pretty_assertions::assert_ne;
+    use std::sync::Arc;
 
     /// This test doesn't have a great way to _validate_ that logs are not cleaned up as part of
     /// the second commit.
@@ -253,5 +277,75 @@ mod tests {
             "flush_and_commit did not create a version apparently?"
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_different_order() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field2", ArrowDataType::Utf8, true),
+            Field::new("field1", ArrowDataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+        assert_eq!(
+            format_message,
+            "Arrow RecordBatch schema is in the wrong order".to_string()
+        );
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_completely_different() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field3", ArrowDataType::Utf8, true),
+            Field::new("field4", ArrowDataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+
+        let missing_field = vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ];
+
+        let found_field = vec![
+            Field::new("field3", ArrowDataType::Utf8, true),
+            Field::new("field4", ArrowDataType::Int32, false),
+        ];
+        let expected = format!(
+            "Arrow RecordBatch schema does not match: Missing fields: {missing_field:?} and Found fields {found_field:?}"
+        );
+        assert_eq!(format_message, expected);
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_extra_field() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+            Field::new("field3", ArrowDataType::Utf8, true),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+
+        let extra_field = vec![Field::new("field3", ArrowDataType::Utf8, true)];
+
+        let expected =
+            format!("Arrow RecordBatch schema does not match: Found extra fields {extra_field:?}");
+        assert_eq!(format_message, expected);
     }
 }

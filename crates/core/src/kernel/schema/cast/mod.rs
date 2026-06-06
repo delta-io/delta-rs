@@ -10,7 +10,6 @@ use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use std::collections::HashSet;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -757,6 +756,22 @@ mod tests {
             result,
             Fields::from(vec![Field::new("field2", DataType::Utf8, true)])
         );
+    }
+
+    #[test]
+    fn test_symmetric_differences_wrong_order() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field2", DataType::Utf8, true),
+            Field::new("field1", DataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema);
+        assert_eq!(result, Some(Fields::empty()));
     }
 
     #[test]
