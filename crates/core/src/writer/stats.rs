@@ -10,8 +10,8 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use parquet::basic::LogicalType;
 use parquet::basic::Type;
+use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -224,7 +224,10 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
+                        let logical_type = column_descr
+                            .logical_type_ref()
+                            .or(converted_to_logical_type(column_descr.converted_type()));
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -661,6 +664,21 @@ fn apply_min_max_for_column(
         (_, None) => {
             unreachable!();
         }
+    }
+}
+
+/// Map the old (old!) [parquet::basic::ConvertedType] into the more modern
+/// [parquet::basic::LogicalType]
+///
+/// Because this is a legacy format helper function, ro types which might not be easy to convert
+/// from one struct to the other, it will just return `None`
+fn converted_to_logical_type(converted: ConvertedType) -> Option<&'static LogicalType> {
+    match converted {
+        ConvertedType::UTF8 => Some(&LogicalType::String),
+        ConvertedType::DATE => Some(&LogicalType::Date),
+        ConvertedType::JSON => Some(&LogicalType::Json),
+        ConvertedType::BSON => Some(&LogicalType::Bson),
+        _others => None,
     }
 }
 
