@@ -96,6 +96,7 @@ fn generate_config_keys(name: &Ident, fields: &[&Field]) -> Result<proc_macro2::
         })
         .collect::<Result<_>>()?;
     Ok(quote! {
+        #[doc = "Enumeration of recognized configuration keys, generated from the struct fields."]
         #[automatically_derived]
         pub enum #enum_name {
             #(#variants),*

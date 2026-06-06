@@ -115,11 +115,13 @@ impl DeltaTable {
         }
     }
 
+    /// Create a new Delta table at this location, returning a [`CreateBuilder`].
     #[must_use]
     pub fn create(&self) -> CreateBuilder {
         CreateBuilder::default().with_log_store(self.log_store())
     }
 
+    /// Restore the table to an earlier version or timestamp, returning a [`RestoreBuilder`].
     #[must_use]
     pub fn restore(self) -> RestoreBuilder {
         RestoreBuilder::new(
@@ -181,6 +183,7 @@ impl DeltaTable {
 
 #[cfg(feature = "datafusion")]
 impl DeltaTable {
+    /// Read the table's data into Arrow record batches, returning a [`LoadBuilder`].
     #[must_use]
     pub fn scan_table(&self) -> LoadBuilder {
         LoadBuilder::new(
@@ -195,6 +198,7 @@ impl DeltaTable {
         CdfLoadBuilder::new(self.log_store(), self.state.map(|s| s.snapshot))
     }
 
+    /// Write the given record batches to the table, returning a [`WriteBuilder`].
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
         WriteBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
@@ -247,15 +251,20 @@ impl DeltaTable {
     }
 }
 
+/// Hook for embedding custom behavior into the lifecycle of a Delta operation.
+///
+/// Implementors can run arbitrary async code around an operation's execution and its post-commit
+/// hook, e.g. to integrate external transaction coordination, metrics, or cleanup. Each callback
+/// receives the operation's [`LogStoreRef`] and a unique `operation_id`.
 #[async_trait]
 pub trait CustomExecuteHandler: Send + Sync {
-    // Execute arbitrary code at the start of a delta operation
+    /// Execute arbitrary code at the start of a delta operation.
     async fn pre_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
 
-    // Execute arbitrary code at the end of a delta operation
+    /// Execute arbitrary code at the end of a delta operation.
     async fn post_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
 
-    // Execute arbitrary code at the start of the post commit hook
+    /// Execute arbitrary code at the start of the post commit hook.
     async fn before_post_commit_hook(
         &self,
         log_store: &LogStoreRef,
@@ -263,7 +272,7 @@ pub trait CustomExecuteHandler: Send + Sync {
         operation_id: Uuid,
     ) -> DeltaResult<()>;
 
-    // Execute arbitrary code at the end of the post commit hook
+    /// Execute arbitrary code at the end of the post commit hook.
     async fn after_post_commit_hook(
         &self,
         log_store: &LogStoreRef,

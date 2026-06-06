@@ -64,6 +64,7 @@ use crate::kernel::{Action, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
+/// Configuration types controlling how data and statistics are written.
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;

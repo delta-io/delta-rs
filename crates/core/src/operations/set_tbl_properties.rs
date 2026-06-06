@@ -142,12 +142,14 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 }
 
 #[cfg(test)]
+/// Tests for the set-table-properties operation.
 pub mod tests {
     use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[tokio::test]
+    /// Verify that setting table properties is persisted to table metadata.
     pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
         let temp_loc = tempdir()?;
         let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;

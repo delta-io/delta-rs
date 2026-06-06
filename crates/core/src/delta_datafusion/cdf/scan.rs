@@ -19,6 +19,12 @@ use crate::{
 
 use super::ADD_PARTITION_SCHEMA;
 
+/// A DataFusion [`TableProvider`](datafusion::catalog::TableProvider) that exposes a Delta
+/// table's Change Data Feed (CDF) as a queryable relation.
+///
+/// Wraps a [`CdfLoadBuilder`] together with the resolved output schema so the CDF stream
+/// (insertions, updates and deletions across versions) can be scanned through the normal
+/// DataFusion planning machinery.
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
     cdf_builder: CdfLoadBuilder,

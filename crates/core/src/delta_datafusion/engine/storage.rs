@@ -110,7 +110,10 @@ impl StorageHandler for DataFusionStorageHandler {
     }
 }
 
+/// Conversion to a DataFusion [`ObjectStoreUrl`], the key used to register and look up an
+/// object store in a session's runtime environment.
 pub trait AsObjectStoreUrl {
+    /// Return the [`ObjectStoreUrl`] that identifies the object store backing `self`.
     fn as_object_store_url(&self) -> ObjectStoreUrl;
 }
 

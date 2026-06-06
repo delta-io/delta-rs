@@ -28,6 +28,7 @@ use crate::{DeltaResult, DeltaTableBuilder};
 #[cfg(test)]
 use futures::TryStreamExt;
 
+/// Convenient result type for tests, boxing any error so `?` works with heterogeneous errors.
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 #[cfg(test)]
@@ -108,20 +109,32 @@ pub(crate) async fn file_paths_from(
 
 /// Reference tables from the test data folder
 pub enum TestTables {
+    /// The canonical `simple_table` fixture.
     Simple,
+    /// A simple table that includes a checkpoint.
     SimpleWithCheckpoint,
+    /// A table containing a Spark-written variant-type checkpoint.
     SparkVariantCheckpoint,
+    /// A minimal table used for commit-related tests.
     SimpleCommit,
+    /// The "golden" reader fixture (data-reader-array-primitives).
     Golden,
+    /// A Delta 0.8.0 partitioned table.
     Delta0_8_0Partitioned,
+    /// A Delta 0.8.0 table with special characters in partition values.
     Delta0_8_0SpecialPartitioned,
+    /// A table with multiple checkpoints.
     Checkpoints,
+    /// A table whose latest version is not checkpointed.
     LatestNotCheckpointed,
+    /// A small table that uses deletion vectors.
     WithDvSmall,
+    /// A custom, caller-named table (path resolution is not provided).
     Custom(String),
 }
 
 impl TestTables {
+    /// Return the on-disk path of this fixture within the test data folder.
     pub fn as_path(&self) -> PathBuf {
         let data_path = find_git_root().join("crates/test/tests/data");
         match self {
@@ -140,6 +153,7 @@ impl TestTables {
         }
     }
 
+    /// Return the canonical name of this fixture (used as a directory/table name).
     pub fn as_name(&self) -> String {
         match self {
             Self::Simple => "simple".into(),
@@ -156,6 +170,7 @@ impl TestTables {
         }
     }
 
+    /// Join this fixture's name onto `root_uri` to form a table URI.
     pub fn uri_for_table(&self, root_uri: impl AsRef<str>) -> String {
         let root_uri = root_uri.as_ref();
         if root_uri.ends_with('/') {
@@ -165,6 +180,7 @@ impl TestTables {
         }
     }
 
+    /// Build a [`DeltaTableBuilder`] pointed at this fixture's location.
     pub fn table_builder(&self) -> DeltaResult<DeltaTableBuilder> {
         let url = Url::from_directory_path(self.as_path()).map_err(|_| {
             crate::DeltaTableError::InvalidTableLocation(
@@ -218,6 +234,10 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
     EnvCleanup(original_values)
 }
 
+/// Assert that two collections of record batches are equal after sorting their data rows.
+///
+/// The header and footer lines of the pretty-printed output are left in place; only the data
+/// rows are sorted, making the comparison order-insensitive for test assertions.
 #[macro_export]
 macro_rules! assert_batches_sorted_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {

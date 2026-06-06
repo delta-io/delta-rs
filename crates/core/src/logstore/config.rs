@@ -15,6 +15,10 @@ use super::storage::{CertificateConfig, LimitConfig};
 use super::{IORuntime, storage::runtime::RuntimeConfig};
 use crate::{DeltaResult, DeltaTableError};
 
+/// A configuration type that can be incrementally populated from string key/value pairs.
+///
+/// Implemented by the various storage configuration structs so that options coming from user
+/// input or the environment can be applied generically by key name.
 pub trait TryUpdateKey: Default {
     /// Update an internal field in the configuration.
     ///
@@ -47,6 +51,7 @@ pub struct ParseResult<T: std::fmt::Debug> {
 }
 
 impl<T: std::fmt::Debug> ParseResult<T> {
+    /// Return an error if any key/value pair failed to parse, otherwise `Ok(())`.
     pub fn raise_errors(&self) -> DeltaResult<()> {
         if !self.errors.is_empty() {
             return Err(DeltaTableError::Generic(format!(
@@ -87,6 +92,10 @@ where
     }
 }
 
+/// Resolved configuration for constructing and decorating an object store backend.
+///
+/// Aggregates the optional dedicated IO runtime, retry/limit/certificate settings and the raw
+/// passthrough options used to build the underlying [`ObjectStore`].
 #[derive(Default, Debug, Clone)]
 pub struct StorageConfig {
     /// Runtime configuration.
@@ -188,6 +197,7 @@ where
 }
 
 impl StorageConfig {
+    /// Iterate over the raw, unparsed key/value options retained on this config.
     pub fn raw(&self) -> impl Iterator<Item = (&String, &String)> {
         self.raw.iter()
     }
@@ -241,7 +251,7 @@ impl StorageConfig {
         Ok(props)
     }
 
-    // Provide an IO Runtime directly
+    /// Attach a dedicated IO [`IORuntime`] used to execute storage operations.
     pub fn with_io_runtime(mut self, rt: IORuntime) -> Self {
         self.runtime = Some(rt);
         self
@@ -260,12 +270,26 @@ where
     Ok((result.config, result.unparsed))
 }
 
+/// Parse a string into a `usize`, returning a descriptive error on failure.
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_usize;
+/// assert_eq!(parse_usize("42").unwrap(), 42);
+/// assert!(parse_usize("not_a_number").is_err());
+/// ```
 pub fn parse_usize(value: &str) -> DeltaResult<usize> {
     value
         .parse::<usize>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
 }
 
+/// Parse a string into an `f64`, returning a descriptive error on failure.
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_f64;
+/// assert_eq!(parse_f64("3.14").unwrap(), 3.14);
+/// assert!(parse_f64("not_a_number").is_err());
+/// ```
 pub fn parse_f64(value: &str) -> DeltaResult<f64> {
     value
         .parse::<f64>()
@@ -278,10 +302,20 @@ pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
 }
 
+/// Parse a string into a `bool`, accepting common truthy spellings (e.g. "1", "true").
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_bool;
+/// assert!(parse_bool("true").unwrap());
+/// assert!(parse_bool("1").unwrap());
+/// assert!(!parse_bool("false").unwrap());
+/// assert!(!parse_bool("0").unwrap());
+/// ```
 pub fn parse_bool(value: &str) -> DeltaResult<bool> {
     Ok(str_is_truthy(value))
 }
 
+/// Parse a configuration value as a plain string (an infallible identity conversion).
 pub fn parse_string(value: &str) -> DeltaResult<String> {
     Ok(value.to_string())
 }
