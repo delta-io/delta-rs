@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 __version__: str
 _NANOSECOND_TIMESTAMPS: bool
 
+def _set_cast_nanos_timestamps_to_micros(cast: bool) -> None: ...
+
 class TableFeatures(Enum):
     # Mapping of one column to another
     ColumnMapping = "ColumnMapping"

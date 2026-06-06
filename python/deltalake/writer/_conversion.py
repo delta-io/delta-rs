@@ -9,7 +9,9 @@ def _convert_arro3_schema_to_delta(
     existing_schema: Arro3Schema | None = None,
 ) -> Arro3Schema:
     """Convert a arro3 schema to a schema compatible with Delta Lake. Converts unsigned to signed equivalent, and
-    converts all timestamps to `us` timestamps. Also handles null column types by converting them to match
+    converts all timestamps to `us` timestamps, except nanosecond timestamps when the experimental nanosecond
+    timestamp feature is enabled.
+    Also handles null column types by converting them to match
     corresponding fields in the existing table schema.
 
     Args:
@@ -19,6 +21,7 @@ def _convert_arro3_schema_to_delta(
     Returns:
         Arro3Schema: Delta-compatible schema with converted types.
     """
+    from deltalake import _nanosecond_timestamps_enabled
 
     def dtype_to_delta_dtype(
         dtype: DataType, field_name: str | None = None
@@ -51,7 +54,7 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_timestamp(dtype):
             if dtype.tz is None:
                 return DataType.timestamp("us")
-            elif dtype.time_unit == "ns":
+            elif dtype.time_unit == "ns" and _nanosecond_timestamps_enabled():
                 return DataType.timestamp("ns", tz="UTC")
             else:
                 return DataType.timestamp("us", tz="UTC")

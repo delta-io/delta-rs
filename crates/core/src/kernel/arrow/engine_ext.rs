@@ -478,6 +478,7 @@ fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) 
 ///
 /// [`StatsProjection`]: crate::kernel::snapshot::StatsProjection
 pub(crate) fn is_public_min_max_stats_eligible_primitive(data_type: &PrimitiveType) -> bool {
+    #[cfg(not(feature = "nanosecond-timestamps"))]
     let matches_nanos = false;
     #[cfg(feature = "nanosecond-timestamps")]
     let matches_nanos = matches!(data_type, &PrimitiveType::TimestampNanos);

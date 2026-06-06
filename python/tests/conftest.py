@@ -13,7 +13,13 @@ import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
-from deltalake import DeltaTable, WriterProperties, write_deltalake
+from deltalake import (
+    DeltaTable,
+    WriterProperties,
+    _disable_nanosecond_timestamps,
+    enable_nanosecond_timestamps,
+    write_deltalake,
+)
 from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
@@ -232,18 +238,22 @@ def azurite_sas_creds(azurite_creds):
     return creds
 
 
-@pytest.fixture()
-def sample_data_pyarrow() -> "pa.Table":
+@pytest.fixture(
+    params=[{"ns_timestamps": True}, {"ns_timestamps": False}],
+    ids=["base", "with_nanos"],
+)
+def sample_data_pyarrow(request) -> "pa.Table":
+    nanosecond_timestamps = request.param["ns_timestamps"] and _NANOSECOND_TIMESTAMPS
     nrows = 5
     import pyarrow as pa
 
     extras = {}
-    if _NANOSECOND_TIMESTAMPS:
+    if nanosecond_timestamps:
         extras["timestamp_ns"] = pa.array(
             [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
         )
 
-    return pa.table(
+    table = pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
             "int64": pa.array(list(range(nrows)), pa.int64()),
@@ -276,6 +286,12 @@ def sample_data_pyarrow() -> "pa.Table":
         }
         | extras
     )
+    try:
+        if nanosecond_timestamps:
+            enable_nanosecond_timestamps()
+        yield table
+    finally:
+        _disable_nanosecond_timestamps()
 
 
 @pytest.fixture()
@@ -379,3 +395,18 @@ def minio_s3_env(monkeypatch, minio_container):
 @pytest.fixture()
 def writer_properties():
     return WriterProperties(compression="GZIP", compression_level=0)
+
+
+@pytest.fixture()
+def nanosecond_timestamps_enabled():
+    from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
+    from deltalake._internal import _NANOSECOND_TIMESTAMPS
+
+    if not _NANOSECOND_TIMESTAMPS:
+        pytest.skip("Rust library built without nanosecond timestamp support")
+
+    enable_nanosecond_timestamps()
+    try:
+        yield
+    finally:
+        _disable_nanosecond_timestamps()
