@@ -930,7 +930,8 @@ mod tests {
         );
 
         // Test error case: empty column name
-        let expr = Expression::Column(ColumnName::new::<&str>([]));
+        let columns: [&str; 0] = [];
+        let expr = Expression::Column(ColumnName::new(columns));
         assert!(to_datafusion_expr(&expr, &DataType::BOOLEAN).is_err());
     }
 }
