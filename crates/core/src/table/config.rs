@@ -190,6 +190,51 @@ impl FromStr for TableProperty {
     }
 }
 
+/// Key in `Metadata.format.options` that enables Parquet content-defined chunking.
+pub const PARQUET_CDC_ENABLED: &str = "contentDefinedChunking.enabled";
+/// Key in `Metadata.format.options` for the minimum CDC chunk size in bytes.
+pub const PARQUET_CDC_MIN_CHUNK_SIZE: &str = "contentDefinedChunking.minChunkSize";
+/// Key in `Metadata.format.options` for the maximum CDC chunk size in bytes.
+pub const PARQUET_CDC_MAX_CHUNK_SIZE: &str = "contentDefinedChunking.maxChunkSize";
+/// Key in `Metadata.format.options` for the Gear hash normalization level.
+pub const PARQUET_CDC_NORM_LEVEL: &str = "contentDefinedChunking.normLevel";
+
+/// Build [`parquet::file::properties::CdcOptions`] from a table's `Metadata.format.options`
+/// when content-defined chunking is enabled, or `None` when it is not.
+///
+/// For existing tables the stored format options are read from the snapshot; for new tables
+/// the write-time `format_options` map is consulted instead.
+pub fn parquet_cdc_options(
+    snapshot_format_options: &std::collections::HashMap<String, String>,
+    format_options: &std::collections::HashMap<String, String>,
+) -> Option<parquet::file::properties::CdcOptions> {
+    let get = |key: &str| -> Option<&str> {
+        snapshot_format_options
+            .get(key)
+            .or_else(|| format_options.get(key))
+            .map(|s| s.as_str())
+    };
+
+    if !get(PARQUET_CDC_ENABLED)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    Some(parquet::file::properties::CdcOptions {
+        min_chunk_size: get(PARQUET_CDC_MIN_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE),
+        max_chunk_size: get(PARQUET_CDC_MAX_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE),
+        norm_level: get(PARQUET_CDC_NORM_LEVEL)
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_NORM_LEVEL),
+    })
+}
+
 /// Delta configuration error
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum DeltaConfigError {
