@@ -43,16 +43,22 @@ pub fn new_metadata(
 /// while the update / mutation APIs are being implemented. It allows us to implement
 /// additional APIs on the Metadata action and hide specifics of how we do the updates.
 pub trait MetadataExt {
+    /// Return a copy of the metadata with its unique table identifier replaced.
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the user-facing table name set.
     fn with_name(self, name: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the table description set.
     fn with_description(self, description: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata whose schema string is replaced with `schema`.
     fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with a single configuration key set to `value`.
     fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the given configuration key removed.
     fn remove_config_key(self, key: &str) -> DeltaResult<Metadata>;
 }
 
@@ -697,6 +703,7 @@ pub enum TableFeatures {
     VariantTypePreview,
     /// Preview shredded variant support
     VariantShreddingPreview,
+    /// Support for materializing partition column values into data files.
     MaterializePartitionColumns,
 }
 

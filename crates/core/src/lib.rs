@@ -75,7 +75,7 @@
 //! };
 //! ```
 
-// #![deny(missing_docs)]
+#![warn(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 pub mod data_catalog;
@@ -88,6 +88,8 @@ pub mod protocol;
 pub use kernel::schema;
 pub mod table;
 
+/// Test fixtures and helpers (reference tables, env scoping, batch assertions) exposed for
+/// integration tests of this crate and downstream crates.
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
 
@@ -181,11 +183,21 @@ pub async fn open_table_with_ds(
 
 static CLIENT_VERSION: OnceLock<String> = OnceLock::new();
 
+/// Record the client version reported by `crate_version`.
+///
+/// Bindings (such as the Python package) call this once at startup so that user agents and
+/// telemetry identify the embedding client rather than the bare core crate version. Subsequent
+/// calls after the first are ignored.
 pub fn init_client_version(version: &str) {
     let _ = CLIENT_VERSION.set(version.to_string());
 }
 
 /// Returns Rust core version or custom set client_version such as the py-binding
+///
+/// ```
+/// // Always returns a non-empty version string.
+/// assert!(!deltalake_core::crate_version().is_empty());
+/// ```
 pub fn crate_version() -> &'static str {
     CLIENT_VERSION
         .get()

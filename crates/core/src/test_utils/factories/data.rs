@@ -16,9 +16,11 @@ use super::FileStats;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{DataType, PrimitiveType, StructType};
 
+/// Factory for generating random Arrow data and statistics for tests.
 pub struct DataFactory;
 
 impl DataFactory {
+    /// Generate a random [`RecordBatch`] for `schema` with `length` rows, honoring `bounds`.
     pub fn record_batch(
         schema: &StructType,
         length: usize,
@@ -27,10 +29,12 @@ impl DataFactory {
         generate_random_batch(schema, length, bounds)
     }
 
+    /// Compute min/max/null statistics for the given batch.
     pub fn file_stats(batch: &RecordBatch) -> TestResult<FileStats> {
         get_stats(batch)
     }
 
+    /// Generate a random array of `data_type` with `length` elements within the given bounds.
     pub fn array(
         data_type: DataType,
         length: usize,
@@ -70,6 +74,7 @@ fn generate_random_batch(
         })
 }
 
+/// Generate a random [`ArrayRef`] of the given `data_type`, optionally bounded by min/max strings.
 pub fn generate_random_array(
     data_type: DataType,
     length: usize,

@@ -478,6 +478,12 @@ impl SnapshotWrapper {
     }
 }
 
+/// An executable, serializable Delta table scan.
+///
+/// `DeltaScan` captures everything needed to read a consistent set of data files from a
+/// table snapshot — the resolved schemas, optional file-skipping predicates, deletion-vector
+/// aware file selection and the originating log store. It is the unit produced by
+/// [`TableProviderBuilder`] and consumed by DataFusion's execution layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaScan {
     snapshot: SnapshotWrapper,
@@ -505,7 +511,10 @@ pub struct DeletionVectorSelection {
 }
 
 impl DeltaScan {
-    // create new delta scan
+    /// Create a new scan over the given `snapshot` using `config`.
+    ///
+    /// Validates that the snapshot only uses reader features delta-rs supports and resolves
+    /// the scan and provider (public) schemas, including the optional file-id column.
     pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
         let snapshot = snapshot.into();
         Self::validate_supported_reader_features(&snapshot)
@@ -692,6 +701,7 @@ impl DeltaScan {
             .map(Some)
     }
 
+    /// Start building a scan/table provider with a fluent [`TableProviderBuilder`].
     pub fn builder() -> TableProviderBuilder {
         TableProviderBuilder::new()
     }

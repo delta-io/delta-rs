@@ -194,6 +194,8 @@ impl DeltaScanConfig {
         }
     }
 
+    /// Create a config seeded from an active DataFusion [`Session`], inheriting its
+    /// Parquet pushdown and view-type settings so the scan matches the session's behavior.
     pub fn new_from_session(session: &dyn Session) -> Self {
         let config_options = session.config().options();
         Self {
@@ -205,6 +207,7 @@ impl DeltaScanConfig {
         }
     }
 
+    /// Set the name of the synthetic column that exposes each row's source file path.
     pub fn with_file_column_name<S: ToString>(mut self, name: S) -> Self {
         self.file_column_name = Some(name.to_string());
         self
@@ -369,6 +372,7 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Consume the builder and resolve it into an executable [`next::DeltaScan`].
     pub async fn build(self) -> Result<next::DeltaScan> {
         let TableProviderBuilder {
             log_store,

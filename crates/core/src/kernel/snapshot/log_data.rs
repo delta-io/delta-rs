@@ -83,10 +83,12 @@ impl<'a> LogDataHandler<'a> {
     }
 
     /// The number of files in the log data.
+    /// Returns the total number of files represented across all underlying record batches.
     pub fn num_files(&self) -> usize {
         self.data.iter().map(|batch| batch.num_rows()).sum()
     }
 
+    /// Iterate over each file as a [`LogicalFileView`] without materializing all of them at once.
     pub fn iter(&self) -> impl Iterator<Item = LogicalFileView> + '_ {
         self.data.iter().flat_map(|batch| {
             (0..batch.num_rows()).map(move |idx| LogicalFileView::new(batch.clone(), idx))

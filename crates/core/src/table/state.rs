@@ -35,6 +35,7 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    /// Wrap an already-loaded [`EagerSnapshot`] as the in-memory state of a table.
     pub fn new(snapshot: EagerSnapshot) -> Self {
         Self { snapshot }
     }
@@ -403,6 +404,10 @@ impl Snapshot {
 }
 
 impl EagerSnapshot {
+    /// Materialize the table's active `Add` actions as a single Arrow [`RecordBatch`].
+    ///
+    /// When `flatten` is true, nested fields (e.g. partition values and statistics) are flattened
+    /// into top-level columns for easier inspection.
     pub fn add_actions_table(
         &self,
         flatten: bool,
@@ -410,6 +415,8 @@ impl EagerSnapshot {
         self.snapshot().add_actions_table(flatten)
     }
 
+    /// Like [`add_actions_table`](Self::add_actions_table) but yields the actions as a sequence of
+    /// record batches instead of a single concatenated batch.
     pub fn add_actions_batches(
         &self,
         flatten: bool,
