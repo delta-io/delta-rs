@@ -52,15 +52,12 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
                 .try_collect()?;
             match expr.op {
                 VariadicExpressionOp::Coalesce => Ok(coalesce(exprs)),
+                others => {
+                    not_impl_err!("The {others} VariadicExpressionOp is not supported proerly")
+                }
             }
         }
-        Expression::Opaque(_) => not_impl_err!("Opaque expressions are not yet supported"),
-        Expression::Unknown(_) => not_impl_err!("Unknown expressions are not yet supported"),
-        Expression::Transform(_) => not_impl_err!("Transform expressions are not yet supported"),
-        Expression::ParseJson(_) => not_impl_err!("ParseJson expressions are not yet supported"),
-        Expression::MapToStruct(_) => {
-            not_impl_err!("MapToStruct expressions are not yet supported")
-        }
+        others => not_impl_err!("The {others} expression type is not yet supported"),
     }
 }
 
@@ -933,7 +930,8 @@ mod tests {
         );
 
         // Test error case: empty column name
-        let expr = Expression::Column(ColumnName::new::<&str>([]));
+        let columns: [&str; 0] = [];
+        let expr = Expression::Column(ColumnName::new(columns));
         assert!(to_datafusion_expr(&expr, &DataType::BOOLEAN).is_err());
     }
 }
