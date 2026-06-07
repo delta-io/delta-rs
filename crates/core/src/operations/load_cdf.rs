@@ -27,13 +27,14 @@ use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
+use delta_kernel::table_features::ColumnMappingMode;
 use tracing::log;
 
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
 };
-use crate::errors::DeltaResult;
+use crate::errors::{ColumnMappingOperation, DeltaResult};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
@@ -453,6 +454,12 @@ impl CdfLoadBuilder {
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
+        if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Read,
+                "CHANGE DATA FEED scans",
+            ));
+        }
 
         let partition_values = snapshot.metadata().partition_columns();
         let schema = snapshot.input_schema();
@@ -708,6 +715,53 @@ pub(crate) mod tests {
         let table = DeltaTable::try_from_url(table_uri).await?;
         let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
         ctx.register_table("cdf", Arc::new(provider))?;
+        Ok(())
+    }
+
+    async fn copied_column_mapping_cdf_table()
+    -> Result<(tempfile::TempDir, DeltaTable), Box<dyn std::error::Error + 'static>> {
+        let fixture = Path::new("../test/tests/data/table_with_column_mapping");
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(fixture, temp_dir.path(), &Default::default())?;
+        let table_path = temp_dir.path().join("table_with_column_mapping");
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        let log = std::fs::read_to_string(&log_path)?;
+        let updated_log = log.replace(
+            "\"delta.columnMapping.mode\":\"name\"",
+            "\"delta.enableChangeDataFeed\":\"true\",\"delta.columnMapping.mode\":\"name\"",
+        );
+        assert_ne!(
+            log, updated_log,
+            "expected column mapping table fixture metadata to contain column mapping mode"
+        );
+        std::fs::write(log_path, updated_log)?;
+
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        Ok((temp_dir, table))
+    }
+
+    #[tokio::test]
+    async fn cdf_scan_rejects_column_mapping_tables() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let (_temp_dir, table) = copied_column_mapping_cdf_table().await?;
+
+        let err = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect_err("cdf scan should reject column-mapped tables before planning files");
+
+        match err {
+            DeltaTableError::UnsupportedColumnMapping {
+                mode: _,
+                operation: _,
+            } => {}
+            _ => panic!("Unexpected error: {err:?}"),
+        }
+
         Ok(())
     }
 

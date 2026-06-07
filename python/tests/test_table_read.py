@@ -1,3 +1,4 @@
+import json
 import multiprocessing
 import os
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
@@ -1126,6 +1127,94 @@ def test_read_query_builder():
 
     actual = qb.execute(query).read_all()
     assert expected == actual
+
+
+def test_query_builder_boolean_false_predicate_4490(tmp_path: Path):
+    table = Table(
+        {
+            "id": Array(
+                [1, 2, 3], ArrowField("id", type=DataType.int64(), nullable=True)
+            ),
+            "deprecated": Array(
+                [False, True, False],
+                ArrowField("deprecated", type=DataType.bool(), nullable=True),
+            ),
+            "chemsys": Array(
+                ["Li-O", "Fe-O", "Na-Cl"],
+                ArrowField("chemsys", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, table)
+
+    actual = (
+        QueryBuilder()
+        .register("materials", DeltaTable(tmp_path))
+        .execute(
+            """
+            SELECT chemsys
+            FROM materials
+            WHERE deprecated=false
+            ORDER BY chemsys
+            """
+        )
+        .read_all()
+    )
+    expected = Table(
+        {
+            "chemsys": Array(
+                ["Li-O", "Na-Cl"],
+                ArrowField("chemsys", type=DataType.string_view(), nullable=True),
+            )
+        }
+    )
+    assert actual == expected
+
+
+def test_query_builder_ignores_legacy_boolean_min_max_stats_4490(tmp_path: Path):
+    table = Table(
+        {
+            "id": Array(
+                [1, 2, 3], ArrowField("id", type=DataType.int64(), nullable=True)
+            ),
+            "deprecated": Array(
+                [False, True, False],
+                ArrowField("deprecated", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, table)
+
+    log_path = tmp_path / "_delta_log" / "00000000000000000000.json"
+    rewritten_lines = []
+    for line in log_path.read_text().splitlines():
+        action = json.loads(line)
+        add = action.get("add")
+        if add and add.get("stats"):
+            stats = json.loads(add["stats"])
+            stats.setdefault("minValues", {})["deprecated"] = True
+            stats.setdefault("maxValues", {})["deprecated"] = True
+            add["stats"] = json.dumps(stats, separators=(",", ":"))
+        rewritten_lines.append(json.dumps(action, separators=(",", ":")))
+    log_path.write_text("\n".join(rewritten_lines) + "\n")
+
+    actual = (
+        QueryBuilder()
+        .register("materials", DeltaTable(tmp_path))
+        .execute(
+            """
+            SELECT id
+            FROM materials
+            WHERE deprecated=false
+            ORDER BY id
+            """
+        )
+        .read_all()
+    )
+    expected = Table(
+        {"id": Array([1, 3], ArrowField("id", type=DataType.int64(), nullable=True))}
+    )
+    assert actual == expected
 
 
 @pytest.mark.pyarrow

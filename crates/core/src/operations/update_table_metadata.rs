@@ -18,7 +18,11 @@ use crate::{DeltaResult, DeltaTableError};
     function = "validate_at_least_one_field",
     message = "No metadata update specified"
 ))]
+/// A validated set of metadata fields to update on a Delta table.
+///
+/// At least one field must be provided; lengths are validated to stay within Delta's limits.
 pub struct TableMetadataUpdate {
+    /// New table name. When set, must be 1-255 characters.
     #[validate(length(
         min = 1,
         max = 255,
@@ -26,6 +30,7 @@ pub struct TableMetadataUpdate {
     ))]
     pub name: Option<String>,
 
+    /// New table description. When set, must be at most 4000 characters.
     #[validate(length(
         max = 4000,
         message = "Table description cannot exceed 4000 characters"

@@ -266,6 +266,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    TimestampNtz(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
     // Scale is stored to handle scale=0 serialization correctly
     Decimal { value: f64, scale: i32 },
@@ -308,10 +309,13 @@ impl StatsScalar {
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
-            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
-                // For now, we assume timestamps are adjusted to UTC. Non-UTC timestamps
-                // are behind a feature gate in Delta:
-                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
+            (
+                Statistics::Int64(v),
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    unit,
+                }),
+            ) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
@@ -326,7 +330,11 @@ impl StatsScalar {
                     debug_value: v.to_string(),
                     logical_type: logical_type.cloned(),
                 })?;
-                Ok(Self::Timestamp(timestamp.naive_utc()))
+                if *is_adjusted_to_u_t_c {
+                    Ok(Self::Timestamp(timestamp.naive_utc()))
+                } else {
+                    Ok(Self::TimestampNtz(timestamp.naive_utc()))
+                }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
@@ -450,6 +458,9 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::TimestampNtz(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
             }
             StatsScalar::Decimal { value, scale } => {
                 // For scale=0, serialize as integer since serde_json would otherwise

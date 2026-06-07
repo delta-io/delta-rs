@@ -58,6 +58,10 @@ static DELTA_PLANNER: LazyLock<Arc<DeltaPlanner>> = LazyLock::new(|| Arc::new(De
 pub struct DeltaPlanner;
 
 impl DeltaPlanner {
+    /// Return the shared, lazily-initialized [`DeltaPlanner`] instance.
+    ///
+    /// The planner is stateless, so a single cached instance is reused rather than
+    /// allocating a new one per query.
     pub fn new() -> Arc<Self> {
         DELTA_PLANNER.clone()
     }
@@ -79,9 +83,12 @@ impl QueryPlanner for DeltaPlanner {
     }
 }
 
+/// Extension [`PhysicalPlanner`](datafusion::physical_planner::PhysicalPlanner) that knows
+/// how to lower delta-rs custom logical nodes into executable physical plans.
 pub struct DeltaExtensionPlanner;
 
 impl DeltaExtensionPlanner {
+    /// Construct a new extension planner.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {})
     }

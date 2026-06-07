@@ -7,7 +7,7 @@ use parquet::errors::ParquetError;
 use serde_json::Value;
 
 use crate::DeltaTable;
-use crate::errors::{DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Version};
 use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
@@ -33,7 +33,10 @@ pub(crate) fn ensure_legacy_writer_supports_table(
         .column_mapping_mode
         .is_some_and(|mode| mode != delta_kernel::table_features::ColumnMappingMode::None)
     {
-        return Err(unsupported_column_mapping_write(operation));
+        return Err(DeltaTableError::unsupported_column_mapping(
+            ColumnMappingOperation::Write,
+            operation,
+        ));
     }
 
     Ok(())

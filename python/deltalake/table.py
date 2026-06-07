@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,7 +24,6 @@ from arro3.core.types import (
 )
 
 from deltalake._internal import (
-    _NANOSECOND_TIMESTAMPS,
     DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
@@ -71,9 +70,6 @@ NOT_SUPPORTED_READER_VERSION = 2
 SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
-if _NANOSECOND_TIMESTAMPS:
-    SUPPORTED_WRITER_FEATURES.add("timestampNanos")
-    SUPPORTED_READER_FEATURES.add("timestampNanos")
 
 FilterLiteralType = tuple[str, str, Any]
 FilterConjunctionType = list[FilterLiteralType]
@@ -575,23 +571,14 @@ class DeltaTable:
         Returns:
             list of the commit infos registered in the transaction log
         """
-
-        def _backwards_enumerate(
-            iterable: list[str], start_end: int
-        ) -> Generator[tuple[int, str], None, None]:
-            n = start_end
-            for elem in iterable:
-                yield n, elem
-                n -= 1
-
-        commits = list(self._table.history(limit))
+        latest_version, commits = self._table.history(limit)
         history = []
-        for version, commit_info_raw in _backwards_enumerate(
-            commits, start_end=self._table.get_latest_version()
-        ):
+        version = latest_version
+        for commit_info_raw in commits:
             commit = json.loads(commit_info_raw)
             commit["version"] = version
             history.append(commit)
+            version -= 1
         return history
 
     def count(self) -> int:

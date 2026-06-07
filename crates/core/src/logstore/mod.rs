@@ -322,19 +322,24 @@ pub struct LogStoreConfig {
 }
 
 impl LogStoreConfig {
+    /// Create a new config for the given table `location`, normalizing the URL form.
     pub fn new(location: &Url, options: StorageConfig) -> Self {
         let location = normalize_table_url(location);
         Self { location, options }
     }
 
+    /// Returns the normalized root URL of the table this config describes.
     pub fn location(&self) -> &Url {
         &self.location
     }
 
+    /// Returns the storage options used to build and decorate the object store.
     pub fn options(&self) -> &StorageConfig {
         &self.options
     }
 
+    /// Wrap a raw object `store` with the decorators (retry, limit, runtime, ...) implied by
+    /// this configuration, scoped to `table_root` (defaulting to the config's location).
     pub fn decorate_store<T: ObjectStore + Clone>(
         &self,
         store: T,
@@ -344,6 +349,7 @@ impl LogStoreConfig {
         self.options.decorate_store(store, table_url)
     }
 
+    /// Returns the global registry of object store factories used for backend discovery.
     pub fn object_store_factory(&self) -> ObjectStoreFactoryRegistry {
         self::factories::object_store_factories()
     }
@@ -397,8 +403,11 @@ pub trait LogStore: Send + Sync + AsAny {
     /// Get object store, can pass operation_id for object stores linked to an operation
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
+    /// Get the object store rooted at the table root (not the delta log), optionally scoped to
+    /// an operation.
     fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
+    /// Get a kernel [`Engine`] backed by this log store's root object store.
     fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
         let store = self.root_object_store(operation_id);
         get_engine(store)

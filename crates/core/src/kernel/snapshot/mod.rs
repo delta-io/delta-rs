@@ -78,6 +78,10 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Build a snapshot of the table at `table_root` using the provided kernel `engine`.
+    ///
+    /// When `version` is `None` the latest available version is loaded. This is the engine-aware
+    /// constructor used when callers want to control the kernel [`Engine`] backing log replay.
     pub async fn try_new_with_engine(
         engine: Arc<dyn Engine>,
         table_root: Url,
@@ -132,10 +136,12 @@ impl Snapshot {
         Self::try_new_with_engine(engine, table_root, config, version).await
     }
 
+    /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
     pub fn scan_builder(&self) -> ScanBuilder {
         ScanBuilder::new(self.inner.clone())
     }
 
+    /// Consume this snapshot and create a [`ScanBuilder`] that owns the underlying state.
     pub fn into_scan_builder(self) -> ScanBuilder {
         ScanBuilder::new(self.inner)
     }
@@ -324,6 +330,7 @@ impl Snapshot {
         self.inner.table_properties()
     }
 
+    /// Returns the resolved [`TableConfiguration`] (protocol, metadata and parsed properties).
     pub fn table_configuration(&self) -> &TableConfiguration {
         self.inner.table_configuration()
     }
@@ -1074,6 +1081,7 @@ impl EagerSnapshot {
         self.snapshot.table_properties()
     }
 
+    /// Returns the resolved [`TableConfiguration`] (protocol, metadata and parsed properties).
     pub fn table_configuration(&self) -> &TableConfiguration {
         self.snapshot.table_configuration()
     }
@@ -1123,6 +1131,10 @@ impl EagerSnapshot {
         self.snapshot.file_views(log_store, predicate)
     }
 
+    /// Stream the file views matching the given partition `filters`.
+    ///
+    /// Deprecated in favor of [`file_views`](Self::file_views) with a kernel predicate, which
+    /// supports richer expressions than simple partition equality filters.
     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
     pub fn file_views_by_partitions(
         &self,
@@ -1139,7 +1151,10 @@ impl EagerSnapshot {
         self.file_views(log_store, Some(predicate))
     }
 
-    /// Iterate over all latest app transactions
+    /// Return the latest committed transaction version for the given application id, if any.
+    ///
+    /// This is used to implement idempotent writes: an application records its own monotonic
+    /// version via a transaction action, and readers can recover the last value seen.
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
@@ -1150,6 +1165,7 @@ impl EagerSnapshot {
             .await
     }
 
+    /// Return the configuration string stored for the given metadata `domain`, if present.
     pub async fn domain_metadata(
         &self,
         log_store: &dyn LogStore,
@@ -1210,6 +1226,7 @@ mod tests {
     };
 
     impl Snapshot {
+        /// Build an in-memory snapshot from the given commits for use in tests.
         pub async fn new_test<'a>(
             commits: impl IntoIterator<Item = &'a CommitData>,
         ) -> DeltaResult<(Self, Arc<dyn LogStore>)> {
@@ -1247,6 +1264,7 @@ mod tests {
     }
 
     impl EagerSnapshot {
+        /// Build an in-memory eager snapshot from the given commits for use in tests.
         pub async fn new_test<'a>(
             commits: impl IntoIterator<Item = &'a CommitData>,
         ) -> DeltaResult<Self> {

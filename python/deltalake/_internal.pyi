@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 __version__: str
 _NANOSECOND_TIMESTAMPS: bool
 
+def _set_cast_nanos_timestamps_to_micros(cast: bool) -> None: ...
+
 class TableFeatures(Enum):
     # Mapping of one column to another
     ColumnMapping = "ColumnMapping"
@@ -197,7 +199,7 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
-    def history(self, limit: int | None) -> list[str]: ...
+    def history(self, limit: int | None) -> tuple[int, list[str]]: ...
     def update_incremental(self) -> None: ...
     def dataset_partitions(
         self,

@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
-use crate::errors::unsupported_column_mapping_write;
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
 use crate::logstore::LogStoreRef;
@@ -98,7 +98,8 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let properties = this.properties;
 
             if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
-                return Err(unsupported_column_mapping_write(
+                return Err(DeltaTableError::unsupported_column_mapping(
+                    ColumnMappingOperation::Write,
                     "SET TBLPROPERTIES delta.columnMapping.mode",
                 ));
             }
@@ -141,12 +142,14 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 }
 
 #[cfg(test)]
+/// Tests for the set-table-properties operation.
 pub mod tests {
     use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[tokio::test]
+    /// Verify that setting table properties is persisted to table metadata.
     pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
         let temp_loc = tempdir()?;
         let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;

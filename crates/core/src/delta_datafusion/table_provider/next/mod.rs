@@ -478,6 +478,12 @@ impl SnapshotWrapper {
     }
 }
 
+/// An executable, serializable Delta table scan.
+///
+/// `DeltaScan` captures everything needed to read a consistent set of data files from a
+/// table snapshot — the resolved schemas, optional file-skipping predicates, deletion-vector
+/// aware file selection and the originating log store. It is the unit produced by
+/// [`TableProviderBuilder`] and consumed by DataFusion's execution layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DeltaScan {
     snapshot: SnapshotWrapper,
@@ -505,7 +511,10 @@ pub struct DeletionVectorSelection {
 }
 
 impl DeltaScan {
-    // create new delta scan
+    /// Create a new scan over the given `snapshot` using `config`.
+    ///
+    /// Validates that the snapshot only uses reader features delta-rs supports and resolves
+    /// the scan and provider (public) schemas, including the optional file-id column.
     pub fn new(snapshot: impl Into<SnapshotWrapper>, config: DeltaScanConfig) -> Result<Self> {
         let snapshot = snapshot.into();
         Self::validate_supported_reader_features(&snapshot)
@@ -692,6 +701,7 @@ impl DeltaScan {
             .map(Some)
     }
 
+    /// Start building a scan/table provider with a fluent [`TableProviderBuilder`].
     pub fn builder() -> TableProviderBuilder {
         TableProviderBuilder::new()
     }
@@ -848,7 +858,10 @@ pub(crate) fn test_multi_partitioned_override_schema() -> SchemaRef {
 #[cfg(test)]
 mod tests {
     use arrow::{
-        array::{Date32Array, Int32Array, Int64Array, StringArray, TimestampMillisecondArray},
+        array::{
+            BooleanArray, Date32Array, Int32Array, Int64Array, StringArray,
+            TimestampMillisecondArray,
+        },
         datatypes::{
             DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
         },
@@ -1650,6 +1663,59 @@ mod tests {
                 "expected pruning predicate to reference {expected}, got {pruning_predicate}",
             );
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_boolean_predicate_does_not_require_minmax_stats() -> TestResult {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int64, true),
+            ArrowField::new("active", ArrowDataType::Boolean, true),
+            ArrowField::new("value", ArrowDataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(StringArray::from(vec!["old-1", "old-2"])),
+            ],
+        )?;
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await?;
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?
+        .with_log_store(table.log_store());
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", Arc::new(provider))?;
+
+        let expected = vec![
+            "+----+--------+-------+",
+            "| id | active | value |",
+            "+----+--------+-------+",
+            "| 1  | true   | old-1 |",
+            "+----+--------+-------+",
+        ];
+
+        let batches = session
+            .sql("SELECT id, active, value FROM delta_table WHERE active = true")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        let batches = session
+            .sql("SELECT id, active, value FROM delta_table WHERE id = 1 AND active = true")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }

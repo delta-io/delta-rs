@@ -13,15 +13,21 @@ pub use actions::*;
 pub use data::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Per-file statistics fixture mirroring the `stats` JSON written into `Add` actions.
 #[serde(rename_all = "camelCase")]
 pub struct FileStats {
+    /// Number of records in the file.
     pub num_records: i64,
+    /// Per-column null counts.
     pub null_count: HashMap<String, Value>,
+    /// Per-column minimum values.
     pub min_values: HashMap<String, Value>,
+    /// Per-column maximum values.
     pub max_values: HashMap<String, Value>,
 }
 
 impl FileStats {
+    /// Create empty statistics for a file with `num_records` rows.
     pub fn new(num_records: i64) -> Self {
         Self {
             num_records,
@@ -32,6 +38,7 @@ impl FileStats {
     }
 }
 
+/// Collection of reusable test schemas.
 pub struct TestSchemas;
 
 impl TestSchemas {
