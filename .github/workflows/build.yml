@@ -136,11 +136,6 @@ jobs:
             --exclude deltalake-hdfs \
             --exclude deltalake-lakefs
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - uses: ./.github/actions/upload-coverage
         with:
-          files: codecov.json
-          fail_ci_if_error: true
-          use_pypi: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}
