@@ -1079,14 +1079,11 @@ async fn execute(
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema().as_ref() {
-            let action = Action::Metadata(
-                new_metadata(
-                    &schema_struct,
-                    current_metadata.partition_columns(),
-                    snapshot.metadata().configuration(),
-                )?
-                .with_format_options(snapshot.metadata().format_options()?)?,
-            );
+            let action = Action::Metadata(new_metadata(
+                &schema_struct,
+                current_metadata.partition_columns(),
+                snapshot.metadata().configuration(),
+            )?);
             schema_action = Some(action);
         }
     }
