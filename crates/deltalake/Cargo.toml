@@ -54,9 +54,8 @@ s3-native-tls = ["deltalake-aws/native-tls", "native-tls"]
 s3 = ["deltalake-aws/rustls", "rustls"]
 unity-experimental = ["deltalake-catalog-unity"]
 # Generic OpenDAL plumbing (no service). Enable a specific backend with one of
-# the `opendal-*` or `hf` features below; each auto-registers its scheme.
+# the `opendal-*` features below; each auto-registers its scheme.
 opendal = ["deltalake-opendal"]
-hf = ["opendal", "deltalake-opendal/hf", "deltalake-opendal/rustls"]
 opendal-fs = ["opendal", "deltalake-opendal/opendal-fs"]
 opendal-memory = ["opendal", "deltalake-opendal/opendal-memory"]
 opendal-s3 = ["opendal", "deltalake-opendal/opendal-s3", "deltalake-opendal/rustls"]
@@ -73,6 +72,7 @@ opendal-webhdfs = ["opendal", "deltalake-opendal/opendal-webhdfs", "deltalake-op
 opendal-webdav = ["opendal", "deltalake-opendal/opendal-webdav", "deltalake-opendal/rustls"]
 opendal-ftp = ["opendal", "deltalake-opendal/opendal-ftp"]
 opendal-sftp = ["opendal", "deltalake-opendal/opendal-sftp"]
+opendal-hf = ["opendal", "deltalake-opendal/opendal-hf", "deltalake-opendal/rustls"]
 lakefs = ["deltalake-lakefs"]
 native-tls = ["deltalake-core/native-tls"]
 rustls = ["deltalake-core/rustls"]
