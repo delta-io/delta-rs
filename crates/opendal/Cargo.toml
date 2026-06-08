@@ -50,5 +50,4 @@ opendal-webhdfs = ["opendal/services-webhdfs"]
 opendal-webdav = ["opendal/services-webdav"]
 opendal-ftp = ["opendal/services-ftp"]
 opendal-sftp = ["opendal/services-sftp"]
-# HuggingFace Hub backend. Enables the `hf://` scheme.
-hf = ["opendal/services-hf"]
+opendal-hf = ["opendal/services-hf"]

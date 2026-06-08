@@ -100,7 +100,6 @@ features = [
     "datafusion",
     "gcs",
     "hdfs",
-    "hf",
     "lakefs",
     "python",
     "unity-experimental",
@@ -121,6 +120,7 @@ features = [
     "opendal-webdav",
     "opendal-ftp",
     "opendal-sftp",
+    "opendal-hf",
 ]
 
 [features]
