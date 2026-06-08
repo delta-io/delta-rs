@@ -78,6 +78,8 @@ const GENERIC_SERVICES: &[(&str, &str)] = &[
     ("ftp", "ftp"),
     #[cfg(feature = "opendal-sftp")]
     ("sftp", "sftp"),
+    #[cfg(feature = "hf")]
+    ("hf", "hf"),
 ];
 
 /// Register the OpenDAL-backed storage handlers enabled by feature flags.
