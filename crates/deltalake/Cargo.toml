@@ -31,7 +31,6 @@ deltalake-azure = { version = "1.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "1.0", path = "../gcp", optional = true }
 deltalake-hdfs = { version = "1.0", path = "../hdfs", optional = true }
 deltalake-opendal = { version = "1.0", path = "../opendal", default-features = false, optional = true }
-deltalake-hf = { version = "1.0", path = "../hf", default-features = false, optional = true }
 deltalake-lakefs = { version = "1.0", path = "../lakefs", optional = true }
 deltalake-catalog-glue = { version = "1.0", path = "../catalog-glue", optional = true }
 deltalake-catalog-unity = { version = "1.0", path = "../catalog-unity", optional = true }
@@ -54,10 +53,10 @@ python = ["deltalake-core/python"]
 s3-native-tls = ["deltalake-aws/native-tls", "native-tls"]
 s3 = ["deltalake-aws/rustls", "rustls"]
 unity-experimental = ["deltalake-catalog-unity"]
-hf = ["deltalake-hf/rustls"]
 # Generic OpenDAL plumbing (no service). Enable a specific backend with one of
-# the `opendal-*` features below; each auto-registers its scheme.
+# the `opendal-*` or `hf` features below; each auto-registers its scheme.
 opendal = ["deltalake-opendal"]
+hf = ["opendal", "deltalake-opendal/hf", "deltalake-opendal/rustls"]
 opendal-fs = ["opendal", "deltalake-opendal/opendal-fs"]
 opendal-memory = ["opendal", "deltalake-opendal/opendal-memory"]
 opendal-s3 = ["opendal", "deltalake-opendal/opendal-s3", "deltalake-opendal/rustls"]

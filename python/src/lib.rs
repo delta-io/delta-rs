@@ -3180,7 +3180,6 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
     deltalake::unity_catalog::register_handlers(None);
-    deltalake::hf::register_handlers(None);
     deltalake::opendal::register_handlers(None);
 
     init_client_version(format!("py-{}", env!("CARGO_PKG_VERSION")).as_str());
