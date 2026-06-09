@@ -56,10 +56,6 @@ impl ExecutionPlan for MergeValidationExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.input.schema()
     }

@@ -132,10 +132,10 @@ mod local {
             &mut self,
             plan: &dyn ExecutionPlan,
         ) -> std::result::Result<bool, Self::Error> {
-            if let Some(exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(exec) = plan.downcast_ref::<DataSourceExec>() {
                 let files = get_scanned_files(exec);
                 self.scanned_files.extend(files);
-            } else if let Some(exec) = plan.as_any().downcast_ref::<DeltaScanExec>() {
+            } else if let Some(exec) = plan.downcast_ref::<DeltaScanExec>() {
                 self.keep_count = exec
                     .metrics()
                     .and_then(|m| m.sum_by_name("count_files_scanned").map(|v| v.as_usize()))

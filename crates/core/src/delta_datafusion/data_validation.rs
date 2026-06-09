@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -446,10 +445,6 @@ impl DisplayAs for DataValidationExec {
 }
 
 impl ExecutionPlan for DataValidationExec {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "DataValidationExec"
     }
@@ -491,7 +486,7 @@ impl ExecutionPlan for DataValidationExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
@@ -1186,10 +1181,7 @@ mod tests {
             DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
 
         // Check that maintains_input_order returns true
-        let downcast = validated_exec
-            .as_any()
-            .downcast_ref::<DataValidationExec>()
-            .unwrap();
+        let downcast = validated_exec.downcast_ref::<DataValidationExec>().unwrap();
         assert_eq!(downcast.maintains_input_order(), vec![true]);
 
         Ok(())
@@ -1233,12 +1225,7 @@ mod tests {
 
         // Create new plan with different child
         let new_exec = validated_exec.with_new_children(vec![memory_exec2])?;
-        assert!(
-            new_exec
-                .as_any()
-                .downcast_ref::<DataValidationExec>()
-                .is_some()
-        );
+        assert!(new_exec.downcast_ref::<DataValidationExec>().is_some());
 
         Ok(())
     }

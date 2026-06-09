@@ -930,7 +930,7 @@ mod tests {
         )
         .await?;
 
-        assert!(plan.as_any().is::<EmptyExec>());
+        assert!(plan.is::<EmptyExec>());
 
         Ok(())
     }

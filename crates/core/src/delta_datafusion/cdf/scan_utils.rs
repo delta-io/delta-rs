@@ -129,8 +129,9 @@ pub fn create_partition_values<F: FileAction>(
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
+                table_reference: None,
             };
 
             file_groups.entry(new_part_values).or_default().push(part);

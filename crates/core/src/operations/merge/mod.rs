@@ -1599,7 +1599,6 @@ async fn execute(
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
-        .as_any()
         .downcast_ref::<MergeBarrierExec>()
         .unwrap()
         .survivors();
@@ -1761,7 +1760,9 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
 
 fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
     let expr = coerce_predicate_literals(expr, target_schema.as_ref())?;
-    let simplify_context = SimplifyContext::default().with_schema(target_schema);
+    let simplify_context = SimplifyContext::builder()
+        .with_schema(target_schema)
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     Ok(simplifier.simplify(expr)?)
 }
