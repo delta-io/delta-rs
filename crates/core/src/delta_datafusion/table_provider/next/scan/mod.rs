@@ -20,15 +20,19 @@ use std::{
     sync::Arc,
 };
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow::datatypes::UInt16Type;
+use arrow_array::{
+    ArrayRef, DictionaryArray, RecordBatch, StringArray, StringViewArray, UInt16Array,
+};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{FieldRef, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
-        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, plan_err, stats::Precision,
+        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
+        plan_err, stats::Precision,
     },
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
@@ -82,6 +86,15 @@ mod plan;
 mod replay;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
+type PublicFileIdMap = HashMap<String, String>;
+
+struct ReplayedScanFiles {
+    files: Vec<ScanFileContext>,
+    transforms: HashMap<String, Arc<Expression>>,
+    dvs: DashMap<String, Vec<bool>>,
+    public_file_ids: PublicFileIdMap,
+    metrics: ExecutionPlanMetricsSet,
+}
 
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
@@ -100,14 +113,13 @@ pub(super) async fn execution_plan(
         )));
     }
 
-    let (files, transforms, dvs, metrics) =
-        replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
+    let replayed = replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
     let file_id_field = scan_plan.contract.file_id_field.clone();
     if scan_plan.is_metadata_only() && !scan_plan.contract.retain_row_index {
-        let map_file = |f: &ScanFileContext| {
+        let map_file = |(file_index, f): (usize, &ScanFileContext)| {
             Ok((
-                f.file_url.to_string(),
+                compact_internal_file_id(file_index),
                 match &f.stats.num_rows {
                     Precision::Exact(n) => *n,
                     _ => {
@@ -120,17 +132,27 @@ pub(super) async fn execution_plan(
             ))
         };
 
-        let maybe_file_rows = files
+        let maybe_file_rows = replayed
+            .files
             .iter()
+            .enumerate()
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
             let retain_file_id = scan_plan.contract.retain_file_id;
+            let ReplayedScanFiles {
+                transforms,
+                dvs,
+                public_file_ids,
+                metrics,
+                ..
+            } = replayed;
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
+                Arc::new(public_file_ids),
                 retain_file_id.then_some(file_id_field),
                 metrics,
             );
@@ -138,7 +160,7 @@ pub(super) async fn execution_plan(
         }
     }
 
-    get_data_scan_plan(session, scan_plan, files, transforms, dvs, metrics, limit).await
+    get_data_scan_plan(session, scan_plan, replayed, limit).await
 }
 
 /// Materialize deletion vector keep masks for every file in the scan that has one.
@@ -283,12 +305,7 @@ async fn replay_files(
     scan_config: DeltaScanConfig,
     stream: ScanMetadataStream,
     file_selection: Option<&ResolvedFileSelection>,
-) -> Result<(
-    Vec<ScanFileContext>,
-    HashMap<String, Arc<Expression>>,
-    DashMap<String, Vec<bool>>,
-    ExecutionPlanMetricsSet,
-)> {
+) -> Result<ReplayedScanFiles> {
     let mut stream = ScanFileStream::new(
         engine,
         &scan_plan.scan,
@@ -301,27 +318,45 @@ async fn replay_files(
         files.extend(file);
     }
 
+    let mut public_file_ids = PublicFileIdMap::default();
+    if scan_plan.contract.retain_file_id {
+        for (file_index, file) in files.iter().enumerate() {
+            public_file_ids.insert(
+                compact_internal_file_id(file_index),
+                file.file_url.to_string(),
+            );
+        }
+    }
+
     let transforms: HashMap<_, _> = files
         .iter_mut()
-        .flat_map(|file| {
+        .enumerate()
+        .flat_map(|(file_index, file)| {
             file.transform
                 .take()
-                .map(|t| (file.file_url.to_string(), t))
+                .map(|t| (compact_internal_file_id(file_index), t))
         })
         .collect();
 
     let dv_stream = stream.dv_stream.build();
-    let dvs: DashMap<_, _> = dv_stream
+    let dvs_by_url: HashMap<_, _> = dv_stream
         .try_filter_map(|(url, dv, _)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
         .try_collect()
         .await?;
+    let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
 
     let metrics = ExecutionPlanMetricsSet::new();
     MetricBuilder::new(&metrics)
         .global_counter("count_files_scanned")
         .add(stream.metrics.num_scanned);
 
-    Ok((files, transforms, dvs, metrics))
+    Ok(ReplayedScanFiles {
+        files,
+        transforms,
+        dvs,
+        public_file_ids,
+        metrics,
+    })
 }
 
 /// Normalize a DV keep mask for `deletion_vectors()`.
@@ -364,19 +399,23 @@ fn normalize_dv_keep_mask_for_api(
 async fn get_data_scan_plan(
     session: &dyn Session,
     scan_plan: KernelScanPlan,
-    files: Vec<ScanFileContext>,
-    transforms: HashMap<String, Arc<Expression>>,
-    dvs: DashMap<String, Vec<bool>>,
-    metrics: ExecutionPlanMetricsSet,
+    replayed: ReplayedScanFiles,
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let ReplayedScanFiles {
+        files,
+        transforms,
+        dvs,
+        public_file_ids,
+        metrics,
+    } = replayed;
     let mut partition_stats = HashMap::new();
 
-    // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
-    // this is used to create a DataSourceExec plan for each store
-    // To correlate the data with the original file, we add the file url as a partition value
-    // This is required to apply the correct transform to the data in downstream processing.
-    let to_partitioned_file = |f: ScanFileContext| {
+    // Convert files into DataFusion `PartitionedFile`s grouped by object store.
+    // Create one `DataSourceExec` plan for each store.
+    // Add a compact scan file id as a partition value for file correlation.
+    // The exec maps that id back to the public file path only when the file column is projected.
+    let to_partitioned_file = |(file_index, f): (usize, ScanFileContext)| {
         if let Some(part_stata) = &f.partitions {
             update_partition_stats(part_stata, &f.stats, &mut partition_stats)?;
         }
@@ -391,7 +430,7 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
-        let file_value = wrap_file_id_value(f.file_url.as_str());
+        let file_value = wrap_file_id_value(compact_internal_file_id(file_index));
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
@@ -404,12 +443,13 @@ async fn get_data_scan_plan(
 
     // Group the files by their object store url. Since datafusion assumes that all files in a
     // DataSourceExec are stored in the same object store, we need to create one plan per store
-    let files_by_store = files
+    let partitioned_files = files
         .into_iter()
+        .enumerate()
         .map(to_partitioned_file)
-        .try_collect::<_, Vec<_>, _>()?
-        .into_iter()
-        .into_group_map();
+        .try_collect::<_, Vec<_>, _>()?;
+
+    let files_by_store = partitioned_files.into_iter().into_group_map();
 
     // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
     // so leaving predicate as None for now until we are sure this is safe to do.
@@ -431,11 +471,15 @@ async fn get_data_scan_plan(
     )
     .await?;
 
+    let transforms = Arc::new(transforms);
+    let dvs = Arc::new(dvs);
+    let public_file_ids = Arc::new(public_file_ids);
     let exec = DeltaScanExec::new(
         Arc::new(scan_plan),
         pq_plan,
-        Arc::new(transforms),
-        Arc::new(dvs),
+        Arc::clone(&transforms),
+        Arc::clone(&dvs),
+        Arc::clone(&public_file_ids),
         partition_stats,
         metrics,
     );
@@ -480,6 +524,75 @@ fn update_partition_stats(
 }
 
 type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
+
+fn compact_internal_file_id(file_index: usize) -> String {
+    file_index.to_string()
+}
+
+fn remap_deletion_vectors_to_internal_file_ids(
+    files: &[ScanFileContext],
+    mut dvs_by_url: HashMap<String, Vec<bool>>,
+) -> Result<DashMap<String, Vec<bool>>> {
+    let dvs = DashMap::new();
+    for (file_index, file) in files.iter().enumerate() {
+        if dvs_by_url.is_empty() {
+            break;
+        }
+        if let Some(dv) = dvs_by_url.remove(file.file_url.as_str()) {
+            dvs.insert(compact_internal_file_id(file_index), dv);
+        }
+    }
+    if let Some(file_url) = dvs_by_url.keys().next() {
+        let redacted_url = Url::parse(file_url)
+            .map(|url| super::redact_url_for_error(&url))
+            .unwrap_or_else(|_| file_url.clone());
+        return Err(internal_datafusion_err!(
+            "missing internal file id mapping for file with deletion vector: {redacted_url}"
+        ));
+    }
+    Ok(dvs)
+}
+
+fn public_file_id<'a>(
+    public_file_ids: &'a PublicFileIdMap,
+    internal_file_id: &str,
+) -> Result<&'a str> {
+    public_file_ids
+        .get(internal_file_id)
+        .map(String::as_str)
+        .ok_or_else(|| {
+            internal_datafusion_err!(
+                "missing public file id mapping for internal file id '{internal_file_id}'"
+            )
+        })
+}
+
+fn file_id_array_for_value(
+    file_id_field: &FieldRef,
+    file_id: &str,
+    row_count: usize,
+) -> Result<ArrayRef> {
+    let keys = UInt16Array::from(vec![0u16; row_count]);
+    let values: ArrayRef = match file_id_field.data_type() {
+        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Utf8View => {
+            if row_count == 0 {
+                Arc::new(StringViewArray::from_iter_values(std::iter::empty::<&str>()))
+            } else {
+                Arc::new(StringViewArray::from_iter_values([file_id]))
+            }
+        }
+        _ => {
+            if row_count == 0 {
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new()))
+            } else {
+                Arc::new(StringArray::from(vec![Some(file_id)]))
+            }
+        }
+    };
+
+    let file_id_array: DictionaryArray<UInt16Type> = DictionaryArray::try_new(keys, values)?;
+    Ok(Arc::new(file_id_array))
+}
 
 /// Maximum number of distinct values representable by DataFusion's default partition dictionary
 /// encoding (`Dictionary<UInt16, _>`).
@@ -723,6 +836,7 @@ impl SchemaAdapter {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::AsArray;
     use arrow_array::Array;
     use arrow_array::{
         BinaryArray, BinaryViewArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
@@ -819,6 +933,141 @@ mod tests {
         assert!(plan.as_any().is::<EmptyExec>());
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_uses_compact_internal_file_id_partition_values() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = create_session().into_inner();
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+        let data_source = exec.children()[0]
+            .as_any()
+            .downcast_ref::<DataSourceExec>()
+            .expect("expected DataSourceExec child");
+        let (file_scan_config, _) = data_source
+            .downcast_to_file_source::<ParquetSource>()
+            .expect("expected parquet file source");
+
+        let internal_file_ids = file_scan_config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.iter())
+            .map(|file| {
+                file.partition_values
+                    .first()
+                    .and_then(|value| value.try_as_str().flatten())
+                    .expect("file-id partition value")
+            })
+            .collect_vec();
+
+        assert!(
+            !internal_file_ids.is_empty(),
+            "test fixture should plan at least one file"
+        );
+        for internal_file_id in internal_file_ids {
+            assert!(
+                internal_file_id.len() <= 20,
+                "internal file id should be compact, got {internal_file_id:?}"
+            );
+            assert!(
+                !internal_file_id.contains('/'),
+                "internal file id should not carry a full file path, got {internal_file_id:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_public_file_id_uses_file_path_with_compact_internal_ids() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = create_session().into_inner();
+
+        session.register_table("delta_table", provider)?;
+
+        let file_id_batches = session
+            .sql("SELECT CAST(file_id AS STRING) AS file_id FROM delta_table LIMIT 1")
+            .await?
+            .collect()
+            .await?;
+        let file_id = file_id_batches[0].column(0).as_string_view().value(0);
+        assert!(
+            file_id.starts_with("file://") && file_id.ends_with(".parquet"),
+            "public file id should remain a file path, got {file_id:?}"
+        );
+
+        let escaped_file_id = file_id.replace('\'', "''");
+        let df = session
+            .sql(&format!(
+                "SELECT id FROM delta_table WHERE file_id = '{escaped_file_id}'"
+            ))
+            .await?;
+        let filtered = df.collect().await?;
+
+        assert!(filtered.iter().map(|batch| batch.num_rows()).sum::<usize>() > 0);
+        assert!(filtered[0].schema().column_with_name("file_id").is_none());
+
+        Ok(())
+    }
+
+    fn scan_file_context(file_url: &str) -> ScanFileContext {
+        ScanFileContext {
+            file_url: Url::parse(file_url).expect("valid test URL"),
+            size: 0,
+            transform: None,
+            stats: Statistics::new_unknown(&Schema::empty()),
+            partitions: None,
+        }
+    }
+
+    #[test]
+    fn test_remap_deletion_vectors_to_internal_file_ids_uses_compact_keys() -> TestResult {
+        let files = vec![
+            scan_file_context("s3://bucket/very/long/path/first.parquet"),
+            scan_file_context("s3://bucket/very/long/path/second.parquet"),
+        ];
+        let mut dvs_by_url = HashMap::new();
+        dvs_by_url.insert(files[1].file_url.to_string(), vec![true, false, true]);
+
+        let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
+
+        assert!(dvs.contains_key("1"));
+        assert!(!dvs.contains_key(files[1].file_url.as_str()));
+        assert_eq!(
+            dvs.get("1").expect("compact dv key").as_slice(),
+            &[true, false, true]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_remap_deletion_vectors_to_internal_file_ids_errors_for_unknown_url() {
+        let files = vec![scan_file_context(
+            "s3://bucket/very/long/path/first.parquet",
+        )];
+        let mut dvs_by_url = HashMap::new();
+        dvs_by_url.insert(
+            "s3://bucket/very/long/path/missing.parquet?X-Amz-Signature=secret-token".to_string(),
+            vec![true],
+        );
+
+        let err = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url).unwrap_err();
+        let err = err.to_string();
+        assert!(
+            err.contains("missing internal file id mapping for file with deletion vector"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("secret-token"),
+            "error should redact URL query secrets: {err}"
+        );
     }
 
     #[cfg(debug_assertions)]
