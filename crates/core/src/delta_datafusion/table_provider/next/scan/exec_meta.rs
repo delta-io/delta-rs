@@ -11,12 +11,9 @@ use std::task::{Context, Poll};
 
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{SchemaRef, UInt16Type};
-use arrow_array::{
-    ArrayRef, BooleanArray, DictionaryArray, RecordBatchOptions, StringArray, StringViewArray,
-    UInt16Array,
-};
-use arrow_schema::{DataType, FieldRef, Fields, Schema};
+use arrow::datatypes::SchemaRef;
+use arrow_array::{BooleanArray, RecordBatchOptions};
+use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
@@ -73,6 +70,8 @@ pub(crate) struct DeltaScanMetaExec {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Deletion vectors for the table
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Column name for the file id
@@ -130,6 +129,7 @@ impl DeltaScanMetaExec {
         input: Vec<VecDeque<(String, usize)>>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
         selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        public_file_ids: Arc<super::PublicFileIdMap>,
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
@@ -140,6 +140,7 @@ impl DeltaScanMetaExec {
             input,
             transforms,
             selection_vectors,
+            public_file_ids,
             metrics,
             file_id_field,
             properties,
@@ -266,6 +267,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
                 .counter("dv_short_mask_padded_files_total", partition),
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
+            public_file_ids: Arc::clone(&self.public_file_ids),
             file_id_field: self.file_id_field.clone(),
             schema_adapter: super::SchemaAdapter::new(Arc::clone(
                 &self.scan_plan.contract.result_schema,
@@ -337,6 +339,8 @@ struct DeltaScanMetaStream {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
     /// Cached schema adapter for efficient batch adaptation across batches
@@ -404,34 +408,13 @@ impl DeltaScanMetaStream {
         };
 
         if let Some(file_id_field) = &self.file_id_field {
-            let row_count = result.num_rows();
-
-            let keys = UInt16Array::from(vec![0u16; row_count]);
-            let values: ArrayRef = match file_id_field.data_type() {
-                DataType::Dictionary(_, value_type)
-                    if value_type.as_ref() == &DataType::Utf8View =>
-                {
-                    if row_count == 0 {
-                        Arc::new(StringViewArray::from_iter_values(std::iter::empty::<&str>()))
-                    } else {
-                        Arc::new(StringViewArray::from_iter_values([file_id.as_str()]))
-                    }
-                }
-                _ => {
-                    if row_count == 0 {
-                        Arc::new(StringArray::from(Vec::<Option<&str>>::new()))
-                    } else {
-                        Arc::new(StringArray::from(vec![Some(file_id.as_str())]))
-                    }
-                }
-            };
-
-            let file_id_array: DictionaryArray<UInt16Type> =
-                DictionaryArray::try_new(keys, values)?;
+            let public_file_id = super::public_file_id(&self.public_file_ids, &file_id)?;
+            let file_id_array =
+                super::file_id_array_for_value(file_id_field, public_file_id, result.num_rows())?;
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,
-                Some((Arc::new(file_id_array), file_id_field.clone())),
+                Some((file_id_array, file_id_field.clone())),
                 &mut self.schema_adapter,
             )
         } else {
@@ -1138,6 +1121,16 @@ mod tests {
 
         let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
         selection_vectors.insert("f2".to_string(), vec![true, false, true, false]);
+        let public_file_ids = Arc::new(
+            [
+                ("f1".to_string(), "f1".to_string()),
+                ("f2".to_string(), "f2".to_string()),
+                ("f3".to_string(), "f3".to_string()),
+                ("f4".to_string(), "f4".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
 
         let exec = DeltaScanMetaExec::new(
             Arc::clone(&template.scan_plan),
@@ -1149,6 +1142,7 @@ mod tests {
             ])],
             Arc::clone(&template.transforms),
             selection_vectors,
+            public_file_ids,
             template.file_id_field.clone(),
             ExecutionPlanMetricsSet::new(),
         );
