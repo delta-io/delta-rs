@@ -123,7 +123,7 @@ When working with the Rust API, Apache Datafusion can be used to query data from
 let delta_path = Url::from_directory_path("/rust/tests/data/delta-0.8.0-partitioned").unwrap();
 let table = deltalake::open_table(delta_path).await?;
 let ctx = SessionContext::new();
-ctx.register_table("simple_table", Arc::new(table.clone()))?;
+ctx.register_table("simple_table", table.table_provider().await?)?;
 let df = ctx.sql("SELECT value FROM simple_table WHERE year = 2021").await?;
 df.show().await?;
 ```
@@ -133,7 +133,7 @@ Apache Datafusion also supports a Dataframe interface that can be used instead o
 let delta_path = Url::from_directory_path("/rust/tests/data/delta-0.8.0-partitioned").unwrap();
 let table = deltalake::open_table(delta_path).await?;
 let ctx = SessionContext::new();
-let dataframe = ctx.read_table( Arc::new(table.clone()))?;
+let dataframe = ctx.read_table(table.table_provider().await?)?;
 let df = dataframe.filter(col("year").eq(lit(2021)))?.select(vec![col("value")])?;
 df.show().await?;
 ```

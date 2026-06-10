@@ -27,6 +27,7 @@ You can easily write a DataFrame to a Delta table.
 === "Rust"
 
     ```rust
+    // Create and initialize an empty table
     let table = CreateBuilder::new()
         .with_location(path)
         .with_table_name("/tmp/some-table")
@@ -49,6 +50,7 @@ You can easily write a DataFrame to a Delta table.
         )
         .await?;
 
+    // Now write into table
     use arrow_schema::{Field, Schema, DataType as ArrowDataType};
     let data = RecordBatch::try_new(
         Arc::new(Schema::new(vec![
@@ -64,6 +66,30 @@ You can easily write a DataFrame to a Delta table.
     table
         .write(vec![data])
         .with_save_mode(SaveMode::Overwrite)
+        .await?;
+
+    
+    
+    // Alternatively, you can also create:
+
+    // Builds a DeltaTable instance without initializing or creating the table on storage.
+    let table = DeltaTableBuilder::from_url(Url::from_directory_path("/tmp/some-table").unwrap())?.build()?;
+
+    // Now initialize and create the table
+    table
+        .create()
+        .with_columns(vec![
+            StructField::new(
+                "num".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+            StructField::new(
+                "letter".to_string(),
+                DataType::Primitive(PrimitiveType::String),
+                true,
+            ),
+        ])
         .await?;
     ```
 
