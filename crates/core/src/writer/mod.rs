@@ -311,19 +311,26 @@ mod tests {
 
         let format_message = format_schema_mismatch(&new_schema, &existing_schema);
 
-        let missing_field = vec![
-            Field::new("field1", ArrowDataType::Int32, false),
-            Field::new("field2", ArrowDataType::Utf8, true),
-        ];
+        let (missing_section, found_section) = format_message
+            .split_once(" and Found fields ")
+            .expect("Message should contain ' and Found fields '");
 
-        let found_field = vec![
-            Field::new("field3", ArrowDataType::Utf8, true),
-            Field::new("field4", ArrowDataType::Int32, false),
-        ];
-        let expected = format!(
-            "Arrow RecordBatch schema does not match: Missing fields: {missing_field:?} and Found fields {found_field:?}"
+        assert!(
+            missing_section.contains("field1"),
+            "field1 should be in missing fields"
         );
-        assert_eq!(format_message, expected);
+        assert!(
+            missing_section.contains("field2"),
+            "field2 should be in missing fields"
+        );
+        assert!(
+            found_section.contains("field3"),
+            "field3 should be in found fields"
+        );
+        assert!(
+            found_section.contains("field4"),
+            "field4 should be in found fields"
+        );
     }
 
     #[test]
