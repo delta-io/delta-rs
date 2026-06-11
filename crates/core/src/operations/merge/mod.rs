@@ -62,7 +62,7 @@ use datafusion::{
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
-use futures::future::BoxFuture;
+use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::*;
@@ -86,8 +86,11 @@ use crate::delta_datafusion::{
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
+    resolve_snapshot,
+};
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::WriterStatsConfig;
@@ -1606,12 +1609,19 @@ async fn execute(
 
     let table_root = snapshot.table_configuration().table_root().clone();
 
-    for action in snapshot.log_data() {
-        let log_path = action.path_raw();
-
-        if should_remove_rewritten_file(&survivors, log_path, &table_root)? {
-            metrics.num_target_files_removed += 1;
-            actions.push(action.remove_action(true).into());
+    {
+        let mut active_adds = snapshot.snapshot().active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        );
+        while let Some(action) = active_adds.try_next().await? {
+            if should_remove_rewritten_file(&survivors, action.path_raw(), &table_root)? {
+                metrics.num_target_files_removed += 1;
+                actions.push(action.remove_action(true).into());
+            }
         }
     }
 
@@ -1649,31 +1659,31 @@ async fn execute(
         TARGET_FILES_SKIPPED_METRIC,
         TARGET_FILES_PRUNED_METRIC_LEGACY,
     ];
-    metrics.num_target_files_skipped_during_scan = get_metric_any_or(
-        &scan_count_metrics,
-        &target_files_skipped_metric_names,
-        || {
-            let total_files = snapshot.log_data().num_files();
-            let (derived, impossible_state) =
-                derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
-            if impossible_state {
-                warn!(
-                    %operation_id,
-                    total_files,
-                    scanned_files = metrics.num_target_files_scanned,
-                    metric_names = ?target_files_skipped_metric_names,
-                    "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
-                );
-            }
+    metrics.num_target_files_skipped_during_scan = if let Some(metric) =
+        get_metric_any(&scan_count_metrics, &target_files_skipped_metric_names)
+    {
+        metric
+    } else {
+        let total_files = count_active_adds(&snapshot)?;
+        let (derived, impossible_state) =
+            derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
+        if impossible_state {
             warn!(
                 %operation_id,
+                total_files,
+                scanned_files = metrics.num_target_files_scanned,
                 metric_names = ?target_files_skipped_metric_names,
-                derived,
-                "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+                "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
             );
-            derived
-        },
-    );
+        }
+        warn!(
+            %operation_id,
+            metric_names = ?target_files_skipped_metric_names,
+            derived,
+            "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+        );
+        derived
+    };
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
@@ -1786,6 +1796,10 @@ fn build_file_skipping_predicates(
 fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize, bool) {
     let impossible_state = scanned_files > total_files;
     (total_files.saturating_sub(scanned_files), impossible_state)
+}
+
+fn count_active_adds(snapshot: &EagerSnapshot) -> DeltaResult<usize> {
+    Ok(snapshot.snapshot().try_log_data()?.num_files())
 }
 
 fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
