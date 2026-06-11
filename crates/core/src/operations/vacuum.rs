@@ -35,7 +35,9 @@ use tracing::*;
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, TombstoneView, Version, resolve_snapshot};
+use crate::kernel::{
+    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, TombstoneView, Version, resolve_snapshot,
+};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -304,7 +306,14 @@ impl VacuumBuilder {
             )
         };
         let valid_files: HashSet<_> = snapshot
-            .file_views(self.log_store.as_ref(), None)
+            .snapshot()
+            .active_adds(
+                self.log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
             .map_ok(|f| f.object_store_path())
             .try_collect()
             .await?;
@@ -603,7 +612,7 @@ async fn collect_full_mode_tombstones(
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
     snapshot
         .snapshot()
-        .tombstones(store)
+        .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
@@ -629,7 +638,7 @@ async fn get_stale_files(
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
         .snapshot()
-        .tombstones(store)
+        .active_tombstones(store)
         .try_filter(|tombstone| {
             ready(is_tombstone_expired(
                 tombstone,
