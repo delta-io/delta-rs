@@ -1077,7 +1077,6 @@ mod tests {
             )
             .await?;
         let exec = scan
-            .as_any()
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
 
@@ -1112,7 +1111,6 @@ mod tests {
 
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
-            .as_any()
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
 
