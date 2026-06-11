@@ -189,3 +189,65 @@ pub fn maybe_lazy_cast_reader(
         input
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use deltalake::arrow::array::{Int32Array, RecordBatchIterator};
+
+    fn sample_reader() -> (Box<dyn RecordBatchReader + Send + 'static>, RecordBatch) {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )
+        .unwrap();
+        let reader = RecordBatchIterator::new(vec![Ok(batch.clone())], schema);
+        (Box::new(reader), batch)
+    }
+
+    /// DataFusion 54's `LazyMemoryExec::execute` calls `reset_state` on the very
+    /// first execution to obtain a fresh stream. This proves that the generator
+    /// returned by that first `reset_state` yields the original data instead of
+    /// failing with "the original stream has been consumed".
+    #[test]
+    fn test_first_execution_succeeds_after_reset_state() {
+        let (reader, expected) = sample_reader();
+        let generator = ArrowStreamBatchGenerator::new(reader);
+
+        // The first reset (as DF54 does before the first execution) hands the
+        // reader off to a fresh generator, which must produce the batch.
+        let fresh = generator.reset_state();
+        let batch = fresh
+            .write()
+            .generate_next_batch()
+            .expect("first execution must succeed after reset_state")
+            .expect("expected a batch from the fresh generator");
+        assert_eq!(batch, expected);
+
+        // Stream is one-shot: the next pull returns end-of-stream.
+        assert!(fresh.write().generate_next_batch().unwrap().is_none());
+    }
+
+    /// A second `reset_state` (a genuine re-execution) cannot replay a consumed
+    /// one-shot stream, so it must fail loudly rather than yield no rows.
+    #[test]
+    fn test_second_reset_state_is_exhausted() {
+        let (reader, _) = sample_reader();
+        let generator = ArrowStreamBatchGenerator::new(reader);
+
+        let _first = generator.reset_state();
+        let second = generator.reset_state();
+        let err = second
+            .write()
+            .generate_next_batch()
+            .expect_err("re-executing a consumed stream must error");
+        assert!(err.to_string().contains("the original stream has been consumed"));
+    }
+}
