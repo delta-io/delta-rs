@@ -18,7 +18,7 @@ use object_store::path::Path;
 /// OpenDAL backends that don't implement `write_with_if_not_exists` reject
 /// `PutMode::Create` with `Unsupported`. This shim approximates the conditional
 /// semantics: it is racy across concurrent writers, so it is only appropriate
-/// for single-writer stores (e.g. HuggingFace Hub).
+/// for single-writer stores.
 pub struct ConditionalPutShim {
     inner: Arc<dyn ObjectStore>,
 }
