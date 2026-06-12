@@ -11,9 +11,9 @@ use deltalake_opendal::{GenericAdapter, register_opendal_handlers};
 
 #[tokio::test]
 async fn fs_roundtrip() {
-    // Register the generic adapter for the OpenDAL `fs` service under a
-    // non-colliding scheme so it never shadows core's `file://`.
-    register_opendal_handlers("opendalfs", Arc::new(GenericAdapter::new("fs")));
+    // The OpenDAL `fs` service has no native counterpart, so it registers
+    // under its bare `fs://` scheme (core owns `file://`, not `fs://`).
+    register_opendal_handlers("fs", Arc::new(GenericAdapter::new("fs")));
 
     let tmp = tempfile::tempdir().unwrap();
     let storage_options = HashMap::from([(
@@ -21,5 +21,5 @@ async fn fs_roundtrip() {
         tmp.path().to_string_lossy().to_string(),
     )]);
 
-    common::roundtrip("opendalfs://localhost/my_table", storage_options).await;
+    common::roundtrip("fs://localhost/my_table", storage_options).await;
 }

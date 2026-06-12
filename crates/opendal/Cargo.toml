@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-opendal"
-version = "0.16.0"
+version = "1.0.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -12,7 +12,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-deltalake-core = { version = "0.32.1", path = "../core", default-features = false }
+deltalake-core = { version = "1.0", path = "../core", default-features = false }
 object_store_opendal = { version = "0.56", default-features = false }
 opendal = { version = "0.56", default-features = false, features = ["executors-tokio"] }
 object_store = { workspace = true }

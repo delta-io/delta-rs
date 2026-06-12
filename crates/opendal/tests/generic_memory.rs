@@ -11,9 +11,11 @@ use deltalake_opendal::{GenericAdapter, register_opendal_handlers};
 
 #[tokio::test]
 async fn memory_roundtrip() {
-    register_opendal_handlers("opendalmem", Arc::new(GenericAdapter::new("memory")));
+    // `memory://` is owned by core, so the generic service is reachable only
+    // via the unambiguous `opendal+memory://` scheme.
+    register_opendal_handlers("opendal+memory", Arc::new(GenericAdapter::new("memory")));
 
     // OpenDAL's memory service is not shared across operator instances, so a
     // fresh reopen can't see prior writes; reload the same handle instead.
-    common::roundtrip_same_handle("opendalmem://localhost/my_table", HashMap::new()).await;
+    common::roundtrip_same_handle("opendal+memory://localhost/my_table", HashMap::new()).await;
 }

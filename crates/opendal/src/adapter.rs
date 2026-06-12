@@ -110,7 +110,7 @@ mod tests {
     #[test]
     fn derives_bucket_and_root_and_prefix() {
         let adapter = GenericAdapter::new("s3");
-        let spec = resolve(&adapter, "opendals3://my-bucket/tables/foo", &[]);
+        let spec = resolve(&adapter, "opendal+s3://my-bucket/tables/foo", &[]);
         assert_eq!(spec.scheme, "s3");
         assert_eq!(spec.table_prefix.as_ref(), "tables/foo");
         assert!(
@@ -125,7 +125,7 @@ mod tests {
         let adapter = GenericAdapter::new("s3");
         let spec = resolve(
             &adapter,
-            "opendals3://my-bucket/t",
+            "opendal+s3://my-bucket/t",
             &[
                 ("opendal.bucket", "override"),
                 ("opendal.endpoint", "http://x"),
