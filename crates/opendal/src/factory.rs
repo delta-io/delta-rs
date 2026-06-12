@@ -43,9 +43,8 @@ impl<A: OpendalAdapter + 'static> ObjectStoreFactory for OpendalObjectStoreFacto
         let sorted: ObjectStoreRef =
             Arc::new(SortedListStore::new(Arc::new(OpendalStore::new(operator))));
         let store = self.0.wrap_store(sorted, &spec);
-        // Emulate conditional creates for services that lack native support
-        // (e.g. HuggingFace). Outermost so its HEAD/PUT see adapter-rewritten
-        // paths.
+        // Emulate conditional creates for services that lack native support.
+        // Outermost so its HEAD/PUT see adapter-rewritten paths.
         let store = if needs_conditional_put_shim {
             Arc::new(ConditionalPutShim::new(store)) as ObjectStoreRef
         } else {
@@ -60,8 +59,8 @@ impl<A: OpendalAdapter + 'static> ObjectStoreFactory for OpendalObjectStoreFacto
 /// The PrefixStore is always recomputed from the adapter's
 /// [`OpendalAdapter::logstore_prefix`] rather than trusting the `prefixed_store`
 /// passed in by delta's `decorate_store` (which derives its prefix from
-/// `url.path()`). For bucket-root services the two agree; for HF, whose operator
-/// is scoped deeper than the bucket root, the adapter is authoritative.
+/// `url.path()`). For bucket-root services the two agree; for services whose
+/// operator is scoped deeper than the bucket root, the adapter is authoritative.
 #[derive(Debug)]
 pub struct OpendalLogStoreFactory<A: OpendalAdapter>(pub Arc<A>);
 

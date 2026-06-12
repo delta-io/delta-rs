@@ -13,7 +13,7 @@ use crate::config::{OPENDAL_PREFIX, collect_prefixed};
 /// lives within the resulting operator.
 #[derive(Debug, Clone)]
 pub struct OperatorSpec {
-    /// OpenDAL service scheme, e.g. `"fs"`, `"memory"`, `"s3"`, `"hf"`.
+    /// OpenDAL service scheme, e.g. `"fs"`, `"memory"`, `"s3"`.
     pub scheme: String,
     /// Config key/value pairs consumed by [`opendal::Operator::via_iter`].
     pub config: Vec<(String, String)>,
@@ -31,8 +31,8 @@ pub trait OpendalAdapter: Send + Sync + std::fmt::Debug {
     /// Map a delta table URL and storage options to an [`OperatorSpec`].
     fn resolve(&self, url: &Url, config: &StorageConfig) -> DeltaResult<OperatorSpec>;
 
-    /// Optionally wrap the raw `OpendalStore`. The default is the identity; HF
-    /// overrides this to strip the repo prefix and emulate conditional puts.
+    /// Optionally wrap the raw `OpendalStore`. The default is the identity; an
+    /// adapter may override this to rewrite paths or otherwise decorate the store.
     fn wrap_store(&self, store: ObjectStoreRef, _spec: &OperatorSpec) -> ObjectStoreRef {
         store
     }
