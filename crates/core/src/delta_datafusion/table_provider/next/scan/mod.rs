@@ -930,7 +930,7 @@ mod tests {
         )
         .await?;
 
-        assert!(plan.as_any().is::<EmptyExec>());
+        assert!(plan.is::<EmptyExec>());
 
         Ok(())
     }
@@ -943,11 +943,9 @@ mod tests {
 
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
-            .as_any()
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
         let data_source = exec.children()[0]
-            .as_any()
             .downcast_ref::<DataSourceExec>()
             .expect("expected DataSourceExec child");
         let (file_scan_config, _) = data_source

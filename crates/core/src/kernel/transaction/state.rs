@@ -157,11 +157,10 @@ impl PruningStatistics for AddContainer<'_> {
         ScalarValue::iter_to_array(values).ok()
     }
 
-    /// return the number of rows for the named column in each container
-    /// as an `Option<UInt64Array>`.
+    /// return the number of rows in each container as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         let values = self.inner.iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
                 ScalarValue::UInt64(Some(statistics.num_records as u64))
@@ -206,12 +205,11 @@ impl PruningStatistics for EagerSnapshot {
         self.log_data().null_counts(column)
     }
 
-    /// return the number of rows for the named column in each container
-    /// as an `Option<UInt64Array>`.
+    /// return the number of rows in each container as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().row_counts(column)
+    fn row_counts(&self) -> Option<ArrayRef> {
+        self.log_data().row_counts()
     }
 
     // This function is required since DataFusion 35.0, but is implemented as a no-op
