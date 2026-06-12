@@ -1663,7 +1663,7 @@ async fn execute(
     {
         metric
     } else {
-        let total_files = count_active_adds(&snapshot)?;
+        let total_files = count_active_adds(&snapshot, log_store.as_ref()).await?;
         let (derived, impossible_state) =
             derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
         if impossible_state {
@@ -1799,8 +1799,22 @@ fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize
     (total_files.saturating_sub(scanned_files), impossible_state)
 }
 
-fn count_active_adds(snapshot: &EagerSnapshot) -> DeltaResult<usize> {
-    Ok(snapshot.snapshot().try_log_data()?.num_files())
+async fn count_active_adds(
+    snapshot: &EagerSnapshot,
+    log_store: &dyn LogStore,
+) -> DeltaResult<usize> {
+    let batches = snapshot
+        .snapshot()
+        .active_add_batches(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .await?;
+
+    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
 }
 
 fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
@@ -1902,15 +1916,16 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTable;
     use crate::TableProperty;
-    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
+    use crate::kernel::{Action, DataType, EagerSnapshot, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
+    use crate::test_utils::{TestResult, TestTables};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
+    use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -2055,6 +2070,30 @@ mod tests {
             pre_merge_files.saturating_sub(metrics.num_target_files_scanned)
         );
         assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_active_adds_replays_lazy_snapshot_without_materialized_files() -> TestResult
+    {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = EagerSnapshot::try_new(
+            &log_store,
+            DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let total_files = super::count_active_adds(&snapshot, log_store.as_ref()).await?;
+
+        assert_eq!(total_files, 5);
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
     }
 
     #[test]
