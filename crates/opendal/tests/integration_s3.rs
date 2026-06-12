@@ -32,7 +32,9 @@ async fn s3_roundtrip() {
     let secret_key =
         std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| "weloverust".to_string());
 
-    register_opendal_handlers("opendals3", Arc::new(GenericAdapter::new("s3")));
+    // `s3://` is owned by deltalake-aws, so the generic service is reachable
+    // only via the unambiguous `opendal+s3://` scheme.
+    register_opendal_handlers("opendal+s3", Arc::new(GenericAdapter::new("s3")));
 
     let storage_options = HashMap::from([
         ("opendal.endpoint".to_string(), endpoint),
@@ -46,6 +48,6 @@ async fn s3_roundtrip() {
         ),
     ]);
 
-    let uri = format!("opendals3://{bucket}/delta_opendal_test");
+    let uri = format!("opendal+s3://{bucket}/delta_opendal_test");
     common::roundtrip(&uri, storage_options).await;
 }

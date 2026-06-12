@@ -36,60 +36,125 @@ pub fn register_opendal_handlers<A: OpendalAdapter + 'static>(scheme: &str, adap
     logstore_factories().insert(url, Arc::new(OpendalLogStoreFactory(adapter)));
 }
 
-/// Generic OpenDAL services to auto-register, as `(delta url scheme, opendal
-/// service)` pairs gated by their cargo feature. Each is enabled only when its
-/// `opendal-<service>` feature is on.
+/// Generic OpenDAL services to auto-register, gated by their cargo feature.
+/// Each is enabled only when its `opendal-<service>` feature is on.
 ///
-/// Schemes owned by a native delta backend (`s3`/`s3a`, `gs`, `az`/`abfs…`,
-/// `hdfs`/`viewfs`, `lakefs`) are deliberately exposed under an `opendal`-
-/// prefixed scheme (e.g. `opendals3://`) so enabling them never clobbers the
-/// native backend's scheme — users opt in by choosing the prefixed scheme.
-/// Services with no native counterpart keep their natural scheme.
-const GENERIC_SERVICES: &[(&str, &str)] = &[
+/// Every service is registered under the unambiguous `opendal+<service>://`
+/// scheme (e.g. `opendal+s3://`). When the service's natural scheme does not
+/// collide with a native delta backend (see [`NATIVE_SCHEMES`]) it is *also*
+/// registered under that bare scheme, so `hf://`, `fs://`, `oss://`, … work
+/// directly. Services whose natural scheme is owned by a native backend
+/// (`s3`, `memory`, …) are reachable only via the `opendal+` form, so enabling
+/// them never clobbers the native backend.
+const GENERIC_SERVICES: &[&str] = &[
     #[cfg(feature = "opendal-fs")]
-    ("opendalfs", "fs"),
+    "fs",
     #[cfg(feature = "opendal-memory")]
-    ("opendalmem", "memory"),
+    "memory",
     #[cfg(feature = "opendal-s3")]
-    ("opendals3", "s3"),
+    "s3",
     #[cfg(feature = "opendal-gcs")]
-    ("gcs", "gcs"),
+    "gcs",
     #[cfg(feature = "opendal-azblob")]
-    ("azblob", "azblob"),
+    "azblob",
     #[cfg(feature = "opendal-azdls")]
-    ("azdls", "azdls"),
+    "azdls",
     #[cfg(feature = "opendal-oss")]
-    ("oss", "oss"),
+    "oss",
     #[cfg(feature = "opendal-obs")]
-    ("obs", "obs"),
+    "obs",
     #[cfg(feature = "opendal-cos")]
-    ("cos", "cos"),
+    "cos",
     #[cfg(feature = "opendal-tos")]
-    ("tos", "tos"),
+    "tos",
     #[cfg(feature = "opendal-b2")]
-    ("b2", "b2"),
+    "b2",
     #[cfg(feature = "opendal-swift")]
-    ("swift", "swift"),
+    "swift",
     #[cfg(feature = "opendal-webhdfs")]
-    ("webhdfs", "webhdfs"),
+    "webhdfs",
     #[cfg(feature = "opendal-webdav")]
-    ("webdav", "webdav"),
+    "webdav",
     #[cfg(feature = "opendal-ftp")]
-    ("ftp", "ftp"),
+    "ftp",
     #[cfg(feature = "opendal-sftp")]
-    ("sftp", "sftp"),
+    "sftp",
     #[cfg(feature = "opendal-hf")]
-    ("hf", "hf"),
+    "hf",
 ];
+
+/// URL schemes owned by native (non-OpenDAL) delta backends. A generic service
+/// whose natural scheme appears here is NOT registered under that bare scheme —
+/// only under `opendal+<service>://` — so it never clobbers the native backend.
+const NATIVE_SCHEMES: &[&str] = &[
+    "file", "memory", "s3", "s3a", "gs", "az", "azure", "adl", "abfs", "abfss", "hdfs", "viewfs",
+    "lakefs", "dbfs", "uc",
+];
+
+/// The scheme prefix that makes any OpenDAL service reachable unambiguously,
+/// e.g. `opendal+s3://`. `+` is a valid URL scheme character (RFC 3986).
+pub const OPENDAL_SCHEME_PREFIX: &str = "opendal+";
 
 /// Register the OpenDAL-backed storage handlers enabled by feature flags.
 ///
 /// Called automatically at program start via the OpenDAL feature flags in the
-/// top-level `deltalake` crate. Native delta schemes (`s3://`, `gs://`,
-/// `az://`, `file://`, `memory://`, …) are never registered here — see
-/// [`GENERIC_SERVICES`].
+/// top-level `deltalake` crate. Each enabled service is registered under
+/// `opendal+<service>://`, plus its bare `<service>://` scheme when that neither
+/// collides with a native delta backend nor is a WHATWG special scheme that
+/// can't form a bare `scheme://` URL (e.g. `ftp`) — see [`GENERIC_SERVICES`].
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
-    for (scheme, service) in GENERIC_SERVICES {
-        register_opendal_handlers(scheme, Arc::new(GenericAdapter::new(*service)));
+    for service in GENERIC_SERVICES {
+        let adapter = Arc::new(GenericAdapter::new(*service));
+        register_opendal_handlers(&format!("{OPENDAL_SCHEME_PREFIX}{service}"), adapter.clone());
+        // Also expose the bare `<service>://` scheme, but only when it neither
+        // collides with a native delta backend nor is a WHATWG "special" scheme.
+        // Special schemes (e.g. `ftp`) require a host, so `Url::parse("ftp://")`
+        // fails — those stay reachable only via the `opendal+<service>://` form.
+        if !NATIVE_SCHEMES.contains(service) && Url::parse(&format!("{service}://")).is_ok() {
+            register_opendal_handlers(service, adapter);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// OpenDAL services whose natural scheme is owned by a native delta backend
+    /// must stay listed in [`NATIVE_SCHEMES`] so [`register_handlers`] registers
+    /// them ONLY under `opendal+<service>://`, never their bare `<service>://`
+    /// scheme. Otherwise the bare registration (a last-writer-wins `.insert`,
+    /// run from an unspecified-order `ctor`) would silently shadow the native
+    /// backend. This pins the known collisions so dropping one from
+    /// `NATIVE_SCHEMES` fails the build rather than clobbering a backend at
+    /// startup.
+    #[test]
+    fn native_scheme_collisions_are_suppressed() {
+        for colliding in ["s3", "memory"] {
+            assert!(
+                NATIVE_SCHEMES.contains(&colliding),
+                "`{colliding}` shares a scheme with a native delta backend but is \
+                 missing from NATIVE_SCHEMES; register_handlers would shadow it \
+                 under bare `{colliding}://`"
+            );
+        }
+    }
+
+    /// `ftp` is a WHATWG "special" scheme: `Url::parse("ftp://")` fails with
+    /// `EmptyHost`, so it must never be bare-registered (doing so panicked the
+    /// whole process at startup, since `register_handlers` runs from a `ctor`).
+    /// It must remain reachable via the `opendal+ftp://` form. Runs only when the
+    /// `opendal-ftp` service is compiled in.
+    #[cfg(feature = "opendal-ftp")]
+    #[test]
+    fn special_scheme_registers_without_panic() {
+        assert!(Url::parse("ftp://").is_err());
+        register_handlers(None);
+        assert!(
+            object_store_factories()
+                .get(&Url::parse("opendal+ftp://").unwrap())
+                .is_some(),
+            "ftp must be reachable via the opendal+ftp:// scheme"
+        );
     }
 }
