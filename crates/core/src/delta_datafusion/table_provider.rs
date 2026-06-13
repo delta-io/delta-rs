@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -594,10 +593,6 @@ impl ExecutionPlan for DeltaScan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.parquet_scan.schema()
     }
@@ -659,7 +654,7 @@ impl ExecutionPlan for DeltaScan {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.parquet_scan.partition_statistics(partition)
     }
 
@@ -679,7 +674,7 @@ pub(crate) fn simplify_expr(
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let execution_props = session.execution_props();
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(df_schema.clone())
         .with_query_execution_start_time(execution_props.query_execution_start_time)
         .with_config_options(
@@ -687,7 +682,8 @@ pub(crate) fn simplify_expr(
                 .config_options()
                 .cloned()
                 .unwrap_or_else(|| session.config().options().clone()),
-        );
+        )
+        .build();
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }

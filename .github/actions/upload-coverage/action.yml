@@ -7,11 +7,10 @@ runs:
   using: "composite"
   steps:
     - name: Upload coverage to Codecov
-      # https://github.com/codecov/codecov-action/releases/tag/v6.0.0>
-      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2
+      # https://github.com/codecov/codecov-action/releases/tag/v7.0.0>
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
       with:
         files: codecov.json
         fail_ci_if_error: true
-        use_pypi: true
       env:
         CODECOV_TOKEN: ${{ inputs.token }}

@@ -209,7 +209,7 @@ mod datafusion {
                 return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
             }
             let partition_values = self.pick_stats(column, "__dummy__")?;
-            let row_counts = self.row_counts(column)?;
+            let row_counts = self.row_counts()?;
             let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
             let mut null_counts = Vec::with_capacity(partition_values.len());
             for i in 0..partition_values.len() {
@@ -223,11 +223,10 @@ mod datafusion {
             Some(Arc::new(UInt64Array::from(null_counts)))
         }
 
-        /// return the number of rows for the named column in each container
-        /// as an `Option<UInt64Array>`.
+        /// return the number of rows in each container as an `Option<UInt64Array>`.
         ///
         /// Note: the returned array must contain `num_containers()` rows
-        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
                 ARROW_HANDLER
                     .new_expression_evaluator(

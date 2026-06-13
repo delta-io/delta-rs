@@ -583,6 +583,9 @@ fn primitive_partition_values_to_array(
             )?)
             .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)?,
         ) as ArrayRef,
+        others => {
+            todo!("The primitive type {others} is not supported currently!");
+        }
     })
 }
 

@@ -1,4 +1,4 @@
-use std::{any::Any, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use arrow_schema::SchemaRef;
 use datafusion::{
@@ -90,10 +90,6 @@ impl DeltaDataSink {
 /// to write the data to the delta table
 #[async_trait::async_trait]
 impl DataSink for DeltaDataSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
     }

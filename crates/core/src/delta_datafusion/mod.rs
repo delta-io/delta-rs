@@ -474,7 +474,6 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let delta_scan = node
-            .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
@@ -522,13 +521,9 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let scan = node
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("Can't encode non-delta tables".to_string())
-            })?;
+        let scan = node.downcast_ref::<DeltaScanNext>().ok_or_else(|| {
+            DataFusionError::Internal("Can't encode non-delta tables".to_string())
+        })?;
         serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
@@ -793,11 +788,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
 
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let decoded_file_ids = serialized
@@ -861,11 +852,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let file_selection = serialized.get("file_selection").unwrap();
         let file_selection_json = serde_json::to_string(file_selection).unwrap();
@@ -923,11 +910,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let file_selection = serialized.get("file_selection").unwrap();
         let file_selection_json = serde_json::to_string(file_selection).unwrap();
@@ -1357,7 +1340,7 @@ mod tests {
             .unwrap();
 
         let df = datafusion
-            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .sql(r#"select * from snapshot where "vaLue" > 10000 and "vaLue" < 20000"#)
             .await
             .unwrap();
 

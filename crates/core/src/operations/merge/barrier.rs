@@ -72,10 +72,6 @@ impl ExecutionPlan for MergeBarrierExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.input.schema()
     }
@@ -435,11 +431,11 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
-pub(crate) fn find_node<T: 'static>(
+pub(crate) fn find_node<T: ExecutionPlan>(
     parent: &Arc<dyn ExecutionPlan>,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate a Node::<T> after the planner converts the logical node
-    if parent.as_any().downcast_ref::<T>().is_some() {
+    if parent.downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
