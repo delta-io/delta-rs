@@ -156,3 +156,41 @@ def test_read_checkpointed_features_table(tmp_path: pathlib.Path):
     dt.create_checkpoint()
 
     assert_spark_read_equal(data, str(tmp_path), ["timestamp"])
+
+
+@pytest.mark.pyspark
+@pytest.mark.pyarrow
+@pytest.mark.integration
+def test_invariants_and_the_implication(tmp_path: pathlib.Path):
+    """
+    Regression test associated with <https://github.com/delta-io/delta-rs/issues/2882>
+    """
+    from pandas import DataFrame
+    from pyspark.sql import SparkSession
+
+    from deltalake import write_deltalake
+
+    write_deltalake(
+        tmp_path,
+        data=DataFrame({"id": [1, 2], "values": [2, 1], "date": [None, None]}),
+        configuration={
+            "delta.minReaderVersion": "1",
+            "delta.minWriterVersion": "2",
+        },  # silently ignored
+    )
+
+    spark = (
+        SparkSession.builder.appName("failing-delta-load")
+        .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+        )
+        .config("spark.jars", "delta-spark_2.12-3.2.0.jar,delta-storage-3.2.0.jar")
+        .getOrCreate()
+    )
+
+    df = spark.read.format("delta").load(str(tmp_path))
+
+    for row in df.collect():
+        print(row)
