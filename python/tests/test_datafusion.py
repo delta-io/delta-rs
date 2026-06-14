@@ -22,8 +22,8 @@ def test_datafusion_table_provider_incompatible_version_errors(tmp_path, monkeyp
         assert pkg == "datafusion"
         call_count["count"] += 1
         if call_count["count"] == 1:
-            return "52.0.0"
-        return "53.0.0"
+            return "53.0.0"
+        return "54.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -41,7 +41,7 @@ def test_datafusion_table_provider_incompatible_version_errors(tmp_path, monkeyp
 
     msg = str(exc_info.value)
     assert "datafusion" in msg
-    assert "datafusion==53" in msg
+    assert "datafusion==54" in msg
     assert "QueryBuilder" in msg
 
 
@@ -71,7 +71,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
 ):
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "53.0.0"
+        return "54.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -93,7 +93,7 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "53.0.0"
+        return "54.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -124,9 +124,13 @@ def test_datafusion_table_provider(tmp_path):
             "DataFusion Python integration tests are disabled by default; set DELTALAKE_RUN_DATAFUSION_TESTS=1"
         )
 
+    # This deltalake build exports a DataFusion 54.x FFI TableProvider; the
+    # installed datafusion-python wheel must match that major or the runtime
+    # guard rejects it. datafusion-python has no 54.x release yet, so skip until
+    # one is published rather than fail.
     datafusion_major = _datafusion_major_version()
-    if datafusion_major is None or datafusion_major < 53:
-        pytest.skip("DataFusion Python integration requires datafusion>=53 wheels")
+    if datafusion_major != 54:
+        pytest.skip("DataFusion Python integration requires datafusion==54.x wheels")
     nrows = 5
     table = Table(
         {
