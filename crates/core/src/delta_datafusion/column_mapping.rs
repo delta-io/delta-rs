@@ -9,7 +9,6 @@
 //! Only names and metadata change — Arrow types and buffers are preserved (so Large/View types
 //! survive), making the rewrite effectively zero-copy.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -167,10 +166,6 @@ impl DisplayAs for ColumnMappingExec {
 }
 
 impl ExecutionPlan for ColumnMappingExec {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "ColumnMappingExec"
     }
@@ -211,7 +206,7 @@ impl ExecutionPlan for ColumnMappingExec {
         }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 
