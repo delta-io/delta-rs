@@ -210,6 +210,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn update_table_metadata_with_lazy_snapshot_retries_after_concurrent_commit() -> TestResult
     {
