@@ -1927,6 +1927,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn snapshot_capability_active_adds_raw_json_preserves_row_counts_and_raw_stats()
     -> TestResult {
