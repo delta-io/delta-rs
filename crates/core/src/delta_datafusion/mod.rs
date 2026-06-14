@@ -1512,4 +1512,105 @@ mod tests {
         let _ = df.collect().await?;
         Ok(())
     }
+
+    /// Regression test documenting issue #1214:
+    /// Binary partition columns yield `None` from `pick_stats` (no natural order),
+    /// so `PruningPredicate` cannot prune any files for binary partition predicates.
+    /// All files pass through even when the predicate would logically exclude some.
+    ///
+    /// TODO(#1214): When/if binary partition pruning is implemented, update this
+    /// test to assert `kept_files.len() == 1` (only the matching file survives).
+    #[tokio::test]
+    async fn test_files_matching_predicate_binary_partition_not_pruned() {
+        use crate::delta_datafusion::files_matching_predicate;
+        use arrow::array::BinaryArray;
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{col, lit};
+
+        // Write two files into separate binary partitions.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("bin_part", ArrowDataType::Binary, true),
+        ]));
+
+        let batch_a = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"aaa".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let batch_b = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![2_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"bbb".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        // Two separate appends so each lands in its own partition file.
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Integer,
+                ),
+                true,
+                None,
+            )
+            .with_column(
+                "bin_part",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Binary,
+                ),
+                true,
+                None,
+            )
+            .with_partition_columns(["bin_part"])
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_a])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_b])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let log_data = snapshot.log_data();
+
+        // Without a predicate all files are returned.
+        let all_files: Vec<_> = files_matching_predicate(log_data.clone(), &[])
+            .unwrap()
+            .collect();
+        assert_eq!(all_files.len(), 2, "expected 2 files before pruning");
+
+        // Apply a predicate that would logically select only the "aaa" partition.
+        // Because Binary columns are skipped by pick_stats (issue #1214), the
+        // PruningPredicate cannot produce statistics for this column and keeps all
+        // files.  The test asserts the *current* conservative behavior: no files are
+        // incorrectly pruned away.
+        let predicate = col("bin_part").eq(lit(ScalarValue::Binary(Some(b"aaa".to_vec()))));
+        let kept_files: Vec<_> = files_matching_predicate(log_data.clone(), &[predicate])
+            .unwrap()
+            .collect();
+
+        // TODO(#1214): change to assert_eq!(kept_files.len(), 1) once binary
+        // partition pruning is supported.
+        assert_eq!(
+            kept_files.len(),
+            2,
+            "expected all files to survive pruning: binary partitions are not prunable (issue #1214)"
+        );
+    }
 }
