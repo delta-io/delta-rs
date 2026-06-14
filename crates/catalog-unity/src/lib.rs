@@ -467,7 +467,7 @@ impl UnityCatalogBuilder {
             {
                 tracing::debug!("Found relevant env: {key}");
                 if let Ok(config_key) = UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    tracing::debug!("Trying: {key} with {value}");
+                    tracing::debug!("Trying: {key}");
                     builder = builder.try_with_option(config_key, value).unwrap();
                 }
             }

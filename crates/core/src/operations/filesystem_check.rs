@@ -31,10 +31,9 @@ use super::CustomExecuteHandler;
 use super::Operation;
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::EagerSnapshot;
-use crate::kernel::resolve_snapshot;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
+use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -144,7 +143,16 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
-        let mut file_stream = snapshot.file_views(&log_store, None).map_ok(|f| f.to_add());
+        let mut file_stream = snapshot
+            .snapshot()
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .map_ok(|f| f.to_add());
         while let Some(active) = file_stream.next().await {
             let active = active?;
             if is_absolute_path(&active.path)? {
