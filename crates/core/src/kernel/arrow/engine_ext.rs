@@ -165,7 +165,7 @@ fn stats_source_schema(
 /// Translates `dataSkippingStatsColumns` from logical to physical names.
 ///
 /// Columns that cannot be resolved against `logical_schema` are dropped.
-fn stats_table_properties<'a>(
+pub(crate) fn stats_table_properties<'a>(
     logical_schema: &StructType,
     table_properties: &'a TableProperties,
     column_mapping_mode: ColumnMappingMode,
@@ -229,8 +229,9 @@ fn physical_column_name(
 /// For the `nullCount` schema, we consider the whole base schema and convert all leaf fields
 /// to data type LONG. Maps, arrays, and variant are considered leaf fields in this case.
 ///
-/// For the min / max schemas, we non-eligible leaf fields from the base schema.
-/// Field eligibility is determined by the fields data type via [`is_skipping_eligeble_datatype`].
+/// For the min / max schemas, remove ineligible leaf fields from the base schema.
+/// The field data type determines eligibility via
+/// [`is_public_min_max_stats_eligible_primitive`].
 ///
 /// The overall schema is then:
 /// ```ignored
@@ -430,9 +431,9 @@ impl<'a> SchemaTransform<'a> for BaseStatsTransform {
     }
 }
 
-// removes all fields with non eligible data types
+// Remove fields with data types that cannot provide min/max stats.
 //
-// should only be applied to schema oricessed via `BaseStatsTransform`.
+// Apply this only to schemas processed by `BaseStatsTransform`.
 struct MinMaxStatsTransform;
 
 impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
@@ -450,7 +451,7 @@ impl<'a> SchemaTransform<'a> for MinMaxStatsTransform {
     }
 
     fn transform_primitive(&mut self, ptype: &'a PrimitiveType) -> Option<Cow<'a, PrimitiveType>> {
-        if is_skipping_eligeble_datatype(ptype) {
+        if is_public_min_max_stats_eligible_primitive(ptype) {
             Some(Cow::Borrowed(ptype))
         } else {
             None
@@ -469,9 +470,15 @@ fn should_include_column(column_name: &ColumnName, column_names: &[ColumnName]) 
     })
 }
 
-/// Checks if a data type is eligible for min/max file skipping.
+/// Returns true when a primitive belongs in the public min/max stats schema.
+///
+/// The public `Add.stats` min/max schema includes booleans. [`StatsProjection`]
+/// applies a stricter scan projection before asking Delta Kernel to parse stats.
 /// https://github.com/delta-io/delta/blob/143ab3337121248d2ca6a7d5bc31deae7c8fe4be/kernel/kernel-api/src/main/java/io/delta/kernel/internal/skipping/StatsSchemaHelper.java#L61
-fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
+///
+/// [`StatsProjection`]: crate::kernel::snapshot::StatsProjection
+pub(crate) fn is_public_min_max_stats_eligible_primitive(data_type: &PrimitiveType) -> bool {
+    #[cfg(not(feature = "nanosecond-timestamps"))]
     let matches_nanos = false;
     #[cfg(feature = "nanosecond-timestamps")]
     let matches_nanos = matches!(data_type, &PrimitiveType::TimestampNanos);
@@ -488,7 +495,6 @@ fn is_skipping_eligeble_datatype(data_type: &PrimitiveType) -> bool {
             | &PrimitiveType::Timestamp
             | &PrimitiveType::TimestampNtz
             | &PrimitiveType::String
-            // | &PrimitiveType::Boolean
             | PrimitiveType::Decimal(_)
     ) || matches_nanos
 }
@@ -504,7 +510,7 @@ pub(crate) fn rb_from_scan_meta(metadata: ScanMetadata) -> DeltaResult<RecordBat
 
 /// Internal extension trait for expression evaluators.
 ///
-/// This just abstracts the conversion between Arrow [`RecoedBatch`]es and
+/// Provides conversion between Arrow [`RecordBatch`]es and
 /// Kernel's [`ArrowEngineData`].
 pub(crate) trait ExpressionEvaluatorExt {
     fn evaluate_arrow(&self, batch: RecordBatch) -> DeltaResult<RecordBatch>;
@@ -986,7 +992,7 @@ mod tests {
         ])
         .unwrap();
 
-        // Expected minValues/maxValues schema: only eligible fields (no boolean, no binary)
+        // Expected minValues/maxValues schema: only eligible fields (no binary)
         let expected_min_max = StructType::try_new([
             StructField::nullable("id", DataType::LONG),
             StructField::nullable("is_active", DataType::BOOLEAN),

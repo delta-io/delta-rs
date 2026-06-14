@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
@@ -19,6 +18,12 @@ use crate::{
 
 use super::ADD_PARTITION_SCHEMA;
 
+/// A DataFusion [`TableProvider`](datafusion::catalog::TableProvider) that exposes a Delta
+/// table's Change Data Feed (CDF) as a queryable relation.
+///
+/// Wraps a [`CdfLoadBuilder`] together with the resolved output schema so the CDF stream
+/// (insertions, updates and deletions across versions) can be scanned through the normal
+/// DataFusion planning machinery.
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
     cdf_builder: CdfLoadBuilder,
@@ -49,10 +54,6 @@ impl DeltaCdfTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for DeltaCdfTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -71,9 +72,11 @@ impl TableProvider for DeltaCdfTableProvider {
         let schema: DFSchema = self.schema().try_into()?;
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
+            let physical_expr = session.create_physical_expr(filter_expr.clone(), &schema)?;
             let plan = self
                 .cdf_builder
+                .clone()
+                .with_partition_pruning_filter(filter_expr)
                 .build(session, Some(&physical_expr))
                 .await?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)

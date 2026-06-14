@@ -62,6 +62,7 @@ impl GeneratedColumn {
         }
     }
 
+    /// Returns the SQL expression used to generate this column's values.
     pub fn get_generation_expression(&self) -> &str {
         &self.generation_expr
     }

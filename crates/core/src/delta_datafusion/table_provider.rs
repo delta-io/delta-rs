@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -24,8 +23,7 @@ use uuid::Uuid;
 
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
-use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{EagerSnapshot, Snapshot, Version};
+use crate::kernel::{Add, EagerSnapshot, Snapshot, Version};
 use crate::logstore::{LogStore, LogStoreExt as _};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -195,6 +193,8 @@ impl DeltaScanConfig {
         }
     }
 
+    /// Create a config seeded from an active DataFusion [`Session`], inheriting its
+    /// Parquet pushdown and view-type settings so the scan matches the session's behavior.
     pub fn new_from_session(session: &dyn Session) -> Self {
         let config_options = session.config().options();
         Self {
@@ -206,6 +206,7 @@ impl DeltaScanConfig {
         }
     }
 
+    /// Set the name of the synthetic column that exposes each row's source file path.
     pub fn with_file_column_name<S: ToString>(mut self, name: S) -> Self {
         self.file_column_name = Some(name.to_string());
         self
@@ -248,6 +249,7 @@ pub struct TableProviderBuilder {
     table_version: Option<Version>,
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
+    file_selection: Option<next::FileSelection>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -260,6 +262,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("row_index_column", &self.row_index_column)
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
+            .field("file_selection", &self.file_selection)
             .finish()
     }
 }
@@ -280,6 +283,7 @@ impl TableProviderBuilder {
             row_index_column: None,
             table_version: None,
             file_skipping_predicates: None,
+            file_selection: None,
         }
     }
 
@@ -348,6 +352,26 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Restrict reads to Add action paths. File metadata comes from the selected snapshot.
+    pub fn with_adds(self, adds: impl IntoIterator<Item = Add>) -> Self {
+        self.with_file_selection(next::FileSelection::from_adds(adds))
+    }
+
+    /// Restrict reads to file paths.
+    pub fn with_file_paths(self, paths: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.with_file_selection(next::FileSelection::from_file_paths(paths))
+    }
+
+    /// Restrict reads to a file selection resolved against the selected snapshot.
+    ///
+    /// Path validation runs during scan or deletion vector planning. Malformed paths, paths
+    /// outside the table root, and missing selected files are reported there.
+    pub fn with_file_selection(mut self, selection: next::FileSelection) -> Self {
+        self.file_selection = Some(selection);
+        self
+    }
+
+    /// Consume the builder and resolve it into an executable [`next::DeltaScan`].
     pub async fn build(self) -> Result<next::DeltaScan> {
         let TableProviderBuilder {
             log_store,
@@ -357,6 +381,7 @@ impl TableProviderBuilder {
             row_index_column,
             table_version,
             file_skipping_predicates,
+            file_selection,
         } = self;
 
         let mut config = session
@@ -385,14 +410,9 @@ impl TableProviderBuilder {
             }
         };
 
-        PROTOCOL
-            .can_read_from_protocol(snapshot.snapshot().protocol())
-            .map_err(|err| DataFusionError::Plan(err.to_string()))?;
-
         if let Some(log_store) = log_store.as_ref() {
-            let snapshot_root_identity = next::canonical_table_root_identity(
-                snapshot.snapshot().scan_builder().build()?.table_root(),
-            );
+            let snapshot_root_identity =
+                next::canonical_table_root_identity(snapshot.snapshot().inner.table_root());
             let log_store_root = log_store.table_root_url();
             let log_store_root_identity = next::canonical_table_root_identity(&log_store_root);
 
@@ -422,6 +442,10 @@ impl TableProviderBuilder {
                 visitor.result?;
             }
             provider = provider.with_file_skipping_predicate(skipping);
+        }
+
+        if let Some(selection) = file_selection {
+            provider = provider.with_file_selection(selection);
         }
 
         Ok(provider)
@@ -569,10 +593,6 @@ impl ExecutionPlan for DeltaScan {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.parquet_scan.schema()
     }
@@ -634,7 +654,7 @@ impl ExecutionPlan for DeltaScan {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.parquet_scan.partition_statistics(partition)
     }
 
@@ -654,7 +674,7 @@ pub(crate) fn simplify_expr(
     expr: Expr,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let execution_props = session.execution_props();
-    let context = SimplifyContext::default()
+    let context = SimplifyContext::builder()
         .with_schema(df_schema.clone())
         .with_query_execution_start_time(execution_props.query_execution_start_time)
         .with_config_options(
@@ -662,7 +682,8 @@ pub(crate) fn simplify_expr(
                 .config_options()
                 .cloned()
                 .unwrap_or_else(|| session.config().options().clone()),
-        );
+        )
+        .build();
     let simplifier = ExprSimplifier::new(context).with_max_cycles(10);
     session.create_physical_expr(simplifier.simplify(expr)?, df_schema.as_ref())
 }
@@ -997,12 +1018,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let missing_file_id = table_root
             .join("__does_not_exist__.parquet")
             .unwrap()
@@ -1010,10 +1026,10 @@ mod tests {
 
         let provider = next::DeltaScan::builder()
             .with_snapshot(snapshot)
+            .with_file_paths([missing_file_id])
             .build()
             .await
-            .unwrap()
-            .with_file_selection(next::FileSelection::new([missing_file_id]));
+            .unwrap();
 
         let session = Arc::new(crate::delta_datafusion::create_session().into_inner());
         let state = session.state_ref().read().clone();

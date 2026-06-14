@@ -66,6 +66,91 @@ mod stream;
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> =
     LazyLock::new(|| Arc::new(scan_row_schema().as_ref().try_into_arrow().unwrap()));
 
+/// Stats payload requested when streaming active add actions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AddStatsPolicy {
+    /// Skip stats during log replay.
+    ///
+    /// Full table snapshots with cached parsed batches can return cached stats.
+    None,
+    /// Preserve raw JSON stats and row count, without parsed stats.
+    #[cfg(feature = "datafusion")]
+    RawJson,
+    /// Preserve parsed stats and raw JSON stats.
+    Parsed,
+}
+
+/// Active add stream options.
+#[derive(Debug, Clone)]
+pub(crate) struct ActiveAddOptions {
+    /// Kernel predicate used for replay pruning.
+    pub(crate) predicate: Option<PredicateRef>,
+    /// Stats payload requested for each add action.
+    pub(crate) stats: AddStatsPolicy,
+}
+
+/// Borrowed protocol, metadata, and table configuration for metadata planners.
+pub(crate) struct SnapshotMetadataRef<'a> {
+    /// Table protocol at this snapshot version.
+    pub(crate) protocol: &'a Protocol,
+    /// Table metadata at this snapshot version.
+    pub(crate) metadata: &'a Metadata,
+    /// Kernel table configuration from protocol, metadata, and properties.
+    pub(crate) table_configuration: &'a TableConfiguration,
+}
+
+/// Active add read set for optimistic transaction conflict checks.
+///
+/// The read set borrows materialized log data when available. Lazy snapshots
+/// store replayed add batches in the returned value, which keeps the snapshot
+/// file cache empty.
+pub(crate) struct ConflictReadSet<'a> {
+    inner: ConflictReadSetInner<'a>,
+}
+
+enum ConflictReadSetInner<'a> {
+    Borrowed(LogDataHandler<'a>),
+    Owned {
+        batches: Arc<Vec<RecordBatch>>,
+        table_configuration: &'a TableConfiguration,
+    },
+}
+
+impl<'a> ConflictReadSet<'a> {
+    fn from_log_data(log_data: LogDataHandler<'a>) -> Self {
+        Self {
+            inner: ConflictReadSetInner::Borrowed(log_data),
+        }
+    }
+
+    fn from_owned_batches(
+        batches: Vec<RecordBatch>,
+        table_configuration: &'a TableConfiguration,
+    ) -> Self {
+        Self {
+            inner: ConflictReadSetInner::Owned {
+                batches: Arc::new(batches),
+                table_configuration,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_log_data_for_test(log_data: LogDataHandler<'a>) -> Self {
+        Self::from_log_data(log_data)
+    }
+
+    pub(crate) fn log_data(&self) -> LogDataHandler<'_> {
+        match &self.inner {
+            ConflictReadSetInner::Borrowed(log_data) => log_data.clone(),
+            ConflictReadSetInner::Owned {
+                batches,
+                table_configuration,
+            } => LogDataHandler::new(batches.as_ref().as_slice(), table_configuration),
+        }
+    }
+}
+
 /// A snapshot of a Delta table
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -78,6 +163,10 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Build a snapshot of the table at `table_root` using the provided kernel `engine`.
+    ///
+    /// When `version` is `None` the latest available version is loaded. This is the engine-aware
+    /// constructor used when callers want to control the kernel [`Engine`] backing log replay.
     pub async fn try_new_with_engine(
         engine: Arc<dyn Engine>,
         table_root: Url,
@@ -132,10 +221,12 @@ impl Snapshot {
         Self::try_new_with_engine(engine, table_root, config, version).await
     }
 
+    /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
     pub fn scan_builder(&self) -> ScanBuilder {
         ScanBuilder::new(self.inner.clone())
     }
 
+    /// Consume this snapshot and create a [`ScanBuilder`] that owns the underlying state.
     pub fn into_scan_builder(self) -> ScanBuilder {
         ScanBuilder::new(self.inner)
     }
@@ -291,6 +382,11 @@ impl Snapshot {
         self.materialized_files.as_ref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_materialized_files_for_test(&self) -> bool {
+        self.materialized_files.is_some()
+    }
+
     pub(crate) async fn ensure_materialized_files(
         self: Arc<Self>,
         log_store: &dyn LogStore,
@@ -314,6 +410,74 @@ impl Snapshot {
         ))
     }
 
+    /// Stream active add actions without requiring `materialized_files`.
+    pub(crate) fn active_adds(
+        &self,
+        log_store: &dyn LogStore,
+        options: ActiveAddOptions,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        self.files_with_stats_policy(log_store, options.predicate, options.stats)
+            .map_ok(|batch| {
+                futures::stream::iter(0..batch.num_rows()).map(move |idx| {
+                    Ok::<_, DeltaTableError>(LogicalFileView::new(batch.clone(), idx))
+                })
+            })
+            .try_flatten()
+            .boxed()
+    }
+
+    /// Collect active add batches without requiring `materialized_files`.
+    pub(crate) async fn active_add_batches(
+        &self,
+        log_store: &dyn LogStore,
+        options: ActiveAddOptions,
+    ) -> DeltaResult<Vec<RecordBatch>> {
+        self.files_with_stats_policy(log_store, options.predicate, options.stats)
+            .try_collect()
+            .await
+    }
+
+    /// Stream active tombstones with the snapshot capability API.
+    ///
+    /// This matches [`Snapshot::tombstones`]. The named method gives maintenance
+    /// callers a `Snapshot` entry point instead of eager snapshot state.
+    pub(crate) fn active_tombstones(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
+        self.tombstones(log_store)
+    }
+
+    /// Build active add input for conflict checking.
+    ///
+    /// Materialized snapshots borrow existing log data. Lazy snapshots replay
+    /// active adds with parsed stats and store those batches in the returned
+    /// read set while leaving this snapshot unmaterialized.
+    pub(crate) async fn conflict_read_set(
+        &self,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<ConflictReadSet<'_>> {
+        match self.try_log_data() {
+            Ok(log_data) => Ok(ConflictReadSet::from_log_data(log_data)),
+            Err(DeltaTableError::NotInitializedWithFiles(_)) => {
+                let batches = self
+                    .active_add_batches(
+                        log_store,
+                        ActiveAddOptions {
+                            predicate: None,
+                            stats: AddStatsPolicy::Parsed,
+                        },
+                    )
+                    .await?;
+                Ok(ConflictReadSet::from_owned_batches(
+                    batches,
+                    self.table_configuration(),
+                ))
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     /// Get the table root of the snapshot
     pub(crate) fn table_root_path(&self) -> DeltaResult<Path> {
         Ok(Path::from_url_path(self.inner.table_root().path())?)
@@ -324,8 +488,18 @@ impl Snapshot {
         self.inner.table_properties()
     }
 
+    /// Returns the resolved [`TableConfiguration`] (protocol, metadata and parsed properties).
     pub fn table_configuration(&self) -> &TableConfiguration {
         self.inner.table_configuration()
+    }
+
+    /// Return borrowed metadata state without materializing files.
+    pub(crate) fn metadata_state(&self) -> SnapshotMetadataRef<'_> {
+        SnapshotMetadataRef {
+            protocol: self.protocol(),
+            metadata: self.metadata(),
+            table_configuration: self.table_configuration(),
+        }
     }
 
     /// Get the active files for the current snapshot.
@@ -418,8 +592,22 @@ impl Snapshot {
         predicate: Option<PredicateRef>,
         stats_mode: FileStatsMode,
     ) -> SendableRBStream {
+        self.files_with_engine_materialized_with_skip_stats(
+            engine,
+            predicate,
+            stats_mode,
+            self.config.skip_stats,
+        )
+    }
+
+    fn files_with_engine_materialized_with_skip_stats(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+        stats_mode: FileStatsMode,
+        skip_stats: bool,
+    ) -> SendableRBStream {
         self.warn_if_skip_stats_with_predicate(&predicate);
-        let skip_stats = self.config.skip_stats;
         let scan = match self.scan_for_files(predicate, skip_stats, stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
@@ -486,6 +674,54 @@ impl Snapshot {
         }
     }
 
+    fn files_with_stats_policy(
+        &self,
+        log_store: &dyn LogStore,
+        predicate: Option<PredicateRef>,
+        stats_policy: AddStatsPolicy,
+    ) -> SendableRBStream {
+        let skip_stats = matches!(stats_policy, AddStatsPolicy::None) || self.config.skip_stats;
+        if predicate.is_none()
+            && let Some(cached) = self.cached_parsed_batches()
+        {
+            return cached;
+        }
+
+        let stats_mode = match stats_policy {
+            AddStatsPolicy::None => FileStatsMode::PreserveRaw,
+            #[cfg(feature = "datafusion")]
+            AddStatsPolicy::RawJson => FileStatsMode::PreserveRaw,
+            AddStatsPolicy::Parsed => FileStatsMode::FullPreserveRaw,
+        };
+
+        match self
+            .materialized_files()
+            .and_then(|materialized_files| materialized_files.full_table_seed())
+        {
+            Some(materialized_seed) => {
+                let (existing_version, existing_data, existing_predicate) =
+                    materialized_seed.into_parts();
+                self.files_from_materialized_with_options(
+                    log_store.engine(None),
+                    predicate,
+                    existing_version,
+                    Box::new(existing_data),
+                    existing_predicate,
+                    FileMaterializationOptions {
+                        stats_mode,
+                        skip_stats,
+                    },
+                )
+            }
+            None => self.files_with_engine_materialized_with_skip_stats(
+                log_store.engine(None),
+                predicate,
+                stats_mode,
+                skip_stats,
+            ),
+        }
+    }
+
     pub(crate) fn files_from<T: Iterator<Item = RecordBatch> + Send + 'static>(
         &self,
         engine: Arc<dyn Engine>,
@@ -531,9 +767,30 @@ impl Snapshot {
         existing_predicate: Option<PredicateRef>,
         stats_mode: FileStatsMode,
     ) -> SendableRBStream {
+        self.files_from_materialized_with_options(
+            engine,
+            predicate,
+            existing_version,
+            existing_data,
+            existing_predicate,
+            FileMaterializationOptions {
+                stats_mode,
+                skip_stats: self.config.skip_stats,
+            },
+        )
+    }
+
+    fn files_from_materialized_with_options<T: Iterator<Item = RecordBatch> + Send + 'static>(
+        &self,
+        engine: Arc<dyn Engine>,
+        predicate: Option<PredicateRef>,
+        existing_version: Version,
+        existing_data: Box<T>,
+        existing_predicate: Option<PredicateRef>,
+        options: FileMaterializationOptions,
+    ) -> SendableRBStream {
         self.warn_if_skip_stats_with_predicate(&predicate);
-        let skip_stats = self.config.skip_stats;
-        let scan = match self.scan_for_files(predicate, skip_stats, stats_mode) {
+        let scan = match self.scan_for_files(predicate, options.skip_stats, options.stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
@@ -814,6 +1071,12 @@ enum FileStatsMode {
     FullPreserveRaw,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FileMaterializationOptions {
+    stats_mode: FileStatsMode,
+    skip_stats: bool,
+}
+
 /// Scope for materialized file replay data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
 pub(crate) enum MaterializedFilesScope {
@@ -1074,6 +1337,7 @@ impl EagerSnapshot {
         self.snapshot.table_properties()
     }
 
+    /// Returns the resolved [`TableConfiguration`] (protocol, metadata and parsed properties).
     pub fn table_configuration(&self) -> &TableConfiguration {
         self.snapshot.table_configuration()
     }
@@ -1123,6 +1387,10 @@ impl EagerSnapshot {
         self.snapshot.file_views(log_store, predicate)
     }
 
+    /// Stream the file views matching the given partition `filters`.
+    ///
+    /// Deprecated in favor of [`file_views`](Self::file_views) with a kernel predicate, which
+    /// supports richer expressions than simple partition equality filters.
     #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
     pub fn file_views_by_partitions(
         &self,
@@ -1139,7 +1407,10 @@ impl EagerSnapshot {
         self.file_views(log_store, Some(predicate))
     }
 
-    /// Iterate over all latest app transactions
+    /// Return the latest committed transaction version for the given application id, if any.
+    ///
+    /// This is used to implement idempotent writes: an application records its own monotonic
+    /// version via a transaction action, and readers can recover the last value seen.
     pub async fn transaction_version(
         &self,
         log_store: &dyn LogStore,
@@ -1150,6 +1421,7 @@ impl EagerSnapshot {
             .await
     }
 
+    /// Return the configuration string stored for the given metadata `domain`, if present.
     pub async fn domain_metadata(
         &self,
         log_store: &dyn LogStore,
@@ -1210,6 +1482,7 @@ mod tests {
     };
 
     impl Snapshot {
+        /// Build an in-memory snapshot from the given commits for use in tests.
         pub async fn new_test<'a>(
             commits: impl IntoIterator<Item = &'a CommitData>,
         ) -> DeltaResult<(Self, Arc<dyn LogStore>)> {
@@ -1247,6 +1520,7 @@ mod tests {
     }
 
     impl EagerSnapshot {
+        /// Build an in-memory eager snapshot from the given commits for use in tests.
         pub async fn new_test<'a>(
             commits: impl IntoIterator<Item = &'a CommitData>,
         ) -> DeltaResult<Self> {
@@ -1525,6 +1799,211 @@ mod tests {
             snapshot.try_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_metadata_state_does_not_materialize_files() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+
+        let metadata = snapshot.metadata_state();
+
+        assert_eq!(metadata.protocol, snapshot.protocol());
+        assert_eq!(metadata.metadata, snapshot.metadata());
+        assert_eq!(metadata.table_configuration, snapshot.table_configuration());
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_adds_without_stats_streams_from_lazy_snapshot() -> TestResult
+    {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+
+        let files: Vec<_> = snapshot
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .try_collect()
+            .await?;
+
+        assert_eq!(files.len(), 12);
+        assert!(files.iter().all(|file| file.stats().is_none()));
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_add_batches_match_stream_adapter() -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let options = ActiveAddOptions {
+            predicate: None,
+            stats: AddStatsPolicy::None,
+        };
+
+        let streamed_rows: usize = snapshot
+            .active_adds(log_store.as_ref(), options.clone())
+            .map_ok(|file| file.path_raw().to_string())
+            .try_collect::<Vec<_>>()
+            .await?
+            .len();
+        let batch_rows: usize = snapshot
+            .active_add_batches(log_store.as_ref(), options)
+            .await?
+            .iter()
+            .map(|batch| batch.num_rows())
+            .sum();
+
+        assert_eq!(batch_rows, streamed_rows);
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_tombstones_delegates_to_snapshot_stream() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+
+        let tombstones = snapshot
+            .active_tombstones(log_store.as_ref())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        assert_eq!(tombstones.len(), 31);
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_conflict_read_set_replays_lazy_snapshot() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+
+        let read_set = snapshot.conflict_read_set(log_store.as_ref()).await?;
+
+        assert_eq!(read_set.log_data().num_files(), 5);
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_conflict_read_set_matches_materialized_stats() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let materialized =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+
+        let lazy_read_set = lazy.conflict_read_set(log_store.as_ref()).await?;
+        let materialized_read_set = materialized.conflict_read_set(log_store.as_ref()).await?;
+        let lazy_log_data = lazy_read_set.log_data();
+        let materialized_log_data = materialized_read_set.log_data();
+        let lazy_files = lazy_log_data.iter().collect::<Vec<_>>();
+        let materialized_files = materialized_log_data.iter().collect::<Vec<_>>();
+
+        assert_eq!(lazy_files.len(), materialized_files.len());
+        assert_eq!(lazy_files[0].path_raw(), materialized_files[0].path_raw());
+        assert_eq!(lazy_files[0].stats(), materialized_files[0].stats());
+        assert!(lazy_files[0].min_values().is_some());
+        assert!(lazy_files[0].max_values().is_some());
+        assert!(lazy_files[0].null_counts().is_some());
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_adds_raw_json_preserves_row_counts_and_raw_stats()
+    -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+
+        let files: Vec<_> = snapshot
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::RawJson,
+                },
+            )
+            .try_collect()
+            .await?;
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].num_records(), Some(3));
+        assert!(files[0].stats().is_some());
+        assert!(files[0].min_values().is_none());
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_adds_paths_only_can_use_materialized_stats_cache()
+    -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+
+        let files: Vec<_> = snapshot
+            .snapshot()
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .try_collect()
+            .await?;
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].num_records(), Some(3));
+        assert!(files[0].min_values().is_some());
+        assert!(snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_active_adds_parsed_preserves_full_stats() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+
+        let files: Vec<_> = snapshot
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::Parsed,
+                },
+            )
+            .try_collect()
+            .await?;
+
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].num_records(), Some(3));
+        assert!(files[0].min_values().is_some());
+        assert!(files[0].max_values().is_some());
+        assert!(files[0].null_counts().is_some());
+        assert!(!snapshot.has_materialized_files_for_test());
 
         Ok(())
     }
@@ -2039,11 +2518,11 @@ mod tests {
         };
         let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(11)).await?;
 
-        assert!(snapshot.snapshot().materialized_files().is_none());
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
 
         snapshot.update(log_store.as_ref(), Some(12)).await?;
 
-        assert!(snapshot.snapshot().materialized_files().is_none());
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
 
         drain_recorded_ops(&mut operations).await;
 

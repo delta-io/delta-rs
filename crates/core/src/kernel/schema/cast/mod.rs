@@ -7,14 +7,33 @@ use arrow_array::{
 };
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
-    ArrowError, DataType, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
+    ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod merge_schema;
 pub(crate) use merge_schema::*;
 
 use crate::DeltaResult;
+
+/// The Python extension enables the nanosecond-timestamps feature, but wants to
+/// enable/disable them at runtime. We therefore make behavior conditional even
+/// when the feature is enabled.
+static CAST_NANOS_TS_TO_MICROS: AtomicBool =
+    AtomicBool::new(!cfg!(feature = "nanosecond-timestamps"));
+
+#[cfg(feature = "nanosecond-timestamps")]
+/// Set whether casting nanosecond timestamps to microsecond timestamps happens.
+pub fn set_cast_nanos_timestamps_to_micros(cast: bool) {
+    CAST_NANOS_TS_TO_MICROS.store(cast, Ordering::Release)
+}
+
+/// Check whether nanosecond timestamps should be cast to microseconds.
+fn should_cast_nanos_timestamps_to_micros() -> bool {
+    CAST_NANOS_TS_TO_MICROS.load(Ordering::Acquire)
+}
 
 fn cast_struct(
     struct_array: &StructArray,
@@ -224,7 +243,8 @@ pub fn cast_record_batch(
 /// unsupported Arrow types to their Delta-compatible equivalents:
 ///
 /// - `Date64` -> `Date32` (day precision)
-/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone), unless the `nanosecond-timestamps` Cargo feature is enabled.
+/// - `Timestamp(Second/Millisecond/Nanosecond, tz)` -> `Timestamp(Microsecond, tz)` (preserves timezone),
+///   except for Nanosecond inputs when `CAST_NANOS_TS_TO_MICROS` is false.
 ///
 /// Recursively normalizes nested types (Struct, List, Map, etc.).
 fn normalize_datatype(dt: &DataType) -> Option<DataType> {
@@ -234,13 +254,12 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         | DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
         }
-        #[cfg(not(feature = "nanosecond-timestamps"))]
         DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
-        }
-        #[cfg(feature = "nanosecond-timestamps")]
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            Some(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()))
+            if should_cast_nanos_timestamps_to_micros() {
+                Some(DataType::Timestamp(TimeUnit::Microsecond, tz.clone()))
+            } else {
+                Some(DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()))
+            }
         }
         DataType::Struct(fields) => {
             let mut changed = false;
@@ -273,7 +292,6 @@ fn normalize_field(field: &FieldRef) -> Option<FieldRef> {
         .map(|dt| Arc::new(field.as_ref().clone().with_data_type(dt)))
 }
 
-#[cfg(not(feature = "nanosecond-timestamps"))]
 fn has_nanosecond_timestamp(dt: &DataType) -> bool {
     match dt {
         DataType::Timestamp(TimeUnit::Nanosecond, _) => true,
@@ -288,6 +306,11 @@ fn has_nanosecond_timestamp(dt: &DataType) -> bool {
     }
 }
 
+/// Normalize an Arrow schema so it can be safely written to a Delta table.
+///
+/// Delta does not support all Arrow types verbatim (for example nanosecond timestamps);
+/// this rewrites such fields to the closest Delta-compatible representation, returning the
+/// original schema untouched when no changes are required.
 pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     let mut changed = false;
     let new_fields: Vec<FieldRef> = schema
@@ -304,19 +327,19 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
         .collect();
 
     if changed {
-        #[cfg(not(feature = "nanosecond-timestamps"))]
-        let nanosecond_truncated_fields: Vec<&str> = schema
-            .fields()
-            .iter()
-            .filter(|f| has_nanosecond_timestamp(f.data_type()))
-            .map(|f| f.name().as_str())
-            .collect();
-        #[cfg(not(feature = "nanosecond-timestamps"))]
-        if !nanosecond_truncated_fields.is_empty() {
-            tracing::warn!(
-                fields = ?nanosecond_truncated_fields,
-                "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
-            );
+        if should_cast_nanos_timestamps_to_micros() {
+            let nanosecond_truncated_fields: Vec<&str> = schema
+                .fields()
+                .iter()
+                .filter(|f| has_nanosecond_timestamp(f.data_type()))
+                .map(|f| f.name().as_str())
+                .collect();
+            if !nanosecond_truncated_fields.is_empty() {
+                tracing::warn!(
+                    fields = ?nanosecond_truncated_fields,
+                    "Lossy timestamp conversion: Timestamp(Nanosecond) columns will be truncated to Timestamp(Microsecond) to comply with the Delta Lake protocol"
+                );
+            }
         }
 
         Arc::new(Schema::new_with_metadata(
@@ -326,6 +349,26 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     } else {
         Arc::clone(schema)
     }
+}
+
+pub(crate) fn symmetric_differences<'a>(
+    new_schema: &'a ArrowSchemaRef,
+    expected_schema: &'a ArrowSchemaRef,
+) -> Option<Fields> {
+    if new_schema == expected_schema {
+        return None;
+    }
+
+    let new_schema_set: HashSet<&'a Field> = HashSet::from_iter(new_schema.flattened_fields());
+    let expected_schema_set: HashSet<&'a Field> =
+        HashSet::from_iter(expected_schema.flattened_fields());
+
+    Some(Fields::from(
+        new_schema_set
+            .symmetric_difference(&expected_schema_set)
+            .map(|f| Arc::new((**f).clone()))
+            .collect::<Vec<_>>(),
+    ))
 }
 
 #[cfg(test)]
@@ -353,6 +396,7 @@ mod tests {
         ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
         StructType as DeltaStructType,
     };
+    use crate::symmetric_differences;
 
     #[test]
     fn test_merge_arrow_schema_with_dict() {
@@ -673,6 +717,61 @@ mod tests {
             result.column(1).deref().as_string::<i32>(),
             new_null_array(&DataType::Utf8, 3).deref().as_string()
         );
+    }
+    #[test]
+    fn test_symmetric_differences_added_field_in_record_batch() {
+        let existing_schema = Arc::new(Schema::new(vec![Field::new(
+            "field1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema).unwrap();
+        assert_eq!(
+            result,
+            Fields::from(vec![Field::new("field2", DataType::Utf8, true)])
+        );
+    }
+
+    #[test]
+    fn test_symmetric_differences_missing_field_in_record_batch() {
+        let new_schema = Arc::new(Schema::new(vec![Field::new(
+            "field1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema).unwrap();
+        assert_eq!(
+            result,
+            Fields::from(vec![Field::new("field2", DataType::Utf8, true)])
+        );
+    }
+
+    #[test]
+    fn test_symmetric_differences_wrong_order() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field2", DataType::Utf8, true),
+            Field::new("field1", DataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema);
+        assert_eq!(result, Some(Fields::empty()));
     }
 
     #[test]

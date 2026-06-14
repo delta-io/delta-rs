@@ -16,20 +16,25 @@ use std::time::SystemTime;
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
+use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
+use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
+use delta_kernel::table_features::ColumnMappingMode;
 use tracing::log;
 
 use crate::DeltaTableError;
-use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
-use crate::errors::DeltaResult;
+use crate::delta_datafusion::{
+    DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
+};
+use crate::errors::{ColumnMappingOperation, DeltaResult};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
@@ -56,6 +61,11 @@ pub struct CdfLoadBuilder {
     allow_out_of_range: bool,
     /// Datafusion session state relevant for executing the input plan
     session: Option<Arc<dyn Session>>,
+    /// Optional logical predicate used ONLY to prune files by their partition
+    /// values. This is never applied as a row-level filter, so any non-partition
+    /// conjuncts are ignored here and row-level correctness must be enforced by a
+    /// separate `FilterExec` wrapped around the resulting plan.
+    filter: Option<Expr>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -84,6 +94,7 @@ impl CdfLoadBuilder {
             ending_timestamp: None,
             allow_out_of_range: false,
             session: None,
+            filter: None,
         }
     }
 
@@ -123,6 +134,19 @@ impl CdfLoadBuilder {
         self
     }
 
+    /// A logical predicate used ONLY to prune files by their partition values.
+    ///
+    /// This does NOT apply a row-level filter: only the conjuncts that reference
+    /// partition columns exclusively are used, and they merely decide which files
+    /// to scan. Any data-column predicate is ignored for correctness purposes, so
+    /// callers that need the rows actually filtered must wrap the resulting plan in
+    /// a `FilterExec` (as `DeltaCdfTableProvider::scan` does). It is `pub(crate)`
+    /// to prevent external callers from mistaking it for a row-level filter.
+    pub(crate) fn with_partition_pruning_filter(mut self, filter: Expr) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
     async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
@@ -147,6 +171,7 @@ impl CdfLoadBuilder {
     async fn determine_files_to_read(
         &self,
         snapshot: &EagerSnapshot,
+        partition_pruning: Option<&PartitionPruningPredicate>,
     ) -> DeltaResult<(
         Vec<CdcDataSpec<AddCDCFile>>,
         Vec<CdcDataSpec<Add>>,
@@ -328,6 +353,12 @@ impl CdfLoadBuilder {
             }
         }
 
+        if let Some(partition_pruning) = partition_pruning {
+            change_files = prune_specs_by_partition(change_files, partition_pruning)?;
+            add_files = prune_specs_by_partition(add_files, partition_pruning)?;
+            remove_files = prune_specs_by_partition(remove_files, partition_pruning)?;
+        }
+
         Ok((change_files, add_files, remove_files))
     }
 
@@ -341,6 +372,80 @@ impl CdfLoadBuilder {
         Some(ScalarValue::Utf8(Some(String::from("delete"))))
     }
 
+    /// Extract the partition-only conjuncts of [`Self::filter`] and compile them
+    /// into a physical predicate that can be evaluated against a file's
+    /// `partitionValues`. Returns `None` when there is no filter, no partition
+    /// columns, or no conjunct restricted to partition columns -- in which case
+    /// the file set is left untouched and correctness still relies on the
+    /// row-level `FilterExec`.
+    ///
+    /// Pruning is purely an optimization, so it **fails open**: if simplifying
+    /// the predicate, building the partition schema, or compiling the physical
+    /// expression fails for any reason, this logs at debug and returns `Ok(None)`
+    /// rather than propagating the error. A pruning failure must never change the
+    /// query result or error a read that would otherwise succeed.
+    fn partition_pruning_predicate(
+        &self,
+        session: &dyn Session,
+        schema: &arrow_schema::SchemaRef,
+        partition_columns: &[String],
+    ) -> DeltaResult<Option<PartitionPruningPredicate>> {
+        let Some(filter) = self.filter.clone() else {
+            return Ok(None);
+        };
+        if partition_columns.is_empty() {
+            return Ok(None);
+        }
+
+        match self.try_build_partition_pruning_predicate(session, schema, partition_columns, filter)
+        {
+            Ok(predicate) => Ok(predicate),
+            Err(e) => {
+                // Fail open: pruning is an optimization. Keep every file and let
+                // the row-level FilterExec enforce correctness.
+                log::debug!(
+                    "load_cdf: skipping partition pruning, failed to build pruning predicate: {e}"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Fallible inner builder for [`Self::partition_pruning_predicate`]. Any error
+    /// returned here is swallowed by the caller (pruning falls open), so it is
+    /// safe for the steps below to propagate errors with `?`.
+    fn try_build_partition_pruning_predicate(
+        &self,
+        session: &dyn Session,
+        schema: &arrow_schema::SchemaRef,
+        partition_columns: &[String],
+        filter: Expr,
+    ) -> DeltaResult<Option<PartitionPruningPredicate>> {
+        let Some((partition_predicate, referenced_columns)) =
+            extract_partition_only_predicate(filter, partition_columns)?
+        else {
+            return Ok(None);
+        };
+
+        // Materialize only the partition columns the predicate actually references.
+        // Coercing every partition column would waste work on columns the predicate
+        // never reads, and a malformed/missing value in an unreferenced column would
+        // make the file fail open and silently weaken pruning.
+        let partition_fields = referenced_columns
+            .iter()
+            .map(|name| schema.field_with_name(name).cloned())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        let partition_schema: arrow_schema::SchemaRef = Arc::new(Schema::new(partition_fields));
+        let df_schema: DFSchema = partition_schema.as_ref().clone().try_into()?;
+        let predicate = session.create_physical_expr(partition_predicate, &df_schema)?;
+
+        Ok(Some(PartitionPruningPredicate {
+            predicate,
+            partition_schema,
+            table_schema: schema.clone(),
+        }))
+    }
+
     /// Executes the scan
     pub async fn build(
         &self,
@@ -349,12 +454,23 @@ impl CdfLoadBuilder {
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
-
-        let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
-        session.ensure_log_store_registered(self.log_store.as_ref())?;
+        if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Read,
+                "CHANGE DATA FEED scans",
+            ));
+        }
 
         let partition_values = snapshot.metadata().partition_columns();
         let schema = snapshot.input_schema();
+
+        let partition_pruning =
+            self.partition_pruning_predicate(session, &schema, partition_values)?;
+        let (cdc, add, remove) = self
+            .determine_files_to_read(&snapshot, partition_pruning.as_ref())
+            .await?;
+        session.ensure_log_store_registered(self.log_store.as_ref())?;
+
         let schema_fields: Vec<Arc<Field>> = schema
             .fields()
             .into_iter()
@@ -496,16 +612,496 @@ pub(crate) mod tests {
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
     use datafusion::common::assert_batches_sorted_eq;
-    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::{collect, displayable};
     use datafusion::prelude::SessionContext;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
+    use crate::delta_datafusion::cdf::scan::DeltaCdfTableProvider;
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaTable, TableProperty};
     use std::path::Path;
     use url::Url;
+
+    /// Regression test for partition pruning in `load_cdf`.
+    ///
+    /// The cdf-table fixture is partitioned by `birthday`. A WHERE clause on `birthday`
+    /// should narrow the physical plan's file_groups to only the matching partition.
+    /// Until partition pruning is implemented, `determine_files_to_read` enumerates every
+    /// Add/AddCDCFile/Remove action in the version range without consulting partition
+    /// predicates, so all partitions' files end up in the plan and only a row-level
+    /// FilterExec rescues correctness.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_file_groups() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let builder = table.scan_cdf().with_starting_version(0);
+        let provider = DeltaCdfTableProvider::try_new(builder)?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let df = ctx
+            .sql("SELECT * FROM cdf WHERE birthday = DATE '2023-12-25'")
+            .await?;
+        let plan = df.create_physical_plan().await?;
+        let txt = displayable(plan.as_ref()).indent(true).to_string();
+
+        let mut paths: Vec<&str> = txt
+            .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())
+            .filter(|s| s.contains("part-") && s.ends_with(".parquet"))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        let non_matching: Vec<&&str> = paths
+            .iter()
+            .filter(|p| !p.contains("birthday=2023-12-25"))
+            .collect();
+
+        assert!(
+            non_matching.is_empty(),
+            "load_cdf should prune non-matching partitions, but found {} file(s) from other partitions:\n{}\n\nFull plan:\n{}",
+            non_matching.len(),
+            non_matching
+                .iter()
+                .map(|p| format!("  {p}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            txt,
+        );
+        Ok(())
+    }
+
+    /// Pruning files by partition value must not drop any matching change rows.
+    #[tokio::test]
+    async fn cdf_partition_predicate_keeps_matching_rows() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-25'")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+--------------+",
+            "| id | name   | birthday   | _change_type |",
+            "+----+--------+------------+--------------+",
+            "| 10 | Borb   | 2023-12-25 | insert       |",
+            "| 8  | Claire | 2023-12-25 | insert       |",
+            "| 9  | Ada    | 2023-12-25 | insert       |",
+            "+----+--------+------------+--------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// Open the `cdf-table` fixture (partitioned by `birthday`) and register it as
+    /// a CDF table provider so partition pruning can be exercised through SQL.
+    async fn register_cdf_table(ctx: &SessionContext) -> TestResult {
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+        Ok(())
+    }
+
+    async fn copied_column_mapping_cdf_table()
+    -> Result<(tempfile::TempDir, DeltaTable), Box<dyn std::error::Error + 'static>> {
+        let fixture = Path::new("../test/tests/data/table_with_column_mapping");
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(fixture, temp_dir.path(), &Default::default())?;
+        let table_path = temp_dir.path().join("table_with_column_mapping");
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        let log = std::fs::read_to_string(&log_path)?;
+        let updated_log = log.replace(
+            "\"delta.columnMapping.mode\":\"name\"",
+            "\"delta.enableChangeDataFeed\":\"true\",\"delta.columnMapping.mode\":\"name\"",
+        );
+        assert_ne!(
+            log, updated_log,
+            "expected column mapping table fixture metadata to contain column mapping mode"
+        );
+        std::fs::write(log_path, updated_log)?;
+
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        Ok((temp_dir, table))
+    }
+
+    #[tokio::test]
+    async fn cdf_scan_rejects_column_mapping_tables() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let (_temp_dir, table) = copied_column_mapping_cdf_table().await?;
+
+        let err = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect_err("cdf scan should reject column-mapped tables before planning files");
+
+        match err {
+            DeltaTableError::UnsupportedColumnMapping {
+                mode: _,
+                operation: _,
+            } => {}
+            _ => panic!("Unexpected error: {err:?}"),
+        }
+
+        Ok(())
+    }
+
+    /// Collect the distinct `birthday=YYYY-MM-DD` partition segments referenced by
+    /// every parquet file (both `part-` add/remove files and `cdc-` change files)
+    /// in a rendered physical plan. This reflects exactly which partitions survived
+    /// file-group pruning.
+    fn partitions_in_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+        let txt = displayable(plan.as_ref()).indent(true).to_string();
+        let mut parts: Vec<String> = txt
+            .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace() || c == '/')
+            .filter(|s| s.starts_with("birthday="))
+            .map(|s| s.to_string())
+            .collect();
+        parts.sort();
+        parts.dedup();
+        parts
+    }
+
+    /// Build the physical plan for `query` against the registered `cdf` table and
+    /// return the distinct partitions remaining in its file groups.
+    async fn pruned_partitions(ctx: &SessionContext, query: &str) -> DeltaResult<Vec<String>> {
+        let plan = ctx
+            .sql(query)
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        Ok(partitions_in_plan(&plan))
+    }
+
+    /// Equality on the partition column should keep only the `2023-12-23` partition,
+    /// which is materialized as CDC files (`_change_data/birthday=2023-12-23/...`)
+    /// for the update at version 1 in addition to the original add at version 0.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_to_cdc_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday = DATE '2023-12-23'").await?;
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-23".to_string()],
+            "equality on partition column must prune to the single matching CDC partition",
+        );
+
+        // Results must still be correct: the 2023-12-23 partition carries the
+        // version-0 inserts and the version-1 update preimages.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-23'")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+------+------------+-----------------+",
+            "| id | name | birthday   | _change_type    |",
+            "+----+------+------------+-----------------+",
+            "| 2  | Bob  | 2023-12-23 | insert          |",
+            "| 2  | Bob  | 2023-12-23 | update_preimage |",
+            "| 3  | Dave | 2023-12-23 | insert          |",
+            "| 3  | Dave | 2023-12-23 | update_preimage |",
+            "| 4  | Kate | 2023-12-23 | insert          |",
+            "| 4  | Kate | 2023-12-23 | update_preimage |",
+            "+----+------+------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// The `2023-12-29` partition exercises the Remove-action fallback: version 3
+    /// deletes id 7 via a `Remove` action (the partition also has version-2 adds
+    /// and CDC files). Pruning to it must keep that Remove file so the `delete`
+    /// change row is still produced.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_to_remove_fallback_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday = DATE '2023-12-29'").await?;
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-29".to_string()],
+            "equality on partition column must prune to the single matching partition, \
+             including its Remove-action file",
+        );
+
+        // The delete (sourced from the version-3 Remove action) must survive.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-29'")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+------------------+",
+            "| id | name   | birthday   | _change_type     |",
+            "+----+--------+------------+------------------+",
+            "| 5  | Emily  | 2023-12-29 | update_postimage |",
+            "| 6  | Carl   | 2023-12-29 | update_postimage |",
+            "| 7  | Dennis | 2023-12-29 | delete           |",
+            "| 7  | Dennis | 2023-12-29 | update_postimage |",
+            "+----+--------+------------+------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// `IS NULL` on the partition column matches no partition (every partition has a
+    /// concrete `birthday`), so all files should be pruned away and no rows returned.
+    #[tokio::test]
+    async fn cdf_partition_predicate_is_null_prunes_everything() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday IS NULL").await?;
+        assert!(
+            partitions.is_empty(),
+            "IS NULL on a fully-populated partition column must prune every partition, got {partitions:?}",
+        );
+
+        let batches = ctx
+            .sql("SELECT * FROM cdf WHERE birthday IS NULL")
+            .await?
+            .collect()
+            .await?;
+        assert!(
+            batches.iter().all(|b| b.num_rows() == 0),
+            "IS NULL must return no rows",
+        );
+        Ok(())
+    }
+
+    /// `IN (...)` over partition values should keep exactly the listed partitions.
+    #[tokio::test]
+    async fn cdf_partition_predicate_in_list_prunes_to_listed_partitions() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday IN (DATE '2023-12-22', DATE '2023-12-25')",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-22".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "IN list must keep exactly the listed partitions",
+        );
+
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday IN (DATE '2023-12-22', DATE '2023-12-25')")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+------------------+",
+            "| id | name   | birthday   | _change_type     |",
+            "+----+--------+------------+------------------+",
+            "| 1  | Steve  | 2023-12-22 | insert           |",
+            "| 10 | Borb   | 2023-12-25 | insert           |",
+            "| 2  | Bob    | 2023-12-22 | update_postimage |",
+            "| 3  | Dave   | 2023-12-22 | update_postimage |",
+            "| 4  | Kate   | 2023-12-22 | update_postimage |",
+            "| 8  | Claire | 2023-12-25 | insert           |",
+            "| 9  | Ada    | 2023-12-25 | insert           |",
+            "+----+--------+------------+------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// An `OR` of two partition equalities should keep both matching partitions.
+    #[tokio::test]
+    async fn cdf_partition_predicate_or_keeps_both_partitions() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday = DATE '2023-12-22' OR birthday = DATE '2023-12-25'",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-22".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "OR of partition equalities must keep both partitions",
+        );
+        Ok(())
+    }
+
+    /// `NOT (birthday = ...)` should keep every partition except the negated one.
+    #[tokio::test]
+    async fn cdf_partition_predicate_not_excludes_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE NOT (birthday = DATE '2023-12-22')",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-23".to_string(),
+                "birthday=2023-12-24".to_string(),
+                "birthday=2023-12-25".to_string(),
+                "birthday=2023-12-29".to_string(),
+            ],
+            "NOT equality must keep every partition except the excluded one",
+        );
+        assert!(
+            !partitions.contains(&"birthday=2023-12-22".to_string()),
+            "the negated partition must be pruned away",
+        );
+        Ok(())
+    }
+
+    /// A range predicate (`>`/`<`) should keep only partitions inside the range.
+    #[tokio::test]
+    async fn cdf_partition_predicate_range_prunes_outside_bounds() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        // 2023-12-23 < birthday < 2023-12-29 leaves only 2023-12-24/25.
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday > DATE '2023-12-23' AND birthday < DATE '2023-12-29'",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-24".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "range predicate must keep only partitions strictly inside the bounds",
+        );
+        Ok(())
+    }
+
+    /// A predicate mixing a partition column and a data column must only prune on
+    /// the partition part. The data conjunct (`id > 5`) is NOT a pruning criterion,
+    /// so the partition must still be kept whole and correctness is left to the
+    /// row-level `FilterExec`.
+    #[tokio::test]
+    async fn cdf_mixed_partition_and_data_predicate_only_prunes_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday = DATE '2023-12-24' AND id > 5",
+        )
+        .await?;
+        // Only the partition conjunct prunes; the whole 2023-12-24 partition is kept
+        // and no other partition leaks in because of the data predicate.
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-24".to_string()],
+            "mixed predicate must prune on the partition part only, keeping the matching partition whole",
+        );
+
+        // The data part is still applied by the row-level filter, so only id > 5 rows
+        // from the 2023-12-24 partition are returned.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-24' AND id > 5")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+-----------------+",
+            "| id | name   | birthday   | _change_type    |",
+            "+----+--------+------------+-----------------+",
+            "| 6  | Carl   | 2023-12-24 | insert          |",
+            "| 6  | Carl   | 2023-12-24 | update_preimage |",
+            "| 7  | Dennis | 2023-12-24 | insert          |",
+            "| 7  | Dennis | 2023-12-24 | update_preimage |",
+            "+----+--------+------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// A predicate on a non-partition column must not prune any files; the
+    /// matching is left to the row-level filter, so every partition's files
+    /// still appear in the plan.
+    #[tokio::test]
+    async fn cdf_non_partition_predicate_does_not_prune() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let collect_paths = |txt: &str| -> Vec<String> {
+            let mut paths: Vec<String> = txt
+                .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())
+                .filter(|s| s.contains("part-") && s.ends_with(".parquet"))
+                .map(|s| s.to_string())
+                .collect();
+            paths.sort();
+            paths.dedup();
+            paths
+        };
+
+        let baseline_plan = ctx
+            .sql("SELECT * FROM cdf")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let baseline_paths =
+            collect_paths(&displayable(baseline_plan.as_ref()).indent(true).to_string());
+
+        let filtered_plan = ctx
+            .sql("SELECT * FROM cdf WHERE id > 5")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let filtered_paths =
+            collect_paths(&displayable(filtered_plan.as_ref()).indent(true).to_string());
+
+        assert_eq!(
+            baseline_paths, filtered_paths,
+            "non-partition predicate must not prune files"
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_load_local() -> TestResult {

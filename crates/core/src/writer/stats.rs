@@ -10,8 +10,8 @@ use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use parquet::basic::LogicalType;
 use parquet::basic::Type;
+use parquet::basic::{ConvertedType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -184,7 +184,7 @@ fn stats_from_metadata(
             }
             if !admitted.contains(&top) {
                 if admitted_count >= limit {
-                    continue;
+                    break;
                 }
                 admitted.insert(top);
                 admitted_count += 1;
@@ -224,7 +224,10 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
+                        let logical_type = column_descr
+                            .logical_type_ref()
+                            .or(converted_to_logical_type(column_descr.converted_type()));
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -266,6 +269,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    TimestampNtz(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
     // Scale is stored to handle scale=0 serialization correctly
     Decimal { value: f64, scale: i32 },
@@ -308,10 +312,13 @@ impl StatsScalar {
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
-            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
-                // For now, we assume timestamps are adjusted to UTC. Non-UTC timestamps
-                // are behind a feature gate in Delta:
-                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
+            (
+                Statistics::Int64(v),
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    unit,
+                }),
+            ) => {
                 let v = get_stat!(v);
                 let timestamp = match unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
@@ -326,7 +333,11 @@ impl StatsScalar {
                     debug_value: v.to_string(),
                     logical_type: logical_type.cloned(),
                 })?;
-                Ok(Self::Timestamp(timestamp.naive_utc()))
+                if *is_adjusted_to_u_t_c {
+                    Ok(Self::Timestamp(timestamp.naive_utc()))
+                } else {
+                    Ok(Self::TimestampNtz(timestamp.naive_utc()))
+                }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
@@ -450,6 +461,9 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::TimestampNtz(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
             }
             StatsScalar::Decimal { value, scale } => {
                 // For scale=0, serialize as integer since serde_json would otherwise
@@ -650,6 +664,21 @@ fn apply_min_max_for_column(
         (_, None) => {
             unreachable!();
         }
+    }
+}
+
+/// Map the old (old!) [parquet::basic::ConvertedType] into the more modern
+/// [parquet::basic::LogicalType]
+///
+/// Because this is a legacy format helper function, ro types which might not be easy to convert
+/// from one struct to the other, it will just return `None`
+fn converted_to_logical_type(converted: ConvertedType) -> Option<&'static LogicalType> {
+    match converted {
+        ConvertedType::UTF8 => Some(&LogicalType::String),
+        ConvertedType::DATE => Some(&LogicalType::Date),
+        ConvertedType::JSON => Some(&LogicalType::Json),
+        ConvertedType::BSON => Some(&LogicalType::Bson),
+        _others => None,
     }
 }
 

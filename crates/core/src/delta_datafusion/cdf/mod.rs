@@ -8,6 +8,7 @@ pub(crate) use self::scan_utils::*;
 use crate::DeltaResult;
 use crate::kernel::{Add, AddCDCFile, Remove, Version};
 
+/// Scan-related types and helpers for reading Change Data Feed (CDF) batches.
 pub mod scan;
 mod scan_utils;
 
@@ -54,6 +55,10 @@ impl<F: FileAction> CdcDataSpec<F> {
             timestamp,
             actions,
         }
+    }
+
+    pub fn into_parts(self) -> (Version, i64, Vec<F>) {
+        (self.version, self.timestamp, self.actions)
     }
 }
 

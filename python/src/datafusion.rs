@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -41,10 +40,6 @@ impl LazyTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for LazyTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<ArrowSchema> {
         self.schema.clone()
     }
@@ -152,10 +147,6 @@ impl TokioDeltaScan {
 
 #[async_trait::async_trait]
 impl TableProvider for TokioDeltaScan {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
@@ -203,6 +194,7 @@ impl TableProvider for TokioDeltaScan {
 mod tests {
     use super::*;
 
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -382,7 +374,7 @@ mod tests {
 
         // The plan should include a LimitExec
         // We can verify this by checking that the plan type is correct
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 
     #[tokio::test]
@@ -419,6 +411,6 @@ mod tests {
 
         // The resulting plan should have a chain of operations:
         // GlobalLimitExec -> ProjectionExec -> FilterExec -> LazyMemoryExec
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 }

@@ -41,3 +41,9 @@ DeltaStorageHandler
 
 .. automodule:: deltalake.fs
     :members:
+
+
+Experimental functionality
+--------------------------
+
+.. autofunction:: deltalake.enable_nanosecond_timestamps

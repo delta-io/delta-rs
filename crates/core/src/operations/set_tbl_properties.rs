@@ -8,9 +8,12 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaResult;
 use crate::DeltaTable;
-use crate::errors::unsupported_column_mapping_write;
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
+use crate::kernel::{
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef,
+    resolve_snapshot,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::config::TableProperty;
@@ -77,6 +80,41 @@ impl SetTablePropertiesBuilder {
     }
 }
 
+fn plan_set_table_properties_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    properties: HashMap<String, String>,
+    raise_if_not_exists: bool,
+) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
+    if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
+        return Err(DeltaTableError::unsupported_column_mapping(
+            ColumnMappingOperation::Write,
+            "SET TBLPROPERTIES delta.columnMapping.mode",
+        ));
+    }
+
+    let mut metadata = snapshot.metadata.clone();
+    let current_protocol = snapshot.protocol;
+    let new_protocol = current_protocol
+        .clone()
+        .apply_properties_to_protocol(&properties, raise_if_not_exists)?;
+
+    for (key, value) in &properties {
+        metadata = metadata.add_config_key(key.clone(), value.to_string())?;
+    }
+
+    let final_protocol = new_protocol.move_table_properties_into_features(metadata.configuration());
+
+    let operation = DeltaOperation::SetTableProperties { properties };
+
+    let mut actions = vec![Action::Metadata(metadata)];
+
+    if current_protocol.ne(&final_protocol) {
+        actions.push(Action::Protocol(final_protocol));
+    }
+
+    Ok((actions, operation))
+}
+
 impl std::future::IntoFuture for SetTablePropertiesBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -92,35 +130,12 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let mut metadata = snapshot.metadata().clone();
-
-            let current_protocol = snapshot.protocol();
             let properties = this.properties;
-
-            if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
-                return Err(unsupported_column_mapping_write(
-                    "SET TBLPROPERTIES delta.columnMapping.mode",
-                ));
-            }
-
-            let new_protocol = current_protocol
-                .clone()
-                .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
-
-            for (key, value) in &properties {
-                metadata = metadata.add_config_key(key.clone(), value.to_string())?;
-            }
-
-            let final_protocol =
-                new_protocol.move_table_properties_into_features(metadata.configuration());
-
-            let operation = DeltaOperation::SetTableProperties { properties };
-
-            let mut actions = vec![Action::Metadata(metadata)];
-
-            if current_protocol.ne(&final_protocol) {
-                actions.push(Action::Protocol(final_protocol));
-            }
+            let (actions, operation) = plan_set_table_properties_actions(
+                snapshot.snapshot().metadata_state(),
+                properties,
+                this.raise_if_not_exists,
+            )?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions.clone())
@@ -141,12 +156,14 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
 }
 
 #[cfg(test)]
+/// Tests for the set-table-properties operation.
 pub mod tests {
     use crate::writer::test_utils::create_initialized_table;
     use std::collections::HashMap;
     use tempfile::tempdir;
 
     #[tokio::test]
+    /// Verify that setting table properties is persisted to table metadata.
     pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
         let temp_loc = tempdir()?;
         let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;

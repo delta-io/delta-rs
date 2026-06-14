@@ -35,7 +35,6 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
-use delta_kernel::table_features::ColumnMappingMode;
 use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -51,7 +50,6 @@ use super::{
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
 };
-use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::resolve_snapshot;
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::*;
@@ -67,7 +65,7 @@ use crate::{
         resolve_session_state,
     },
     kernel::{
-        Action, EagerSnapshot,
+        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -398,7 +396,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),
@@ -459,9 +464,6 @@ impl std::future::IntoFuture for UpdateBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(unsupported_column_mapping_write("UPDATE"));
-            }
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

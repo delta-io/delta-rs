@@ -8,7 +8,6 @@ use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
 use moka::Expiry;
 use moka::future::Cache;
-use std::any::Any;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::error;
@@ -49,10 +48,6 @@ impl UnityCatalogList {
 }
 
 impl CatalogProviderList for UnityCatalogList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,
@@ -104,10 +99,6 @@ impl UnityCatalogProvider {
 }
 
 impl CatalogProvider for UnityCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.schemas.iter().map(|c| c.key().clone()).collect()
     }
@@ -211,10 +202,6 @@ impl UnitySchemaProvider {
 
 #[async_trait::async_trait]
 impl SchemaProvider for UnitySchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.table_names.clone()
     }

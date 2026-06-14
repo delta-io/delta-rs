@@ -15,9 +15,11 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
 use crate::kernel::{ProtocolInner, partitions_schema};
 
+/// Factory for constructing Delta log actions (`Add`, `Remove`, `Protocol`, `Metadata`) in tests.
 pub struct ActionFactory;
 
 impl ActionFactory {
+    /// Build an `Add` action directly from object metadata and pre-computed statistics.
     pub fn add_raw(
         meta: ObjectMeta,
         stats: FileStats,
@@ -39,6 +41,7 @@ impl ActionFactory {
         }
     }
 
+    /// Build an `Add` action by generating a random data file for `schema` within `bounds`.
     pub fn add(
         schema: &StructType,
         bounds: HashMap<&str, (&str, &str)>,
@@ -101,10 +104,12 @@ impl ActionFactory {
         ActionFactory::add_raw(meta, stats, partition_values, data_change)
     }
 
+    /// Build a `Remove` action that tombstones the given `Add`.
     pub fn remove(add: &Add, data_change: bool) -> Remove {
         add_as_remove(add, data_change)
     }
 
+    /// Build a `Protocol` action, defaulting reader/writer versions when not specified.
     pub fn protocol(
         max_reader: Option<i32>,
         max_writer: Option<i32>,
@@ -120,6 +125,7 @@ impl ActionFactory {
         .as_kernel()
     }
 
+    /// Build a `Metadata` action for the given schema, partition columns and configuration.
     pub fn metadata(
         schema: &StructType,
         partition_columns: Option<impl IntoIterator<Item = impl ToString>>,
@@ -141,6 +147,7 @@ impl ActionFactory {
     }
 }
 
+/// Convert an `Add` action into the corresponding `Remove` (tombstone) action.
 pub fn add_as_remove(add: &Add, data_change: bool) -> Remove {
     Remove {
         path: add.path.clone(),

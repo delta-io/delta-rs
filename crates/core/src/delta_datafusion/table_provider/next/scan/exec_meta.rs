@@ -3,7 +3,6 @@
 //! This module implements [`DeltaScanMetaExec`], which answers queries using only file
 //! metadata and statistics, avoiding the cost of reading actual Parquet data files.
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
@@ -11,12 +10,9 @@ use std::task::{Context, Poll};
 
 use arrow::array::RecordBatch;
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{SchemaRef, UInt16Type};
-use arrow_array::{
-    ArrayRef, BooleanArray, DictionaryArray, RecordBatchOptions, StringArray, StringViewArray,
-    UInt16Array,
-};
-use arrow_schema::{DataType, FieldRef, Fields, Schema};
+use arrow::datatypes::SchemaRef;
+use arrow_array::{BooleanArray, RecordBatchOptions};
+use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
@@ -73,6 +69,8 @@ pub(crate) struct DeltaScanMetaExec {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Deletion vectors for the table
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// Column name for the file id
@@ -130,6 +128,7 @@ impl DeltaScanMetaExec {
         input: Vec<VecDeque<(String, usize)>>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
         selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        public_file_ids: Arc<super::PublicFileIdMap>,
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
@@ -140,6 +139,7 @@ impl DeltaScanMetaExec {
             input,
             transforms,
             selection_vectors,
+            public_file_ids,
             metrics,
             file_id_field,
             properties,
@@ -194,10 +194,6 @@ impl DeltaScanMetaExec {
 impl ExecutionPlan for DeltaScanMetaExec {
     fn name(&self) -> &'static str {
         "DeltaScanMetaExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -266,6 +262,7 @@ impl ExecutionPlan for DeltaScanMetaExec {
                 .counter("dv_short_mask_padded_files_total", partition),
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
+            public_file_ids: Arc::clone(&self.public_file_ids),
             file_id_field: self.file_id_field.clone(),
             schema_adapter: super::SchemaAdapter::new(Arc::clone(
                 &self.scan_plan.contract.result_schema,
@@ -293,12 +290,12 @@ impl ExecutionPlan for DeltaScanMetaExec {
         None
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        Ok(Statistics {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        Ok(Arc::new(Statistics {
             num_rows: Precision::Exact(self.exact_num_rows(partition)?),
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(self.schema().as_ref()),
-        })
+        }))
     }
 
     fn gather_filters_for_pushdown(
@@ -337,6 +334,8 @@ struct DeltaScanMetaStream {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// Column name for the file id
     file_id_field: Option<FieldRef>,
     /// Cached schema adapter for efficient batch adaptation across batches
@@ -377,7 +376,17 @@ impl DeltaScanMetaStream {
             batch
         };
 
-        let result = if let Some(transform) = self.transforms.get(&file_id) {
+        let result = if self
+            .scan_plan
+            .scan
+            .logical_schema()
+            .fields()
+            .next()
+            .is_none()
+        {
+            // Empty projection: the kernel transform can't build a zero-field struct, keep as-is.
+            batch
+        } else if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
                 .new_expression_evaluator(
                     EMPTY_KERNEL_SCHEMA.clone(),
@@ -394,34 +403,13 @@ impl DeltaScanMetaStream {
         };
 
         if let Some(file_id_field) = &self.file_id_field {
-            let row_count = result.num_rows();
-
-            let keys = UInt16Array::from(vec![0u16; row_count]);
-            let values: ArrayRef = match file_id_field.data_type() {
-                DataType::Dictionary(_, value_type)
-                    if value_type.as_ref() == &DataType::Utf8View =>
-                {
-                    if row_count == 0 {
-                        Arc::new(StringViewArray::from_iter_values(std::iter::empty::<&str>()))
-                    } else {
-                        Arc::new(StringViewArray::from_iter_values([file_id.as_str()]))
-                    }
-                }
-                _ => {
-                    if row_count == 0 {
-                        Arc::new(StringArray::from(Vec::<Option<&str>>::new()))
-                    } else {
-                        Arc::new(StringArray::from(vec![Some(file_id.as_str())]))
-                    }
-                }
-            };
-
-            let file_id_array: DictionaryArray<UInt16Type> =
-                DictionaryArray::try_new(keys, values)?;
+            let public_file_id = super::public_file_id(&self.public_file_ids, &file_id)?;
+            let file_id_array =
+                super::file_id_array_for_value(file_id_field, public_file_id, result.num_rows())?;
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,
-                Some((Arc::new(file_id_array), file_id_field.clone())),
+                Some((file_id_array, file_id_field.clone())),
                 &mut self.schema_adapter,
             )
         } else {
@@ -696,7 +684,7 @@ mod tests {
             .scan(&session.state(), Some(&empty_projection), &[], None)
             .await?;
         assert!(
-            scan.as_any().downcast_ref::<DeltaScanMetaExec>().is_some(),
+            scan.downcast_ref::<DeltaScanMetaExec>().is_some(),
             "expected metadata-only scan\n{diagnostics}"
         );
         assert_eq!(
@@ -817,7 +805,7 @@ mod tests {
             )
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanMetaExec>();
+        let downcast = scan.downcast_ref::<DeltaScanMetaExec>();
         assert!(downcast.is_some());
 
         session.register_table("delta_table", provider).unwrap();
@@ -870,7 +858,7 @@ mod tests {
             )
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanMetaExec>();
+        let downcast = scan.downcast_ref::<DeltaScanMetaExec>();
         assert!(downcast.is_some());
 
         let expected = vec![
@@ -971,7 +959,7 @@ mod tests {
             )
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanMetaExec>();
+        let downcast = scan.downcast_ref::<DeltaScanMetaExec>();
         assert!(downcast.is_some());
 
         let data = collect_partitioned(scan, session.task_ctx())
@@ -998,7 +986,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), Some(&vec![data_idx]), &[], None)
             .await?;
-        let downcast = scan.as_any().downcast_ref::<DeltaScanMetaExec>();
+        let downcast = scan.downcast_ref::<DeltaScanMetaExec>();
         assert!(downcast.is_some());
         assert_eq!(
             scan.schema()
@@ -1122,12 +1110,21 @@ mod tests {
             .scan(&session.state(), Some(&empty_projection), &[], None)
             .await?;
         let template = scan
-            .as_any()
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected metadata-only scan");
 
         let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
         selection_vectors.insert("f2".to_string(), vec![true, false, true, false]);
+        let public_file_ids = Arc::new(
+            [
+                ("f1".to_string(), "f1".to_string()),
+                ("f2".to_string(), "f2".to_string()),
+                ("f3".to_string(), "f3".to_string()),
+                ("f4".to_string(), "f4".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
 
         let exec = DeltaScanMetaExec::new(
             Arc::clone(&template.scan_plan),
@@ -1139,6 +1136,7 @@ mod tests {
             ])],
             Arc::clone(&template.transforms),
             selection_vectors,
+            public_file_ids,
             template.file_id_field.clone(),
             ExecutionPlanMetricsSet::new(),
         );
@@ -1155,7 +1153,6 @@ mod tests {
         );
 
         let repartitioned = repartitioned
-            .as_any()
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected repartitioned DeltaScanMetaExec");
         assert_eq!(repartitioned.input.len(), 2);

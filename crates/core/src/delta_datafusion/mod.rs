@@ -64,9 +64,12 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session, create_session_state_with_spill_config,
 };
-pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
+pub use self::table_provider::next::{
+    DeletionVectorSelection, DeltaScan as DeltaScanNext, FileSelection, MissingSelectedFilePolicy,
+};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
 };
@@ -84,7 +87,9 @@ pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 #[doc(hidden)]
 pub mod bench_support;
 pub mod cdf;
+mod column_mapping;
 mod data_validation;
+/// DataFusion-backed kernel engine and its storage/format handlers.
 pub mod engine;
 pub mod expr;
 mod file_id;
@@ -266,9 +271,12 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = SessionContext::new()
-            .create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
+        let session: SessionContext = create_session().into();
+        let schema = log_data.read_schema();
+        let df_schema = Arc::new(schema.clone().to_dfschema()?);
+        let resolved = Expression::from(predicate).resolve(&session.state(), df_schema.clone())?;
+        let expr = session.create_physical_expr(resolved, &df_schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let mask = pruning_predicate.prune(&log_data)?;
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
@@ -466,7 +474,6 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let delta_scan = node
-            .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
@@ -514,13 +521,9 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let scan = node
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("Can't encode non-delta tables".to_string())
-            })?;
+        let scan = node.downcast_ref::<DeltaScanNext>().ok_or_else(|| {
+            DataFusionError::Internal("Can't encode non-delta tables".to_string())
+        })?;
         serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
@@ -612,6 +615,7 @@ mod tests {
     use crate::DeltaTable;
     use crate::operations::write::SchemaMode;
     use crate::test_utils::{
+        make_test_add,
         object_store::{
             RecordedObjectStoreOperation as ObjectStoreOperation, RecordedPathKind as PathKind,
             drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
@@ -634,7 +638,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -748,12 +752,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let selected_file_ids: Vec<String> = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -769,8 +768,8 @@ mod tests {
             .await
             .unwrap()
             .with_file_selection(
-                FileSelection::new(selected_file_ids.clone())
-                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+                FileSelection::from_file_paths(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore),
             );
 
         let codec = DeltaLogicalCodec {};
@@ -789,16 +788,12 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
 
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let decoded_file_ids = serialized
             .get("file_selection")
-            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.get("paths"))
             .and_then(|value| value.as_array())
             .unwrap()
             .iter()
@@ -812,6 +807,121 @@ mod tests {
 
         assert_eq!(decoded_file_ids, selected_file_ids);
         assert_eq!(decoded_policy, "Ignore");
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_serializes_file_selection_adds_as_identity_only() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let mut add = make_test_add("part=a/part-000.parquet", &[("part", "a")], 123);
+        add.stats = Some(r#"{"numRecords":999}"#.to_string());
+        add.tags = Some(std::collections::HashMap::from([(
+            "secret-tag".to_string(),
+            Some("secret-value".to_string()),
+        )]));
+        add.size = 999;
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_adds([add]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("part=a/part-000.parquet"));
+        for forbidden in [
+            "partitionValues",
+            "numRecords",
+            "secret-tag",
+            "secret-value",
+            "modificationTime",
+            "\"size\"",
+        ] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "FileSelection::from_adds serialized Add metadata field {forbidden}: {file_selection_json}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_strips_file_selection_url_credentials() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_file_paths([
+                "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+            ]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("https://example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "encoded file selection contains {forbidden}: {file_selection_json}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1230,7 +1340,7 @@ mod tests {
             .unwrap();
 
         let df = datafusion
-            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .sql(r#"select * from snapshot where "vaLue" > 10000 and "vaLue" < 20000"#)
             .await
             .unwrap();
 

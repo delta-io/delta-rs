@@ -51,7 +51,6 @@ use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::Expr;
-use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use futures::{StreamExt as _, TryStreamExt, stream};
 use parquet::file::properties::WriterProperties;
@@ -74,9 +73,11 @@ use crate::delta_datafusion::{
     Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
     scan_files_where_matches, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, LogicalFileView, resolve_snapshot};
+use crate::kernel::{
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, resolve_snapshot,
+};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -294,9 +295,6 @@ impl std::future::IntoFuture for DeleteBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(unsupported_column_mapping_write("DELETE"));
-            }
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
@@ -439,10 +437,16 @@ async fn execute(
     let scan_start = Instant::now();
 
     let Some(predicate) = predicate else {
-        // no predicate, so we are just dropping all files.
-        // we also don't need to write cdc actions if we are fropping all files.
-        let full_file =
-            collect_full_file_deletes(snapshot.file_views(log_store.as_ref(), None)).await?;
+        // no predicate means all files match.
+        // cdc actions are not written when table files are removed.
+        let full_file = collect_full_file_deletes(snapshot.snapshot().active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::RawJson,
+            },
+        ))
+        .await?;
         metrics.num_removed_files = full_file.removed_files;
         metrics.num_deleted_rows = full_file.deleted_rows;
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
@@ -458,8 +462,7 @@ async fn execute(
         .to_vec();
     let mut props = crate::delta_datafusion::FindFilesExprProperties {
         partition_columns,
-        partition_only: true,
-        result: Ok(()),
+        ..Default::default()
     };
     for term in &skipping_pred {
         term.visit(&mut props)?;
@@ -479,9 +482,13 @@ async fn execute(
                 // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
                 // a file either fully matches or does not. It is therefore safe to treat this as
                 // the authoritative match set for DELETE.
-                collect_full_file_deletes(
-                    snapshot.file_views(log_store.as_ref(), Some(Arc::new(delta_predicate))),
-                )
+                collect_full_file_deletes(snapshot.snapshot().active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: Some(Arc::new(delta_predicate)),
+                        stats: AddStatsPolicy::RawJson,
+                    },
+                ))
                 .await?
             }
             Err(err) => {
@@ -500,7 +507,14 @@ async fn execute(
                 );
                 collect_full_file_deletes(
                     snapshot
-                        .file_views(log_store.as_ref(), None)
+                        .snapshot()
+                        .active_adds(
+                            log_store.as_ref(),
+                            ActiveAddOptions {
+                                predicate: None,
+                                stats: AddStatsPolicy::RawJson,
+                            },
+                        )
                         .try_filter_map(|f| {
                             let matching_paths = Arc::clone(&matching_paths);
                             async move { Ok(matching_paths.contains(f.path_raw()).then_some(f)) }
@@ -533,7 +547,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),
@@ -715,6 +736,7 @@ mod tests {
     use delta_kernel::schema::StructType;
     use object_store::ObjectStoreExt as _;
     use pretty_assertions::assert_eq;
+    use rstest::rstest;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1066,13 +1088,15 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 3);
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("value = 1"));
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
 
         let expected = vec![
             "+----+-------+------------+",
@@ -1228,9 +1252,10 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, Some(2));
         assert_eq!(metrics.num_copied_rows, 0);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
 
         let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
         assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(2)));
 
         let expected = vec![
@@ -1975,7 +2000,9 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 0);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
 
         let expected = [
             "+----+-------+------------+",
@@ -2639,6 +2666,168 @@ mod tests {
         let predicate = "\"created_at\" < ARROW_CAST('2024-01-01 00:00:00+00:00', 'Timestamp(Microsecond, None)')";
         let (table, _metrics) = table.delete().with_predicate(predicate).await?;
         assert_eq!(table.version(), Some(2), "The delete failed to execute");
+        Ok(())
+    }
+
+    const START_TIMESTAMP_US: i64 = 1_704_067_200 * 1_000_000; // 2024-01-01 00:00:00 UTC
+    const DAY_US: i64 = 60 * 60 * 24 * 1_000_000;
+
+    async fn setup_timestamp_table() -> DeltaResult<(DeltaTable, Arc<Schema>)> {
+        use arrow::array::TimestampMicrosecondArray;
+
+        let table: DeltaTable = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "timestamp",
+                DeltaDataType::Primitive(PrimitiveType::Timestamp),
+                true,
+                None,
+            )
+            .await?;
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "timestamp",
+            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        )]));
+
+        // Write two batches covering different time ranges,
+        // resulting in two data files.
+
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US,
+                    START_TIMESTAMP_US + DAY_US,
+                    START_TIMESTAMP_US + 2 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table = table.write(vec![batch]).await?;
+
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US + 3 * DAY_US,
+                    START_TIMESTAMP_US + 4 * DAY_US,
+                    START_TIMESTAMP_US + 5 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table = table.write(vec![batch]).await?;
+
+        Ok((table, arrow_schema))
+    }
+
+    /// Ensure conflict checking works when a delete operation with a timestamp predicate follows
+    /// a concurrent write operation. This requires arrow_cast expressions to be simplified.
+    #[rstest]
+    #[tokio::test]
+    async fn test_concurrent_delete_with_timestamp_predicate_after_write(
+        #[values(true, false)] is_conflict: bool,
+    ) -> DeltaResult<()> {
+        use arrow::array::TimestampMicrosecondArray;
+        let (table, arrow_schema) = setup_timestamp_table().await?;
+
+        // Clone the table to make two concurrent operations
+        let table_for_op1 = table.clone();
+        let table_for_op2 = table;
+
+        // Successful commit: adds new data
+        let new_batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![Arc::new(
+                TimestampMicrosecondArray::from(vec![
+                    START_TIMESTAMP_US + 6 * DAY_US,
+                    START_TIMESTAMP_US + 7 * DAY_US,
+                ])
+                .with_timezone("UTC"),
+            )],
+        )?;
+        let table_after_append = table_for_op1
+            .write(vec![new_batch])
+            .await
+            .expect("Failed to append new data");
+        assert_eq!(table_after_append.version(), Some(3));
+
+        let predicate = if is_conflict {
+            // Delete would affect newly written data
+            "timestamp >= '2024-01-02T00:00:00Z'"
+        } else {
+            "timestamp < '2024-01-02T00:00:00Z'"
+        };
+
+        // Concurrent commit that deletes a range of data.
+        let result = table_for_op2.delete().with_predicate(predicate).await;
+
+        if is_conflict {
+            let err = result.expect_err(
+                "expected concurrent delete with a timestamp predicate to fail conflict checking",
+            );
+            assert!(
+                err.to_string()
+                    .contains("concurrent transactions added new data"),
+                "unexpected error: {err}",
+            );
+        } else {
+            let (table, _) = result.expect("expected concurrent delete to succeed");
+            assert_eq!(table.version(), Some(4));
+        }
+
+        Ok(())
+    }
+
+    /// Ensure conflict checking works with two concurrent delete operations with timestamp
+    /// predicates. This requires arrow_cast expressions to be simplified.
+    #[rstest]
+    #[tokio::test]
+    async fn test_concurrent_deletes_with_timestamp_predicates(
+        #[values(true, false)] is_conflict: bool,
+    ) -> DeltaResult<()> {
+        let (table, _) = setup_timestamp_table().await?;
+
+        // Clone the table to make two concurrent operations
+        let table_for_op1 = table.clone();
+        let table_for_op2 = table;
+
+        // Successful commit: delete with timestamp predicate
+        // that only affects the second batch of written data.
+        let (table_after_delete, _) = table_for_op1
+            .delete()
+            .with_predicate("timestamp >= '2024-01-05T00:00:00Z'")
+            .await
+            .expect("Failed to delete data");
+        assert_eq!(table_after_delete.version(), Some(3));
+
+        // Concurrent other delete with a different predicate
+        let predicate = if is_conflict {
+            // Predicate that also includes the second batch of written data
+            "timestamp >= '2024-01-06T00:00:00Z'"
+        } else {
+            // Predicate that only affects the first batch of written data
+            "timestamp < '2024-01-02T00:00:00Z'"
+        };
+
+        let result = table_for_op2.delete().with_predicate(predicate).await;
+
+        if is_conflict {
+            let err = result.expect_err(
+                "expected concurrent delete with a timestamp predicate to fail conflict checking",
+            );
+            assert!(
+                err.to_string()
+                    .contains("concurrent transaction deleted data this operation read"),
+                "unexpected error: {err}",
+            );
+        } else {
+            let (table, _) = result.expect("expected concurrent delete to succeed");
+            assert_eq!(table.version(), Some(4));
+        }
+
         Ok(())
     }
 }

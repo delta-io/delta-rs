@@ -442,7 +442,7 @@ impl ScanContext {
     }
 }
 
-fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
+pub(super) fn parse_path(url: &Url, path: &str) -> DeltaResult<Url, DataFusionError> {
     Ok(match Url::parse(path) {
         Ok(url) => url,
         Err(_) => url

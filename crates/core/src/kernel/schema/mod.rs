@@ -15,5 +15,6 @@ pub trait DataCheck {
     /// The SQL expression to use for the check
     fn get_expression(&self) -> &str;
 
+    /// Upcast to [`Any`] so callers can downcast to the concrete check implementation.
     fn as_any(&self) -> &dyn Any;
 }

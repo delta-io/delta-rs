@@ -57,13 +57,14 @@ use crate::delta_datafusion::{
     DeltaSessionExt, SessionFallbackPolicy, SessionResolveContext, create_session,
     resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError, unsupported_column_mapping_write};
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{Action, EagerSnapshot, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
+/// Configuration types controlling how data and statistics are written.
 pub mod configs;
 pub(crate) mod execution;
 pub(crate) mod generated_columns;
@@ -406,8 +407,12 @@ impl WriteBuilder {
 
         match &self.snapshot {
             Some(snapshot) => {
-                if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                    return Err(unsupported_column_mapping_write("WRITE"));
+                if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+                    && self.schema_mode.is_some()
+                {
+                    return Err(DeltaTableError::Generic(
+                        "Schema evolution on column-mapped tables is not yet supported".to_string(),
+                    ));
                 }
 
                 if self.mode == SaveMode::Overwrite {

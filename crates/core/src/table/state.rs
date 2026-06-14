@@ -35,6 +35,7 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    /// Wrap an already-loaded [`EagerSnapshot`] as the in-memory state of a table.
     pub fn new(snapshot: EagerSnapshot) -> Self {
         Self { snapshot }
     }
@@ -138,7 +139,7 @@ impl DeltaTableState {
         &self,
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
-        self.snapshot.snapshot().tombstones(log_store)
+        self.snapshot.snapshot().active_tombstones(log_store)
     }
 
     /// Get the transaction version for the given application ID.
@@ -288,6 +289,40 @@ impl Snapshot {
         self.add_actions_batches_with_schema(true, expression, table_schema)
     }
 
+    /// Project active add batches to path and partition columns.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn active_add_partition_batches_from(
+        &self,
+        batches: &[RecordBatch],
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        let mut expressions = vec![column_expr_ref!("path")];
+        let mut fields = vec![StructField::not_null("path", DataType::STRING)];
+
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
+            fields.push(StructField::nullable(
+                "partition",
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
+            ));
+            expressions.push(column_expr_ref!("partitionValues_parsed"));
+        }
+
+        let expression = Expression::Struct(expressions, None);
+        let table_schema = DataType::try_struct_type(fields)?;
+
+        let evaluated_batches = batches.iter().map(|batch| {
+            let input_schema = Arc::new(batch.schema().as_ref().try_into_kernel()?);
+            let evaluator = ARROW_HANDLER.new_expression_evaluator(
+                input_schema,
+                expression.clone().into(),
+                table_schema.clone(),
+            )?;
+            let batch = evaluator.evaluate_arrow(batch.clone())?;
+            Ok(batch.normalize(".", None)?)
+        });
+
+        coalesce_batches(evaluated_batches)
+    }
+
     fn add_actions_batches_with_schema(
         &self,
         flatten: bool,
@@ -403,6 +438,10 @@ impl Snapshot {
 }
 
 impl EagerSnapshot {
+    /// Materialize the table's active `Add` actions as a single Arrow [`RecordBatch`].
+    ///
+    /// When `flatten` is true, nested fields (e.g. partition values and statistics) are flattened
+    /// into top-level columns for easier inspection.
     pub fn add_actions_table(
         &self,
         flatten: bool,
@@ -410,6 +449,8 @@ impl EagerSnapshot {
         self.snapshot().add_actions_table(flatten)
     }
 
+    /// Like [`add_actions_table`](Self::add_actions_table) but yields the actions as a sequence of
+    /// record batches instead of a single concatenated batch.
     pub fn add_actions_batches(
         &self,
         flatten: bool,

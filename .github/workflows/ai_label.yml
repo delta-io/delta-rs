@@ -1,0 +1,42 @@
+name: ai_label
+
+# Add the "ai" label when any commit in the PR is co-authored by an AI assistant
+on:
+  pull_request_target:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  label:
+    name: Label AI-assisted PRs
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # <https://github.com/actions/github-script/releases/tag/v8>
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            // Match a Co-authored-by trailer naming an AI assistant.
+            const aiPattern = /^co-authored-by:.*\b(claude|copilot|codex)\b/im
+
+            const commits = await github.paginate(github.rest.pulls.listCommits, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            })
+
+            const aiAssisted = commits.some((c) => aiPattern.test(c.commit.message))
+            if (!aiAssisted) {
+              return
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              labels: ["ai"],
+            })

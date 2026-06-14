@@ -61,9 +61,8 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
-use delta_kernel::table_features::ColumnMappingMode;
 use filter::try_construct_early_filter;
-use futures::future::BoxFuture;
+use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::*;
@@ -85,11 +84,13 @@ use crate::delta_datafusion::{
     resolve_session_state, update_datafusion_session,
 };
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
-use crate::errors::unsupported_column_mapping_write;
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
+    resolve_snapshot,
+};
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::WriterStatsConfig;
@@ -101,6 +102,7 @@ use crate::protocol::{DeltaOperation, MergePredicate};
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use delta_kernel::table_features::ColumnMappingMode;
 
 mod barrier;
 mod filter;
@@ -1600,19 +1602,25 @@ async fn execute(
     metrics.num_target_files_added = actions.len();
 
     let survivors = barrier
-        .as_any()
         .downcast_ref::<MergeBarrierExec>()
         .unwrap()
         .survivors();
 
     let table_root = snapshot.table_configuration().table_root().clone();
 
-    for action in snapshot.log_data() {
-        let log_path = action.path_raw();
-
-        if should_remove_rewritten_file(&survivors, log_path, &table_root)? {
-            metrics.num_target_files_removed += 1;
-            actions.push(action.remove_action(true).into());
+    {
+        let mut active_adds = snapshot.snapshot().active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        );
+        while let Some(action) = active_adds.try_next().await? {
+            if should_remove_rewritten_file(&survivors, action.path_raw(), &table_root)? {
+                metrics.num_target_files_removed += 1;
+                actions.push(action.remove_action(true).into());
+            }
         }
     }
 
@@ -1650,31 +1658,31 @@ async fn execute(
         TARGET_FILES_SKIPPED_METRIC,
         TARGET_FILES_PRUNED_METRIC_LEGACY,
     ];
-    metrics.num_target_files_skipped_during_scan = get_metric_any_or(
-        &scan_count_metrics,
-        &target_files_skipped_metric_names,
-        || {
-            let total_files = snapshot.log_data().num_files();
-            let (derived, impossible_state) =
-                derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
-            if impossible_state {
-                warn!(
-                    %operation_id,
-                    total_files,
-                    scanned_files = metrics.num_target_files_scanned,
-                    metric_names = ?target_files_skipped_metric_names,
-                    "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
-                );
-            }
+    metrics.num_target_files_skipped_during_scan = if let Some(metric) =
+        get_metric_any(&scan_count_metrics, &target_files_skipped_metric_names)
+    {
+        metric
+    } else {
+        let total_files = count_active_adds(&snapshot, log_store.as_ref()).await?;
+        let (derived, impossible_state) =
+            derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
+        if impossible_state {
             warn!(
                 %operation_id,
+                total_files,
+                scanned_files = metrics.num_target_files_scanned,
                 metric_names = ?target_files_skipped_metric_names,
-                derived,
-                "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+                "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
             );
-            derived
-        },
-    );
+        }
+        warn!(
+            %operation_id,
+            metric_names = ?target_files_skipped_metric_names,
+            derived,
+            "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+        );
+        derived
+    };
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
@@ -1762,7 +1770,9 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
 
 fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
     let expr = coerce_predicate_literals(expr, target_schema.as_ref())?;
-    let simplify_context = SimplifyContext::default().with_schema(target_schema);
+    let simplify_context = SimplifyContext::builder()
+        .with_schema(target_schema)
+        .build();
     let simplifier = ExprSimplifier::new(simplify_context).with_max_cycles(10);
     Ok(simplifier.simplify(expr)?)
 }
@@ -1787,6 +1797,24 @@ fn build_file_skipping_predicates(
 fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize, bool) {
     let impossible_state = scanned_files > total_files;
     (total_files.saturating_sub(scanned_files), impossible_state)
+}
+
+async fn count_active_adds(
+    snapshot: &EagerSnapshot,
+    log_store: &dyn LogStore,
+) -> DeltaResult<usize> {
+    let batches = snapshot
+        .snapshot()
+        .active_add_batches(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .await?;
+
+    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
 }
 
 fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
@@ -1827,11 +1855,15 @@ impl std::future::IntoFuture for MergeBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(unsupported_column_mapping_write("MERGE"));
-            }
-
             PROTOCOL.can_write_to(&snapshot)?;
+
+            if this.merge_schema
+                && snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None
+            {
+                return Err(DeltaTableError::Generic(
+                    "Schema evolution on column-mapped tables is not yet supported".to_string(),
+                ));
+            }
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -1884,15 +1916,16 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTable;
     use crate::TableProperty;
-    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
+    use crate::kernel::{Action, DataType, EagerSnapshot, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
+    use crate::test_utils::{TestResult, TestTables};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
+    use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -2037,6 +2070,30 @@ mod tests {
             pre_merge_files.saturating_sub(metrics.num_target_files_scanned)
         );
         assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_active_adds_replays_lazy_snapshot_without_materialized_files() -> TestResult
+    {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = EagerSnapshot::try_new(
+            &log_store,
+            DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let total_files = super::count_active_adds(&snapshot, log_store.as_ref()).await?;
+
+        assert_eq!(total_files, 5);
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
     }
 
     #[test]

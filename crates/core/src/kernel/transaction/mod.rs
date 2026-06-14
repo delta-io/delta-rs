@@ -135,6 +135,7 @@ const RESERVED_COMMIT_INFO_KEYS: &[&str] = &[
 ];
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+/// Metrics describing the work performed to land a single commit.
 #[serde(rename_all = "camelCase")]
 pub struct CommitMetrics {
     /// Number of retries before a successful commit
@@ -142,6 +143,7 @@ pub struct CommitMetrics {
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+/// Metrics describing work performed by post-commit hooks (checkpointing, log cleanup).
 #[serde(rename_all = "camelCase")]
 pub struct PostCommitMetrics {
     /// Whether a new checkpoint was created as part of this commit
@@ -152,6 +154,7 @@ pub struct PostCommitMetrics {
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
+/// Aggregate metrics for a commit, combining commit-time and post-commit measurements.
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
     /// Number of retries before a successful commit
@@ -868,8 +871,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 (latest_version - steps) + 1,
                             )
                             .await?;
+                            let conflict_read_set = read_snapshot
+                                .snapshot()
+                                .conflict_read_set(this.log_store.as_ref())
+                                .await?;
                             let transaction_info = TransactionInfo::try_new(
-                                read_snapshot.log_data(),
+                                conflict_read_set,
                                 this.data.operation.read_predicate(),
                                 &this.data.actions,
                                 this.data.operation.read_whole_table(),
