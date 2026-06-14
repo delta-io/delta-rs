@@ -105,7 +105,10 @@ pub const OPENDAL_SCHEME_PREFIX: &str = "opendal+";
 pub fn register_handlers(_additional_prefixes: Option<Url>) {
     for service in GENERIC_SERVICES {
         let adapter = Arc::new(GenericAdapter::new(*service));
-        register_opendal_handlers(&format!("{OPENDAL_SCHEME_PREFIX}{service}"), adapter.clone());
+        register_opendal_handlers(
+            &format!("{OPENDAL_SCHEME_PREFIX}{service}"),
+            adapter.clone(),
+        );
         // Also expose the bare `<service>://` scheme, but only when it neither
         // collides with a native delta backend nor is a WHATWG "special" scheme.
         // Special schemes (e.g. `ftp`) require a host, so `Url::parse("ftp://")`
