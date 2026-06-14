@@ -752,12 +752,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let selected_file_ids: Vec<String> = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
