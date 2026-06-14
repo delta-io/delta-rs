@@ -30,8 +30,8 @@ use crate::delta_datafusion::{
     normalize_path_as_file_id, resolve_file_column_name,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, EagerSnapshot};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView};
+use crate::logstore::{LogStore, LogStoreRef};
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
@@ -40,17 +40,6 @@ pub(crate) struct FindFiles {
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
-}
-
-/// Abstraction over sources that can provide partition metadata add-action batches.
-pub(crate) trait PartitionAddActionsProvider {
-    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>>;
-}
-
-impl PartitionAddActionsProvider for EagerSnapshot {
-    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
-        EagerSnapshot::add_actions_partition_batches(self)
-    }
 }
 
 /// Finds files in a snapshot that match the provided predicate.
@@ -78,7 +67,8 @@ pub(crate) async fn find_files(
             let predicate = analysis.predicate();
 
             if analysis.partition_only {
-                let candidates = scan_memory_table(snapshot, &predicate).await?;
+                let candidates =
+                    scan_memory_table(snapshot, log_store.as_ref(), &predicate).await?;
                 let result = FindFiles {
                     candidates,
                     partition_scan: true,
@@ -488,9 +478,14 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
 /// partition predicates without materializing full add-action metadata.
 /// Returns `None` when the snapshot contains no add actions.
 pub(crate) fn add_actions_partition_mem_table(
-    snapshot: &(impl PartitionAddActionsProvider + ?Sized),
+    snapshot: &EagerSnapshot,
 ) -> DeltaResult<Option<MemTable>> {
-    let add_action_batches = snapshot.add_actions_partition_batches()?;
+    add_actions_partition_mem_table_from_batches(snapshot.add_actions_partition_batches()?)
+}
+
+fn add_actions_partition_mem_table_from_batches(
+    add_action_batches: Vec<RecordBatch>,
+) -> DeltaResult<Option<MemTable>> {
     if add_action_batches.is_empty() {
         return Ok(None);
     }
@@ -544,10 +539,30 @@ pub(crate) fn add_actions_partition_mem_table(
     )?))
 }
 
-async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.log_data().iter().map(|f| f.to_add()).collect_vec();
+async fn scan_memory_table(
+    snapshot: &EagerSnapshot,
+    log_store: &dyn LogStore,
+    predicate: &Expr,
+) -> DeltaResult<Vec<Add>> {
+    let options = ActiveAddOptions {
+        predicate: None,
+        stats: AddStatsPolicy::None,
+    };
+    let add_action_batches = snapshot
+        .snapshot()
+        .active_add_batches(log_store, options)
+        .await?;
+    let actions: Vec<Add> = add_action_batches
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.num_rows()).map(|idx| LogicalFileView::new(batch.clone(), idx).to_add())
+        })
+        .collect_vec();
 
-    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+    let partition_batches = snapshot
+        .snapshot()
+        .active_add_partition_batches_from(&add_action_batches)?;
+    let Some(mem_table) = add_actions_partition_mem_table_from_batches(partition_batches)? else {
         return Ok(vec![]);
     };
 
@@ -682,7 +697,13 @@ mod tests {
             DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
         },
         protocol::SaveMode,
-        test_utils::{TestResult, multibatch_add_actions_for_partition, open_fs_path},
+        test_utils::{
+            TestResult, multibatch_add_actions_for_partition,
+            object_store::{
+                drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+            },
+            open_fs_path,
+        },
         writer::test_utils::{get_delta_schema, get_record_batch},
     };
 
@@ -1045,7 +1066,12 @@ mod tests {
             .with_partition_columns(["modified"])
             .await?;
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(table.snapshot()?.snapshot(), &predicate).await?;
+        let matches = scan_memory_table(
+            table.snapshot()?.snapshot(),
+            table.log_store().as_ref(),
+            &predicate,
+        )
+        .await?;
         assert!(matches.is_empty());
         Ok(())
     }
@@ -1065,10 +1091,86 @@ mod tests {
         let snapshot = table.snapshot()?.snapshot();
         let total_actions = snapshot.log_data().iter().count();
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, &predicate).await?;
+        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert!(!matches.is_empty());
         assert!(matches.len() < total_actions);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_filters_lazy_snapshot_without_materializing() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let log_store = table.log_store().clone();
+        let config = crate::DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+
+        assert!(!matches.is_empty());
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_replays_lazy_snapshot_once() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let config = crate::DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+        drain_recorded_ops(&mut operations).await;
+
+        snapshot
+            .snapshot()
+            .active_add_batches(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .await?;
+        let single_replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+        let replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        assert!(!matches.is_empty());
+        assert_eq!(replay_reads, single_replay_reads);
         Ok(())
     }
 
@@ -1100,7 +1202,7 @@ mod tests {
         );
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, &predicate).await?;
+        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert_eq!(matches.len(), expected_matches);
 
@@ -1113,26 +1215,6 @@ mod tests {
             .map(|idx| format!("modified=2021-02-02/file-{idx:05}.parquet"))
             .collect::<HashSet<_>>();
         assert_eq!(match_paths, expected_paths);
-        Ok(())
-    }
-
-    struct MockPartitionProvider {
-        batches: Vec<RecordBatch>,
-    }
-
-    impl PartitionAddActionsProvider for MockPartitionProvider {
-        fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
-            Ok(self.batches.clone())
-        }
-    }
-
-    #[test]
-    fn test_add_actions_partition_mem_table_accepts_generic_provider() -> DeltaResult<()> {
-        let provider = MockPartitionProvider {
-            batches: Vec::new(),
-        };
-        let mem_table = add_actions_partition_mem_table(&provider)?;
-        assert!(mem_table.is_none());
         Ok(())
     }
 }

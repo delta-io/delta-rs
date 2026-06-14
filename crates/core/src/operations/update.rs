@@ -65,7 +65,7 @@ use crate::{
         resolve_session_state,
     },
     kernel::{
-        Action, EagerSnapshot,
+        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -396,7 +396,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),
