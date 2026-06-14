@@ -13,12 +13,15 @@ The test below uses the local filesystem service under the ``fs://`` scheme,
 so it runs without any network access or external account.
 """
 
-import pyarrow as pa
+import pytest
 
 from deltalake import DeltaTable, write_deltalake
 
 
+@pytest.mark.pyarrow
 def test_opendal_fs_roundtrip(tmp_path):
+    import pyarrow as pa
+
     # `opendal.root` scopes the operator at the temp dir; the URL path is the
     # table prefix within it. The host segment is unused for the fs service.
     storage_options = {"opendal.root": str(tmp_path)}
@@ -42,7 +45,10 @@ def test_opendal_fs_roundtrip(tmp_path):
     assert result.column("id").to_pylist() == [1, 1, 2, 2, 3, 3]
 
 
+@pytest.mark.pyarrow
 def test_opendal_prefixed_scheme_roundtrip(tmp_path):
+    import pyarrow as pa
+
     # Every service is also reachable under the unambiguous `opendal+<service>://`
     # scheme; this exercises that registration path (the `fs` service has no
     # native counterpart, but the prefixed form must work regardless).
