@@ -9,7 +9,7 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::{
-    Action, Add, LogDataHandler, Metadata, Protocol, Remove, Transaction, Version,
+    Action, Add, ConflictReadSet, Metadata, Protocol, Remove, Transaction, Version,
 };
 use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
@@ -111,7 +111,7 @@ pub(crate) struct TransactionInfo<'a> {
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
     /// read [`DeltaTableState`] used for the transaction
-    read_snapshot: LogDataHandler<'a>,
+    read_snapshot: ConflictReadSet<'a>,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
@@ -119,7 +119,7 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     pub fn try_new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
@@ -127,8 +127,9 @@ impl<'a> TransactionInfo<'a> {
         use datafusion::prelude::SessionContext;
 
         let session = SessionContext::new();
+        let log_data = read_snapshot.log_data();
         let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
+            .map(|pred| log_data.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
 
         let mut read_app_ids = HashSet::<String>::new();
@@ -148,7 +149,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(feature = "datafusion")]
     pub fn new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<Expr>,
         actions: &'a [Action],
         read_whole_table: bool,
@@ -171,7 +172,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     pub fn try_new(
-        read_snapshot: LogDataHandler<'a>,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
         read_whole_table: bool,
@@ -207,7 +208,7 @@ impl<'a> TransactionInfo<'a> {
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
                 files_matching_predicate(
-                    self.read_snapshot.clone(),
+                    self.read_snapshot.log_data(),
                     std::slice::from_ref(predicate),
                 )
                 .map_err(|err| CommitConflictError::Predicate {
@@ -215,14 +216,23 @@ impl<'a> TransactionInfo<'a> {
                 })?,
             ))
         } else {
-            Ok(Either::Right(self.read_snapshot.iter().map(|f| f.to_add())))
+            Ok(Either::Right(
+                self.read_snapshot
+                    .log_data()
+                    .into_iter()
+                    .map(|f| f.to_add()),
+            ))
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.iter().map(|f| f.to_add()))
+        Ok(self
+            .read_snapshot
+            .log_data()
+            .into_iter()
+            .map(|f| f.to_add()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -369,6 +379,7 @@ impl<'a> ConflictChecker<'a> {
                     op,
                     &transaction_info
                         .read_snapshot
+                        .log_data()
                         .table_properties()
                         .isolation_level(),
                 ) {
@@ -380,6 +391,7 @@ impl<'a> ConflictChecker<'a> {
             .unwrap_or_else(|| {
                 transaction_info
                     .read_snapshot
+                    .log_data()
                     .table_properties()
                     .isolation_level()
             });
@@ -410,11 +422,19 @@ impl<'a> ConflictChecker<'a> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
                 p.min_reader_version(),
-                self.txn_info.read_snapshot.protocol().min_reader_version(),
+                self.txn_info
+                    .read_snapshot
+                    .log_data()
+                    .protocol()
+                    .min_reader_version(),
             );
             let (win_write, curr_write) = (
                 p.min_writer_version(),
-                self.txn_info.read_snapshot.protocol().min_writer_version(),
+                self.txn_info
+                    .read_snapshot
+                    .log_data()
+                    .protocol()
+                    .min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
                 return Err(CommitConflictError::ProtocolChanged(format!(
@@ -479,10 +499,12 @@ impl<'a> ConflictChecker<'a> {
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.txn_info.read_snapshot.read_schema();
+                    let read_snapshot = self.txn_info.read_snapshot.log_data();
+                    let arrow_schema = read_snapshot.read_schema();
                     let partition_columns = self
                         .txn_info
                         .read_snapshot
+                        .log_data()
                         .metadata()
                         .partition_columns()
                         .to_vec();
@@ -717,8 +739,9 @@ mod tests {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
+        let conflict_read_set = ConflictReadSet::from_log_data_for_test(snapshot.log_data());
         let transaction_info =
-            TransactionInfo::new(snapshot.log_data(), reads, &actions, read_whole_table);
+            TransactionInfo::new(conflict_read_set, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
