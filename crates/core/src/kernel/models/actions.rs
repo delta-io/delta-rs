@@ -540,6 +540,25 @@ impl ProtocolInner {
                 }
             }
         }
+        // Check columnMappingMode and bump protocol or add reader/writerFeatures
+        if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode) {
+            if mode.as_str() != "none" {
+                if self.min_reader_version >= 3 {
+                    self.reader_features
+                        .get_or_insert_with(HashSet::new)
+                        .insert(TableFeature::ColumnMapping);
+                } else {
+                    self.min_reader_version = self.min_reader_version.max(2);
+                }
+                if self.min_writer_version >= 7 {
+                    self.writer_features
+                        .get_or_insert_with(HashSet::new)
+                        .insert(TableFeature::ColumnMapping);
+                } else {
+                    self.min_writer_version = self.min_writer_version.max(5);
+                }
+            }
+        }
 
         // Check enableChangeDataFeed and bump protocol or add writerFeature if writer versions is >=7
         if let Some(enable_cdf) = parsed_properties.get(&TableProperty::EnableChangeDataFeed) {
@@ -1324,6 +1343,97 @@ mod tests {
                 ]
                 .as_slice()
             )
+        );
+    }
+
+    #[test]
+    fn test_apply_properties_column_mapping_legacy_versions() {
+        let protocol: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 1,
+            "minWriterVersion": 2,
+        }))
+        .unwrap();
+        let config = HashMap::from([("delta.columnMapping.mode".to_string(), "name".to_string())]);
+
+        let protocol = protocol
+            .apply_properties_to_protocol(&config, true)
+            .unwrap();
+
+        assert_eq!(protocol.min_reader_version(), 2);
+        assert_eq!(protocol.min_writer_version(), 5);
+    }
+
+    #[test]
+    fn test_apply_properties_column_mapping_table_features() {
+        // On a table-features protocol (reader v3 / writer v7), column mapping is a ReaderWriter
+        // feature and must be declared in both the reader and writer feature lists.
+        let protocol: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 3,
+            "minWriterVersion": 7,
+            "readerFeatures": [],
+            "writerFeatures": [],
+        }))
+        .unwrap();
+        let config = HashMap::from([("delta.columnMapping.mode".to_string(), "name".to_string())]);
+
+        let protocol = protocol
+            .apply_properties_to_protocol(&config, true)
+            .unwrap();
+
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(
+            protocol
+                .reader_features()
+                .unwrap()
+                .contains(&TableFeature::ColumnMapping),
+            "readerFeatures should contain ColumnMapping, got: {:?}",
+            protocol.reader_features()
+        );
+        assert!(
+            protocol
+                .writer_features()
+                .unwrap()
+                .contains(&TableFeature::ColumnMapping),
+            "writerFeatures should contain ColumnMapping, got: {:?}",
+            protocol.writer_features()
+        );
+    }
+
+    #[test]
+    fn test_apply_properties_column_mapping_independent_reader_writer() {
+        // Reader and writer are bumped independently: a feature-based writer (v7) declares the
+        // ColumnMapping writer feature, while the legacy reader is bumped to v2.
+        let protocol: Protocol = serde_json::from_value(serde_json::json!({
+            "minReaderVersion": 1,
+            "minWriterVersion": 7,
+            "writerFeatures": [],
+        }))
+        .unwrap();
+        let config = HashMap::from([("delta.columnMapping.mode".to_string(), "name".to_string())]);
+
+        let protocol = protocol
+            .apply_properties_to_protocol(&config, true)
+            .unwrap();
+
+        assert_eq!(protocol.min_reader_version(), 2);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(
+            protocol
+                .writer_features()
+                .unwrap()
+                .contains(&TableFeature::ColumnMapping),
+            "writerFeatures should contain ColumnMapping, got: {:?}",
+            protocol.writer_features()
+        );
+        // Reader stayed legacy (v2), so it carries no ColumnMapping reader feature.
+        assert!(
+            !protocol
+                .reader_features()
+                .map(|f| f.contains(&TableFeature::ColumnMapping))
+                .unwrap_or(false),
+            "reader side should remain legacy, got: {:?}",
+            protocol.reader_features()
         );
     }
 
