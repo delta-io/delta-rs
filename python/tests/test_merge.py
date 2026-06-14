@@ -3472,3 +3472,108 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
 
         expected_array = pa.array([None, None, 123_456], pa.timestamp("us", tz="UTC"))
         assert pa.chunked_array(result.column("ts")).combine_chunks() == expected_array
+
+
+@pytest.mark.pyarrow
+def test_merge_when_not_matched_by_source_partition_pruning(tmp_path: pathlib.Path):
+    """
+    Bug reproduction for issue #4535:
+    MERGE with WHEN NOT MATCHED BY SOURCE ignores target partition predicate
+    and scans all partitions.
+
+    This test reproduces the issue where adding a WHEN NOT MATCHED BY SOURCE clause
+    disables target partition pruning, even when both the merge predicate and the
+    clause predicate restrict the operation to the same partition.
+    """
+    import pyarrow as pa
+    # Create partitioned table with data in multiple partitions
+    target_data = pa.table(
+        {
+            "date": pa.array(
+                ["2026-01-01"] * 2 + ["2026-01-02"] * 3 + ["2026-01-03"] * 2
+            ),
+            "id": pa.array([1, 2, 1, 2, 3, 1, 2]),
+            "val": pa.array([10, 20, 100, 200, 300, 1000, 2000]),
+            "keep": pa.array([True] * 7),
+        }
+    )
+
+    # Write partitioned table
+    write_deltalake(
+        tmp_path,
+        target_data,
+        mode="overwrite",
+        partition_by=["date"],
+    )
+
+    # Prepare source data targeting only 2026-01-02 partition
+    source_data = pa.table(
+        {
+            "date": pa.array(["2026-01-02", "2026-01-02"]),
+            "id": pa.array([1, 2]),
+            "val": pa.array([101, 202]),
+        }
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    # Merge without WHEN NOT MATCHED BY SOURCE - should scan only targeted partition
+    stats_without = (
+        dt.merge(
+            source=source_data,
+            source_alias="s",
+            target_alias="t",
+            predicate=(
+                "t.date = s.date "
+                "AND t.id = s.id "
+                "AND t.date = '2026-01-02'"  # Restrict to specific partition
+            ),
+        )
+        .when_matched_update({"val": "s.val"})
+        .execute()
+    )
+
+    # Merge with WHEN NOT MATCHED BY SOURCE - should ALSO scan only targeted partition
+    # but currently scans ALL partitions (bug)
+    stats_with = (
+        dt.merge(
+            source=source_data,
+            source_alias="s",
+            target_alias="t",
+            predicate=(
+                "t.date = s.date "
+                "AND t.id = s.id "
+                "AND t.date = '2026-01-02'"  # Restrict to specific partition
+            ),
+        )
+        .when_matched_update({"val": "s.val"})
+        .when_not_matched_by_source_update(
+            predicate="t.date = '2026-01-02'",  # Also restrict to same partition
+            updates={"keep": "false"},
+        )
+        .execute()
+    )
+
+    print(
+        f"Without WHEN NOT MATCHED BY SOURCE: files scanned = {stats_without['num_target_files_scanned']}"
+    )
+    print(
+        f"With WHEN NOT MATCHED BY SOURCE: files scanned = {stats_with['num_target_files_scanned']}"
+    )
+
+    # The key assertion: partition pruning should work the same way
+    # With and without WHEN NOT MATCHED BY SOURCE when the predicates
+    # restrict to the same partition
+    assert (
+        stats_without["num_target_files_scanned"]
+        == stats_with["num_target_files_scanned"]
+    ), (
+        f"Partition pruning issue detected: without={stats_without['num_target_files_scanned']}, with={stats_with['num_target_files_scanned']}"
+    )
+
+    assert (
+        stats_without["num_target_files_skipped_during_scan"]
+        == stats_with["num_target_files_skipped_during_scan"]
+    ), (
+        f"Partition skipping behavior differs: without={stats_without['num_target_files_skipped_during_scan']}, with={stats_with['num_target_files_skipped_during_scan']}"
+    )
