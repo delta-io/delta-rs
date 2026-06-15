@@ -2138,6 +2138,82 @@ async fn test_schema_merge_generated_column_referencing_missing_column_e2e() {
     );
 }
 
+/// Write and then read back Arrow fixed-size list data.
+#[tokio::test]
+async fn test_fixed_size_list_round_trip() -> Result<()> {
+    let list_size = 2;
+    // Default arrow-rs item field is named "item" but delta-rs expects "element"
+    let item_field = ArrowField::new_list_field(ArrowDataType::Int32, true);
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![ArrowField::new_fixed_size_list(
+        "xs",
+        item_field.clone(),
+        list_size,
+        true,
+    )]));
+
+    let make_batch = |list_values: &[Vec<i32>]| -> Result<RecordBatch> {
+        let mut builder = FixedSizeListBuilder::with_capacity(
+            PrimitiveBuilder::<types::Int32Type>::with_capacity(
+                list_values.len() * (list_size as usize),
+            ),
+            list_size,
+            list_values.len(),
+        )
+        .with_field(item_field.clone());
+        for list in list_values.iter() {
+            for value in list.iter() {
+                builder.values().append_value(*value);
+            }
+            builder.append(true);
+        }
+        let fixed_size_list = Arc::new(builder.finish());
+        Ok(RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![fixed_size_list],
+        )?)
+    };
+
+    // Write table with some initial data
+    let initial_values: Vec<Vec<i32>> = vec![vec![0, 1], vec![2, 3], vec![4, 5]];
+    let table: DeltaTable = DeltaTable::new_in_memory()
+        .write(vec![make_batch(&initial_values)?])
+        .await?;
+
+    // Append more data
+    let appended_values: Vec<Vec<i32>> = vec![vec![6, 7], vec![8, 9]];
+    let table = table.write(vec![make_batch(&appended_values)?]).await?;
+
+    let ctx = SessionContext::new();
+    table.update_datafusion_session(&ctx.state())?;
+    ctx.register_table("test", table.table_provider().await?)?;
+    let batches: Vec<RecordBatch> = ctx.sql("select * from test").await?.collect().await?;
+
+    let schema = batches[0].schema();
+    let list_field = schema.field_with_name("xs")?;
+    let ArrowDataType::List(inner) = list_field.data_type() else {
+        panic!("Expected 'xs' to be read back as a list typed column");
+    };
+    assert_eq!(inner.data_type(), &ArrowDataType::Int32);
+
+    assert_batches_sorted_eq!(
+        #[rustfmt::skip]
+        &[
+            "+--------+",
+            "| xs     |",
+            "+--------+",
+            "| [0, 1] |",
+            "| [2, 3] |",
+            "| [4, 5] |",
+            "| [6, 7] |",
+            "| [8, 9] |",
+            "+--------+",
+        ],
+        &batches
+    );
+
+    Ok(())
+}
+
 mod date_partitions {
     use super::*;
 
