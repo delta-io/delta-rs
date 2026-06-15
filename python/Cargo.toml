@@ -89,7 +89,7 @@ tikv-jemallocator = { version = "0.7.0", features = [
 tikv-jemallocator = { version = "0.7.0", features = ["disable_initial_exec_tls"] }
 
 [dependencies.pyo3]
-version = "0.28"
+version = "0.29"
 features = ["extension-module", "abi3", "abi3-py310"]
 
 [dependencies.deltalake]
