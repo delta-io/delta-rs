@@ -77,26 +77,52 @@ storage_options = {"opendal.root": "/tmp/delta-data"}
 write_deltalake("fs://localhost/my_table", df, storage_options=storage_options)
 ```
 
-## Example: HuggingFace Hub
+## Example: HuggingFace Hub — datasets and models
 
-HuggingFace repositories have no bucket, so use the `hf://` scheme with an
-**empty host** (`hf:///…`) and pass the repository coordinates as
-`storage_options`. The URL path is the table prefix inside the repository.
+Dataset and model repositories are addressed as
+`hf://<repo_type>/<owner>/<repo>/<table_path>`. An optional revision
+(branch, tag, or commit SHA) can be embedded in the URL as
+`hf://<repo_type>/<owner>/<repo>@<revision>/<table_path>`.
 
 ```python
 storage_options = {
-    "opendal.repo_type": "datasets",        # "datasets", "models", or "buckets"
-    "opendal.repo_id": "my-org/my-dataset", # <owner>/<repo>
-    "opendal.revision": "main",
-    "opendal.token": "hf_...",              # a HuggingFace access token
+    "opendal.token": "hf_...",  # a HuggingFace access token
 }
 
-write_deltalake("hf:///my_table", df, storage_options=storage_options)
+# Write to the default branch
+write_deltalake(
+    "hf://datasets/my-org/my-dataset/my_table",
+    df,
+    storage_options=storage_options,
+)
 
-dt = DeltaTable("hf:///my_table", storage_options=storage_options)
+# Read from a specific revision
+dt = DeltaTable(
+    "hf://datasets/my-org/my-dataset@v1.0/my_table",
+    storage_options=storage_options,
+)
 ```
 
-!!! note
-    Writing to the Hub uses a HEAD-then-PUT emulation of conditional creates,
-    which is racy across concurrent writers. The HuggingFace backend is only
-    appropriate for single-writer workloads.
+## Example: HuggingFace Hub — buckets
+
+HuggingFace [Buckets](https://huggingface.co/docs/huggingface_hub/en/guides/buckets)
+are S3-like object stores (no git history) addressed as
+`hf://buckets/<owner>/<bucket>/<table_path>`. Buckets do not support
+revisions.
+
+```python
+storage_options = {
+    "opendal.token": "hf_...",  # a HuggingFace access token
+}
+
+write_deltalake(
+    "hf://buckets/my-org/my-bucket/my_table",
+    df,
+    storage_options=storage_options,
+)
+
+dt = DeltaTable(
+    "hf://buckets/my-org/my-bucket/my_table",
+    storage_options=storage_options,
+)
+```
