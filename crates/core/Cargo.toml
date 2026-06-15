@@ -22,7 +22,7 @@ delta_kernel.workspace = true
 # Incompatible dependencies were introduced into our transitives:
 # <https://github.com/dropbox/rust-brotli/issues/256>
 alloc-stdlib = "=0.2.2"
-brotli-decompressor = "=5.0.1"
+brotli-decompressor = "=5.0.3"
 ##
 
 
