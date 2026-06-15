@@ -250,7 +250,8 @@ impl SchemaProvider for UnitySchemaProvider {
                 let new_storage_opts = temp_creds.get_credentials().ok_or_else(|| {
                     DataFusionError::External(UnityCatalogError::MissingCredential.into())
                 })?;
-                let table_url = ensure_table_uri(&sl).map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table_url =
+                    ensure_table_uri(&sl).map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let table = DeltaTableBuilder::from_url(table_url)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .with_storage_options(new_storage_opts)
