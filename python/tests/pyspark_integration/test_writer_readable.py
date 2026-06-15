@@ -194,3 +194,86 @@ def test_invariants_and_the_implication(tmp_path: pathlib.Path):
 
     for row in df.collect():
         print(row)
+
+
+@pytest.mark.pyspark
+@pytest.mark.pyarrow
+@pytest.mark.integration
+def test_column_mapping_with_pyspark(tmp_path: pathlib.Path):
+    """
+    Regression test associated with:
+    <https://github.com/delta-io/delta-rs/issues/4501>
+    """
+
+    from pyspark.sql import types as T
+
+    from deltalake import DeltaTable
+
+    schema = T.StructType(
+        [
+            T.StructField("id", T.IntegerType(), nullable=False),
+            T.StructField("name", T.StringType(), nullable=True),
+            T.StructField(
+                "address",  # ← name of the struct column
+                T.StructType(
+                    [
+                        T.StructField(
+                            "address", T.StringType(), True
+                        ),  # ← same name, as struct⚠️
+                        T.StructField("city", T.StringType(), True),
+                        T.StructField("zip", T.StringType(), True),
+                    ]
+                ),
+                nullable=True,
+            ),
+        ]
+    )
+
+    data = [
+        (1, "Alice", ("10 Downing St", "London", "SW1A 2AA")),
+        (2, "Bob", ("1600 Pennsylvania Ave", "Washington", "20500")),
+    ]
+
+    df = spark.createDataFrame(data, schema)
+
+    # write initial Delta table
+    df.write.format("delta").mode("overwrite").save(tmp_path.as_posix())
+
+    df_read_again = spark.read.load(path=tmp_path.as_posix(), format="delta")
+    df_read_again.show(truncate=False)
+    df_read_again.printSchema()
+
+    log = (
+        (tmp_path / "_delta_log" / "00000000000000000000.json").read_text().splitlines()
+    )
+    print(
+        "_delta_log:",
+        *log,
+        sep="\n",
+        end="\n\n",
+    )
+
+    # upgrade table protocol
+    spark.sql(
+        f"""
+        ALTER TABLE delta.`{tmp_path.as_posix()}`
+        SET TBLPROPERTIES (
+            'delta.minReaderVersion'     = '2',
+            'delta.minWriterVersion'     = '5',
+            'delta.columnMapping.mode'   = 'name'
+        )
+        """
+    )
+    log = (
+        (tmp_path / "_delta_log" / "00000000000000000001.json").read_text().splitlines()
+    )
+    print(
+        "_delta_log:",
+        *log,
+        sep="\n",
+        end="\n\n",
+    )
+
+    # trying to access table using delta-rs will fail ❌
+    dt = DeltaTable(tmp_path.as_posix())
+    print(dt.schema())
