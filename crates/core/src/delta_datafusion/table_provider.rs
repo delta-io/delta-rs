@@ -411,9 +411,8 @@ impl TableProviderBuilder {
         };
 
         if let Some(log_store) = log_store.as_ref() {
-            let snapshot_root_identity = next::canonical_table_root_identity(
-                snapshot.snapshot().scan_builder().build()?.table_root(),
-            );
+            let snapshot_root_identity =
+                next::canonical_table_root_identity(snapshot.snapshot().inner.table_root());
             let log_store_root = log_store.table_root_url();
             let log_store_root_identity = next::canonical_table_root_identity(&log_store_root);
 
@@ -1019,12 +1018,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let missing_file_id = table_root
             .join("__does_not_exist__.parquet")
             .unwrap()
