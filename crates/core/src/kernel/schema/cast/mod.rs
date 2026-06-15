@@ -278,7 +278,18 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         }
         DataType::List(inner) => normalize_field(inner).map(DataType::List),
         DataType::FixedSizeList(inner, size) => {
-            normalize_field(inner).map(|normalized| DataType::FixedSizeList(normalized, *size))
+            let normalized_inner = if inner.name() != "element" {
+                let inner = inner.as_ref().clone().with_name("element");
+                let dt = normalize_datatype(inner.data_type());
+                let inner = match dt {
+                    Some(dt) => inner.with_data_type(dt),
+                    None => inner,
+                };
+                Some(Arc::new(inner))
+            } else {
+                normalize_field(inner)
+            };
+            normalized_inner.map(|normalized| DataType::FixedSizeList(normalized, *size))
         }
         DataType::Map(entries, sorted) => {
             normalize_field(entries).map(|normalized| DataType::Map(normalized, *sorted))
