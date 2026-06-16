@@ -4,10 +4,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::sync::Once;
 
 /// Error response from unity API
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct ErrorResponse {
     /// The error code
     pub error_code: String,
@@ -37,7 +38,7 @@ impl fmt::Display for TokenErrorResponse {
     }
 }
 
-#[derive(Deserialize, Default, Debug)]
+#[derive(Deserialize, Default, Debug, Clone)]
 #[serde(default)]
 pub struct ErrorDetails {
     #[serde(rename = "@type")]
@@ -84,7 +85,7 @@ pub enum ListSchemasResponse {
 }
 
 /// Get table response
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum GetTableResponse {
     /// Successful response
@@ -298,11 +299,10 @@ pub enum DataSourceFormat {
     VectorIndexFormat,
 }
 
-#[derive(Deserialize, Default, Debug)]
+#[derive(Deserialize, Default, Debug, PartialEq, Clone)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
-#[derive(PartialEq, Clone)]
 pub enum TableType {
     #[default]
     Undefined,
@@ -311,6 +311,19 @@ pub enum TableType {
     View,
     MaterializedView,
     StreamingTable,
+}
+
+impl Display for TableType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TableType::Undefined => write!(f, "Undefined"),
+            TableType::Managed => write!(f, "Managed"),
+            TableType::External => write!(f, "External"),
+            TableType::View => write!(f, "View"),
+            TableType::MaterializedView => write!(f, "MaterializedView"),
+            TableType::StreamingTable => write!(f, "StreamingTable"),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -331,11 +344,11 @@ pub struct Table {
     /// Name of parent schema relative to its parent catalog.
     pub schema_name: String,
     pub table_type: TableType,
-    pub data_source_format: DataSourceFormat,
+    pub data_source_format: Option<DataSourceFormat>,
     /// The array of __ColumnInfo__ definitions of the table's columns.
     pub columns: Vec<ColumnInfo>,
     /// Storage root URL for table (for **MANAGED**, **EXTERNAL** tables)
-    pub storage_location: String,
+    pub storage_location: Option<String>,
     /// User-provided free-form text description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -444,7 +457,6 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "aws"))]
     pub fn get_aws_credentials(&self) -> Option<HashMap<String, String>> {
-        tracing::warn!("AWS Credentials found, but the feature is not enabled.");
         None
     }
 
@@ -456,7 +468,6 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "azure"))]
     pub fn get_azure_credentials(&self) -> Option<HashMap<String, String>> {
-        tracing::warn!("Azure credentials found, but the feature is not enabled.");
         None
     }
 
@@ -468,7 +479,6 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "gcp"))]
     pub fn get_gcp_credentials(&self) -> Option<HashMap<String, String>> {
-        tracing::warn!("GCP credentials found, but the feature is not enabled.");
         None
     }
 
@@ -480,7 +490,6 @@ impl TemporaryTableCredentials {
 
     #[cfg(not(feature = "r2"))]
     pub fn get_r2_credentials(&self) -> Option<HashMap<String, String>> {
-        tracing::warn!("r2 credentials found, but feature is not enabled.");
         None
     }
 
