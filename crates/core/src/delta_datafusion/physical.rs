@@ -78,10 +78,6 @@ impl ExecutionPlan for MetricObserverExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.parent.schema()
     }
@@ -111,7 +107,7 @@ impl ExecutionPlan for MetricObserverExec {
     fn partition_statistics(
         &self,
         partition: Option<usize>,
-    ) -> datafusion::common::Result<Statistics> {
+    ) -> datafusion::common::Result<Arc<Statistics>> {
         self.parent.partition_statistics(partition)
     }
 
@@ -166,7 +162,7 @@ pub(crate) fn find_metric_node(
     parent: &Arc<dyn ExecutionPlan>,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate the physical MetricCountExec Node after the planner converts the logical node
-    if let Some(metric) = parent.as_any().downcast_ref::<MetricObserverExec>()
+    if let Some(metric) = parent.downcast_ref::<MetricObserverExec>()
         && metric.id().eq(id)
     {
         return Some(parent.to_owned());

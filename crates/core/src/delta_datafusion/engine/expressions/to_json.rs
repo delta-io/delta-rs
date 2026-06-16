@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::{any::Any, sync::LazyLock};
+use std::sync::LazyLock;
 
 use arrow::datatypes::DataType;
 use datafusion::common::Result;
@@ -45,10 +45,6 @@ fn get_doc() -> &'static Documentation {
 }
 
 impl ScalarUDFImpl for ToJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "to_json"
     }

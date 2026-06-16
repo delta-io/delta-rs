@@ -26,7 +26,7 @@
 //! - applying Delta features by transforming the physical data into the table's logical schema
 //!
 use std::collections::HashSet;
-use std::{any::Any, borrow::Cow, fmt, sync::Arc};
+use std::{borrow::Cow, fmt, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{DataFusionError, Result};
@@ -709,10 +709,6 @@ impl DeltaScan {
 
 #[async_trait::async_trait]
 impl TableProvider for DeltaScan {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.full_schema.clone()
     }
@@ -996,7 +992,6 @@ mod tests {
         ) -> Result<bool, DataFusionError> {
             let Some(scan_config) = datasource_exec
                 .data_source()
-                .as_any()
                 .downcast_ref::<FileScanConfig>()
             else {
                 return Ok(true);
@@ -1016,11 +1011,11 @@ mod tests {
         type Error = DataFusionError;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            if let Some(delta_scan_exec) = plan.as_any().downcast_ref::<scan::DeltaScanExec>() {
+            if let Some(delta_scan_exec) = plan.downcast_ref::<scan::DeltaScanExec>() {
                 return self.pre_visit_delta_scan(delta_scan_exec);
             };
 
-            if let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(datasource_exec) = plan.downcast_ref::<DataSourceExec>() {
                 return self.pre_visit_data_source(datasource_exec);
             }
 
@@ -1038,20 +1033,16 @@ mod tests {
         type Error = DataFusionError;
 
         fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
+            let Some(datasource_exec) = plan.downcast_ref::<DataSourceExec>() else {
                 return Ok(true);
             };
             let Some(scan_config) = datasource_exec
                 .data_source()
-                .as_any()
                 .downcast_ref::<FileScanConfig>()
             else {
                 return Ok(true);
             };
-            let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
+            let Some(parquet_source) = scan_config.file_source.downcast_ref::<ParquetSource>()
             else {
                 return Ok(true);
             };
@@ -1801,7 +1792,7 @@ mod tests {
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
         let total_file_count = snapshot
             .file_views(log_store.as_ref(), None)
             .try_fold(0usize, |count, _| async move { Ok(count + 1) })
@@ -1998,7 +1989,7 @@ mod tests {
     async fn test_scan_with_file_selection_applies_deletion_vectors() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -2112,7 +2103,7 @@ mod tests {
     async fn test_scan_with_file_selection_strict_missing_files_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -2149,7 +2140,7 @@ mod tests {
     async fn test_scan_with_file_selection_missing_policy_ignore_skips_missing() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -2663,7 +2654,7 @@ mod tests {
     async fn test_deletion_vectors_file_selection_strict_missing_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
             .with_log_store(log_store)
@@ -2685,7 +2676,7 @@ mod tests {
     async fn test_deletion_vectors_file_selection_ignore_missing_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
-        let table_root = snapshot.scan_builder().build()?.table_root().clone();
+        let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
             .with_log_store(log_store)

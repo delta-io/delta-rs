@@ -7,6 +7,7 @@ compile_error!(
     for this crate to function properly."
 );
 
+use dashmap::DashMap;
 use deltalake_core::logstore::{
     LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
     object_store::RetryConfig,
@@ -14,9 +15,11 @@ use deltalake_core::logstore::{
 use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderValue, InvalidHeaderValue};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
+use tracing::instrument;
 use typed_builder::TypedBuilder;
 
 use crate::credential::{
@@ -24,8 +27,8 @@ use crate::credential::{
 };
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
-    ListTableSummariesResponse, TableTempCredentialsResponse, TemporaryTableCredentialsRequest,
-    TokenErrorResponse,
+    ListTableSummariesResponse, Table, TableTempCredentialsResponse, TableType,
+    TemporaryTableCredentialsRequest, TokenErrorResponse,
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
@@ -130,6 +133,9 @@ pub enum UnityCatalogError {
 
     #[error("Non-200 returned on token acquisition: {0}")]
     InvalidCredentials(TokenErrorResponse),
+
+    #[error("{0} is not a table and doesn't have an included storage location. Type: {1}")]
+    NotATable(String, TableType),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
@@ -467,7 +473,11 @@ impl UnityCatalogBuilder {
             {
                 tracing::debug!("Found relevant env: {key}");
                 if let Ok(config_key) = UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    tracing::debug!("Trying: {key} with {value}");
+                    if key.contains("TOKEN") {
+                        tracing::debug!("Trying: {key} with **redacted**");
+                    } else {
+                        tracing::debug!("Trying: {key}");
+                    }
                     builder = builder.try_with_option(config_key, value).unwrap();
                 }
             }
@@ -645,6 +655,7 @@ impl UnityCatalogBuilder {
             client,
             workspace_url,
             credential,
+            table_cache: DashMap::new(),
         })
     }
 }
@@ -654,6 +665,7 @@ pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
     credential: CredentialProvider,
     workspace_url: String,
+    table_cache: DashMap<String, GetTableResponse>,
 }
 
 impl UnityCatalog {
@@ -684,9 +696,14 @@ impl UnityCatalog {
     /// all catalogs will be retrieved. Otherwise, only catalogs owned by the caller
     /// (or for which the caller has the USE_CATALOG privilege) will be retrieved.
     /// There is no guarantee of a specific ordering of the elements in the array.
+    #[instrument(skip(self))]
     pub async fn list_catalogs(&self) -> Result<ListCatalogsResponse, UnityCatalogError> {
+        tracing::event!(
+            tracing::Level::DEBUG,
+            "Listing catalogs: {}",
+            self.catalog_url()
+        );
         let token = self.get_credential().await?;
-        // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
             .client
             .get(format!("{}/catalogs", self.catalog_url()))
@@ -705,51 +722,56 @@ impl UnityCatalog {
     ///
     /// # Parameters
     /// - catalog_name: Parent catalog for schemas of interest.
-    pub async fn list_schemas(
+    #[instrument(skip(self))]
+    pub async fn list_schemas<S>(
         &self,
-        catalog_name: impl AsRef<str>,
-    ) -> Result<ListSchemasResponse, UnityCatalogError> {
+        catalog_name: S,
+    ) -> Result<ListSchemasResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
+        tracing::event!(
+            tracing::Level::DEBUG,
+            "Listing schemas: {}",
+            self.catalog_url()
+        );
         let token = self.get_credential().await?;
-        // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
             .client
             .get(format!("{}/schemas", self.catalog_url()))
             .header(AUTHORIZATION, token)
-            .query(&[("catalog_name", catalog_name.as_ref())])
+            .query(&[("catalog_name", catalog_name.into())])
             .send()
             .await?;
-        let status = resp.status();
-        let body = resp.text().await?;
-        serde_json::from_str(&body).map_err(|e| {
-            tracing::error!(
-                "Failed to parse list_schemas response (status {}): {}",
-                status,
-                body
-            );
-            UnityCatalogError::Generic {
-                source: Box::new(e),
-            }
-        })
+        Ok(resp.json().await?)
     }
 
     /// Gets the specified schema within the metastore.#
     ///
     /// The caller must be a metastore admin, the owner of the schema,
     /// or a user that has the USE_SCHEMA privilege on the schema.
-    pub async fn get_schema(
+    #[instrument(skip(self))]
+    pub async fn get_schema<S>(
         &self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-    ) -> Result<GetSchemaResponse, UnityCatalogError> {
+        catalog_name: S,
+        schema_name: S,
+    ) -> Result<GetSchemaResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
+        tracing::event!(
+            tracing::Level::DEBUG,
+            "Getting schema: {}",
+            self.catalog_url()
+        );
         let token = self.get_credential().await?;
-        // https://docs.databricks.com/api-explorer/workspace/schemas/get
         let resp = self
             .client
             .get(format!(
                 "{}/schemas/{}.{}",
                 self.catalog_url(),
-                catalog_name.as_ref(),
-                schema_name.as_ref()
+                catalog_name.into(),
+                schema_name.into()
             ))
             .header(AUTHORIZATION, token)
             .send()
@@ -768,19 +790,27 @@ impl UnityCatalog {
     ///   USE_CATALOG privilege on the parent catalog.
     ///
     /// There is no guarantee of a specific ordering of the elements in the array.
-    pub async fn list_table_summaries(
+    #[tracing::instrument(skip_all)]
+    pub async fn list_table_summaries<S>(
         &self,
-        catalog_name: impl AsRef<str>,
-        schema_name_pattern: impl AsRef<str>,
-    ) -> Result<ListTableSummariesResponse, UnityCatalogError> {
+        catalog_name: S,
+        schema_name_pattern: S,
+    ) -> Result<ListTableSummariesResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
+        tracing::event!(
+            tracing::Level::DEBUG,
+            "Table Summary: {}",
+            self.catalog_url()
+        );
         let token = self.get_credential().await?;
-        // https://docs.databricks.com/api-explorer/workspace/tables/listsummaries
         let resp = self
             .client
             .get(format!("{}/table-summaries", self.catalog_url()))
             .query(&[
-                ("catalog_name", catalog_name.as_ref()),
-                ("schema_name_pattern", schema_name_pattern.as_ref()),
+                ("catalog_name", catalog_name.into()),
+                ("schema_name_pattern", schema_name_pattern.into()),
             ])
             .header(AUTHORIZATION, token)
             .send()
@@ -796,36 +826,50 @@ impl UnityCatalog {
     /// the parent schema, or be the owner of the table and have the SELECT privilege on it as well.
     ///
     /// # Parameters
-    pub async fn get_table(
+    #[tracing::instrument(skip_all)]
+    pub async fn get_table<S>(
         &self,
-        catalog_id: impl AsRef<str>,
-        database_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-    ) -> Result<GetTableResponse, UnityCatalogError> {
+        catalog_id: S,
+        database_name: S,
+        table_name: S,
+    ) -> Result<GetTableResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
+        let full_path = format!(
+            "{}.{}.{}",
+            catalog_id.into(),
+            database_name.into(),
+            table_name.into()
+        );
+
+        if let Some(table) = self.table_cache.get(&full_path) {
+            tracing::event!(tracing::Level::DEBUG, "Table cache hit: {}", full_path);
+            return Ok(table.clone());
+        } else {
+            tracing::event!(tracing::Level::DEBUG, "Getting table: {}", full_path);
+        }
         let token = self.get_credential().await?;
-        // https://docs.databricks.com/api-explorer/workspace/tables/get
         let resp = self
             .client
-            .get(format!(
-                "{}/tables/{}.{}.{}",
-                self.catalog_url(),
-                catalog_id.as_ref(),
-                database_name.as_ref(),
-                table_name.as_ref(),
-            ))
+            .get(format!("{}/tables/{}", self.catalog_url(), full_path))
             .header(AUTHORIZATION, token)
             .send()
             .await?;
-
-        Ok(resp.json().await?)
+        let table: GetTableResponse = resp.json().await?;
+        self.table_cache.insert(full_path, table.clone());
+        Ok(table)
     }
 
-    pub async fn get_temp_table_credentials(
+    pub async fn get_temp_table_credentials<S>(
         &self,
-        catalog_id: impl AsRef<str>,
-        database_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-    ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
+        catalog_id: S,
+        database_name: S,
+        table_name: S,
+    ) -> Result<TableTempCredentialsResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
         self.get_temp_table_credentials_with_permission(
             catalog_id,
             database_name,
@@ -835,21 +879,24 @@ impl UnityCatalog {
         .await
     }
 
-    pub async fn get_temp_table_credentials_with_permission(
+    #[tracing::instrument(skip_all)]
+    pub async fn get_temp_table_credentials_with_permission<S>(
         &self,
-        catalog_id: impl AsRef<str>,
-        database_name: impl AsRef<str>,
-        table_name: impl AsRef<str>,
-        operation: impl AsRef<str>,
-    ) -> Result<TableTempCredentialsResponse, UnityCatalogError> {
+        catalog_id: S,
+        database_name: S,
+        table_name: S,
+        operation: &str,
+    ) -> Result<TableTempCredentialsResponse, UnityCatalogError>
+    where
+        S: Into<String> + Debug,
+    {
         let token = self.get_credential().await?;
         let table_info = self
             .get_table(catalog_id, database_name, table_name)
             .await?;
         let response = match table_info {
             GetTableResponse::Success(table) => {
-                let request =
-                    TemporaryTableCredentialsRequest::new(&table.table_id, operation.as_ref());
+                let request = TemporaryTableCredentialsRequest::new(&table.table_id, operation);
                 Ok(self
                     .client
                     .post(format!(
@@ -944,12 +991,21 @@ impl DataCatalog for UnityCatalog {
         match self
             .get_table(
                 catalog_id.unwrap_or("main".into()),
-                database_name,
-                table_name,
+                database_name.to_string(),
+                table_name.to_string(),
             )
             .await?
         {
-            GetTableResponse::Success(table) => Ok(table.storage_location),
+            GetTableResponse::Success(Table {
+                storage_location: Some(sl),
+                ..
+            }) => Ok(sl),
+            GetTableResponse::Success(Table {
+                storage_location: None,
+                name,
+                table_type,
+                ..
+            }) => Err(UnityCatalogError::NotATable(name, table_type)),
             GetTableResponse::Error(err) => Err(UnityCatalogError::InvalidTable {
                 error_code: err.error_code,
                 message: err.message,

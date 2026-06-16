@@ -7,8 +7,9 @@ use arrow_array::{
 };
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{
-    ArrowError, DataType, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
+    ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -277,7 +278,18 @@ fn normalize_datatype(dt: &DataType) -> Option<DataType> {
         }
         DataType::List(inner) => normalize_field(inner).map(DataType::List),
         DataType::FixedSizeList(inner, size) => {
-            normalize_field(inner).map(|normalized| DataType::FixedSizeList(normalized, *size))
+            let normalized_inner = if inner.name() != "element" {
+                let inner = inner.as_ref().clone().with_name("element");
+                let dt = normalize_datatype(inner.data_type());
+                let inner = match dt {
+                    Some(dt) => inner.with_data_type(dt),
+                    None => inner,
+                };
+                Some(Arc::new(inner))
+            } else {
+                normalize_field(inner)
+            };
+            normalized_inner.map(|normalized| DataType::FixedSizeList(normalized, *size))
         }
         DataType::Map(entries, sorted) => {
             normalize_field(entries).map(|normalized| DataType::Map(normalized, *sorted))
@@ -350,6 +362,26 @@ pub fn normalize_for_delta(schema: &ArrowSchemaRef) -> ArrowSchemaRef {
     }
 }
 
+pub(crate) fn symmetric_differences<'a>(
+    new_schema: &'a ArrowSchemaRef,
+    expected_schema: &'a ArrowSchemaRef,
+) -> Option<Fields> {
+    if new_schema == expected_schema {
+        return None;
+    }
+
+    let new_schema_set: HashSet<&'a Field> = HashSet::from_iter(new_schema.flattened_fields());
+    let expected_schema_set: HashSet<&'a Field> =
+        HashSet::from_iter(expected_schema.flattened_fields());
+
+    Some(Fields::from(
+        new_schema_set
+            .symmetric_difference(&expected_schema_set)
+            .map(|f| Arc::new((**f).clone()))
+            .collect::<Vec<_>>(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -375,6 +407,7 @@ mod tests {
         ArrayType as DeltaArrayType, DataType as DeltaDataType, StructField as DeltaStructField,
         StructType as DeltaStructType,
     };
+    use crate::symmetric_differences;
 
     #[test]
     fn test_merge_arrow_schema_with_dict() {
@@ -695,6 +728,61 @@ mod tests {
             result.column(1).deref().as_string::<i32>(),
             new_null_array(&DataType::Utf8, 3).deref().as_string()
         );
+    }
+    #[test]
+    fn test_symmetric_differences_added_field_in_record_batch() {
+        let existing_schema = Arc::new(Schema::new(vec![Field::new(
+            "field1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema).unwrap();
+        assert_eq!(
+            result,
+            Fields::from(vec![Field::new("field2", DataType::Utf8, true)])
+        );
+    }
+
+    #[test]
+    fn test_symmetric_differences_missing_field_in_record_batch() {
+        let new_schema = Arc::new(Schema::new(vec![Field::new(
+            "field1",
+            DataType::Int32,
+            false,
+        )]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema).unwrap();
+        assert_eq!(
+            result,
+            Fields::from(vec![Field::new("field2", DataType::Utf8, true)])
+        );
+    }
+
+    #[test]
+    fn test_symmetric_differences_wrong_order() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field2", DataType::Utf8, true),
+            Field::new("field1", DataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", DataType::Int32, false),
+            Field::new("field2", DataType::Utf8, true),
+        ]));
+
+        let result = symmetric_differences(&new_schema, &existing_schema);
+        assert_eq!(result, Some(Fields::empty()));
     }
 
     #[test]

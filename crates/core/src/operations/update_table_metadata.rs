@@ -8,7 +8,7 @@ use validator::Validate;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, SnapshotMetadataRef, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -100,6 +100,26 @@ impl UpdateTableMetadataBuilder {
     }
 }
 
+fn plan_update_table_metadata_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    update: TableMetadataUpdate,
+) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
+    let mut metadata = snapshot.metadata.clone();
+
+    if let Some(name) = &update.name {
+        metadata = metadata.with_name(name.clone())?;
+    }
+    if let Some(description) = &update.description {
+        metadata = metadata.with_description(description.clone())?;
+    }
+
+    let operation = DeltaOperation::UpdateTableMetadata {
+        metadata_update: update,
+    };
+
+    Ok((vec![Action::Metadata(metadata)], operation))
+}
+
 impl std::future::IntoFuture for UpdateTableMetadataBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -122,20 +142,8 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
                 .validate()
                 .map_err(|e| DeltaTableError::MetadataError(format!("{e}")))?;
 
-            let mut metadata = snapshot.metadata().clone();
-
-            if let Some(name) = &update.name {
-                metadata = metadata.with_name(name.clone())?;
-            }
-            if let Some(description) = &update.description {
-                metadata = metadata.with_description(description.clone())?;
-            }
-
-            let operation = DeltaOperation::UpdateTableMetadata {
-                metadata_update: update,
-            };
-
-            let actions = vec![Action::Metadata(metadata)];
+            let (actions, operation) =
+                plan_update_table_metadata_actions(snapshot.snapshot().metadata_state(), update)?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions)
@@ -152,5 +160,92 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, RecordBatch};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+
+    use crate::kernel::{DataType, EagerSnapshot, PrimitiveType, StructField};
+    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
+
+    use super::*;
+
+    fn id_field() -> StructField {
+        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
+    }
+
+    fn metadata_update() -> TableMetadataUpdate {
+        TableMetadataUpdate {
+            name: Some("events".to_string()),
+            description: Some("event table".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn update_table_metadata_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field()])
+            .await?;
+        let log_store = table.log_store().clone();
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
+            .with_update(metadata_update())
+            .await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn update_table_metadata_with_lazy_snapshot_retries_after_concurrent_commit() -> TestResult
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field()])
+            .await?;
+        let log_store = table.log_store().clone();
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "id",
+                ArrowDataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let table = table.write(vec![batch]).await?;
+
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(snapshot.version(), 0);
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let updated = UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
+            .with_update(metadata_update())
+            .await?;
+
+        assert_eq!(updated.version(), Some(2));
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
     }
 }

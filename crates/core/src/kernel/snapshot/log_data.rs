@@ -173,6 +173,109 @@ mod datafusion {
             )
             .ok()
         }
+
+        /// Evaluate the raw partition values for a `Binary`-typed partition column.
+        ///
+        /// Unlike [`pick_stats`], this does NOT bail out for binary types: binary values do
+        /// not support natural ordering (so `min_values`/`max_values` must stay `None`) but
+        /// they *do* support exact-match comparison via [`PruningStatistics::contained`].
+        fn pick_binary_partition_values(&self, column: &Column) -> Option<ArrayRef> {
+            let schema = self.config.logical_schema();
+            let field = schema.field(&column.name)?;
+            if field.data_type() != &DataType::Primitive(PrimitiveType::Binary) {
+                return None;
+            }
+            if !self
+                .config
+                .metadata()
+                .partition_columns()
+                .contains(&column.name)
+            {
+                return None;
+            }
+            let expression = Expression::column(["partitionValues_parsed", &column.name]);
+            let evaluator = ARROW_HANDLER
+                .new_expression_evaluator(
+                    crate::kernel::models::fields::log_schema_ref().clone(),
+                    expression.into(),
+                    field.data_type().clone(),
+                )
+                .ok()?;
+            let results: Vec<_> = self
+                .data
+                .iter()
+                .map(|data| -> DeltaResult<_> {
+                    Ok(evaluator.evaluate_arrow(data.clone())?.column(0).clone())
+                })
+                .try_collect()
+                .ok()?;
+            concat(
+                &results
+                    .iter()
+                    .map(|result| result.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .ok()
+        }
+
+        /// Evaluate whether each file's binary partition value is a member of `values`.
+        ///
+        /// Returns `false` for a file when its partition value is definitely NOT in `values`
+        /// (safe to prune).  Returns `true` when it matches any value in the set, or when
+        /// the partition value is null (conservative: keep the file).
+        fn contained_binary(
+            &self,
+            column: &Column,
+            values: &HashSet<ScalarValue>,
+        ) -> Option<BooleanArray> {
+            use arrow_array::BinaryArray;
+
+            let partition_values = self.pick_binary_partition_values(column)?;
+            let binary_arr = partition_values.as_any().downcast_ref::<BinaryArray>()?;
+
+            // Binary partition values are serialized into the Delta log as unicode-escape
+            // hex strings (e.g. b"aaa" → "\\u0061\\u0061\\u0061") by
+            // `create_escaped_binary_string`, then parsed back into `Scalar::Binary` by
+            // `PrimitiveType::parse_scalar` via `raw.to_string().into_bytes()`.
+            // This means the stored bytes are the UTF-8 encoding of that escape string,
+            // NOT the original raw bytes.  We must apply the same encoding to the predicate
+            // scalars before comparing so that equality holds.
+            fn encode_binary_bytes(bytes: &[u8]) -> Vec<u8> {
+                bytes
+                    .iter()
+                    .flat_map(|&b| format!("\\u{b:04X}").into_bytes())
+                    .collect()
+            }
+
+            // Unwrap the dictionary wrapper that `_arrow_schema` adds to binary
+            // partition columns.
+            fn unwrap_binary_scalar(scalar: &ScalarValue) -> Option<Vec<u8>> {
+                match scalar {
+                    ScalarValue::Binary(Some(v)) | ScalarValue::LargeBinary(Some(v)) => {
+                        Some(encode_binary_bytes(v))
+                    }
+                    ScalarValue::Dictionary(_, inner) => unwrap_binary_scalar(inner),
+                    _ => None,
+                }
+            }
+
+            let mut contains = Vec::with_capacity(binary_arr.len());
+            for i in 0..binary_arr.len() {
+                if binary_arr.is_null(i) {
+                    // Null partition value: conservatively keep the file.
+                    contains.push(true);
+                } else {
+                    let pv: &[u8] = binary_arr.value(i);
+                    contains.push(
+                        values
+                            .iter()
+                            .filter_map(unwrap_binary_scalar)
+                            .any(|encoded| encoded.as_slice() == pv),
+                    );
+                }
+            }
+            Some(BooleanArray::from(contains))
+        }
     }
 
     impl PruningStatistics for LogDataHandler<'_> {
@@ -209,7 +312,7 @@ mod datafusion {
                 return arrow_cast::cast(counts.as_ref(), &ArrowDataType::UInt64).ok();
             }
             let partition_values = self.pick_stats(column, "__dummy__")?;
-            let row_counts = self.row_counts(column)?;
+            let row_counts = self.row_counts()?;
             let row_counts = row_counts.as_any().downcast_ref::<UInt64Array>()?;
             let mut null_counts = Vec::with_capacity(partition_values.len());
             for i in 0..partition_values.len() {
@@ -223,11 +326,10 @@ mod datafusion {
             Some(Arc::new(UInt64Array::from(null_counts)))
         }
 
-        /// return the number of rows for the named column in each container
-        /// as an `Option<UInt64Array>`.
+        /// return the number of rows in each container as an `Option<UInt64Array>`.
         ///
         /// Note: the returned array must contain `num_containers()` rows
-        fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+        fn row_counts(&self) -> Option<ArrayRef> {
             static ROW_COUNTS_EVAL: LazyLock<Arc<dyn ExpressionEvaluator>> = LazyLock::new(|| {
                 ARROW_HANDLER
                     .new_expression_evaluator(
@@ -267,6 +369,18 @@ mod datafusion {
                     .contains(&column.name)
             {
                 return None;
+            }
+
+            // Binary partition columns support exact-match pruning but not range pruning
+            // (no natural ordering).  Delegate to a dedicated path that bypasses the
+            // ordering guard in `pick_stats`.  See issue #1214.
+            let schema = self.config.logical_schema();
+            if schema
+                .field(&column.name)
+                .map(|f| f.data_type() == &DataType::Primitive(PrimitiveType::Binary))
+                .unwrap_or(false)
+            {
+                return self.contained_binary(column, value);
             }
 
             // Retrieve the partition values for the column

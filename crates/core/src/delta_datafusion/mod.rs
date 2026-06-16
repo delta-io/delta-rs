@@ -474,7 +474,6 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let delta_scan = node
-            .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
@@ -522,13 +521,9 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let scan = node
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("Can't encode non-delta tables".to_string())
-            })?;
+        let scan = node.downcast_ref::<DeltaScanNext>().ok_or_else(|| {
+            DataFusionError::Internal("Can't encode non-delta tables".to_string())
+        })?;
         serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
@@ -757,12 +752,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let selected_file_ids: Vec<String> = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -798,11 +788,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
 
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let decoded_file_ids = serialized
@@ -866,11 +852,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let file_selection = serialized.get("file_selection").unwrap();
         let file_selection_json = serde_json::to_string(file_selection).unwrap();
@@ -928,11 +910,7 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let file_selection = serialized.get("file_selection").unwrap();
         let file_selection_json = serde_json::to_string(file_selection).unwrap();
@@ -1362,7 +1340,7 @@ mod tests {
             .unwrap();
 
         let df = datafusion
-            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .sql(r#"select * from snapshot where "vaLue" > 10000 and "vaLue" < 20000"#)
             .await
             .unwrap();
 
@@ -1533,5 +1511,188 @@ mod tests {
 
         let _ = df.collect().await?;
         Ok(())
+    }
+
+    /// Tests that binary partition columns support equality pruning (= / IN predicates)
+    /// even though they do not support range pruning (< / > predicates).
+    ///
+    /// Resolves issue #1214.
+    #[tokio::test]
+    async fn test_files_matching_predicate_binary_partition_not_pruned() {
+        use crate::delta_datafusion::files_matching_predicate;
+        use arrow::array::BinaryArray;
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{col, lit};
+
+        // Write two files into separate binary partitions.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("bin_part", ArrowDataType::Binary, true),
+        ]));
+
+        let batch_a = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"aaa".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let batch_b = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![2_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"bbb".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        // Two separate appends so each lands in its own partition file.
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Integer,
+                ),
+                true,
+                None,
+            )
+            .with_column(
+                "bin_part",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Binary,
+                ),
+                true,
+                None,
+            )
+            .with_partition_columns(["bin_part"])
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_a])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_b])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let log_data = snapshot.log_data();
+
+        // Without a predicate all files are returned.
+        let all_files: Vec<_> = files_matching_predicate(log_data.clone(), &[])
+            .unwrap()
+            .collect();
+        assert_eq!(all_files.len(), 2, "expected 2 files before pruning");
+
+        // Apply a predicate that selects only the "aaa" partition.
+        // `contained()` now handles binary exact-match pruning (issue #1214).
+        let predicate = col("bin_part").eq(lit(ScalarValue::Binary(Some(b"aaa".to_vec()))));
+        let kept_files: Vec<_> = files_matching_predicate(log_data.clone(), &[predicate])
+            .unwrap()
+            .collect();
+
+        assert_eq!(
+            kept_files.len(),
+            1,
+            "expected exactly the 'aaa' partition file to survive equality pruning"
+        );
+    }
+
+    /// Range predicates (`<`, `>`) on binary partition columns must NOT prune any files
+    /// because binary values have no natural ordering.  All files are conservatively kept.
+    #[tokio::test]
+    async fn test_files_matching_predicate_binary_partition_range_not_pruned() {
+        use crate::delta_datafusion::files_matching_predicate;
+        use arrow::array::BinaryArray;
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{col, lit};
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("bin_part", ArrowDataType::Binary, true),
+        ]));
+
+        let batch_a = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"aaa".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let batch_b = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![2_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"bbb".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Integer,
+                ),
+                true,
+                None,
+            )
+            .with_column(
+                "bin_part",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Binary,
+                ),
+                true,
+                None,
+            )
+            .with_partition_columns(["bin_part"])
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_a])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![batch_b])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let log_data = snapshot.log_data();
+
+        // A `>` predicate on a binary column must keep all files — there are no
+        // min/max stats for binary, so datafusion cannot eliminate any file.
+        let gt_pred = col("bin_part").gt(lit(ScalarValue::Binary(Some(b"aaa".to_vec()))));
+        let kept = files_matching_predicate(log_data.clone(), &[gt_pred])
+            .unwrap()
+            .count();
+        assert_eq!(
+            kept, 2,
+            "range predicate '>' on binary partition must not prune any files"
+        );
+
+        // Likewise for `<`.
+        let lt_pred = col("bin_part").lt(lit(ScalarValue::Binary(Some(b"bbb".to_vec()))));
+        let kept = files_matching_predicate(log_data.clone(), &[lt_pred])
+            .unwrap()
+            .count();
+        assert_eq!(
+            kept, 2,
+            "range predicate '<' on binary partition must not prune any files"
+        );
     }
 }
