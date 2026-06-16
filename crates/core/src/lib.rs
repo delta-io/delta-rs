@@ -790,7 +790,7 @@ mod tests {
 
     #[test]
     fn test_builder_from_valid_url_remote_path() {
-        let table_url = Url::parse("memory:///table/path").unwrap();
+        let table_url = Url::parse("memory:///table/path/").unwrap();
 
         let builder = builder_from_valid_url(table_url.clone()).unwrap();
         let built = builder.build().unwrap();
