@@ -632,6 +632,72 @@ mod tests {
 
     #[cfg(feature = "datafusion")]
     #[tokio::test]
+    async fn test_delta_table_state_serde_roundtrip_preserves_add_actions() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let state = table.snapshot()?;
+        let before = state.add_actions_table(true)?;
+
+        let bytes = serde_json::to_vec(state)?;
+        let actual: DeltaTableState = serde_json::from_slice(&bytes)?;
+        let after = actual.add_actions_table(true)?;
+
+        assert_eq!(actual.version(), state.version());
+        assert_eq!(after, before);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_delta_table_state_without_files_roundtrip_stays_without_files() -> DeltaResult<()>
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let state = DeltaTableState::try_new(table.log_store().as_ref(), config, None).await?;
+        assert!(
+            !state
+                .snapshot()
+                .snapshot()
+                .has_materialized_files_for_test()
+        );
+
+        let bytes = serde_json::to_vec(&state)?;
+        let actual: DeltaTableState = serde_json::from_slice(&bytes)?;
+
+        assert_eq!(actual.version(), state.version());
+        assert!(
+            !actual
+                .snapshot()
+                .snapshot()
+                .has_materialized_files_for_test()
+        );
+        assert!(matches!(
+            actual.add_actions_table(true),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
     async fn test_add_actions_batches_non_empty_non_flatten_has_partition_struct() -> DeltaResult<()>
     {
         let table = DeltaTable::new_in_memory()

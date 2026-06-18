@@ -2992,6 +2992,24 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
+def test_without_files_delta_table_write_preserves_state(tmp_path: pathlib.Path) -> None:
+    import pyarrow as pa
+
+    initial = pa.table({"id": pa.array([1, 2], type=pa.int64())})
+    write_deltalake(tmp_path, initial)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    write_deltalake(dt, pa.table({"id": pa.array([3], type=pa.int64())}), mode="append")
+
+    latest = DeltaTable(tmp_path)
+    assert latest.version() == 1
+    assert latest.to_pyarrow_table().sort_by("id")["id"].to_pylist() == [1, 2, 3]
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
 def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
     """
     Calling create_write_transaction with mode="overwrite" and non-empty
