@@ -2992,7 +2992,9 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
-def test_without_files_delta_table_write_preserves_state(tmp_path: pathlib.Path) -> None:
+def test_without_files_delta_table_write_preserves_state(
+    tmp_path: pathlib.Path,
+) -> None:
     import pyarrow as pa
 
     initial = pa.table({"id": pa.array([1, 2], type=pa.int64())})
