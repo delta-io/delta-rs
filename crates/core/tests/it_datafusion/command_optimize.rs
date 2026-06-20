@@ -1,11 +1,12 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 use std::{
+    collections::BTreeSet,
     error::Error,
     sync::{Arc, Mutex},
 };
 
-use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
@@ -24,7 +25,9 @@ use deltalake_core::operations::optimize::{
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::test_utils::TestTables;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake_core::{DeltaTable, PartitionFilter, Path, open_table};
+use deltalake_core::{
+    DeltaTable, NULL_PARTITION_VALUE_DATA_PATH, PartitionFilter, Path, open_table,
+};
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt as _;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -197,6 +200,30 @@ fn ordered_range_batch(
     )?)
 }
 
+fn multi_partition_batch(
+    part_a: Option<i64>,
+    part_b: &str,
+    start: i64,
+    rows: usize,
+) -> Result<RecordBatch, Box<dyn Error>> {
+    let values = (start..start + rows as i64).collect::<Vec<_>>();
+    let part_a_values = vec![part_a; rows];
+    let part_b_values = vec![part_b.to_string(); rows];
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("part_a", ArrowDataType::Int64, true),
+            Field::new("part_b", ArrowDataType::Utf8, true),
+            Field::new("val", ArrowDataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(part_a_values)),
+            Arc::new(StringArray::from(part_b_values)),
+            Arc::new(Int64Array::from(values)),
+        ],
+    )?)
+}
+
 fn single_int_batch(values: Vec<i32>) -> Result<RecordBatch, Box<dyn Error>> {
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -249,6 +276,113 @@ async fn latest_commit_actions(table: &DeltaTable) -> Result<Vec<Action>, Box<dy
             std::io::Error::other(format!("missing commit entry for version {version}"))
         })?;
     Ok(get_actions(version, &commit_bytes)?)
+}
+
+async fn setup_multi_partition_optimize_table() -> Result<Context, Box<dyn Error>> {
+    let columns = vec![
+        StructField::new(
+            "part_a".to_owned(),
+            DataType::Primitive(PrimitiveType::Long),
+            true,
+        ),
+        StructField::new(
+            "part_b".to_owned(),
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+        StructField::new(
+            "val".to_owned(),
+            DataType::Primitive(PrimitiveType::Long),
+            false,
+        ),
+    ];
+    let partition_columns = vec!["part_a".to_owned(), "part_b".to_owned()];
+
+    let tmp_dir = tempfile::tempdir()?;
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let mut table = DeltaTable::try_from_url(
+        url::Url::from_directory_path(std::path::Path::new(table_uri)).unwrap(),
+    )
+    .await?
+    .create()
+    .with_columns(columns)
+    .with_partition_columns(partition_columns)
+    .await?;
+
+    let mut writer = RecordBatchWriter::for_table(&table)?;
+    for (part_a, writes, start_base) in [
+        (Some(1), 4, 1_000),
+        (Some(2), 3, 2_000),
+        (Some(3), 3, 3_000),
+        (None, 3, 4_000),
+    ] {
+        for write_idx in 0..writes {
+            write(
+                &mut writer,
+                &mut table,
+                multi_partition_batch(part_a, "x", start_base + write_idx * 10, 3)?,
+            )
+            .await?;
+        }
+    }
+
+    Ok(Context { tmp_dir, table })
+}
+
+async fn assert_latest_optimize_adds_preserve_full_partitions(
+    table: &DeltaTable,
+) -> Result<(), Box<dyn Error>> {
+    let actions = latest_commit_actions(table).await?;
+    let adds = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(adds.len(), 4, "{adds:?}");
+
+    let mut actual_partitions = BTreeSet::new();
+    for add in adds {
+        assert!(
+            !add.path.starts_with("part_b=x/"),
+            "path was flattened to a partial partition: {}",
+            add.path
+        );
+        assert_eq!(add.partition_values.len(), 2, "{:?}", add.partition_values);
+        let part_a = add
+            .partition_values
+            .get("part_a")
+            .ok_or_else(|| std::io::Error::other(format!("missing part_a in {add:?}")))?;
+        let part_b = add
+            .partition_values
+            .get("part_b")
+            .and_then(|value| value.as_deref())
+            .ok_or_else(|| std::io::Error::other(format!("missing part_b in {add:?}")))?;
+
+        assert_eq!(part_b, "x");
+        let part_a_path_value = part_a.as_deref().unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+        let expected_prefix = format!("part_a={part_a_path_value}/part_b=x/");
+        assert!(
+            add.path.starts_with(&expected_prefix),
+            "path {} did not start with {expected_prefix}",
+            add.path
+        );
+        actual_partitions.insert((part_a.clone(), part_b.to_owned()));
+    }
+
+    let expected_partitions = [
+        (Some("1".to_string()), "x".to_string()),
+        (Some("2".to_string()), "x".to_string()),
+        (Some("3".to_string()), "x".to_string()),
+        (None, "x".to_string()),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(actual_partitions, expected_partitions);
+
+    Ok(())
 }
 
 struct DvSmallAppendedTable {
@@ -596,6 +730,48 @@ async fn write(
     writer.write(batch).await?;
     writer.flush_and_commit(table).await?;
     table.update_state().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_subset_partition_filter_preserves_full_partition_values()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_multi_partition_optimize_table().await?;
+    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+
+    let (updated, metrics) = context
+        .table
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(NonZeroU64::new(1_000_000).unwrap())
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 4);
+    assert_eq!(metrics.num_files_removed, 13);
+    assert_eq!(metrics.partitions_optimized, 4);
+    assert_latest_optimize_adds_preserve_full_partitions(&updated).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_subset_partition_filter_preserves_full_partition_values()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_multi_partition_optimize_table().await?;
+    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+
+    let (updated, metrics) = context
+        .table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["val".to_string()]))
+        .with_filters(&filter)
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 4);
+    assert_eq!(metrics.num_files_removed, 13);
+    assert_eq!(metrics.partitions_optimized, 4);
+    assert_latest_optimize_adds_preserve_full_partitions(&updated).await?;
+
     Ok(())
 }
 
