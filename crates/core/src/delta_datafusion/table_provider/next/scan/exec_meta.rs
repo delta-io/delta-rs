@@ -1171,4 +1171,89 @@ mod tests {
 
         Ok(())
     }
+
+    // ------------------------------------------------------------------
+    // DV scan-planning probe — metrics for deletion-vector planning overhead
+    // ------------------------------------------------------------------
+
+    /// Return total DV mask bytes and DV count for a metadata-only scan.
+    fn probe_dv_metrics(exec: &DeltaScanMetaExec) -> (usize, usize) {
+        let total_mask_bytes: usize = exec
+            .selection_vectors
+            .iter()
+            .map(|entry| entry.value().len() * size_of::<bool>())
+            .sum();
+        let dv_count = exec.selection_vectors.len();
+        (dv_count, total_mask_bytes)
+    }
+
+    #[tokio::test]
+    async fn test_dv_probe_reports_non_zero_dv_metrics() -> TestResult {
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider
+            .scan(&session.state(), Some(&vec![]), &[], None)
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan with DVs")
+            .clone();
+
+        let (dv_count, total_mask_bytes) = probe_dv_metrics(&exec);
+
+        assert!(
+            dv_count > 0,
+            "expected at least one file with a deletion vector, got {dv_count}"
+        );
+        assert!(
+            total_mask_bytes > 0,
+            "expected non-zero DV mask bytes, got {total_mask_bytes}"
+        );
+
+        // Log probe diagnostics for manual inspection.
+        println!(
+            "DV probe report:\n  dv_count={dv_count}\n  total_mask_bytes={total_mask_bytes}\n  avg_mask_bytes={}",
+            if dv_count > 0 {
+                total_mask_bytes / dv_count
+            } else {
+                0
+            }
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_probe_short_mask_counter_fires() -> TestResult {
+        // The dv_short_mask_padded_files_total counter is only registered
+        // during plan execution (DeltaScanMetaStream::new), not during
+        // scan planning.  Execute the plan and verify the counter exists.
+        let table = TestTables::WithDvSmall.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = create_session();
+        let state = session.state();
+        let scan = provider.scan(&state, Some(&vec![]), &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan with DVs")
+            .clone();
+
+        // Execute partition 0 and collect results.
+        let task_ctx = state.task_ctx();
+        let stream = exec.execute(0, task_ctx)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        assert_eq!(batches.len(), 1, "expected one batch from WithDvSmall");
+        let row_count = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(row_count, 8, "WithDvSmall: 10 rows minus 2 deleted = 8");
+
+        // Now the counter should be registered.
+        let metric_str = format!("{:?}", exec.metrics());
+        assert!(
+            metric_str.contains("dv_short_mask_padded_files_total"),
+            "expected dv_short_mask_padded_files_total counter to be registered\n{metric_str}"
+        );
+
+        Ok(())
+    }
 }
