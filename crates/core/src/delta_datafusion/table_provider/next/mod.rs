@@ -432,11 +432,29 @@ pub(crate) fn normalize_path_as_file_id(
     normalize_path_as_file_id_with_table_root(path, &table_root_url, context)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
-    /// Compatibility for serialized scan payloads that still contain an eager snapshot.
-    EagerSnapshot(Arc<EagerSnapshot>),
+}
+
+impl<'de> Deserialize<'de> for SnapshotWrapper {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        enum SnapshotWrapperCompat {
+            Snapshot(Arc<Snapshot>),
+            EagerSnapshot(Arc<EagerSnapshot>),
+        }
+
+        Ok(match SnapshotWrapperCompat::deserialize(deserializer)? {
+            SnapshotWrapperCompat::Snapshot(snapshot) => SnapshotWrapper::Snapshot(snapshot),
+            SnapshotWrapperCompat::EagerSnapshot(snapshot) => {
+                SnapshotWrapper::Snapshot(snapshot.snapshot().clone().into())
+            }
+        })
+    }
 }
 
 impl From<Arc<Snapshot>> for SnapshotWrapper {
@@ -467,14 +485,12 @@ impl SnapshotWrapper {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.table_configuration(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot().table_configuration(),
         }
     }
 
     pub(crate) fn snapshot(&self) -> &Snapshot {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
         }
     }
 }
@@ -782,12 +798,11 @@ impl TableProvider for DeltaScan {
 
         super::update_datafusion_session(state, log_store.as_ref(), self.read_operation_id)?;
 
-        let snapshot = match &self.snapshot {
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.as_ref().clone(),
-            SnapshotWrapper::Snapshot(snap) => {
-                EagerSnapshot::try_new_with_snapshot(log_store.as_ref(), snap.clone()).await?
-            }
-        };
+        let snapshot = EagerSnapshot::try_new_with_snapshot(
+            log_store.as_ref(),
+            self.snapshot.snapshot().clone().into(),
+        )
+        .await?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,

@@ -55,7 +55,7 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
+use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, Snapshot, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::parquet_utils::default_writer_properties;
@@ -612,7 +612,7 @@ type ParquetReadStream = BoxStream<'static, Result<RecordBatch, ParquetError>>;
 
 #[derive(Clone)]
 struct SelectedFileScanFactory {
-    snapshot: EagerSnapshot,
+    snapshot: Snapshot,
     log_store: LogStoreRef,
     scan_config: DeltaScanConfig,
     read_operation_id: Option<Uuid>,
@@ -620,7 +620,7 @@ struct SelectedFileScanFactory {
 
 impl SelectedFileScanFactory {
     fn try_new(
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         log_store: LogStoreRef,
         session: &dyn Session,
         read_operation_id: Option<Uuid>,
@@ -837,7 +837,7 @@ impl MergePlan {
                     read_session.as_ref().clone(),
                 ));
                 let scan_factory = SelectedFileScanFactory::try_new(
-                    snapshot,
+                    snapshot.snapshot(),
                     log_store.clone(),
                     read_session.as_ref(),
                     Some(operation_id),
@@ -886,7 +886,7 @@ impl MergePlan {
                 )?);
                 let task_parameters = self.task_parameters.clone();
                 let scan_factory = SelectedFileScanFactory::try_new(
-                    snapshot,
+                    snapshot.snapshot(),
                     log_store.clone(),
                     read_session.as_ref(),
                     Some(operation_id),
@@ -1022,14 +1022,14 @@ pub async fn create_merge_plan(
     let (operations, metrics, planner_stats) = match optimize_type {
         OptimizeType::Compact => {
             info!("building compaction plan");
-            build_compaction_plan(log_store, snapshot, filters, target_size).await?
+            build_compaction_plan(log_store, snapshot.snapshot(), filters, target_size).await?
         }
         OptimizeType::ZOrder(zorder_columns) => {
             info!("building z-order plan");
             build_zorder_plan(
                 log_store,
                 zorder_columns,
-                snapshot,
+                snapshot.snapshot(),
                 partitions_keys,
                 filters,
             )
@@ -1195,7 +1195,7 @@ fn plan_compaction_bins_in_stable_order(
 
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     filters: &[PartitionFilter],
     target_size: NonZeroU64,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
@@ -1310,7 +1310,7 @@ fn validate_zorder_column(schema: &StructType, column: &str) -> Result<(), Delta
 async fn build_zorder_plan(
     log_store: &dyn LogStore,
     zorder_columns: Vec<String>,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     partition_keys: &[String],
     filters: &[PartitionFilter],
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {

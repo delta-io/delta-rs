@@ -14,7 +14,7 @@ use either::{Left, Right};
 use futures::TryStreamExt as _;
 use itertools::Itertools;
 
-use crate::kernel::EagerSnapshot;
+use crate::kernel::Snapshot;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
@@ -323,7 +323,7 @@ pub(crate) fn generalize_filter(
 
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
-    table_snapshot: &EagerSnapshot,
+    table_snapshot: &Snapshot,
     session_state: &dyn Session,
     source: &LogicalPlan,
     source_name: &TableReference,
@@ -478,7 +478,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -569,7 +569,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -627,7 +627,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -690,7 +690,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -759,7 +759,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -831,7 +831,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap().snapshot(),
+            table.snapshot().unwrap().snapshot().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,

@@ -76,7 +76,8 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, resolve_snapshot,
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot,
+    resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
@@ -295,7 +296,7 @@ impl std::future::IntoFuture for DeleteBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            PROTOCOL.check_append_only(&snapshot)?;
+            PROTOCOL.check_append_only(snapshot.snapshot())?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
@@ -332,7 +333,7 @@ impl std::future::IntoFuture for DeleteBuilder {
             let (actions, metrics) = execute(
                 predicate,
                 this.log_store.clone(),
-                snapshot.clone(),
+                snapshot.snapshot(),
                 &session,
                 operation_id,
             )
@@ -423,7 +424,7 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
 async fn execute(
     predicate: Option<Expr>,
     log_store: LogStoreRef,
-    snapshot: EagerSnapshot,
+    snapshot: &Snapshot,
     session: &dyn Session,
     operation_id: Uuid,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
@@ -439,7 +440,7 @@ async fn execute(
     let Some(predicate) = predicate else {
         // no predicate means all files match.
         // cdc actions are not written when table files are removed.
-        let full_file = collect_full_file_deletes(snapshot.snapshot().active_adds(
+        let full_file = collect_full_file_deletes(snapshot.active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
                 predicate: None,
@@ -482,7 +483,7 @@ async fn execute(
                 // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
                 // a file either fully matches or does not. It is therefore safe to treat this as
                 // the authoritative match set for DELETE.
-                collect_full_file_deletes(snapshot.snapshot().active_adds(
+                collect_full_file_deletes(snapshot.active_adds(
                     log_store.as_ref(),
                     ActiveAddOptions {
                         predicate: Some(Arc::new(delta_predicate)),
@@ -500,14 +501,13 @@ async fn execute(
                 let matching_paths = Arc::new(
                     find_file_paths_by_partition_predicate_datafusion(
                         session,
-                        &snapshot,
+                        snapshot,
                         &partition_predicate,
                     )
                     .await?,
                 );
                 collect_full_file_deletes(
                     snapshot
-                        .snapshot()
                         .active_adds(
                             log_store.as_ref(),
                             ActiveAddOptions {
@@ -535,7 +535,7 @@ async fn execute(
     }
 
     let maybe_scan_plan =
-        scan_files_where_matches(session, &snapshot, log_store.clone(), predicate).await?;
+        scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
@@ -547,7 +547,6 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -595,7 +594,7 @@ async fn execute(
         }),
     });
 
-    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
+    let (write_plan, write_cdc) = if should_write_cdc(snapshot)? {
         // create change set entries for all records we deleted
         let cdc_deletes = files_scan
             .scan()
@@ -654,7 +653,7 @@ async fn execute(
 
 async fn find_file_paths_by_partition_predicate_datafusion(
     session: &dyn Session,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     predicate: &Expr,
 ) -> DeltaResult<std::collections::HashSet<String>> {
     use arrow_array::StringArray;

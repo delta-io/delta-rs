@@ -65,7 +65,7 @@ use crate::{
         resolve_session_state,
     },
     kernel::{
-        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
+        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -276,7 +276,7 @@ async fn execute(
     predicate: Expr,
     updates: HashMap<Column, Expression>,
     log_store: LogStoreRef,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
     operation_id: Uuid,
@@ -396,7 +396,6 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -464,7 +463,7 @@ impl std::future::IntoFuture for UpdateBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            PROTOCOL.check_append_only(&snapshot)?;
+            PROTOCOL.check_append_only(snapshot.snapshot())?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
@@ -510,7 +509,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 predicate,
                 this.updates,
                 this.log_store.clone(),
-                &snapshot,
+                snapshot.snapshot(),
                 &state,
                 this.writer_properties,
                 operation_id,

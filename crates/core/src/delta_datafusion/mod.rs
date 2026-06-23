@@ -1382,7 +1382,7 @@ mod tests {
             .unwrap();
 
         let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
+            .build(table.snapshot().unwrap().snapshot().snapshot())
             .unwrap();
 
         let (log_store, mut operations) = recording_log_store(table.log_store());

@@ -416,7 +416,7 @@ impl WriteBuilder {
                 }
 
                 if self.mode == SaveMode::Overwrite {
-                    PROTOCOL.check_append_only(snapshot)?;
+                    PROTOCOL.check_append_only(snapshot.snapshot())?;
                     if !snapshot.load_config().require_files {
                         return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
                     }
@@ -425,10 +425,10 @@ impl WriteBuilder {
                 PROTOCOL.can_write_to(snapshot)?;
 
                 if self.schema_mode.is_none() {
-                    PROTOCOL.check_can_write_timestamp_ntz(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_timestamp_ntz(snapshot.snapshot(), &schema)?;
                     #[cfg(feature = "nanosecond-timestamps")]
-                    PROTOCOL.check_can_write_timestamp_nanos(snapshot, &schema)?;
-                    PROTOCOL.check_can_write_variant(snapshot, &schema)?;
+                    PROTOCOL.check_can_write_timestamp_nanos(snapshot.snapshot(), &schema)?;
+                    PROTOCOL.check_can_write_variant(snapshot.snapshot(), &schema)?;
                 }
                 match self.mode {
                     SaveMode::ErrorIfExists => {
@@ -503,8 +503,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
+                let snapshot = this.snapshot.as_ref().map(EagerSnapshot::snapshot);
                 let prepared_write = plan::prepare_write(plan::WritePreparationInput {
-                    snapshot: this.snapshot.as_ref(),
+                    snapshot,
                     session: &session,
                     source,
                     mode: this.mode,
@@ -519,7 +520,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 })?;
 
                 let overwrite_plan = plan::plan_overwrite_rewrite(
-                    this.snapshot.as_ref(),
+                    snapshot,
                     &this.log_store,
                     &session,
                     this.mode,
@@ -564,7 +565,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
-                    this.snapshot.as_ref(),
+                    snapshot,
                     &session,
                     source_plan.clone(),
                     partition_columns.clone(),

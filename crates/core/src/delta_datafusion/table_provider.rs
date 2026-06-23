@@ -139,7 +139,7 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &Snapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             Some(resolve_file_column_name(
                 snapshot.input_schema().as_ref(),
@@ -776,6 +776,19 @@ mod tests {
             err.to_string()
                 .contains("Unable to add file path column since column with name file_col exists")
         );
+    }
+
+    #[tokio::test]
+    async fn test_scan_config_builder_accepts_snapshot_without_eager_wrapper() {
+        let table = create_in_memory_id_table().await.unwrap();
+        let snapshot = table.snapshot().unwrap().snapshot().snapshot();
+
+        let config = DeltaScanConfigBuilder::new()
+            .with_file_column(true)
+            .build(snapshot)
+            .unwrap();
+
+        assert_eq!(config.file_column_name.as_deref(), Some(PATH_COLUMN));
     }
 
     #[tokio::test]

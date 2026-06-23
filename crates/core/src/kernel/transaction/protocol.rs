@@ -7,8 +7,7 @@ use super::{TableReference, TransactionError};
 #[cfg(feature = "nanosecond-timestamps")]
 use crate::kernel::contains_timestamp_nanos;
 use crate::kernel::{
-    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
-    contains_variant,
+    Action, Protocol, ProtocolExt as _, Schema, Snapshot, contains_timestampntz, contains_variant,
 };
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -91,7 +90,7 @@ impl ProtocolChecker {
     }
 
     /// Check append-only at the high level (operation level)
-    pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+    pub fn check_append_only(&self, snapshot: &Snapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
@@ -100,7 +99,7 @@ impl ProtocolChecker {
 
     fn check_can_write_feature(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         contains_feature: bool,
         feature: TableFeature,
     ) -> Result<(), TransactionError> {
@@ -123,7 +122,7 @@ impl ProtocolChecker {
     /// Check can write_timestamp_ntz
     pub fn check_can_write_timestamp_ntz(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampntz");
@@ -138,7 +137,7 @@ impl ProtocolChecker {
     /// Check can write_timestamp_nanos
     pub fn check_can_write_timestamp_nanos(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampnanos");
@@ -152,7 +151,7 @@ impl ProtocolChecker {
     /// Check can write variant
     pub fn check_can_write_variant(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write variant");
@@ -854,7 +853,7 @@ mod tests {
         .unwrap();
         assert!(
             checker
-                .check_can_write_variant(missing_feature.snapshot(), &schema)
+                .check_can_write_variant(missing_feature.snapshot().snapshot(), &schema)
                 .is_err()
         );
 
@@ -871,7 +870,7 @@ mod tests {
         .unwrap();
         assert!(
             checker
-                .check_can_write_variant(preview_feature.snapshot(), &schema)
+                .check_can_write_variant(preview_feature.snapshot().snapshot(), &schema)
                 .is_ok()
         );
     }
