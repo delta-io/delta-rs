@@ -2145,6 +2145,10 @@ mod tests {
         let elements = value.as_array().expect("expected eager snapshot sequence");
         assert_eq!(elements.len(), 1);
 
+        let actual: EagerSnapshot = serde_json::from_value(value)?;
+        assert_eq!(actual.version(), snapshot.version());
+        assert_eq!(actual.metadata().id(), snapshot.metadata().id());
+
         Ok(())
     }
 
@@ -2152,13 +2156,18 @@ mod tests {
     async fn test_eager_snapshot_legacy_serde_preserves_materialized_state() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+
+        assert!(snapshot.snapshot().has_materialized_files_for_test());
+
         let legacy = legacy_eager_snapshot_payload(&snapshot);
 
         let actual: EagerSnapshot = serde_json::from_value(legacy)?;
 
+        assert_eq!(actual.version(), snapshot.version());
+        assert!(actual.snapshot().has_materialized_files_for_test());
         assert_eq!(
-            actual.log_data().num_files(),
-            snapshot.log_data().num_files()
+            actual.try_log_data()?.num_files(),
+            snapshot.try_log_data()?.num_files()
         );
 
         Ok(())
