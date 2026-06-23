@@ -295,7 +295,7 @@ impl TableProviderBuilder {
 
     /// Provide an eager snapshot to use for the table provider
     pub fn with_eager_snapshot(mut self, snapshot: impl Into<Arc<EagerSnapshot>>) -> Self {
-        self.snapshot = Some(SnapshotWrapper::EagerSnapshot(snapshot.into()));
+        self.snapshot = Some(SnapshotWrapper::from(snapshot.into()));
         self
     }
 
