@@ -216,7 +216,7 @@ impl LogicalFileView {
     ///
     /// This preserves all partition columns even when `partitionValues_parsed` was narrowed to the
     /// predicate-referenced subset for data skipping.
-    fn partition_values_map(&self) -> HashMap<String, Option<String>> {
+    pub fn partition_values_map(&self) -> HashMap<String, Option<String>> {
         self.raw_partition_values()
             .filter(|partitions| partitions.is_valid(self.index))
             .and_then(|partitions| collect_string_map(&partitions.value(self.index)))
