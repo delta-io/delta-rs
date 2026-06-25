@@ -550,7 +550,7 @@ def test_drop_column_not_null(tmp_path: pathlib.Path):
     write_deltalake(tmp_path, _non_null_table())
 
     dt = DeltaTable(tmp_path)
-    assert dt.schema().field("id").nullable is False
+    assert dt.schema().fields("id").nullable is False
 
     dt.alter.drop_column_not_null("id")
 
