@@ -463,7 +463,7 @@ impl std::future::IntoFuture for UpdateBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            PROTOCOL.check_append_only(snapshot.snapshot())?;
+            PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();

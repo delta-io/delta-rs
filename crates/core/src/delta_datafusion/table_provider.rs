@@ -139,7 +139,11 @@ impl DeltaScanConfigBuilder {
     }
 
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &Snapshot) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &EagerSnapshot) -> DeltaResult<DeltaScanConfig> {
+        self.build_from_snapshot(snapshot.snapshot())
+    }
+
+    fn build_from_snapshot(&self, snapshot: &Snapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             Some(resolve_file_column_name(
                 snapshot.input_schema().as_ref(),
@@ -779,9 +783,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_scan_config_builder_accepts_snapshot_without_eager_wrapper() {
+    async fn test_scan_config_builder_preserves_eager_snapshot_compatibility() {
         let table = create_in_memory_id_table().await.unwrap();
-        let snapshot = table.snapshot().unwrap().snapshot().snapshot();
+        let snapshot = table.snapshot().unwrap().snapshot();
 
         let config = DeltaScanConfigBuilder::new()
             .with_file_column(true)
