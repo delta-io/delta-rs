@@ -120,7 +120,7 @@ fn plan_drop_column_not_null_actions(
         .move_table_properties_into_features(metadata.configuration());
 
     let operation = DeltaOperation::DropColumnNotNull {
-        column: column_name.to_string(),
+        column: updated_field.clone(),
     };
 
     metadata = metadata.with_schema(&updated_table_schema)?;
