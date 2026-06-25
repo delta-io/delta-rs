@@ -382,7 +382,7 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     DropColumnNotNull {
         /// The name of the column whose `NOT NULL` constraint was dropped
-        column: String,
+        column: StructField,
     },
 }
 
