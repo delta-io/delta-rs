@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.6.0"
+version = "1.6.1"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
@@ -103,6 +103,24 @@ features = [
     "lakefs",
     "python",
     "unity-experimental",
+    # Generic OpenDAL backends (each auto-registers its URL scheme).
+    "opendal-fs",
+    "opendal-memory",
+    "opendal-s3",
+    "opendal-gcs",
+    "opendal-azblob",
+    "opendal-azdls",
+    "opendal-oss",
+    "opendal-obs",
+    "opendal-cos",
+    "opendal-tos",
+    "opendal-b2",
+    "opendal-swift",
+    "opendal-webhdfs",
+    "opendal-webdav",
+    "opendal-ftp",
+    "opendal-sftp",
+    "opendal-hf",
 ]
 
 [features]

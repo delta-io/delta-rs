@@ -15,7 +15,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaProtocolError
+from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
@@ -560,6 +560,33 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     add_actions = dt.get_add_actions()
     assert add_actions.num_rows == 0
     assert dt.get_add_actions(flatten=True).num_rows == 0
+
+
+@pytest.mark.pyarrow
+def test_get_add_actions_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
+def test_without_files_update_preserves_get_add_actions_error(tmp_path: Path):
+    import pyarrow as pa
+
+    data = pa.table({"id": pa.array([1, 2, 3], type=pa.int64())})
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    assert dt.version() == 0
+
+    write_deltalake(tmp_path, data, mode="append")
+    dt.update_incremental()
+
+    assert dt.version() == 1
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
