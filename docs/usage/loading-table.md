@@ -8,13 +8,13 @@ such as creation time.
 {{ code_example('delta_table', 'get_table_info', ['DeltaTable'])}}
 
 Depending on your storage backend, you could use the `storage_options`
-parameter to provide some configuration. Configuration is defined for
-specific backends - [s3
-options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants),
-[azure
-options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants),
-[gcs
-options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants).
+parameter to provide some configuration.
+
+Configuration is defined for specific backends
+
+- [s3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants),
+- [azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants),
+- [gcs options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants).
 
 === "Python"
     ```python
@@ -36,22 +36,28 @@ basic service provider is derived from the URL being used. We try to
 support many of the well-known formats to identify basic service
 properties.
 
-**S3**:
+=== "S3"
 
-> - s3://\<bucket\>/\<path\>
-> - s3a://\<bucket\>/\<path\>
+    ```
+    s3://\<bucket\>/\<path\>
+    s3a://\<bucket\>/\<path\>
+    ```
 
-Note that `delta-rs` does not read credentials from a local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can also pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+    Note that `delta-rs` does not read credentials from a local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can also pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
-**Azure**:
+=== "Azure"
 
-> - az://\<container\>/\<path\>
-> - adl://\<container\>/\<path\>
-> - abfs://\<container\>/\<path\>
+    ```
+    az://\<container\>/\<path\>
+    adl://\<container\>/\<path\>
+    abfs://\<container\>/\<path\>
+    ```
 
-**GCS**:
+=== "GCS"
 
-> - gs://\<bucket\>/\<path\>
+    ```
+    - gs://\<bucket\>/\<path\>
+    ```
 
 
 ## Verify Table Existence
@@ -215,7 +221,9 @@ You may load a Delta Table from your Databricks or Open Source Unity Catalog usi
     # True
     ```
 
-### Following environmental variables are supported
+### Environment variables
+
+The following environment variables are supported when loading tables using a `uc://` URL:
 
 #### Connection Configuration
 
@@ -241,7 +249,11 @@ You may load a Delta Table from your Databricks or Open Source Unity Catalog usi
 | `DATABRICKS_AUTHORITY_ID` | Authority (tenant) ID for OAuth flows |
 | `DATABRICKS_CLIENT_ID` | Service principal client ID |
 | `DATABRICKS_CLIENT_SECRET` | Service principal client secret |
-| or ||
+
+ or
+
+| Environment Variable | Description |
+|---------------------|-------------|
 | `UNITY_AUTHORITY_HOST` | Unity-prefixed authority host |
 | `UNITY_AUTHORITY_ID` | Unity-prefixed authority ID |
 | `UNITY_CLIENT_ID` | Unity-prefixed client ID |
@@ -256,7 +268,11 @@ You may load a Delta Table from your Databricks or Open Source Unity Catalog usi
 | `DATABRICKS_MSI_RESOURCE_ID` | MSI resource ID for managed identity |
 | `DATABRICKS_OBJECT_ID` | Object ID for managed identity authentication |
 | `DATABRICKS_USE_AZURE_CLI` | Use Azure CLI for acquiring access token |
-| or ||
+
+or
+
+| Environment Variable | Description |
+|---------------------|-------------|
 | `UNITY_FEDERATED_TOKEN_FILE` | Unity-prefixed federated token file |
 | `UNITY_MSI_ENDPOINT` | Unity-prefixed MSI endpoint |
 | `UNITY_MSI_RESOURCE_ID` | Unity-prefixed MSI resource ID |
