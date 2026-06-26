@@ -18,8 +18,8 @@ Configuration is defined for specific backends
 
 === "Python"
     ```python
-    >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
-    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
+    storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
+    dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
     ```
 
 === "Rust"
@@ -56,7 +56,7 @@ properties.
 === "GCS"
 
     ```
-    - gs://\<bucket\>/\<path\>
+    gs://\<bucket\>/\<path\>
     ```
 
 
