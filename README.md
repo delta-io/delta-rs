@@ -155,6 +155,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Merge                 | ![done] | ![done] | Merge a target Delta table with source data |
 | Update                | ![done] | ![done] | Update values from a table                  |
 | Add Column            | ![done] | ![done] | Add new columns or nested fields            |
+| Drop NOT NULL         | ![done] | ![done] | Make a non-nullable column nullable          |
 | Add Feature           | ![done] | ![done] | Enable delta table features                 |
 | Add Constraints       | ![done] | ![done] | Set delta constraints, to verify data on write |
 | Drop Constraints      | ![done] | ![done] | Removes delta constraints                   |
