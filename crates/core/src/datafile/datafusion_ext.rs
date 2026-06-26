@@ -159,11 +159,102 @@ impl DeltaDataReader for DataFusionDataReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    use datafusion::prelude::SessionContext;
+    use futures::stream::TryStreamExt as _;
+
+    use crate::operations::create::CreateBuilder;
+    use crate::writer::DeltaWriter as _;
+    use crate::writer::RecordBatchWriter;
+    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
 
     #[tokio::test]
     async fn test_sendable_streams_to_future_stream_empty_is_empty() {
         // Empty input must not panic in `select_all`; it yields an empty stream.
         let mut stream = sendable_streams_to_future_stream(vec![]);
         assert!(stream.next().await.is_none());
+    }
+
+    /// Write a small unpartitioned table with one batch; returns the temp dir
+    /// (kept alive for the on-disk files), the loaded table, and the row count.
+    async fn table_with_one_batch() -> (tempfile::TempDir, DeltaTable, usize) {
+        let schema = get_delta_schema();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut table = CreateBuilder::new()
+            .with_location(tmp.path().to_str().unwrap())
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let rows = batch.num_rows();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer.write(batch).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+        (tmp, table, rows)
+    }
+
+    fn session() -> Arc<dyn Session> {
+        Arc::new(SessionContext::new().state())
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_data_reader_reads_all_rows() {
+        // `try_new` + `read(default)` round-trips every written row through the
+        // advanced (DataFusion-backed) reader.
+        let (_tmp, table, rows) = table_with_one_batch().await;
+        let reader = DataFusionDataReader::try_new(&table, session())
+            .await
+            .unwrap();
+
+        let stream = reader.read(ReadOptions::default()).await.unwrap();
+        let batches: Vec<_> = stream.buffered(4).try_collect().await.unwrap();
+
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, rows);
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_data_reader_projection() {
+        // A column projection is resolved against the schema and applied to the scan.
+        let (_tmp, table, _rows) = table_with_one_batch().await;
+        let session = session();
+        let reader = DataFusionDataReader::try_new(&table, session.clone())
+            .await
+            .unwrap();
+
+        let options = ScanOptions {
+            projection: Some(vec!["id".to_string()]),
+            limit: None,
+        };
+        let stream = reader.scan(session.as_ref(), options).await.unwrap();
+
+        assert_eq!(stream.schema().fields().len(), 1);
+        assert_eq!(stream.schema().field(0).name(), "id");
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_data_reader_projection_unknown_column_errors() {
+        // Projecting a column that isn't in the schema is a clear error, not a panic.
+        let (_tmp, table, _rows) = table_with_one_batch().await;
+        let session = session();
+        let reader = DataFusionDataReader::try_new(&table, session.clone())
+            .await
+            .unwrap();
+
+        let options = ScanOptions {
+            projection: Some(vec!["does_not_exist".to_string()]),
+            limit: None,
+        };
+        let err = reader
+            .scan(session.as_ref(), options)
+            .await
+            .err()
+            .expect("projecting an unknown column should error");
+        assert!(
+            matches!(err, DeltaTableError::SchemaMismatch { .. }),
+            "got: {err:?}"
+        );
     }
 }

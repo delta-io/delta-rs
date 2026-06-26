@@ -290,4 +290,94 @@ mod tests {
         let err = ParquetTableReader::try_new(&table).await.unwrap_err();
         assert!(matches!(err, DeltaTableError::Generic(_)), "got: {err:?}");
     }
+
+    #[tokio::test]
+    async fn test_kernel_readers_not_yet_implemented() {
+        // The kernel-backed readers are placeholders; both report a clear
+        // not-yet-implemented error rather than panicking or returning empty data.
+        let file_err = KernelDataFileReader
+            .read_file(Path::from("data/file.parquet"))
+            .await
+            .err()
+            .expect("KernelDataFileReader is a placeholder and must error");
+        assert!(
+            matches!(file_err, DeltaTableError::Generic(_)),
+            "got: {file_err:?}"
+        );
+
+        let table_err = KernelDataReader
+            .read(ReadOptions::default())
+            .await
+            .err()
+            .expect("KernelDataReader is a placeholder and must error");
+        assert!(
+            matches!(table_err, DeltaTableError::Generic(_)),
+            "got: {table_err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parquet_file_reader_reads_single_file() {
+        // Exercise the file-tier reader's `read_file` (size-unknown) path directly,
+        // independent of the dataset-tier reader.
+        let schema = get_delta_schema();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut table = CreateBuilder::new()
+            .with_location(tmp.path().to_str().unwrap())
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+
+        let batch = get_record_batch(None, false);
+        let expected_rows = batch.num_rows();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer.write(batch).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+
+        // Locate a data file in the table root.
+        let store = table.object_store();
+        let mut listing = store.list(None);
+        let mut data_file = None;
+        while let Some(meta) = listing.next().await {
+            let location = meta.unwrap().location;
+            if location.filename().is_some_and(|f| f.ends_with(".parquet")) {
+                data_file = Some(location);
+                break;
+            }
+        }
+        let path = data_file.expect("table should have a parquet data file");
+
+        let reader = ParquetFileReader::new(store);
+        let stream = reader.read_file(path).await.unwrap();
+        let batches: Vec<_> = stream.buffered(2).try_collect().await.unwrap();
+
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, expected_rows);
+    }
+
+    #[tokio::test]
+    async fn test_parquet_table_reader_rejects_projection() {
+        // The basic reader has no pushdown yet, so it rejects projection/limit
+        // rather than silently returning unfiltered data.
+        let schema = get_delta_schema();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut table = CreateBuilder::new()
+            .with_location(tmp.path().to_str().unwrap())
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer.write(get_record_batch(None, false)).await.unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+
+        let reader = ParquetTableReader::try_new(&table).await.unwrap();
+        let options = ReadOptions::default().with_projection(vec!["id".to_string()]);
+        let err = reader
+            .read(options)
+            .await
+            .err()
+            .expect("the basic reader should reject projection");
+        assert!(matches!(err, DeltaTableError::Generic(_)), "got: {err:?}");
+    }
 }

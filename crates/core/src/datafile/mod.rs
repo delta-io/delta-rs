@@ -114,3 +114,20 @@ pub trait DeltaDataReader: Send + Sync {
     /// Read the selected data as a stream of batch futures.
     async fn read(&self, options: ReadOptions) -> DeltaResult<RecordBatchFutureStream>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_options_builders() {
+        let options = ReadOptions::default()
+            .with_projection(vec!["a".to_string(), "b".to_string()])
+            .with_limit(5);
+        assert_eq!(
+            options.projection,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
+        assert_eq!(options.limit, Some(5));
+    }
+}
