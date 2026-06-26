@@ -2,9 +2,8 @@
 //!
 //! This module hosts two kinds of reader:
 //!
-//! * [`ParquetFileReader`] / [`ParquetTableReader`] — **new in this PR.** The
-//!   first concrete implementations of the read traits, added to prove the read
-//!   side of the design end-to-end (the write side already has real impls).
+//! * [`ParquetFileReader`] / [`ParquetTableReader`]
+//!   The first concrete implementations of the read traits
 //!   They read raw parquet directly from object storage with no DataFusion, and
 //!   are intentionally minimal: they reject tables that need deletion-vector
 //!   application, column mapping, or partition-value reconstruction.
@@ -54,7 +53,7 @@ fn not_supported(feature: &str) -> DeltaTableError {
 /// File-tier reader that reads a single parquet data file directly from object
 /// storage, with no DataFusion.
 ///
-/// New in this PR: the first concrete [`DataFileReader`], added to validate the
+/// Concrete [`DataFileReader`], added to validate the
 /// per-file read seam (the same seam where parquet decryption will later
 /// attach, mirroring the write side).
 #[derive(Debug, Clone)]
@@ -97,7 +96,7 @@ impl DataFileReader for ParquetFileReader {
 /// (no DataFusion, no predicate), composing [`ParquetFileReader`] across the
 /// table.
 ///
-/// New in this PR: the first concrete [`DeltaDataReader`], added to prove that
+/// Concrete [`DeltaDataReader`], added to prove that
 /// the file tier composes into a whole-table read through the
 /// [`RecordBatchFutureStream`] waist.
 ///
