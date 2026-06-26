@@ -904,7 +904,7 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """
-        Restores table to a given version or datetime.
+        Restores table to a given version or datetime. See also [``load_as_version``](#deltalake.DeltaTable.load_as_version).
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -915,6 +915,13 @@ class DeltaTable:
 
         Returns:
             the metrics from restore.
+
+        Example:
+            Restore the table to version `1`.
+            ```python
+            dt = DeltaTable(table_path)
+            dt.restore(1)
+            ```
         """
         if isinstance(target, datetime):
             metrics = self._table.restore(
