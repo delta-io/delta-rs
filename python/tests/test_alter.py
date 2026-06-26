@@ -550,13 +550,15 @@ def test_drop_column_not_null(tmp_path: pathlib.Path):
     write_deltalake(tmp_path, _non_null_table())
 
     dt = DeltaTable(tmp_path)
-    assert dt.schema().fields("id").nullable is False
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is False
 
     dt.alter.drop_column_not_null("id")
 
-    assert dt.schema().field("id").nullable is True
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is True
     # Other columns are left untouched.
-    assert dt.schema().field("value").nullable is True
+    assert fields_by_name["value"].nullable is True
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "CHANGE COLUMN"
 
