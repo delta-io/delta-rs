@@ -2145,6 +2145,10 @@ mod tests {
         let elements = value.as_array().expect("expected eager snapshot sequence");
         assert_eq!(elements.len(), 1);
 
+        let actual: EagerSnapshot = serde_json::from_value(value)?;
+        assert_eq!(actual.version(), snapshot.version());
+        assert_eq!(actual.metadata().id(), snapshot.metadata().id());
+
         Ok(())
     }
 
@@ -2152,13 +2156,18 @@ mod tests {
     async fn test_eager_snapshot_legacy_serde_preserves_materialized_state() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+
+        assert!(snapshot.snapshot().has_materialized_files_for_test());
+
         let legacy = legacy_eager_snapshot_payload(&snapshot);
 
         let actual: EagerSnapshot = serde_json::from_value(legacy)?;
 
+        assert_eq!(actual.version(), snapshot.version());
+        assert!(actual.snapshot().has_materialized_files_for_test());
         assert_eq!(
-            actual.log_data().num_files(),
-            snapshot.log_data().num_files()
+            actual.try_log_data()?.num_files(),
+            snapshot.try_log_data()?.num_files()
         );
 
         Ok(())
@@ -2588,6 +2597,63 @@ mod tests {
             replay_ops.iter().all(|op| !op.is_log_replay_read()),
             "expected predicate file_views() to reuse materialized state, got {replay_ops:?}",
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_partition_values_map_preserves_all_columns_under_narrowing_predicate()
+    -> TestResult {
+        use std::collections::BTreeSet;
+
+        // A predicate that references only a subset of the partition columns (year + month, but
+        // not day) makes the scan narrow `partition_values()` to the referenced columns for data
+        // skipping. `partition_values_map()` must still return every partition column so connectors
+        // can reconstruct the full partition identity of each file.
+        let base = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+
+        let predicate = Arc::new(to_kernel_predicate(
+            &[
+                PartitionFilter::try_from(("year", "=", "2020"))?,
+                PartitionFilter::try_from(("month", "=", "2"))?,
+            ],
+            snapshot.schema().as_ref(),
+        )?);
+
+        let views: Vec<_> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .try_collect()
+            .await?;
+        assert_eq!(views.len(), 2, "predicate should match exactly two files");
+
+        for view in &views {
+            // The parsed accessor is narrowed to the predicate-referenced columns: `day` is dropped.
+            let narrowed: BTreeSet<String> = view
+                .partition_values()
+                .map(|values| {
+                    values
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                !narrowed.contains("day"),
+                "expected `day` to be narrowed out of partition_values(), got {narrowed:?}",
+            );
+
+            // The raw map preserves every partition column regardless of the scan predicate.
+            let full: BTreeSet<String> = view.partition_values_map().into_keys().collect();
+            assert_eq!(
+                full,
+                BTreeSet::from(["year".to_string(), "month".to_string(), "day".to_string()]),
+                "partition_values_map() must return all partition columns regardless of predicate",
+            );
+        }
 
         Ok(())
     }
