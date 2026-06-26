@@ -8,7 +8,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use indexmap::IndexMap;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
@@ -19,6 +19,7 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
+use crate::datafile::{DataFileWriter, DeltaDataWriter, RecordBatchFutureStream};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
@@ -65,6 +66,29 @@ fn get_max_concurrency_tasks() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_MAX_CONCURRENCY_TASKS)
+    })
+}
+
+const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
+
+fn parse_writer_batch_concurrency(raw: Option<&str>) -> usize {
+    raw.and_then(|s| s.parse::<usize>().ok())
+        .filter(|size| *size > 0)
+        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+}
+
+/// How many record batches may be in flight on a write path. It bounds the
+/// producer→writer channel capacity in `write_streams` (and the change-data
+/// fan-in), and the `buffered()` drain depth in [`DeltaDataWriter::write_all`].
+/// Tunable via `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (default 10); read once.
+pub(crate) fn writer_batch_concurrency() -> usize {
+    static CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *CONCURRENCY.get_or_init(|| {
+        parse_writer_batch_concurrency(
+            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
+                .ok()
+                .as_deref(),
+        )
     })
 }
 
@@ -194,6 +218,12 @@ pub struct DeltaWriter {
     object_store: ObjectStoreRef,
     /// configuration for the writers
     config: WriterConfig,
+    /// Physical file schema (table schema with partition columns removed), derived
+    /// once at construction. The per-batch write paths read this instead of calling
+    /// `WriterConfig::file_schema()`, which reallocates the schema on every call.
+    /// Invariant: it depends only on the config's table schema + partition columns,
+    /// so any future setter for those must refresh this field.
+    file_schema: ArrowSchemaRef,
     /// partition writers for individual partitions
     partition_writers: HashMap<Path, PartitionWriter>,
 }
@@ -201,9 +231,11 @@ pub struct DeltaWriter {
 impl DeltaWriter {
     /// Create a new instance of [`DeltaWriter`]
     pub fn new(object_store: ObjectStoreRef, config: WriterConfig) -> Self {
+        let file_schema = config.file_schema();
         Self {
             object_store,
             config,
+            file_schema,
             partition_writers: HashMap::new(),
         }
     }
@@ -219,11 +251,37 @@ impl DeltaWriter {
         values: &RecordBatch,
     ) -> DeltaResult<Vec<PartitionResult>> {
         Ok(divide_by_partition_values(
-            self.config.file_schema(),
-            self.config.partition_columns.clone(),
+            self.file_schema.clone(),
+            &self.config.partition_columns,
             values,
         )
         .map_err(|err| WriteError::Partitioning(err.to_string()))?)
+    }
+
+    /// Build a fresh [`PartitionWriter`] for the given partition values.
+    fn build_partition_writer(
+        &self,
+        partition_values: IndexMap<String, Scalar>,
+    ) -> DeltaResult<PartitionWriter> {
+        let prefix_override = match self.config.random_prefix_length {
+            Some(length) => Some(Path::parse(random_prefix(length))?),
+            None => None,
+        };
+        let config = PartitionWriterConfig::try_new(
+            self.file_schema.clone(),
+            partition_values,
+            Some(self.config.writer_properties.clone()),
+            self.config.target_file_size,
+            Some(self.config.write_batch_size),
+            None,
+            prefix_override,
+        )?;
+        PartitionWriter::try_with_config(
+            self.object_store.clone(),
+            config,
+            self.config.num_indexed_cols,
+            self.config.stats_columns.clone(),
+        )
     }
 
     /// Write a batch to the partition induced by the partition_values. The record batch is expected
@@ -244,30 +302,30 @@ impl DeltaWriter {
                 writer.write(&record_batch).await?;
             }
             None => {
-                let prefix_override = match self.config.random_prefix_length {
-                    Some(length) => Some(Path::parse(random_prefix(length))?),
-                    None => None,
-                };
-                let config = PartitionWriterConfig::try_new(
-                    self.config.file_schema(),
-                    partition_values.clone(),
-                    Some(self.config.writer_properties.clone()),
-                    self.config.target_file_size,
-                    Some(self.config.write_batch_size),
-                    None,
-                    prefix_override,
-                )?;
-                let mut writer = PartitionWriter::try_with_config(
-                    self.object_store.clone(),
-                    config,
-                    self.config.num_indexed_cols,
-                    self.config.stats_columns.clone(),
-                )?;
+                let mut writer = self.build_partition_writer(partition_values.clone())?;
                 writer.write(&record_batch).await?;
                 let _ = self.partition_writers.insert(partition_key, writer);
             }
         }
 
+        Ok(())
+    }
+
+    /// Fast path for unpartitioned tables: there is a single partition writer
+    /// (keyed by the empty path), so skip the per-batch partition split, the
+    /// partition-column projection, the hive-path parse, and the map lookup churn
+    /// — the projection is an identity for an unpartitioned schema, so the batch
+    /// can go straight to the writer.
+    async fn write_unpartitioned(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        let partition_key = Path::default();
+        match self.partition_writers.get_mut(&partition_key) {
+            Some(writer) => writer.write(batch).await?,
+            None => {
+                let mut writer = self.build_partition_writer(IndexMap::new())?;
+                writer.write(batch).await?;
+                let _ = self.partition_writers.insert(partition_key, writer);
+            }
+        }
         Ok(())
     }
 
@@ -277,6 +335,9 @@ impl DeltaWriter {
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
     pub async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        if self.config.partition_columns.is_empty() {
+            return self.write_unpartitioned(batch).await;
+        }
         for result in self.divide_by_partition_values(batch)? {
             self.write_partition(result.record_batch, &result.partition_values)
                 .await?;
@@ -284,11 +345,29 @@ impl DeltaWriter {
         Ok(())
     }
 
+    /// Total encoded (parquet) size currently buffered across all open partition
+    /// files (i.e. data written but not yet finalized into a closed file).
+    pub(crate) fn buffered_size(&self) -> usize {
+        self.partition_writers
+            .values()
+            .map(PartitionWriter::buffered_size)
+            .sum()
+    }
+
     /// Close the writer and get the new [Add] actions.
     ///
     /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
+        // The common (unpartitioned) case has a single writer; close it directly and
+        // skip the concurrent-fan-out machinery (and the `num_cpus` probe).
+        if writers.len() <= 1 {
+            let mut actions = Vec::new();
+            for (_, writer) in writers {
+                actions.extend(writer.close().await?);
+            }
+            return Ok(actions);
+        }
         let actions = futures::stream::iter(writers)
             .map(|(_, writer)| async move {
                 let writer_actions = writer.close().await?;
@@ -302,6 +381,54 @@ impl DeltaWriter {
             .await?;
 
         Ok(actions)
+    }
+}
+
+/// Per-batch write metrics accumulated while draining a batch stream.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct DrainMetrics {
+    /// Cumulative time spent inside [`DeltaWriter::write`] (ms).
+    pub write_time_ms: u64,
+    /// Total rows written.
+    pub rows_written: u64,
+}
+
+/// Write every batch from `batches` through `writer`, accumulating the total
+/// write time and row count. This is the single per-batch drain loop shared by
+/// the basic [`DeltaDataWriter::write_all`] and the DataFusion producer/consumer
+/// path (`write_streams`).
+pub(crate) async fn write_batches_timed<S>(
+    writer: &mut DeltaWriter,
+    mut batches: S,
+) -> DeltaResult<DrainMetrics>
+where
+    S: Stream<Item = DeltaResult<RecordBatch>> + Unpin,
+{
+    let mut metrics = DrainMetrics::default();
+    while let Some(batch) = batches.next().await {
+        let batch = batch?;
+        metrics.rows_written += batch.num_rows() as u64;
+        let wstart = std::time::Instant::now();
+        writer.write(&batch).await?;
+        metrics.write_time_ms += wstart.elapsed().as_millis() as u64;
+    }
+    Ok(metrics)
+}
+
+#[async_trait::async_trait]
+impl DeltaDataWriter for DeltaWriter {
+    async fn write_all(
+        mut self: Box<Self>,
+        batches: RecordBatchFutureStream,
+    ) -> DeltaResult<Vec<Add>> {
+        // Resolve up to `writer_batch_concurrency()` batch futures ahead and
+        // write them in input order (`buffered`, not `buffer_unordered`, so file
+        // content is deterministic). Today's callers wrap already-materialized
+        // batches in ready futures (so this is just a bounded drain, metrics
+        // unused), but the bound is honored for any future streaming caller.
+        let buffered = batches.buffered(writer_batch_concurrency().max(1));
+        write_batches_timed(&mut self, buffered).await?;
+        (*self).close().await
     }
 }
 
@@ -434,7 +561,7 @@ impl PartitionWriter {
     ) -> DeltaResult<Self> {
         let writer_id = uuid::Uuid::new_v4();
         let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
-        let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config)?;
+        let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
 
         Ok(Self {
             object_store,
@@ -452,9 +579,8 @@ impl PartitionWriter {
         object_store: ObjectStoreRef,
         path: Path,
         config: &PartitionWriterConfig,
-    ) -> DeltaResult<LazyArrowWriter> {
-        let state = LazyArrowWriter::Initialized(path, object_store.clone(), config.clone());
-        Ok(state)
+    ) -> LazyArrowWriter {
+        LazyArrowWriter::Initialized(path, object_store, config.clone())
     }
 
     fn next_data_path(&mut self) -> Path {
@@ -470,7 +596,7 @@ impl PartitionWriter {
 
     fn reset_writer(&mut self) -> DeltaResult<()> {
         let next_path = self.next_data_path();
-        let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
+        let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config);
         let state = std::mem::replace(&mut self.writer, new_writer);
 
         if let LazyArrowWriter::Writing(path, arrow_writer) = state {
@@ -478,6 +604,11 @@ impl PartitionWriter {
                 .spawn(upload_parquet_file(arrow_writer, path));
         }
         Ok(())
+    }
+
+    /// Encoded (parquet) size currently buffered in the in-progress file.
+    fn buffered_size(&self) -> usize {
+        self.writer.estimated_size()
     }
 
     /// Buffers record batches in-memory up to appx. `target_file_size`.
@@ -494,19 +625,27 @@ impl PartitionWriter {
             .into());
         }
 
+        let Some(target_file_size) = self.config.target_file_size else {
+            // No size target: hand the whole batch to the arrow writer in one call.
+            // It still forms row groups internally, so the output is identical, but
+            // we avoid fragmenting a large batch into many tiny `write_batch` calls.
+            self.writer.write_batch(batch).await?;
+            return Ok(());
+        };
+
+        // With a target file size we slice the batch so we can check the encoded
+        // size between chunks and roll a new file once the target is reached.
         let max_offset = batch.num_rows();
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.writer
                 .write_batch(&batch.slice(offset, length))
                 .await?;
-            if let Some(target_file_size) = self.config.target_file_size {
-                let estimated_size = self.writer.estimated_size();
-                // flush currently buffered data to disk once we meet or exceed the target file size.
-                if estimated_size as u64 >= target_file_size.get() {
-                    debug!("Writing file with estimated size {estimated_size:?} in background.");
-                    self.reset_writer()?;
-                }
+            let estimated_size = self.writer.estimated_size();
+            // flush currently buffered data to disk once we meet or exceed the target file size.
+            if estimated_size as u64 >= target_file_size.get() {
+                debug!("Writing file with estimated size {estimated_size:?} in background.");
+                self.reset_writer()?;
             }
         }
 
@@ -560,6 +699,19 @@ impl PartitionWriter {
     }
 }
 
+// Expose the inherent `write`/`close` behind the [`DataFileWriter`] trait (the
+// per-file seam). Fully-qualified calls select the inherent methods.
+#[async_trait::async_trait]
+impl DataFileWriter for PartitionWriter {
+    async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        PartitionWriter::write(self, batch).await
+    }
+
+    async fn close(self: Box<Self>) -> DeltaResult<Vec<Add>> {
+        PartitionWriter::close(*self).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,6 +725,35 @@ mod tests {
     use object_store::ObjectStoreExt as _;
     use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
+
+    #[test]
+    fn writer_batch_concurrency_zero_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(Some("0")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn writer_batch_concurrency_positive_value_is_used() {
+        assert_eq!(parse_writer_batch_concurrency(Some("8")), 8);
+    }
+
+    #[test]
+    fn writer_batch_concurrency_invalid_value_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(Some("abc")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn writer_batch_concurrency_missing_value_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(None),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
 
     fn get_delta_writer(
         object_store: ObjectStoreRef,

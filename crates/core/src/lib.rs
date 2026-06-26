@@ -79,6 +79,7 @@
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 pub mod data_catalog;
+pub mod datafile;
 pub mod errors;
 pub mod kernel;
 pub mod logstore;

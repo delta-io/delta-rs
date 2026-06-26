@@ -18,7 +18,6 @@ use chrono::{DateTime, Utc};
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
-use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
@@ -529,10 +528,8 @@ impl CdfLoadBuilder {
             add_remove_partition_fields,
         );
 
-        let parquet_options = TableParquetOptions {
-            global: session.config().options().execution.parquet.clone(),
-            ..Default::default()
-        };
+        let parquet_options =
+            crate::datafile::ReaderProperties::default().to_table_parquet_options(session);
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
             .with_table_parquet_options(parquet_options.clone());

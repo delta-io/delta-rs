@@ -5,37 +5,30 @@
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
-use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array, new_null_array};
+use arrow_array::{ArrayRef, RecordBatch, UInt32Array, new_null_array};
 use arrow_ord::partition::partition;
 use arrow_row::{RowConverter, SortField};
 use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
-use bytes::Bytes;
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow, TryIntoKernel};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
-use object_store::{ObjectStore, path::Path};
-use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
+use object_store::ObjectStore;
+use parquet::file::properties::WriterProperties;
 use tracing::log::*;
-use uuid::Uuid;
 
-use super::stats::create_add;
-use super::utils::{
-    ShareableBuffer, arrow_schema_without_partitions, next_data_path,
-    record_batch_without_partitions,
-};
 use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
+use crate::datafile::writer::DeltaWriter as DataFileDeltaWriter;
 use crate::errors::DeltaTableError;
-use crate::kernel::schema::cast::normalize_for_delta;
+use crate::kernel::schema::cast::{cast_record_batch, normalize_for_delta};
 use crate::kernel::schema::merge_arrow_schema;
 use crate::kernel::transaction::CommitProperties;
-use crate::kernel::{Action, Add, PartitionsExt, scalars::ScalarExt};
+use crate::kernel::{Action, Add, scalars::ScalarExt};
 use crate::kernel::{MetadataExt as _, Version};
-use crate::logstore::ObjectStoreRetryExt;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
@@ -46,9 +39,19 @@ pub struct RecordBatchWriter {
     arrow_schema_ref: ArrowSchemaRef,
     original_schema_ref: ArrowSchemaRef,
     writer_properties: WriterProperties,
-    should_evolve: bool,
     partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, PartitionWriter>,
+    /// Streaming sink (created lazily on first write). Batches are encoded into
+    /// it incrementally; it is sealed at `flush` and rotated when a `MergeSchema`
+    /// write widens the schema.
+    sink: Option<DataFileDeltaWriter>,
+    /// `Add` actions from sinks already sealed in this write window (schema-widening
+    /// rotations); returned together at the next `flush`.
+    pending_adds: Vec<Add>,
+    /// Batches streamed since the last `flush` (for `buffered_record_batch_count`).
+    buffered_batch_count: usize,
+    /// Optional target file size; when set, the sink rolls a new file once an
+    /// in-progress file reaches it. `None` (default) keeps one file per partition.
+    target_file_size: Option<NonZeroU64>,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: Option<Vec<String>>,
     commit_properties: Option<CommitProperties>,
@@ -149,8 +152,10 @@ impl RecordBatchWriter {
             original_schema_ref: arrow_schema_ref.clone(),
             writer_properties,
             partition_columns,
-            should_evolve: false,
-            arrow_writers: HashMap::new(),
+            sink: None,
+            pending_adds: Vec::new(),
+            buffered_batch_count: 0,
+            target_file_size: None,
             num_indexed_cols: configuration
                 .get("delta.dataSkippingNumIndexedCols")
                 .and_then(|v| {
@@ -183,8 +188,10 @@ impl RecordBatchWriter {
             original_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
-            should_evolve: false,
-            arrow_writers: HashMap::new(),
+            sink: None,
+            pending_adds: Vec::new(),
+            buffered_batch_count: 0,
+            target_file_size: None,
             num_indexed_cols: configuration
                 .get("delta.dataSkippingNumIndexedCols")
                 .and_then(|v| {
@@ -202,23 +209,42 @@ impl RecordBatchWriter {
         }
     }
 
-    /// Returns the current byte length of the in memory buffer.
-    /// This may be used by the caller to decide when to finalize the file write.
+    /// Approximate total encoded (parquet) size of the data buffered across all
+    /// in-progress files in the underlying dataset sink (the writer keeps one open
+    /// file per partition). May be used by the caller to decide when to finalize
+    /// the buffered writes by calling [`flush`](Self::flush).
     pub fn buffer_len(&self) -> usize {
-        self.arrow_writers.values().map(|w| w.buffer_len()).sum()
+        self.sink
+            .as_ref()
+            .map_or(0, DataFileDeltaWriter::buffered_size)
     }
 
-    /// Returns the number of records held in the current buffer.
+    /// Returns the number of record batches streamed since the last flush.
     pub fn buffered_record_batch_count(&self) -> usize {
-        self.arrow_writers
-            .values()
-            .map(|w| w.buffered_record_batch_count)
-            .sum()
+        self.buffered_batch_count
     }
 
-    /// Resets internal state.
+    /// Resets internal state, discarding any data buffered since the last flush.
+    ///
+    /// This only drops in-memory buffers; it does not touch object storage. If a
+    /// `target_file_size` is set, or a schema-widening `MergeSchema` write has
+    /// rotated the sink since the last flush, some parquet files may already have
+    /// been finalized and uploaded. `reset` neither deletes those files nor keeps
+    /// their pending `Add` actions, so they remain in storage unreferenced by the
+    /// log (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead
+    /// to commit buffered data.
     pub fn reset(&mut self) {
-        self.arrow_writers.clear();
+        self.sink = None;
+        self.pending_adds.clear();
+        self.buffered_batch_count = 0;
+    }
+
+    /// Sets a target file size; once an in-progress file reaches it the writer
+    /// finalizes it and rolls a new one. Without this the writer emits a single
+    /// file per partition per flush (the default).
+    pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
+        self.target_file_size = NonZeroU64::new(target_file_size);
+        self
     }
 
     /// Returns the arrow schema representation of the delta table schema defined for the wrapped
@@ -227,58 +253,32 @@ impl RecordBatchWriter {
         self.arrow_schema_ref.clone()
     }
 
-    ///Write a batch to the specified partition
-    pub async fn write_partition(
-        &mut self,
-        record_batch: RecordBatch,
-        partition_values: &IndexMap<String, Scalar>,
-        mode: WriteMode,
-    ) -> Result<ArrowSchemaRef, DeltaTableError> {
-        let partition_key = partition_values.hive_partition_path();
-
-        let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
-
-        let written_schema = match self.arrow_writers.get_mut(&partition_key) {
-            Some(writer) => writer.write(&record_batch, mode)?,
-            None => {
-                let mut writer = PartitionWriter::new(
-                    arrow_schema_without_partitions(
-                        &self.arrow_schema_ref,
-                        &self.partition_columns,
-                    ),
-                    partition_values.clone(),
-                    self.writer_properties.clone(),
-                )?;
-                let schema = writer.write(&record_batch, mode)?;
-                // Currently schema evolution is not supported with partition columns which means
-                // the schema returned here is equivalent to `arrow_schema_without_partitions`
-                // which can cause problems see #3783
-                let _ = self.arrow_writers.insert(partition_key, writer);
-                schema
-            }
-        };
-        if mode == WriteMode::MergeSchema {
-            Ok(written_schema)
-        } else {
-            Ok(self.arrow_schema_ref.clone())
-        }
-    }
-
     /// Sets the writer properties for the underlying arrow writer.
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = writer_properties;
         self
     }
 
-    fn divide_by_partition_values(
-        &mut self,
-        values: &RecordBatch,
-    ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
-        divide_by_partition_values(
-            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns),
+    /// Build a fresh streaming sink for the current schema/partitioning/target size.
+    fn new_sink(&self) -> DataFileDeltaWriter {
+        super::build_streaming_sink(
+            self.storage.clone(),
+            self.arrow_schema_ref.clone(),
             self.partition_columns.clone(),
-            values,
+            self.writer_properties.clone(),
+            self.target_file_size,
+            self.num_indexed_cols,
+            self.stats_columns.clone(),
         )
+    }
+
+    /// Finalize the current sink (if any), collecting its [`Add`] actions into
+    /// `pending_adds` for the next flush.
+    async fn seal_sink(&mut self) -> Result<(), DeltaTableError> {
+        if let Some(sink) = self.sink.take() {
+            self.pending_adds.extend(sink.close().await?);
+        }
+        Ok(())
     }
 }
 
@@ -288,8 +288,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaTableError> {
         self.write_with_mode(values, WriteMode::Default).await
     }
-    /// Divides a single record batch into into multiple according to table partitioning.
-    /// Values are written to arrow buffers, to collect data until it should be written to disk.
+    /// Stream a record batch (partition columns included) into the dataset
+    /// writer, resolving schema evolution. Partitioning and parquet encoding
+    /// happen incrementally; files are finalized at flush (or when a target file
+    /// size is reached, or when a `MergeSchema` write widens the schema).
     async fn write_with_mode(
         &mut self,
         values: RecordBatch,
@@ -301,14 +303,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                     .to_owned(),
             ));
         }
-        // Set the should_evolve flag for later in case the writer should perform schema evolution
-        // on its flush_and_commit
-        self.should_evolve = mode == WriteMode::MergeSchema;
-
         let values = if values.schema() != self.arrow_schema_ref {
             let normalized = normalize_for_delta(&values.schema());
             if normalized != values.schema() {
-                crate::kernel::schema::cast::cast_record_batch(&values, normalized, true, false)?
+                cast_record_batch(&values, normalized, true, false)?
             } else {
                 values
             }
@@ -316,41 +314,51 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             values
         };
 
-        for result in self.divide_by_partition_values(&values)? {
-            let maybe_evolved_schema = self
-                .write_partition(result.record_batch, &result.partition_values, mode)
-                .await?;
-            self.arrow_schema_ref = maybe_evolved_schema;
+        let batch = if values.schema() != self.arrow_schema_ref {
+            match mode {
+                WriteMode::MergeSchema => {
+                    debug!("The writer and record batch schemas do not match, merging");
+                    let merged = merge_arrow_schema(
+                        self.arrow_schema_ref.clone(),
+                        values.schema().clone(),
+                        true,
+                    )?;
+                    if merged != self.arrow_schema_ref {
+                        // Genuine widening: data already streamed under the narrower
+                        // schema can't be re-encoded, so seal the current sink (its
+                        // files simply omit the new column, which reads back as null)
+                        // and continue with the widened schema in a fresh sink.
+                        self.seal_sink().await?;
+                        self.arrow_schema_ref = merged;
+                    }
+                    // Conform the incoming batch to the (merged) schema; a column-type
+                    // change errors here, at write time.
+                    conform_to_schema(&values, &self.arrow_schema_ref)?
+                }
+                WriteMode::Default => {
+                    return Err(DeltaWriterError::SchemaMismatch {
+                        record_batch_schema: values.schema(),
+                        expected_schema: self.arrow_schema_ref.clone(),
+                    }
+                    .into());
+                }
+            }
+        } else {
+            values
+        };
+
+        if self.sink.is_none() {
+            self.sink = Some(self.new_sink());
         }
-        Ok(())
+        super::write_into_sink(&mut self.sink, &mut self.buffered_batch_count, &batch).await
     }
 
-    /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
+    /// Finalize all files written since the last flush and return their [`Add`]
+    /// actions, resetting internal state to handle another flush window.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
-        let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::with_capacity(writers.len());
-
-        for (_, writer) in writers {
-            let metadata = writer.arrow_writer.close()?;
-            let prefix = Path::parse(writer.partition_values.hive_partition_path())?;
-            let uuid = Uuid::new_v4();
-            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
-            let obj_bytes = Bytes::from(writer.buffer.to_vec());
-            let file_size = obj_bytes.len() as i64;
-            self.storage
-                .put_with_retries(&path, obj_bytes.into(), 15)
-                .await?;
-
-            actions.push(create_add(
-                &writer.partition_values,
-                path.to_string(),
-                file_size,
-                &metadata,
-                self.num_indexed_cols,
-                &self.stats_columns,
-            )?);
-        }
-        Ok(actions)
+        self.seal_sink().await?;
+        self.buffered_batch_count = 0;
+        Ok(std::mem::take(&mut self.pending_adds))
     }
 
     /// Flush the internal write buffers to files in the delta table folder structure.
@@ -362,7 +370,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         use crate::kernel::StructType;
         let mut adds: Vec<Action> = self.flush().await?.drain(..).map(Action::Add).collect();
 
-        if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
+        // The schema only ever changes via a `MergeSchema` widening, so a difference
+        // from the original schema is exactly the signal to evolve the table metadata.
+        let evolve_schema = self.arrow_schema_ref != self.original_schema_ref;
+        if evolve_schema {
             let schema: StructType = self.arrow_schema_ref.clone().try_into_kernel()?;
             if !self.partition_columns.is_empty() {
                 return Err(DeltaTableError::Generic(
@@ -377,7 +388,13 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
         }
-        super::flush_and_commit(adds, table, self.commit_properties.clone()).await
+        let version = super::flush_and_commit(adds, table, self.commit_properties.clone()).await?;
+        if evolve_schema {
+            // The widened schema is now committed; treat it as the baseline so a
+            // subsequent commit doesn't re-emit the same metadata.
+            self.original_schema_ref = self.arrow_schema_ref.clone();
+        }
+        Ok(version)
     }
 }
 
@@ -390,122 +407,37 @@ pub struct PartitionResult {
     pub record_batch: RecordBatch,
 }
 
-struct PartitionWriter {
-    arrow_schema: ArrowSchemaRef,
-    writer_properties: WriterProperties,
-    pub(super) buffer: ShareableBuffer,
-    pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
-    pub(super) partition_values: IndexMap<String, Scalar>,
-    pub(super) buffered_record_batch_count: usize,
-}
-
-impl PartitionWriter {
-    pub fn new(
-        arrow_schema: ArrowSchemaRef,
-        partition_values: IndexMap<String, Scalar>,
-        writer_properties: WriterProperties,
-    ) -> Result<Self, ParquetError> {
-        let buffer = ShareableBuffer::default();
-        let arrow_writer = ArrowWriter::try_new(
-            buffer.clone(),
-            arrow_schema.clone(),
-            Some(writer_properties.clone()),
-        )?;
-
-        let buffered_record_batch_count = 0;
-
-        Ok(Self {
-            arrow_schema,
-            writer_properties,
-            buffer,
-            arrow_writer,
-            partition_values,
-            buffered_record_batch_count,
-        })
-    }
-
-    /// Writes the record batch in-memory and updates internal state accordingly.
-    /// This method buffers the write stream internally so it can be invoked for many
-    /// record batches and flushed after the appropriate number of bytes has been written.
-    ///
-    /// Returns the schema which was written by the write which can be used to understand if a
-    /// schema evolution has happened
-    pub fn write(
-        &mut self,
-        record_batch: &RecordBatch,
-        mode: WriteMode,
-    ) -> Result<ArrowSchemaRef, DeltaWriterError> {
-        let merged_batch = if record_batch.schema() != self.arrow_schema {
-            match mode {
-                WriteMode::MergeSchema => {
-                    debug!("The writer and record batch schemas do not match, merging");
-
-                    let merged = merge_arrow_schema(
-                        self.arrow_schema.clone(),
-                        record_batch.schema().clone(),
-                        true,
-                    )?;
-                    self.arrow_schema = merged;
-
-                    let mut cols = vec![];
-                    for field in self.arrow_schema.fields() {
-                        if let Some(column) = record_batch.column_by_name(field.name()) {
-                            cols.push(column.clone());
-                        } else {
-                            let null_column =
-                                new_null_array(field.data_type(), record_batch.num_rows());
-                            cols.push(null_column);
-                        }
-                    }
-                    Some(RecordBatch::try_new(self.arrow_schema.clone(), cols)?)
-                }
-                WriteMode::Default => {
-                    // If the schemas didn't match then an error should be pushed up
-                    Err(DeltaWriterError::SchemaMismatch {
-                        record_batch_schema: record_batch.schema(),
-                        expected_schema: self.arrow_schema.clone(),
-                    })?
-                }
+/// Project `batch` onto `schema`, null-filling absent fields. Present columns are
+/// carried over unchanged (and so must already match), which makes a column-type
+/// change across a schema merge a hard error rather than a silent cast.
+fn conform_to_schema(
+    batch: &RecordBatch,
+    schema: &ArrowSchemaRef,
+) -> Result<RecordBatch, DeltaWriterError> {
+    let mut cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        match batch.column_by_name(field.name()) {
+            // Present column whose type matches: carried over unchanged.
+            Some(column) if column.data_type() == field.data_type() => cols.push(column.clone()),
+            // Present but the type differs — e.g. a later MergeSchema write widened
+            // this column's type while this batch was buffered under the old type.
+            // Report a clear schema mismatch rather than a low-level arrow error.
+            Some(_) => {
+                return Err(DeltaWriterError::SchemaMismatch {
+                    record_batch_schema: batch.schema(),
+                    expected_schema: schema.clone(),
+                });
             }
-        } else {
-            None
-        };
-
-        // Copy current cursor bytes so we can recover from failures
-        let buffer_bytes = self.buffer.to_vec();
-        let record_batch = merged_batch.as_ref().unwrap_or(record_batch);
-
-        match self.arrow_writer.write(record_batch) {
-            Ok(_) => {
-                self.buffered_record_batch_count += 1;
-                Ok(self.arrow_schema.clone())
-            }
-            // If a write fails we need to reset the state of the PartitionWriter
-            Err(e) => {
-                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
-                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
-                let arrow_writer = ArrowWriter::try_new(
-                    new_buffer,
-                    self.arrow_schema.clone(),
-                    Some(self.writer_properties.clone()),
-                )?;
-                let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
-                Err(e.into())
-            }
+            None => cols.push(new_null_array(field.data_type(), batch.num_rows())),
         }
     }
-
-    /// Returns the current byte length of the in memory buffer.
-    /// This may be used by the caller to decide when to finalize the file write.
-    pub fn buffer_len(&self) -> usize {
-        self.buffer.len() + self.arrow_writer.in_progress_size()
-    }
+    Ok(RecordBatch::try_new(schema.clone(), cols)?)
 }
 
 /// Partition a RecordBatch along partition columns
 pub(crate) fn divide_by_partition_values(
     arrow_schema: ArrowSchemaRef,
-    partition_columns: Vec<String>,
+    partition_columns: &[String],
     values: &RecordBatch,
 ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
     let mut partitions = Vec::new();
@@ -550,8 +482,8 @@ pub(crate) fn divide_by_partition_values(
             .collect::<Result<Vec<_>, _>>()?;
 
         let partition_values = partition_columns
-            .clone()
-            .into_iter()
+            .iter()
+            .cloned()
             .zip(partition_key_iter)
             .collect();
         let batch_data = arrow_schema
@@ -578,7 +510,7 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
     let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(arrays).unwrap();
     let mut sort: Vec<_> = rows.iter().enumerate().collect();
-    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    sort.sort_unstable_by_key(|(_, a)| *a);
     UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }
 
@@ -589,10 +521,78 @@ mod tests {
     use delta_kernel::schema::StructType;
 
     use crate::DeltaResult;
+    use crate::kernel::PartitionsExt;
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::*;
 
     use super::*;
+    use crate::writer::utils::arrow_schema_without_partitions;
+
+    /// Partition a record batch through the writer's schema/partition columns,
+    /// for tests that assert on the resulting [`PartitionResult`]s.
+    fn divide_writer_batch(
+        writer: &RecordBatchWriter,
+        values: &RecordBatch,
+    ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
+        divide_by_partition_values(
+            arrow_schema_without_partitions(&writer.arrow_schema_ref, &writer.partition_columns),
+            &writer.partition_columns,
+            values,
+        )
+    }
+
+    #[test]
+    fn test_conform_to_schema_null_fills_missing_columns() {
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType, Field};
+        use std::sync::Arc;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "a",
+                DataType::Int32,
+                true,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![Some(1), Some(2)]))],
+        )
+        .unwrap();
+        let target = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true), // absent from the batch -> null-filled
+        ]));
+        let out = conform_to_schema(&batch, &target).unwrap();
+        assert_eq!(out.num_columns(), 2);
+        assert_eq!(out.column(1).null_count(), 2);
+    }
+
+    #[test]
+    fn test_conform_to_schema_type_change_reports_schema_mismatch() {
+        use arrow_array::StringArray;
+        use arrow_schema::{DataType, Field};
+        use std::sync::Arc;
+
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "c",
+                DataType::Utf8,
+                true,
+            )])),
+            vec![Arc::new(StringArray::from(vec![Some("x")]))],
+        )
+        .unwrap();
+        // A column present with a different (e.g. widened) type must report a
+        // clear SchemaMismatch, not a low-level arrow type-mismatch error.
+        let target = Arc::new(ArrowSchema::new(vec![Field::new(
+            "c",
+            DataType::LargeUtf8,
+            true,
+        )]));
+        let err = conform_to_schema(&batch, &target).unwrap_err();
+        assert!(
+            matches!(err, DeltaWriterError::SchemaMismatch { .. }),
+            "expected SchemaMismatch, got: {err:?}"
+        );
+    }
 
     #[tokio::test]
     async fn test_buffer_len_includes_unflushed_row_group() {
@@ -668,9 +668,9 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(table_path, &partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let writer = RecordBatchWriter::for_table(&table).unwrap();
 
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
         assert_eq!(partitions.len(), 1);
         assert_eq!(partitions[0].record_batch, batch)
@@ -684,9 +684,9 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
         let table = create_initialized_table(table_path, &partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let writer = RecordBatchWriter::for_table(&table).unwrap();
 
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
         let expected_keys = vec![
             String::from("modified=2021-02-01"),
@@ -747,8 +747,8 @@ mod tests {
             .expect("Failed to deserialize the JSON in the buffer");
         let batch = decoder.flush().expect("Failed to flush").unwrap();
 
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        let writer = RecordBatchWriter::for_table(&table).unwrap();
+        let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
         let expected_keys = [
             String::from("modified=2021-02-01"),
@@ -824,9 +824,9 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table = create_initialized_table(table_path, &partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let writer = RecordBatchWriter::for_table(&table).unwrap();
 
-        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
         let expected_keys = vec![
             String::from("modified=2021-02-01/id=A"),
@@ -1036,6 +1036,106 @@ mod tests {
                 expected_columns, found_columns,
                 "The new table schema does not contain all evolved columns as expected"
             );
+        }
+
+        #[tokio::test]
+        async fn test_schema_evolution_not_dropped_by_trailing_default_write() {
+            // Regression: a MergeSchema widening followed, in the same flush window,
+            // by a Default write that already matches the widened schema must still
+            // evolve the table metadata at commit. (Schema evolution is keyed off the
+            // schema diff, not a flag the trailing Default write could clear.)
+            let table_schema = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let mut table = CreateBuilder::new()
+                .with_location(table_dir.path().to_str().unwrap())
+                .with_columns(table_schema.fields().cloned())
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Widen the schema via MergeSchema.
+            let wider = Arc::new(ArrowSchema::new(vec![
+                Field::new("vid", DataType::Int32, true),
+                Field::new("name", DataType::Utf8, true),
+            ]));
+            let wide_batch = RecordBatch::try_new(
+                wider,
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1)])),
+                    Arc::new(StringArray::from(vec![Some("will")])),
+                ],
+            )
+            .unwrap();
+            writer
+                .write_with_mode(wide_batch, WriteMode::MergeSchema)
+                .await
+                .unwrap();
+
+            // A Default write that already matches the widened schema, before commit.
+            let merged = writer.arrow_schema();
+            let matching = conform_to_schema(&get_record_batch(None, false), &merged).unwrap();
+            writer.write(matching).await.unwrap();
+
+            writer.flush_and_commit(&mut table).await.unwrap();
+            table.load().await.unwrap();
+
+            let committed = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+            let names: Vec<&str> = committed.fields().map(|f| f.name().as_str()).collect();
+            assert!(
+                names.contains(&"vid") && names.contains(&"name"),
+                "trailing Default write dropped the evolved columns: {names:?}",
+            );
+        }
+
+        #[tokio::test]
+        async fn test_write_schema_evolution_multiple_buffered_batches() {
+            // Buffer several batches under different schemas before a single
+            // flush: the prior (base-schema) batches must be conformed to the
+            // merged schema at flush, not rebuilt on every widening write.
+            let table_schema = get_delta_schema();
+            let table_dir = tempfile::tempdir().unwrap();
+            let mut table = CreateBuilder::new()
+                .with_location(table_dir.path().to_str().unwrap())
+                .with_table_name("test-table")
+                .with_columns(table_schema.fields().cloned())
+                .await
+                .unwrap();
+            table.load().await.unwrap();
+
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Two batches in the base schema (Default mode), buffered.
+            writer.write(get_record_batch(None, false)).await.unwrap();
+            writer.write(get_record_batch(None, false)).await.unwrap();
+
+            // A third, wider batch — buffered, not flushed between writes.
+            let wider = RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![
+                    Field::new("vid", DataType::Int32, true),
+                    Field::new("name", DataType::Utf8, true),
+                ])),
+                vec![
+                    Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+                    Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+                ],
+            )
+            .unwrap();
+            writer
+                .write_with_mode(wider, WriteMode::MergeSchema)
+                .await
+                .unwrap();
+            assert_eq!(writer.buffered_record_batch_count(), 3);
+
+            // A single flush conforms the two base batches to the merged schema.
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 1);
+            table.load().await.unwrap();
+
+            let schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+            let found: Vec<&String> = schema.fields().map(|f| f.name()).collect();
+            assert_eq!(found, vec!["id", "value", "modified", "vid", "name"]);
         }
 
         #[tokio::test]
@@ -1266,7 +1366,7 @@ mod tests {
                 .unwrap();
 
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-            let partitions = writer.divide_by_partition_values(&batch).unwrap();
+            let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
             assert_eq!(partitions.len(), 1);
             assert_eq!(partitions[0].record_batch, batch);
@@ -1321,7 +1421,7 @@ mod tests {
                 .unwrap();
 
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-            let partitions = writer.divide_by_partition_values(&batch).unwrap();
+            let partitions = divide_writer_batch(&writer, &batch).unwrap();
 
             assert_eq!(partitions.len(), 1);
             assert_eq!(partitions[0].record_batch, batch);

@@ -25,8 +25,8 @@ use tokio::task::JoinSet;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::writer::{DeltaWriter, WriterConfig};
 use crate::DeltaTableError;
+use crate::datafile::writer::{DeltaWriter, WriterConfig, writer_batch_concurrency};
 use crate::delta_datafusion::{
     ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
@@ -35,26 +35,6 @@ use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTy
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
-
-const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
-const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
-
-fn parse_channel_size(raw: Option<&str>) -> usize {
-    raw.and_then(|s| s.parse::<usize>().ok())
-        .filter(|size| *size > 0)
-        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
-}
-
-fn channel_size() -> usize {
-    static CHANNEL_SIZE: OnceLock<usize> = OnceLock::new();
-    *CHANNEL_SIZE.get_or_init(|| {
-        parse_channel_size(
-            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
-                .ok()
-                .as_deref(),
-        )
-    })
-}
 
 #[cfg(test)]
 mod tests {
@@ -76,36 +56,7 @@ mod tests {
     use futures::{Stream, stream};
     use object_store::memory::InMemory;
 
-    use super::{
-        DEFAULT_WRITER_BATCH_CHANNEL_SIZE, ObjectStoreRef, SendableRecordBatchStream,
-        WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG, WriterConfig, parse_channel_size, write_streams,
-    };
-
-    #[test]
-    fn channel_size_zero_falls_back_to_default() {
-        assert_eq!(
-            parse_channel_size(Some("0")),
-            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
-        );
-    }
-
-    #[test]
-    fn channel_size_positive_value_is_used() {
-        assert_eq!(parse_channel_size(Some("8")), 8);
-    }
-
-    #[test]
-    fn channel_size_invalid_value_falls_back_to_default() {
-        assert_eq!(
-            parse_channel_size(Some("abc")),
-            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
-        );
-    }
-
-    #[test]
-    fn channel_size_missing_value_falls_back_to_default() {
-        assert_eq!(parse_channel_size(None), DEFAULT_WRITER_BATCH_CHANNEL_SIZE);
-    }
+    use super::{ObjectStoreRef, SendableRecordBatchStream, WriterConfig, write_streams};
 
     fn write_streams_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -157,6 +108,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_streams_empty_is_noop() {
+        // No input streams: must return an empty result (no producers spawned).
+        let config = write_streams_config(write_streams_schema());
+        let (adds, metrics) = write_streams(vec![], write_streams_object_store(), config)
+            .await
+            .unwrap();
+        assert!(adds.is_empty());
+        assert_eq!(metrics.rows_written, 0);
+    }
+
+    #[tokio::test]
     async fn test_write_streams_aborts_workers_when_writer_fails() {
         let expected_schema = write_streams_schema();
         let config = write_streams_config(expected_schema.clone());
@@ -194,10 +156,6 @@ mod tests {
         assert!(
             err_msg.contains("Unexpected Arrow schema"),
             "expected writer schema mismatch error, got: {err_msg}"
-        );
-        assert!(
-            !err_msg.contains(WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG),
-            "expected primary writer failure, got channel-close fallback: {err_msg}"
         );
         assert!(
             dropped.load(Ordering::SeqCst),
@@ -281,13 +239,16 @@ struct WriteSinkConfig {
 }
 
 /// Apply column mapping to a write plan: wrap it so its batches are emitted physically, translate
+/// A plan with its (physical) partition columns and optional random-prefix length.
+type ColumnMappedPlan = (Arc<dyn ExecutionPlan>, Vec<String>, Option<usize>);
+
 /// partition columns to physical names, and request a random file prefix. No-op (returns its
 /// inputs) when `column_mapping` is `None`.
 fn apply_column_mapping_to_plan(
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
     column_mapping: &Option<ColumnMappingState>,
-) -> DeltaResult<(Arc<dyn ExecutionPlan>, Vec<String>, Option<usize>)> {
+) -> DeltaResult<ColumnMappedPlan> {
     match column_mapping {
         None => Ok((plan, partition_columns, None)),
         Some(state) => {
@@ -511,17 +472,32 @@ pub(crate) async fn write_exec_plan(
     }
 }
 
+/// Error message used when a worker's `send` fails because the writer task has
+/// already closed the channel (e.g. the writer errored). It is recognised by
+/// [`is_writer_task_closed_error`] so the real (writer) error is surfaced
+/// instead of this downstream symptom.
+const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
+
+fn is_writer_task_closed_error(err: &DeltaTableError) -> bool {
+    matches!(err, DeltaTableError::Generic(msg) if msg == WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG)
+}
+
 /// Drain one or more streams through a single [`DeltaWriter`].
 ///
-/// Each stream is consumed by its own worker task and forwarded over an mpsc channel
-/// to a single writer task to preserve backpressure and streaming semantics.
+/// One worker task is spawned per input stream (so the per-stream scan/compute —
+/// the CPU work in `next()` — parallelizes across runtime threads); all workers
+/// feed the writer task over a bounded channel (capacity
+/// `writer_batch_concurrency()`), overlapping scan/compute with parquet
+/// encode+upload under backpressure. On the first stream error the remaining
+/// workers are aborted and the error surfaced; if the writer rejects a batch the
+/// workers are aborted and the writer error surfaced.
 pub(crate) async fn write_streams(
     streams: Vec<SendableRecordBatchStream>,
     object_store: ObjectStoreRef,
     config: WriterConfig,
 ) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
     let worker_count = streams.len();
-    let (tx, mut rx) = mpsc::channel::<RecordBatch>(channel_size());
+    let (tx, mut rx) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
 
     let mut writer_handle = tokio::task::spawn(async move {
         let mut writer = DeltaWriter::new(object_store, config);
@@ -648,10 +624,6 @@ pub(crate) async fn write_streams(
     ))
 }
 
-fn is_writer_task_closed_error(err: &DeltaTableError) -> bool {
-    matches!(err, DeltaTableError::Generic(msg) if msg == WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG)
-}
-
 /// Hash repartitions the plan by partition columns so each stream
 /// writes to disjoint Delta partitions.
 /// The output partition count is capped by `DELTARS_MAX_CONCURRENT_WRITERS`
@@ -731,20 +703,15 @@ async fn write_data_plan(
     let scan_start = std::time::Instant::now();
 
     let mut join_set = JoinSet::new();
-    for mut stream in partition_streams {
+    for stream in partition_streams {
         let store = object_store.clone();
         let config = config.clone();
         join_set.spawn(async move {
-            let mut writer = DeltaWriter::new(store, config);
-            let mut write_ms: u64 = 0;
-            while let Some(maybe_batch) = stream.next().await {
-                let batch = maybe_batch?;
-                let wstart = std::time::Instant::now();
-                writer.write(&batch).await?;
-                write_ms += wstart.elapsed().as_millis() as u64;
-            }
-            let adds = writer.close().await?;
-            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, write_ms))
+            // Each partition drains through the same producer/consumer writer as
+            // the unpartitioned path, so scan and parquet encode+upload overlap
+            // within the partition (and across partitions via the JoinSet).
+            let (adds, metrics) = write_streams(vec![stream], store, config).await?;
+            Ok::<(Vec<Add>, u64), DeltaTableError>((adds, metrics.write_time_ms))
         });
     }
 
@@ -836,8 +803,8 @@ async fn write_cdc_plan(
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {
-        let (tx_normal, mut rx_normal) = mpsc::channel::<RecordBatch>(channel_size());
-        let (tx_cdf, mut rx_cdf) = mpsc::channel::<RecordBatch>(channel_size());
+        let (tx_normal, mut rx_normal) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
+        let (tx_cdf, mut rx_cdf) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
 
         let normal_writer_handle = tokio::task::spawn(async move {
             let mut writer = DeltaWriter::new(object_store, normal_config);
