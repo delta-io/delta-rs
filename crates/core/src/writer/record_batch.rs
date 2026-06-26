@@ -198,8 +198,10 @@ impl RecordBatchWriter {
             original_schema_ref: arrow_schema_ref.clone(),
             writer_properties,
             partition_columns,
-            should_evolve: false,
-            arrow_writers: HashMap::new(),
+            sink: None,
+            pending_adds: Vec::new(),
+            buffered_batch_count: 0,
+            target_file_size: None,
             num_indexed_cols: configuration
                 .get("delta.dataSkippingNumIndexedCols")
                 .and_then(|v| {
