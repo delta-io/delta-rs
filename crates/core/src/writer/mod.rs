@@ -1,18 +1,11 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use std::num::NonZeroU64;
-use std::sync::Arc;
-
 use arrow::{datatypes::FieldRef, datatypes::SchemaRef, error::ArrowError};
-use arrow_array::RecordBatch;
 use async_trait::async_trait;
-use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use object_store::{Error as ObjectStoreError, ObjectStore};
+use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
-use parquet::file::properties::WriterProperties;
 
 use crate::DeltaTable;
-use crate::datafile::writer::{DeltaWriter as DataFileSink, WriterConfig};
 use crate::errors::{ColumnMappingOperation, DeltaTableError};
 use crate::kernel::schema::symmetric_differences;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
@@ -26,6 +19,7 @@ pub mod json;
 pub mod record_batch;
 pub(crate) mod stats;
 pub mod utils;
+pub(crate) mod window;
 
 #[cfg(test)]
 pub mod test_utils;
@@ -46,54 +40,6 @@ pub(crate) fn ensure_legacy_writer_supports_table(
         ));
     }
 
-    Ok(())
-}
-
-/// Build the streaming [`DeltaWriter`](crate::datafile::writer::DeltaWriter) sink
-/// shared by the legacy [`RecordBatchWriter`] and [`JsonWriter`], centralizing the
-/// (positional) [`WriterConfig`](crate::datafile::writer::WriterConfig) construction
-/// so its argument order lives in one place.
-pub(crate) fn build_streaming_sink(
-    storage: Arc<dyn ObjectStore>,
-    file_schema: SchemaRef,
-    partition_columns: Vec<String>,
-    writer_properties: WriterProperties,
-    target_file_size: Option<NonZeroU64>,
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    stats_columns: Option<Vec<String>>,
-) -> DataFileSink {
-    let config = WriterConfig::new(
-        file_schema,
-        partition_columns,
-        Some(writer_properties),
-        target_file_size,
-        None,
-        num_indexed_cols,
-        stats_columns,
-    );
-    DataFileSink::new(storage, config)
-}
-
-/// Encode `batch` into the (already-created) streaming sink, shared by the legacy
-/// [`RecordBatchWriter`] and [`JsonWriter`]. On a write error the sink's in-progress
-/// multipart upload can't be rolled back, so the sink is dropped and the buffered
-/// count reset: a later write starts a fresh file rather than appending onto a
-/// corrupt one. (Batches already streamed into this sink are lost — an inherent
-/// cost of streaming vs. a fully-buffered writer.)
-pub(crate) async fn write_into_sink(
-    sink: &mut Option<DataFileSink>,
-    buffered_batch_count: &mut usize,
-    batch: &RecordBatch,
-) -> Result<(), DeltaTableError> {
-    let writer = sink
-        .as_mut()
-        .expect("sink must be created before write_into_sink");
-    if let Err(e) = writer.write(batch).await {
-        *sink = None;
-        *buffered_batch_count = 0;
-        return Err(e);
-    }
-    *buffered_batch_count += 1;
     Ok(())
 }
 

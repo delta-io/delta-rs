@@ -7,15 +7,14 @@ use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use itertools::Itertools;
-use parquet::file::properties::WriterProperties;
 use serde_json::Value;
 use tracing::*;
 use url::Url;
 
 use super::utils::record_batch_from_message;
+use super::window::{SinkFactory, WriteWindow};
 use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
-use crate::datafile::writer::DeltaWriter as DataFileDeltaWriter;
 use crate::errors::DeltaTableError;
 use crate::kernel::Add;
 use crate::parquet_utils::default_writer_properties;
@@ -24,22 +23,10 @@ use crate::table::config::TablePropertiesExt as _;
 
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
-    table: DeltaTable,
-    /// Optional schema to use, otherwise try to rely on the schema from the [DeltaTable]
-    schema_ref: Option<ArrowSchemaRef>,
-    writer_properties: WriterProperties,
-    partition_columns: Vec<String>,
-    /// Stats-collection config, resolved once at construction (mirrors
-    /// `RecordBatchWriter`) so a new sink doesn't re-read the table snapshot.
-    num_indexed_cols: DataSkippingNumIndexedCols,
-    stats_columns: Option<Vec<String>>,
-    /// Streaming sink (created lazily on first write); sealed at flush.
-    sink: Option<DataFileDeltaWriter>,
-    /// Batches streamed since the last flush (for `buffered_record_batch_count`).
-    buffered_batch_count: usize,
-    /// Optional target file size; when set, the sink rolls a new file once an
-    /// in-progress file reaches it. `None` (default) keeps one file per partition.
-    target_file_size: Option<NonZeroU64>,
+    /// All mutable per-flush-window state. The schema is fixed at construction
+    /// (from the provided schema ref, or the table's schema). `JsonWriter` never
+    /// evolves the schema, so the window never widens.
+    window: WriteWindow,
 }
 
 impl std::fmt::Debug for JsonWriter {
@@ -61,21 +48,39 @@ impl JsonWriter {
             .load()
             .await?;
         ensure_legacy_writer_supports_table(&table, "JsonWriter")?;
+        Self::from_parts(&table, schema_ref, partition_columns.unwrap_or_default())
+    }
 
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
-        let (num_indexed_cols, stats_columns) = Self::read_stats_config(&table)?;
+    /// Creates a JsonWriter to write to the given table, using the table's schema.
+    pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
+        ensure_legacy_writer_supports_table(table, "JsonWriter")?;
+        let (schema, partition_columns) = {
+            let snapshot = table.snapshot()?;
+            let partition_columns = snapshot.metadata().partition_columns().to_vec();
+            let schema: ArrowSchemaRef = Arc::new(snapshot.schema().as_ref().try_into_arrow()?);
+            (schema, partition_columns)
+        };
+        Self::from_parts(table, schema, partition_columns)
+    }
 
-        Ok(Self {
-            table,
-            schema_ref: Some(schema_ref),
-            writer_properties,
-            partition_columns: partition_columns.unwrap_or_default(),
+    /// Build a writer over `table` with a fixed `schema` and partitioning. The
+    /// stats configuration is resolved once here (mirroring `RecordBatchWriter`).
+    fn from_parts(
+        table: &DeltaTable,
+        schema: ArrowSchemaRef,
+        partition_columns: Vec<String>,
+    ) -> Result<Self, DeltaTableError> {
+        let (num_indexed_cols, stats_columns) = Self::read_stats_config(table)?;
+        let factory = SinkFactory {
+            storage: table.object_store(),
+            partition_columns,
+            writer_properties: default_writer_properties(parquet::basic::Compression::SNAPPY),
+            target_file_size: None,
             num_indexed_cols,
             stats_columns,
-            sink: None,
-            buffered_batch_count: 0,
-            target_file_size: None,
+        };
+        Ok(Self {
+            window: WriteWindow::new(factory, schema),
         })
     }
 
@@ -94,44 +99,17 @@ impl JsonWriter {
         ))
     }
 
-    /// Creates a JsonWriter to write to the given table
-    pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
-        ensure_legacy_writer_supports_table(table, "JsonWriter")?;
-
-        // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.snapshot()?.metadata();
-        let partition_columns = metadata.partition_columns().into();
-
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
-        let (num_indexed_cols, stats_columns) = Self::read_stats_config(table)?;
-
-        Ok(Self {
-            table: table.clone(),
-            writer_properties,
-            partition_columns,
-            schema_ref: None,
-            num_indexed_cols,
-            stats_columns,
-            sink: None,
-            buffered_batch_count: 0,
-            target_file_size: None,
-        })
-    }
-
     /// Approximate total encoded (parquet) size of the data buffered across all
     /// in-progress files in the underlying dataset sink (one open file per
     /// partition). May be used by the caller to decide when to finalize the
     /// buffered writes by calling [`flush`](Self::flush).
     pub fn buffer_len(&self) -> usize {
-        self.sink
-            .as_ref()
-            .map_or(0, DataFileDeltaWriter::buffered_size)
+        self.window.buffered_size()
     }
 
     /// Returns the number of record batches streamed since the last flush.
     pub fn buffered_record_batch_count(&self) -> usize {
-        self.buffered_batch_count
+        self.window.count()
     }
 
     /// Resets internal state, discarding any data buffered since the last flush.
@@ -143,8 +121,7 @@ impl JsonWriter {
     /// (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead to
     /// commit buffered data.
     pub fn reset(&mut self) {
-        self.sink = None;
-        self.buffered_batch_count = 0;
+        self.window.abort();
     }
 
     /// Sets a target file size; once an in-progress file reaches it the writer
@@ -155,42 +132,14 @@ impl JsonWriter {
     /// disabled and the writer keeps one file per partition per flush, exactly
     /// as if this method had not been called.
     pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
-        self.target_file_size = NonZeroU64::new(target_file_size);
+        self.window
+            .set_target_file_size(NonZeroU64::new(target_file_size));
         self
     }
 
-    /// Build a fresh streaming sink for the table's current config and the
-    /// writer's schema/partitioning/target size.
-    fn new_sink(&self) -> Result<DataFileDeltaWriter, DeltaTableError> {
-        Ok(super::build_streaming_sink(
-            self.table.object_store(),
-            self.arrow_schema(),
-            self.partition_columns.clone(),
-            self.writer_properties.clone(),
-            self.target_file_size,
-            self.num_indexed_cols,
-            self.stats_columns.clone(),
-        ))
-    }
-
-    /// Returns the user-defined arrow schema representation or the schema defined for the wrapped
-    /// table.
-    ///
-    pub fn arrow_schema(&self) -> Arc<arrow::datatypes::Schema> {
-        if let Some(schema_ref) = self.schema_ref.as_ref() {
-            return schema_ref.clone();
-        }
-        let schema = self
-            .table
-            .snapshot()
-            .expect("Failed to unwrap snapshot for table")
-            .schema();
-        Arc::new(
-            schema
-                .as_ref()
-                .try_into_arrow()
-                .expect("Failed to coerce delta schema to arrow"),
-        )
+    /// Returns the arrow schema this writer encodes under (fixed at construction).
+    pub fn arrow_schema(&self) -> ArrowSchemaRef {
+        self.window.schema().clone()
     }
 }
 
@@ -230,26 +179,19 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         if let Some(value) = values.iter().find(|v| !v.is_object()) {
             return Err(DeltaWriterError::InvalidRecord(value.to_string()).into());
         }
-        let arrow_schema = self.arrow_schema();
-        let record_batch = record_batch_from_message(arrow_schema.clone(), values.as_slice())?;
+        let schema = self.window.schema().clone();
+        let record_batch = record_batch_from_message(schema.clone(), values.as_slice())?;
 
-        if record_batch.schema() != arrow_schema {
+        if record_batch.schema() != schema {
             return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
-                expected_schema: arrow_schema,
+                expected_schema: schema,
             }
             .into());
         }
 
-        if self.sink.is_none() {
-            self.sink = Some(self.new_sink()?);
-        }
-        super::write_into_sink(
-            &mut self.sink,
-            &mut self.buffered_batch_count,
-            &record_batch,
-        )
-        .await
+        // `JsonWriter` never evolves the schema, so the window never widens.
+        self.window.write(&record_batch, None).await
     }
 
     /// Finalize all files written since the last flush and return their [`Add`]
@@ -258,12 +200,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// These actions should be committed to the [DeltaTable] for the written data.
     #[instrument(skip(self), fields(batch_count = 0))]
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
-        Span::current().record("batch_count", self.buffered_batch_count);
-        self.buffered_batch_count = 0;
-        let actions = match self.sink.take() {
-            Some(sink) => sink.close().await?,
-            None => Vec::new(),
-        };
+        Span::current().record("batch_count", self.window.count());
+        let actions = self.window.drain().await?;
         debug!(actions_count = actions.len(), "flush completed");
         Ok(actions)
     }
@@ -409,7 +347,7 @@ mod tests {
         let writer = JsonWriter::for_table(&table).unwrap();
 
         assert_eq!(
-            writer.writer_properties.created_by(),
+            writer.window.writer_properties().created_by(),
             format!("delta-rs version {}", crate::crate_version())
         );
     }
@@ -430,7 +368,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            writer.writer_properties.created_by(),
+            writer.window.writer_properties().created_by(),
             format!("delta-rs version {}", crate::crate_version())
         );
     }
