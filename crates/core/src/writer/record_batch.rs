@@ -405,9 +405,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                 ));
             }
             let schema: StructType = self.window.schema().clone().try_into_kernel()?;
-            // TODO: we are using the metadata from the passed table, but actually have no guarantee that this is
-            // the same table that was used to create the writer instance. Previously we were erasing current config
-            // assigning a new table ID, which we should not be doing when evolving the schema.
+            // Evolve the schema on the passed table's *current* metadata (preserving
+            // its config and table id), not a fresh one.
+            // TODO: there is no guarantee the passed `table` is the one the writer was
+            // created against.
             let current_meta = table.snapshot()?.metadata().clone();
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
@@ -1112,6 +1113,83 @@ mod tests {
             assert!(
                 names.contains(&"vid") && names.contains(&"name"),
                 "trailing Default write dropped the evolved columns: {names:?}",
+            );
+        }
+
+        #[tokio::test]
+        async fn test_merge_schema_preserves_new_column_data() {
+            // A MergeSchema write that adds a column must persist that column's
+            // *data*, not only evolve the table metadata. This reads the raw parquet
+            // back and asserts the new column's values are present — a check the
+            // metadata-only evolution tests above don't make.
+            use crate::datafile::reader::ParquetTableReader;
+            use crate::datafile::{DeltaDataReader, ReadOptions};
+            use arrow_array::Array;
+            use futures::stream::{StreamExt as _, TryStreamExt as _};
+
+            let table_dir = tempfile::tempdir().unwrap();
+            let mut table = create_initialized_table(table_dir.path().to_str().unwrap(), &[]).await;
+            let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+            // Base write under the table schema, committed on its own.
+            let base = get_record_batch(None, false);
+            writer.write(base.clone()).await.unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+
+            // A MergeSchema write that adds an `extra` column with real values.
+            let extra_values: Vec<i32> = (0..base.num_rows() as i32).collect();
+            let mut fields: Vec<Field> = base
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.as_ref().clone())
+                .collect();
+            fields.push(Field::new("extra", DataType::Int32, true));
+            let mut columns: Vec<ArrayRef> = base.columns().to_vec();
+            columns.push(Arc::new(Int32Array::from(extra_values.clone())));
+            let widened =
+                RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+
+            writer
+                .write_with_mode(widened, WriteMode::MergeSchema)
+                .await
+                .unwrap();
+            writer.flush_and_commit(&mut table).await.unwrap();
+            table.load().await.unwrap();
+
+            // The table schema evolved to include `extra`...
+            let committed = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+            assert!(
+                committed.fields().any(|f| f.name() == "extra"),
+                "schema should have evolved to include `extra`",
+            );
+
+            // ...AND the new column's values are physically present in a data file
+            // (raw parquet read, no schema-on-read null-filling).
+            let reader = ParquetTableReader::try_new(&table).await.unwrap();
+            let batches: Vec<_> = reader
+                .read(ReadOptions::default())
+                .await
+                .unwrap()
+                .buffered(4)
+                .try_collect()
+                .await
+                .unwrap();
+
+            let mut got: Vec<i32> = Vec::new();
+            for b in &batches {
+                if let Ok(idx) = b.schema().index_of("extra") {
+                    let col = b
+                        .column(idx)
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .expect("extra column is Int32");
+                    got.extend(col.iter().flatten());
+                }
+            }
+            assert_eq!(
+                got, extra_values,
+                "the MergeSchema-added column's data must be persisted, not dropped",
             );
         }
 
