@@ -421,11 +421,13 @@ impl DeltaDataWriter for DeltaWriter {
         mut self: Box<Self>,
         batches: RecordBatchFutureStream,
     ) -> DeltaResult<Vec<Add>> {
-        // Resolve up to `writer_batch_concurrency()` batch futures ahead and
-        // write them in input order (`buffered`, not `buffer_unordered`, so file
-        // content is deterministic). Today's callers wrap already-materialized
-        // batches in ready futures (so this is just a bounded drain, metrics
-        // unused), but the bound is honored for any future streaming caller.
+        // Resolve up to `writer_batch_concurrency()` batch futures ahead and write
+        // them in input-stream order (`buffered`, not `buffer_unordered`), so this
+        // adds no reordering of its own — the file order follows the input (which a
+        // caller that merges partition streams may itself interleave). Today's
+        // callers wrap already-materialized batches in ready futures (so this is
+        // just a bounded drain, metrics unused), but the bound is honored for any
+        // future streaming caller.
         let buffered = batches.buffered(writer_batch_concurrency().max(1));
         write_batches_timed(&mut self, buffered).await?;
         (*self).close().await
