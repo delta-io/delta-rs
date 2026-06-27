@@ -119,9 +119,15 @@ features = [
     "opendal-webhdfs",
     "opendal-webdav",
     "opendal-ftp",
-    "opendal-sftp",
     "opendal-hf",
 ]
+
+# SFTP support needs `openssh`, a Unix dependency.
+# Keep SFTP enabled for Linux and macOS Python wheels.
+[target.'cfg(not(windows))'.dependencies.deltalake]
+path = "../crates/deltalake"
+version = "1"
+features = ["opendal-sftp"]
 
 [features]
 default = ["rustls", "nanosecond-timestamps"]
