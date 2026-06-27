@@ -224,6 +224,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         if values.is_empty() {
             return Ok(());
         }
+        // Reject non-object records (bare arrays/strings/numbers/bools) up front
+        // with a record-naming error, rather than letting them surface as an
+        // opaque arrow JSON-decoder failure.
+        if let Some(value) = values.iter().find(|v| !v.is_object()) {
+            return Err(DeltaWriterError::InvalidRecord(value.to_string()).into());
+        }
         let arrow_schema = self.arrow_schema();
         let record_batch = record_batch_from_message(arrow_schema.clone(), values.as_slice())?;
 
@@ -334,6 +340,24 @@ mod tests {
         assert_eq!(writer.buffered_record_batch_count(), 0);
         let add_actions = writer.flush().await.unwrap();
         assert!(add_actions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_json_write_rejects_non_object_record() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_test_table(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        // A bare (non-object) JSON value must be rejected up front with a clear,
+        // record-naming error rather than an opaque arrow decode failure.
+        let err = writer
+            .write(vec![serde_json::json!(42)])
+            .await
+            .expect_err("a non-object JSON record must be rejected");
+        assert!(
+            err.to_string().contains("Invalid JSON record"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]

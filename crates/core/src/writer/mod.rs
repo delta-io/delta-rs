@@ -117,6 +117,10 @@ pub(crate) enum DeltaWriterError {
     #[error("Arrow RecordBatch created from JSON buffer is a None value")]
     EmptyRecordBatch,
 
+    /// A JSON value handed to the [`JsonWriter`] was not an object.
+    #[error("Invalid JSON record (expected an object): {0}")]
+    InvalidRecord(String),
+
     /// Serialization of delta log statistics failed.
     #[error("Failed to write statistics value {debug_value} with logical type {logical_type:?}")]
     StatsParsingFailed {
