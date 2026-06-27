@@ -112,13 +112,14 @@ impl JsonWriter {
         self.window.count()
     }
 
-    /// Resets internal state, discarding any data buffered since the last flush.
+    /// Resets internal state, discarding any data written since the last flush.
     ///
-    /// This only drops in-memory buffers; it does not touch object storage. If a
-    /// `target_file_size` is set, the underlying sink may already have rolled and
-    /// uploaded one or more completed files since the last flush. `reset` does not
-    /// delete those files, so they remain in storage unreferenced by the log
-    /// (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead to
+    /// The sink streams to object storage as it writes, so by the time `reset` runs
+    /// bytes may already be uploaded: an in-progress multipart upload for the open
+    /// file, plus any files already finalized by a `target_file_size` roll. `reset`
+    /// drops the writer's in-process state without cleaning any of that up, so the
+    /// abandoned upload and finalized files are left in storage unreferenced by the
+    /// log (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead to
     /// commit buffered data.
     pub fn reset(&mut self) {
         self.window.abort();
@@ -154,11 +155,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// writer; partitioning and parquet encoding happen incrementally, and files
     /// are finalized at flush.
     ///
-    /// JSON decode and schema-mismatch errors are reported here, per write. A
-    /// record that decodes to valid Arrow but only fails when parquet-encoded
-    /// surfaces its error later, from [`flush`](JsonWriter::flush), and fails that
-    /// whole flush (every batch written since the last flush) rather than being
-    /// skipped individually.
+    /// JSON decode and schema-mismatch errors are reported here, per write, and
+    /// leave the flush window untouched. Parquet-encoding and object-store errors
+    /// can surface either here (encoding streams incrementally as the batch is
+    /// written) or later at [`flush`](JsonWriter::flush); either way they abort the
+    /// whole flush window — every batch written since the last flush — rather than
+    /// skipping the offending record individually.
     async fn write_with_mode(
         &mut self,
         values: Vec<Value>,

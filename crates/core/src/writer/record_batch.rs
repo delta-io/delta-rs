@@ -235,15 +235,16 @@ impl RecordBatchWriter {
         self.window.count()
     }
 
-    /// Resets internal state, discarding any data buffered since the last flush.
+    /// Resets internal state, discarding any data written since the last flush.
     ///
-    /// This only drops in-memory buffers; it does not touch object storage. If a
-    /// `target_file_size` is set, or a schema-widening `MergeSchema` write has
-    /// rotated the sink since the last flush, some parquet files may already have
-    /// been finalized and uploaded. `reset` neither deletes those files nor keeps
-    /// their pending `Add` actions, so they remain in storage unreferenced by the
-    /// log (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead
-    /// to commit buffered data.
+    /// The sink streams to object storage as it writes, so by the time `reset` runs
+    /// bytes may already be uploaded: an in-progress multipart upload for the open
+    /// file, plus any files already finalized by a `target_file_size` roll or a
+    /// schema-widening `MergeSchema` rotation. `reset` drops the writer's in-process
+    /// state — the open sink and the pending `Add` actions — without cleaning any of
+    /// that up, so the abandoned upload and finalized files are left in storage
+    /// unreferenced by the log (reclaimed only by a later vacuum). Call
+    /// [`flush`](Self::flush) instead to commit buffered data.
     pub fn reset(&mut self) {
         self.window.abort();
     }
