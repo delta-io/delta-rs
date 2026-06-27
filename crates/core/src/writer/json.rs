@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
 use serde_json::Value;
@@ -28,6 +29,10 @@ pub struct JsonWriter {
     schema_ref: Option<ArrowSchemaRef>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
+    /// Stats-collection config, resolved once at construction (mirrors
+    /// `RecordBatchWriter`) so a new sink doesn't re-read the table snapshot.
+    num_indexed_cols: DataSkippingNumIndexedCols,
+    stats_columns: Option<Vec<String>>,
     /// Streaming sink (created lazily on first write); sealed at flush.
     sink: Option<DataFileDeltaWriter>,
     /// Batches streamed since the last flush (for `buffered_record_batch_count`).
@@ -59,16 +64,34 @@ impl JsonWriter {
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
+        let (num_indexed_cols, stats_columns) = Self::read_stats_config(&table)?;
 
         Ok(Self {
             table,
             schema_ref: Some(schema_ref),
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
+            num_indexed_cols,
+            stats_columns,
             sink: None,
             buffered_batch_count: 0,
             target_file_size: None,
         })
+    }
+
+    /// Resolve the data-skipping stats configuration from the table snapshot.
+    fn read_stats_config(
+        table: &DeltaTable,
+    ) -> Result<(DataSkippingNumIndexedCols, Option<Vec<String>>), DeltaTableError> {
+        let snapshot = table.snapshot()?;
+        let table_config = snapshot.table_config();
+        Ok((
+            table_config.num_indexed_cols(),
+            table_config
+                .data_skipping_stats_columns
+                .as_ref()
+                .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
+        ))
     }
 
     /// Creates a JsonWriter to write to the given table
@@ -81,12 +104,15 @@ impl JsonWriter {
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
+        let (num_indexed_cols, stats_columns) = Self::read_stats_config(table)?;
 
         Ok(Self {
             table: table.clone(),
             writer_properties,
             partition_columns,
             schema_ref: None,
+            num_indexed_cols,
+            stats_columns,
             sink: None,
             buffered_batch_count: 0,
             target_file_size: None,
@@ -124,6 +150,10 @@ impl JsonWriter {
     /// Sets a target file size; once an in-progress file reaches it the writer
     /// finalizes it and rolls a new one. Without this the writer emits a single
     /// file per partition per flush (the default).
+    ///
+    /// A `target_file_size` of `0` means "no limit": size-based rolling is
+    /// disabled and the writer keeps one file per partition per flush, exactly
+    /// as if this method had not been called.
     pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
         self.target_file_size = NonZeroU64::new(target_file_size);
         self
@@ -132,26 +162,14 @@ impl JsonWriter {
     /// Build a fresh streaming sink for the table's current config and the
     /// writer's schema/partitioning/target size.
     fn new_sink(&self) -> Result<DataFileDeltaWriter, DeltaTableError> {
-        let storage = self.table.object_store();
-        let (num_indexed_cols, stats_columns) = {
-            let snapshot = self.table.snapshot()?;
-            let table_config = snapshot.table_config();
-            (
-                table_config.num_indexed_cols(),
-                table_config
-                    .data_skipping_stats_columns
-                    .as_ref()
-                    .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
-            )
-        };
         Ok(super::build_streaming_sink(
-            storage,
+            self.table.object_store(),
             self.arrow_schema(),
             self.partition_columns.clone(),
             self.writer_properties.clone(),
             self.target_file_size,
-            num_indexed_cols,
-            stats_columns,
+            self.num_indexed_cols,
+            self.stats_columns.clone(),
         ))
     }
 

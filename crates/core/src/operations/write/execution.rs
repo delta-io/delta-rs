@@ -26,7 +26,9 @@ use tracing::log::*;
 use uuid::Uuid;
 
 use crate::DeltaTableError;
-use crate::datafile::writer::{DeltaWriter, WriterConfig, writer_batch_concurrency};
+use crate::datafile::writer::{
+    DeltaWriter, WriterConfig, write_batches_timed, writer_batch_concurrency,
+};
 use crate::delta_datafusion::{
     ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
@@ -497,20 +499,27 @@ pub(crate) async fn write_streams(
     config: WriterConfig,
 ) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
     let worker_count = streams.len();
-    let (tx, mut rx) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
+    let (tx, rx) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
 
     let mut writer_handle = tokio::task::spawn(async move {
         let mut writer = DeltaWriter::new(object_store, config);
-        let mut total_write_ms: u64 = 0;
-        let mut rows_written: u64 = 0;
-        while let Some(batch) = rx.recv().await {
-            rows_written += batch.num_rows() as u64;
-            let wstart = std::time::Instant::now();
-            writer.write(&batch).await?;
-            total_write_ms += wstart.elapsed().as_millis() as u64;
-        }
+        // Drain the channel through the shared timed-write loop so the per-batch
+        // write timing / row accounting lives in one place
+        // (datafile::writer::write_batches_timed), the same loop the basic
+        // DeltaDataWriter::write_all uses.
+        let batches = futures::stream::unfold(rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|batch| (Ok::<_, DeltaTableError>(batch), rx))
+        })
+        .boxed();
+        let metrics = write_batches_timed(&mut writer, batches).await?;
         let adds = writer.close().await?;
-        Ok::<(Vec<Add>, u64, u64), DeltaTableError>((adds, total_write_ms, rows_written))
+        Ok::<(Vec<Add>, u64, u64), DeltaTableError>((
+            adds,
+            metrics.write_time_ms,
+            metrics.rows_written,
+        ))
     });
 
     let mut worker_set = JoinSet::new();

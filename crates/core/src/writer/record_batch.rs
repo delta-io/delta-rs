@@ -146,31 +146,13 @@ impl RecordBatchWriter {
         let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
         let configuration = table.snapshot()?.metadata().configuration().clone();
 
-        Ok(Self {
-            storage: table.object_store(),
-            arrow_schema_ref: arrow_schema_ref.clone(),
-            original_schema_ref: arrow_schema_ref.clone(),
-            writer_properties,
+        Ok(Self::from_parts(
+            table.object_store(),
+            arrow_schema_ref,
             partition_columns,
-            sink: None,
-            pending_adds: Vec::new(),
-            buffered_batch_count: 0,
-            target_file_size: None,
-            num_indexed_cols: configuration
-                .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| {
-                    v.parse::<u64>()
-                        .ok()
-                        .map(DataSkippingNumIndexedCols::NumColumns)
-                })
-                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
-                    DEFAULT_NUM_INDEX_COLS,
-                )),
-            stats_columns: configuration
-                .get("delta.dataSkippingStatsColumns")
-                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
-            commit_properties: None,
-        })
+            &configuration,
+            writer_properties,
+        ))
     }
 
     /// Creates a [`RecordBatchWriter`] to write data to an [`BlindDeltaTable`].
@@ -192,31 +174,13 @@ impl RecordBatchWriter {
             .build();
         let configuration = metadata.configuration().clone();
 
-        Ok(Self {
-            storage: table.object_store(),
-            arrow_schema_ref: arrow_schema_ref.clone(),
-            original_schema_ref: arrow_schema_ref.clone(),
-            writer_properties,
+        Ok(Self::from_parts(
+            table.object_store(),
+            arrow_schema_ref,
             partition_columns,
-            sink: None,
-            pending_adds: Vec::new(),
-            buffered_batch_count: 0,
-            target_file_size: None,
-            num_indexed_cols: configuration
-                .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| {
-                    v.parse::<u64>()
-                        .ok()
-                        .map(DataSkippingNumIndexedCols::NumColumns)
-                })
-                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
-                    DEFAULT_NUM_INDEX_COLS,
-                )),
-            stats_columns: configuration
-                .get("delta.dataSkippingStatsColumns")
-                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
-            commit_properties: None,
-        })
+            &configuration,
+            writer_properties,
+        ))
     }
 
     fn new_with_table(
@@ -226,31 +190,51 @@ impl RecordBatchWriter {
         configuration: HashMap<String, String>,
         writer_properties: WriterProperties,
     ) -> Self {
-        let schema = normalize_for_delta(&schema);
+        Self::from_parts(
+            delta_table.object_store(),
+            normalize_for_delta(&schema),
+            partition_columns.unwrap_or_default(),
+            &configuration,
+            writer_properties,
+        )
+    }
+
+    /// Build a writer from already-resolved parts, parsing the data-skipping
+    /// stats configuration once. All constructors funnel through this so the
+    /// config parsing and field defaults live in a single place.
+    fn from_parts(
+        storage: Arc<dyn ObjectStore>,
+        arrow_schema_ref: ArrowSchemaRef,
+        partition_columns: Vec<String>,
+        configuration: &HashMap<String, String>,
+        writer_properties: WriterProperties,
+    ) -> Self {
+        let num_indexed_cols = configuration
+            .get("delta.dataSkippingNumIndexedCols")
+            .and_then(|v| {
+                v.parse::<u64>()
+                    .ok()
+                    .map(DataSkippingNumIndexedCols::NumColumns)
+            })
+            .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
+                DEFAULT_NUM_INDEX_COLS,
+            ));
+        let stats_columns = configuration
+            .get("delta.dataSkippingStatsColumns")
+            .map(|v| v.split(',').map(|s| s.to_string()).collect());
 
         Self {
-            storage: delta_table.object_store(),
-            arrow_schema_ref: schema.clone(),
-            original_schema_ref: schema,
+            storage,
+            arrow_schema_ref: arrow_schema_ref.clone(),
+            original_schema_ref: arrow_schema_ref,
             writer_properties,
-            partition_columns: partition_columns.unwrap_or_default(),
+            partition_columns,
             sink: None,
             pending_adds: Vec::new(),
             buffered_batch_count: 0,
             target_file_size: None,
-            num_indexed_cols: configuration
-                .get("delta.dataSkippingNumIndexedCols")
-                .and_then(|v| {
-                    v.parse::<u64>()
-                        .ok()
-                        .map(DataSkippingNumIndexedCols::NumColumns)
-                })
-                .unwrap_or(DataSkippingNumIndexedCols::NumColumns(
-                    DEFAULT_NUM_INDEX_COLS,
-                )),
-            stats_columns: configuration
-                .get("delta.dataSkippingStatsColumns")
-                .map(|v| v.split(',').map(|s| s.to_string()).collect()),
+            num_indexed_cols,
+            stats_columns,
             commit_properties: None,
         }
     }
@@ -288,6 +272,10 @@ impl RecordBatchWriter {
     /// Sets a target file size; once an in-progress file reaches it the writer
     /// finalizes it and rolls a new one. Without this the writer emits a single
     /// file per partition per flush (the default).
+    ///
+    /// A `target_file_size` of `0` means "no limit": size-based rolling is
+    /// disabled and the writer keeps one file per partition per flush, exactly
+    /// as if this method had not been called.
     pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
         self.target_file_size = NonZeroU64::new(target_file_size);
         self
@@ -303,6 +291,41 @@ impl RecordBatchWriter {
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = writer_properties;
         self
+    }
+
+    /// Write a record batch that belongs entirely to the partition identified by
+    /// `partition_values`, streaming it into the partition's open file.
+    ///
+    /// The batch may be provided with or without its partition columns (the sink
+    /// strips them before encoding). Returns the writer's current arrow schema.
+    /// `MergeSchema` is rejected for partitioned tables, matching [`write`](Self::write).
+    pub async fn write_partition(
+        &mut self,
+        record_batch: RecordBatch,
+        partition_values: &IndexMap<String, Scalar>,
+        mode: WriteMode,
+    ) -> Result<ArrowSchemaRef, DeltaTableError> {
+        if mode == WriteMode::MergeSchema && !self.partition_columns.is_empty() {
+            return Err(DeltaTableError::Generic(
+                "Merging Schemas with partition columns present is currently unsupported"
+                    .to_owned(),
+            ));
+        }
+        if self.sink.is_none() {
+            self.sink = Some(self.new_sink());
+        }
+        let sink = self.sink.as_mut().expect("sink was just created");
+        if let Err(e) = sink.write_partition(record_batch, partition_values).await {
+            // Mirror `write_into_sink`: the streaming sink can't roll back its
+            // in-progress upload, so drop it (and any sealed-but-uncommitted
+            // files) rather than leave a later flush to commit a partial window.
+            self.sink = None;
+            self.pending_adds.clear();
+            self.buffered_batch_count = 0;
+            return Err(e);
+        }
+        self.buffered_batch_count += 1;
+        Ok(self.arrow_schema_ref.clone())
     }
 
     /// Build a fresh streaming sink for the current schema/partitioning/target size.
@@ -396,13 +419,30 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         if self.sink.is_none() {
             self.sink = Some(self.new_sink());
         }
-        super::write_into_sink(&mut self.sink, &mut self.buffered_batch_count, &batch).await
+        if let Err(e) =
+            super::write_into_sink(&mut self.sink, &mut self.buffered_batch_count, &batch).await
+        {
+            // `write_into_sink` already dropped the poisoned sink; also drop any
+            // sealed-but-uncommitted files from earlier `MergeSchema` rotations so
+            // a later flush() can't commit only a partial subset of this now-aborted
+            // write window.
+            self.pending_adds.clear();
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Finalize all files written since the last flush and return their [`Add`]
     /// actions, resetting internal state to handle another flush window.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
-        self.seal_sink().await?;
+        if let Err(e) = self.seal_sink().await {
+            // The in-progress file failed to finalize; drop the whole window
+            // (including earlier sealed files) rather than leave `pending_adds`
+            // to be re-committed by a retried flush.
+            self.pending_adds.clear();
+            self.buffered_batch_count = 0;
+            return Err(e);
+        }
         self.buffered_batch_count = 0;
         Ok(std::mem::take(&mut self.pending_adds))
     }

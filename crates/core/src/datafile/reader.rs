@@ -151,8 +151,12 @@ impl ParquetTableReader {
             }
             // Use the canonical object-store path helper (preserves percent
             // encoding), matching every other read path; carry the size so the
-            // parquet reader can skip a `HEAD` per file.
-            files.push((view.object_store_path(), view.size() as u64));
+            // parquet reader can skip a `HEAD` per file. A non-positive size
+            // (absent/corrupt log entry) is stored as 0, meaning "size unknown"
+            // — the reader then discovers it with a `HEAD` rather than trusting a
+            // wrapped-around length.
+            let size = u64::try_from(view.size()).unwrap_or(0);
+            files.push((view.object_store_path(), size));
         }
 
         let store = log_store.object_store(None);
@@ -199,7 +203,11 @@ async fn open_file_stream(
     path: Path,
     size: u64,
 ) -> RecordBatchFutureStream {
-    match reader.read_file_sized(path, Some(size)).await {
+    // size 0 means "unknown" (see try_new): let the reader HEAD for it.
+    match reader
+        .read_file_sized(path, (size > 0).then_some(size))
+        .await
+    {
         Ok(file_stream) => file_stream,
         Err(err) => {
             let failing: BatchFuture = Box::pin(async move { Err(err) });
