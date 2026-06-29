@@ -2602,6 +2602,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_partition_values_map_preserves_all_columns_under_narrowing_predicate()
+    -> TestResult {
+        use std::collections::BTreeSet;
+
+        // A predicate that references only a subset of the partition columns (year + month, but
+        // not day) makes the scan narrow `partition_values()` to the referenced columns for data
+        // skipping. `partition_values_map()` must still return every partition column so connectors
+        // can reconstruct the full partition identity of each file.
+        let base = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+
+        let predicate = Arc::new(to_kernel_predicate(
+            &[
+                PartitionFilter::try_from(("year", "=", "2020"))?,
+                PartitionFilter::try_from(("month", "=", "2"))?,
+            ],
+            snapshot.schema().as_ref(),
+        )?);
+
+        let views: Vec<_> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .try_collect()
+            .await?;
+        assert_eq!(views.len(), 2, "predicate should match exactly two files");
+
+        for view in &views {
+            // The parsed accessor is narrowed to the predicate-referenced columns: `day` is dropped.
+            let narrowed: BTreeSet<String> = view
+                .partition_values()
+                .map(|values| {
+                    values
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                !narrowed.contains("day"),
+                "expected `day` to be narrowed out of partition_values(), got {narrowed:?}",
+            );
+
+            // The raw map preserves every partition column regardless of the scan predicate.
+            let full: BTreeSet<String> = view.partition_values_map().into_keys().collect();
+            assert_eq!(
+                full,
+                BTreeSet::from(["year".to_string(), "month".to_string(), "day".to_string()]),
+                "partition_values_map() must return all partition columns regardless of predicate",
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_eager_file_views_reuses_materialized_files_with_data_predicate() -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let (log_store, mut operations) = recording_log_store(table.log_store());
