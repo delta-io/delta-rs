@@ -101,8 +101,9 @@ impl DataFileReader for ParquetFileReader {
 #[derive(Debug, Clone)]
 pub struct ParquetTableReader {
     file_reader: ParquetFileReader,
-    /// Data files as (object-store path, size in bytes).
-    files: Vec<(Path, u64)>,
+    /// Data files as (object-store path, size in bytes); `Arc` so `read`/`Clone`
+    /// share the list instead of deep-copying every path.
+    files: Arc<[(Path, u64)]>,
 }
 
 impl ParquetTableReader {
@@ -150,7 +151,7 @@ impl ParquetTableReader {
         let store = log_store.object_store(None);
         Ok(Self {
             file_reader: ParquetFileReader::new(store),
-            files,
+            files: files.into(),
         })
     }
 }
@@ -167,12 +168,14 @@ impl DeltaDataReader for ParquetTableReader {
         }
 
         let file_reader = self.file_reader.clone();
+        let files = Arc::clone(&self.files);
         // Read up to `num_cpus` files concurrently and interleave their batches
         // (`flat_map_unordered`), overlapping per-file open/read latency. Row order
         // across files isn't preserved, which is fine for a no-predicate scan.
         let concurrency = num_cpus::get().max(1);
-        let stream = futures::stream::iter(self.files.clone())
-            .flat_map_unordered(concurrency, move |(path, size)| {
+        let stream = futures::stream::iter(0..files.len())
+            .flat_map_unordered(concurrency, move |i| {
+                let (path, size) = files[i].clone();
                 futures::stream::once(open_file_stream(file_reader.clone(), path, size))
                     .flatten()
                     .boxed()

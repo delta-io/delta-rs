@@ -33,6 +33,18 @@ fn sendable_streams_to_future_stream(
     results_to_future_stream(select_all(streams))
 }
 
+/// Run `provider.scan(..)` and coalesce its output partitions into one stream.
+/// Shared by [`DataFusionDataReader::scan`] and the `load` operation.
+pub(crate) async fn coalesce_provider_scan(
+    provider: &Arc<dyn TableProvider>,
+    session: &dyn Session,
+    projection: Option<&Vec<usize>>,
+    limit: Option<usize>,
+) -> DeltaResult<SendableRecordBatchStream> {
+    let scan_plan = provider.scan(session, projection, &[], limit).await?;
+    Ok(CoalescePartitionsExec::new(scan_plan).execute(0, session.task_ctx())?)
+}
+
 /// Options controlling a DataFusion-backed scan.
 #[derive(Debug, Default, Clone)]
 pub struct ScanOptions {
@@ -139,12 +151,7 @@ impl DeltaDataReaderExt for DataFusionDataReader {
         options: ScanOptions,
     ) -> DeltaResult<SendableRecordBatchStream> {
         let projection = self.projection_indices(&options)?;
-        let scan_plan = self
-            .provider
-            .scan(session, projection.as_ref(), &[], options.limit)
-            .await?;
-        let plan = CoalescePartitionsExec::new(scan_plan);
-        Ok(plan.execute(0, session.task_ctx())?)
+        coalesce_provider_scan(&self.provider, session, projection.as_ref(), options.limit).await
     }
 }
 

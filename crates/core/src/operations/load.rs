@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::SendableRecordBatchStream;
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
@@ -112,12 +111,13 @@ impl std::future::IntoFuture for LoadBuilder {
 
             let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             let provider = table.table_provider().await?;
-            let scan_plan = provider
-                .scan(session.as_ref(), projection.as_ref(), &[], None)
-                .await?;
-
-            let plan = CoalescePartitionsExec::new(scan_plan);
-            let stream = plan.execute(0, session.task_ctx())?;
+            let stream = crate::datafile::datafusion_ext::coalesce_provider_scan(
+                &provider,
+                session.as_ref(),
+                projection.as_ref(),
+                None,
+            )
+            .await?;
 
             Ok((table, stream))
         })

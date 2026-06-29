@@ -284,47 +284,48 @@ impl DeltaWriter {
         )
     }
 
-    /// Write a batch to the partition induced by the partition_values. The record batch is expected
-    /// to be pre-partitioned and only contain rows that belong into the same partition.
-    /// However, it should still contain the partition columns.
+    /// Find-or-create the partition writer for `key` and stream `batch` into it.
+    /// `make_values` supplies the new writer's partition values and is called only
+    /// when a writer is created. The writer is inserted only after its first write
+    /// succeeds, so a failed first write leaves no half-open writer behind.
+    async fn write_keyed(
+        &mut self,
+        key: Path,
+        batch: &RecordBatch,
+        make_values: impl FnOnce() -> IndexMap<String, Scalar>,
+    ) -> DeltaResult<()> {
+        match self.partition_writers.get_mut(&key) {
+            Some(writer) => writer.write(batch).await?,
+            None => {
+                let mut writer = self.build_partition_writer(make_values())?;
+                writer.write(batch).await?;
+                let _ = self.partition_writers.insert(key, writer);
+            }
+        }
+        Ok(())
+    }
+
+    /// Write a batch to the partition induced by `partition_values`. The batch must
+    /// be pre-partitioned (all rows in one partition) but still include the
+    /// partition columns; they are stripped before encoding.
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
         partition_values: &IndexMap<String, Scalar>,
     ) -> DeltaResult<()> {
-        let partition_key = Path::parse(partition_values.hive_partition_path())?;
-
+        let key = Path::parse(partition_values.hive_partition_path())?;
         let record_batch =
             record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
-
-        match self.partition_writers.get_mut(&partition_key) {
-            Some(writer) => {
-                writer.write(&record_batch).await?;
-            }
-            None => {
-                let mut writer = self.build_partition_writer(partition_values.clone())?;
-                writer.write(&record_batch).await?;
-                let _ = self.partition_writers.insert(partition_key, writer);
-            }
-        }
-
-        Ok(())
+        self.write_keyed(key, &record_batch, || partition_values.clone())
+            .await
     }
 
     /// Fast path for unpartitioned tables: a single partition writer keyed by the
     /// empty path, skipping the per-batch partition split and projection (an
     /// identity for an unpartitioned schema) — the batch goes straight to the writer.
     async fn write_unpartitioned(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
-        let partition_key = Path::default();
-        match self.partition_writers.get_mut(&partition_key) {
-            Some(writer) => writer.write(batch).await?,
-            None => {
-                let mut writer = self.build_partition_writer(IndexMap::new())?;
-                writer.write(batch).await?;
-                let _ = self.partition_writers.insert(partition_key, writer);
-            }
-        }
-        Ok(())
+        self.write_keyed(Path::default(), batch, IndexMap::new)
+            .await
     }
 
     /// Buffers record batches in-memory per partition up to appx. `target_file_size` for a partition.
