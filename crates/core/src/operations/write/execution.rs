@@ -486,13 +486,11 @@ fn is_writer_task_closed_error(err: &DeltaTableError) -> bool {
 
 /// Drain one or more streams through a single [`DeltaWriter`].
 ///
-/// One worker task is spawned per input stream (so the per-stream scan/compute —
-/// the CPU work in `next()` — parallelizes across runtime threads); all workers
-/// feed the writer task over a bounded channel (capacity
-/// `writer_batch_concurrency()`), overlapping scan/compute with parquet
-/// encode+upload under backpressure. On the first stream error the remaining
-/// workers are aborted and the error surfaced; if the writer rejects a batch the
-/// workers are aborted and the writer error surfaced.
+/// One worker task is spawned per input stream (so the per-stream scan/compute in
+/// `next()` parallelizes across runtime threads); all workers feed the writer task
+/// over a bounded channel (capacity `writer_batch_concurrency()`), overlapping
+/// scan/compute with parquet encode+upload under backpressure. On any stream or
+/// writer error the remaining workers are aborted and the underlying error surfaced.
 pub(crate) async fn write_streams(
     streams: Vec<SendableRecordBatchStream>,
     object_store: ObjectStoreRef,
@@ -503,10 +501,9 @@ pub(crate) async fn write_streams(
 
     let mut writer_handle = tokio::task::spawn(async move {
         let mut writer = DeltaWriter::new(object_store, config);
-        // Drain the channel through the shared timed-write loop so the per-batch
-        // write timing / row accounting lives in one place
-        // (datafile::writer::write_batches_timed), the same loop the basic
-        // DeltaDataWriter::write_all uses.
+        // Drain the channel through the shared timed-write loop
+        // (datafile::writer::write_batches_timed) — the same loop the basic
+        // DeltaDataWriter::write_all uses, so timing/row accounting lives in one place.
         let batches = futures::stream::unfold(rx, |mut rx| async move {
             rx.recv()
                 .await

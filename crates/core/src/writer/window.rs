@@ -1,19 +1,16 @@
 //! The write-window abstraction shared by the legacy [`RecordBatchWriter`] and
 //! [`JsonWriter`].
 //!
-//! [`WriteWindow`] owns *all* of the mutable state accumulated between flushes —
-//! the open streaming sink, the files already sealed by mid-window schema
-//! rotations, the current (possibly widened) schema, and the batch count — and is
-//! the only place that state is mutated. That makes the writers' core invariant
-//! hold *by construction* rather than by discipline scattered across error paths:
+//! [`WriteWindow`] is the single owner of the mutable state between flushes (open
+//! sink, sealed rotations, current schema, batch count), so the writers' core
+//! invariants hold by construction rather than by error-path discipline:
 //!
-//! 1. **A flush window commits all-or-nothing.** Any IO error while writing aborts
-//!    the whole window ([`WriteWindow::abort`]), so a later flush can never commit
-//!    only a partial subset of an aborted write.
-//! 2. **The schema only advances together with its data.** The committed
-//!    `baseline` is advanced ([`WriteWindow::committed`]) *only after* the log
-//!    commit succeeds, and an abort reverts the schema to that baseline — so a
-//!    failed (or never-committed) write can never evolve the table schema.
+//! 1. **A flush window commits all-or-nothing.** Any IO error aborts the whole
+//!    window ([`WriteWindow::abort`]), so a later flush can't commit a partial
+//!    subset of a failed write.
+//! 2. **Schema advances only with its data.** The committed `baseline` advances
+//!    ([`WriteWindow::committed`]) only after the log commit succeeds, and an abort
+//!    reverts to it — so a failed write can't evolve the table schema.
 //!
 //! [`RecordBatchWriter`]: super::record_batch::RecordBatchWriter
 //! [`JsonWriter`]: super::json::JsonWriter
@@ -61,16 +58,13 @@ impl SinkFactory {
     }
 }
 
-/// The abortable flush-window state. See the module docs for the invariant it
-/// upholds. The legacy writers hold one of these and drive it; they never touch
-/// the sink/sealed/schema/count directly.
+/// The abortable flush-window state; see the module docs for the invariants it
+/// upholds. The writers drive it and never touch the inner state directly.
 pub(crate) struct WriteWindow {
     factory: SinkFactory,
     /// Schema the open sink encodes under; widens on a `MergeSchema` write.
     schema: ArrowSchemaRef,
-    /// The last *committed* schema. The window reverts to this on [`abort`].
-    ///
-    /// [`abort`]: WriteWindow::abort
+    /// The last committed schema; the window reverts to it on `abort`.
     baseline: ArrowSchemaRef,
     /// Open streaming sink, created lazily on the first write of a window.
     sink: Option<DataFileWriter>,
@@ -136,13 +130,12 @@ impl WriteWindow {
         self.factory.writer_properties = writer_properties;
     }
 
-    /// Stream `batch` (which must already conform to `schema()`, or to the merged
-    /// schema when `widen_to` is `Some`) into the open sink. A `widen_to` first
-    /// seals the current sink — whose files predate the new column, so they read
-    /// the new column back as null — and adopts the wider schema.
+    /// Stream `batch` into the open sink. It must conform to `schema()`, or to the
+    /// merged schema when `widen_to` is `Some` — in which case the current sink is
+    /// first sealed (its files predate the new column, so they read it back as null)
+    /// and the wider schema adopted.
     ///
-    /// All-or-nothing: any IO error [`abort`]s the window, so the caller can never
-    /// observe a half-applied write.
+    /// All-or-nothing: any IO error [`abort`]s the window.
     ///
     /// [`abort`]: WriteWindow::abort
     pub(crate) async fn write(
@@ -247,14 +240,12 @@ impl WriteWindow {
         self.count = 0;
     }
 
-    /// Discard everything accumulated since the last commit: the open sink, the
-    /// sealed rotations, the batch count, and any uncommitted schema widening (the
-    /// schema reverts to the committed baseline). A later flush then commits
-    /// nothing — never a partial subset, nor a schema evolution without its data.
+    /// Discard everything accumulated since the last commit — open sink, sealed
+    /// rotations, batch count, and any uncommitted schema widening (schema reverts
+    /// to the committed baseline) — so a later flush commits nothing.
     ///
-    /// Already-uploaded files become unreferenced and are reclaimed by a later
-    /// vacuum, an inherent cost of a streaming writer that can't roll back an
-    /// in-progress multipart upload.
+    /// Bytes already uploaded by the streaming sink (an in-progress multipart upload
+    /// can't be rolled back) are left unreferenced, reclaimed by a later vacuum.
     pub(crate) fn abort(&mut self) {
         self.sink = None;
         self.sealed.clear();

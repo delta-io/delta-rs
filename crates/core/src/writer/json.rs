@@ -156,11 +156,10 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// are finalized at flush.
     ///
     /// JSON decode and schema-mismatch errors are reported here, per write, and
-    /// leave the flush window untouched. Parquet-encoding and object-store errors
-    /// can surface either here (encoding streams incrementally as the batch is
-    /// written) or later at [`flush`](JsonWriter::flush); either way they abort the
-    /// whole flush window — every batch written since the last flush — rather than
-    /// skipping the offending record individually.
+    /// leave the flush window untouched. Parquet-encoding / object-store errors can
+    /// surface here (encoding is incremental) or later at [`flush`](JsonWriter::flush);
+    /// either way they fail the whole flush window — every batch since the last
+    /// flush — rather than skipping the offending record.
     async fn write_with_mode(
         &mut self,
         values: Vec<Value>,
@@ -175,8 +174,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         if values.is_empty() {
             return Ok(());
         }
-        // Reject non-object records (bare arrays/strings/numbers/bools) up front
-        // with a record-naming error, rather than letting them surface as an
+        // Reject non-object records up front with a clear error, rather than an
         // opaque arrow JSON-decoder failure.
         if let Some(value) = values.iter().find(|v| !v.is_object()) {
             return Err(DeltaWriterError::InvalidRecord(value.to_string()).into());

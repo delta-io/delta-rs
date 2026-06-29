@@ -2,11 +2,10 @@
 //!
 //! This module hosts two kinds of reader:
 //!
-//! * [`ParquetFileReader`] / [`ParquetTableReader`]
-//!   The first concrete implementations of the read traits
-//!   They read raw parquet directly from object storage with no DataFusion, and
-//!   are intentionally minimal: they reject tables that need deletion-vector
-//!   application, column mapping, or partition-value reconstruction.
+//! * [`ParquetFileReader`] / [`ParquetTableReader`] — the first concrete
+//!   implementations: they read raw parquet directly from object storage with no
+//!   DataFusion, and are intentionally minimal, rejecting tables that need
+//!   deletion-vector application, column mapping, or partition-value reconstruction.
 //! * [`KernelDataFileReader`] / [`KernelDataReader`] — placeholders for the
 //!   later, full-fidelity reader backed by `delta-kernel`'s scan engine (which
 //!   applies deletion vectors, partition values, and column-mapping transforms).
@@ -47,15 +46,12 @@ fn not_supported(feature: &str) -> DeltaTableError {
 }
 
 // ---------------------------------------------------------------------------
-// New: a concrete, DataFusion-free parquet reader that proves the read traits.
+// Concrete, DataFusion-free parquet readers (file and dataset tiers).
 // ---------------------------------------------------------------------------
 
 /// File-tier reader that reads a single parquet data file directly from object
-/// storage, with no DataFusion.
-///
-/// Concrete [`DataFileReader`], added to validate the
-/// per-file read seam (the same seam where parquet decryption will later
-/// attach, mirroring the write side).
+/// storage, with no DataFusion. A concrete [`DataFileReader`] — the per-file read
+/// seam where parquet decryption will later attach, mirroring the write side.
 #[derive(Debug, Clone)]
 pub struct ParquetFileReader {
     store: Arc<dyn ObjectStore>,
@@ -92,23 +88,16 @@ impl DataFileReader for ParquetFileReader {
     }
 }
 
-/// Dataset-tier reader that reads all of a table's parquet data files directly
-/// (no DataFusion, no predicate), composing [`ParquetFileReader`] across the
-/// table.
+/// Dataset-tier reader that reads all of a table's parquet data files directly —
+/// no DataFusion, no predicate — composing [`ParquetFileReader`] across the table.
 ///
-/// Concrete [`DeltaDataReader`], added to prove that
-/// the file tier composes into a whole-table read through the
-/// [`RecordBatchFutureStream`] waist.
-///
-/// Minimal by design — it reads raw parquet, so [`ParquetTableReader::try_new`]
-/// rejects tables that use deletion vectors, column mapping, or partition
-/// columns. Honoring those is the job of the kernel-backed [`KernelDataReader`].
-///
-/// It also does not unify schemas across files: the returned batches reflect
-/// each data file's physical schema as written. On a table whose schema evolved
-/// (a widened column type or an added column), older and newer files yield
-/// batches with differing schemas, and the caller is responsible for
-/// reconciling them (e.g. casting to a common schema before `concat`).
+/// Minimal by design: it reads raw parquet, so [`ParquetTableReader::try_new`]
+/// rejects tables that use deletion vectors, column mapping, or partition columns
+/// (those are the kernel-backed [`KernelDataReader`]'s job), and it does not unify
+/// schemas across files — returned batches reflect each file's physical schema as
+/// written. On a table whose schema evolved, older and newer files yield batches
+/// with differing schemas, and the caller must reconcile them (e.g. cast to a
+/// common schema before `concat`).
 #[derive(Debug, Clone)]
 pub struct ParquetTableReader {
     file_reader: ParquetFileReader,
@@ -149,12 +138,11 @@ impl ParquetTableReader {
             if view.deletion_vector_descriptor().is_some() {
                 return Err(not_supported("deletion vectors"));
             }
-            // Use the canonical object-store path helper (preserves percent
-            // encoding), matching every other read path; carry the size so the
-            // parquet reader can skip a `HEAD` per file. A non-positive size
-            // (absent/corrupt log entry) is stored as 0, meaning "size unknown"
-            // — the reader then discovers it with a `HEAD` rather than trusting a
-            // wrapped-around length.
+            // Canonical object-store path (preserves percent encoding), matching
+            // every other read path; carry the size so the reader can skip a
+            // per-file `HEAD`. A non-positive size (absent/corrupt log entry)
+            // becomes 0 = "unknown", and the reader HEADs for it rather than
+            // trusting a wrapped-around length.
             let size = u64::try_from(view.size()).unwrap_or(0);
             files.push((view.object_store_path(), size));
         }
@@ -180,10 +168,8 @@ impl DeltaDataReader for ParquetTableReader {
 
         let file_reader = self.file_reader.clone();
         // Read up to `num_cpus` files concurrently and interleave their batches
-        // (`flat_map_unordered`), so the `RecordBatchFutureStream` waist actually
-        // overlaps per-file open/read latency instead of serializing it. Row
-        // order across files is not preserved, which is fine for a no-predicate
-        // scan.
+        // (`flat_map_unordered`), overlapping per-file open/read latency. Row order
+        // across files isn't preserved, which is fine for a no-predicate scan.
         let concurrency = num_cpus::get().max(1);
         let stream = futures::stream::iter(self.files.clone())
             .flat_map_unordered(concurrency, move |(path, size)| {

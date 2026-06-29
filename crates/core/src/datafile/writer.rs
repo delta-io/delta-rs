@@ -311,11 +311,9 @@ impl DeltaWriter {
         Ok(())
     }
 
-    /// Fast path for unpartitioned tables: there is a single partition writer
-    /// (keyed by the empty path), so skip the per-batch partition split, the
-    /// partition-column projection, the hive-path parse, and the map lookup churn
-    /// — the projection is an identity for an unpartitioned schema, so the batch
-    /// can go straight to the writer.
+    /// Fast path for unpartitioned tables: a single partition writer keyed by the
+    /// empty path, skipping the per-batch partition split and projection (an
+    /// identity for an unpartitioned schema) — the batch goes straight to the writer.
     async fn write_unpartitioned(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
         let partition_key = Path::default();
         match self.partition_writers.get_mut(&partition_key) {

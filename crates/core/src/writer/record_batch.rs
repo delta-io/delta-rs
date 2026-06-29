@@ -250,20 +250,15 @@ impl RecordBatchWriter {
     }
 
     /// Sets a target file size; once an in-progress file reaches it the writer
-    /// finalizes it and rolls a new one. Without this the writer emits a single
-    /// file per partition per flush (the default).
-    ///
-    /// A `target_file_size` of `0` means "no limit": size-based rolling is
-    /// disabled and the writer keeps one file per partition per flush, exactly
-    /// as if this method had not been called.
+    /// finalizes it and rolls a new one. Without this — or with `0`, meaning no
+    /// limit — the writer emits a single file per partition per flush.
     pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
         self.window
             .set_target_file_size(NonZeroU64::new(target_file_size));
         self
     }
 
-    /// Returns the arrow schema representation of the delta table schema defined for the wrapped
-    /// table.
+    /// Returns the writer's current arrow schema.
     pub fn arrow_schema(&self) -> ArrowSchemaRef {
         self.window.schema().clone()
     }
@@ -324,11 +319,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                     .to_owned(),
             ));
         }
-        // Phase 1 — validate and conform the batch against the window's current
-        // schema. Every error here is caller-supplied bad data and mutates no
-        // window state, so data already buffered in this flush window is preserved.
-        // (A `MergeSchema` write that changes an existing column's type is rejected
-        // here, before any sink is sealed or schema widened.)
+        // Phase 1 — validate and conform against the window's current schema. Errors
+        // here are bad caller data and mutate no window state, so already-buffered
+        // data is preserved (a `MergeSchema` type change is rejected here, before any
+        // sink is sealed or schema widened).
         let schema = self.window.schema().clone();
         let values = if values.schema() != schema {
             let normalized = normalize_for_delta(&values.schema());
@@ -362,10 +356,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             (values, None)
         };
 
-        // Phase 2 — the window applies the (all-or-nothing) effectful write: seal
-        // and widen on a rotation, stream the batch, and abort the whole window on
-        // any IO error (so a later flush can't commit a partial subset, or evolve
-        // the schema, from a write that failed).
+        // Phase 2 — the window applies the effectful, all-or-nothing write (seal +
+        // widen on a rotation, stream the batch, abort on any IO error).
         self.window.write(&batch, widen_to).await
     }
 
@@ -375,17 +367,15 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         self.window.drain().await
     }
 
-    /// Flush the internal write buffers to files in the delta table folder structure.
-    /// and commit the changes to the Delta log, creating a new table version.
+    /// Flush buffered files and commit them to the Delta log, creating a new version.
     async fn flush_and_commit(
         &mut self,
         table: &mut DeltaTable,
     ) -> Result<Version, DeltaTableError> {
         use crate::kernel::StructType;
-        // Stage (seal) the window WITHOUT clearing it: if the log commit fails (e.g.
-        // a concurrent-writer conflict) the buffered data is kept so the caller can
-        // retry `flush_and_commit` without re-uploading, and the committed schema
-        // baseline is only advanced once the commit lands.
+        // Stage (seal) without clearing: if the commit fails (e.g. a concurrent-writer
+        // conflict) the data stays staged so the caller can retry without re-uploading,
+        // and the schema baseline only advances once the commit lands.
         let mut adds: Vec<Action> = self
             .window
             .stage()
@@ -395,8 +385,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             .map(Action::Add)
             .collect();
 
-        // The schema only ever changes via a `MergeSchema` widening, so a difference
-        // from the committed baseline is exactly the signal to evolve the metadata.
+        // Schema changes only via `MergeSchema` widening, so a difference from the
+        // committed baseline is the signal to evolve the metadata.
         let evolve_schema = self.window.schema_evolved();
         if evolve_schema {
             if !self.window.partition_columns().is_empty() {
@@ -415,9 +405,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             adds.push(Action::Metadata(metadata));
         }
         let version = super::flush_and_commit(adds, table, self.commit_properties.clone()).await?;
-        // The commit landed: advance the committed baseline and empty the window.
-        // (On a commit failure the `?` above returns early, leaving the window
-        // staged for a retry.)
+        // Commit landed: advance the baseline and empty the window. (A failed commit
+        // returns early above, leaving the window staged for retry.)
         self.window.committed();
         Ok(version)
     }
