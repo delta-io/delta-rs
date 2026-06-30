@@ -382,6 +382,7 @@ pub(crate) async fn write_execution_plan(
         None,
         false,
         None,
+        false,
     )
     .await?;
     Ok(actions)
@@ -401,6 +402,7 @@ pub(crate) async fn write_execution_plan_v2(
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
+    relax_nullability: bool,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
     // We always take the plan Schema since the data may contain Large/View arrow types,
     // the schema and batches were prior constructed with this in mind.
@@ -410,6 +412,7 @@ pub(crate) async fn write_execution_plan_v2(
             session,
             &plan.schema().to_dfschema()?,
             snapshot.table_configuration(),
+            relax_nullability,
         )?
     } else {
         debug!(

@@ -1591,6 +1591,7 @@ async fn execute(
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
+        false,
     )
     .await?;
     if let Some(schema_metadata) = schema_action {
