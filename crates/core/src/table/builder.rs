@@ -389,8 +389,11 @@ pub fn parse_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
 
     let mut url = match uri_type {
         UriType::LocalPath(path) => {
-            let path = std::fs::canonicalize(path).map_err(|err| {
-                let msg = format!("Invalid table location: {table_uri}\nError: {err:?}");
+            let path = std::fs::canonicalize(&path).map_err(|err| {
+                let msg = format!(
+                    "Local path \"{}\" does not exist or you don't have access!\nError: {err:?}",
+                    path.display(),
+                );
                 DeltaTableError::InvalidTableLocation(msg)
             })?;
             Url::from_directory_path(path).map_err(|_| {
@@ -702,6 +705,94 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn test_parse_table_uri_remote_url() {
+        object_store_factories().insert(
+            Url::parse("s3://").unwrap(),
+            Arc::new(DefaultObjectStoreFactory::default()),
+        );
+
+        // Basic remote URL is returned as-is
+        let uri = parse_table_uri("s3://bucket/path");
+        assert!(uri.is_ok());
+        assert_eq!("s3://bucket/path", uri.unwrap().as_str());
+
+        // Trailing slashes are trimmed from the path component
+        let uri = parse_table_uri("s3://bucket/path/");
+        assert!(uri.is_ok());
+        assert_eq!("s3://bucket/path", uri.unwrap().as_str());
+
+        // Multiple trailing slashes are all trimmed
+        let uri = parse_table_uri("s3://bucket/path//");
+        assert!(uri.is_ok());
+        assert_eq!("s3://bucket/path", uri.unwrap().as_str());
+
+        // memory:// scheme is supported
+        let uri = parse_table_uri("memory:///test/table");
+        assert!(uri.is_ok());
+        assert_eq!("memory:///test/table", uri.unwrap().as_str());
+
+        // Percent-encoded paths are preserved (no double-encoding)
+        let uri = parse_table_uri("s3://bucket/my%20table");
+        assert!(uri.is_ok());
+        assert_eq!("s3://bucket/my%20table", uri.unwrap().as_str());
+    }
+
+    #[test]
+    fn test_parse_table_uri_local_existing_path() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+
+        // Existing absolute path returns a file:// URL
+        let uri = parse_table_uri(tmp_path.to_str().unwrap());
+        assert!(uri.is_ok());
+        let url = uri.unwrap();
+        assert!(url.scheme() == "file");
+        // Path should not have a trailing slash after parse_table_uri
+        assert!(!url.path().ends_with('/'));
+
+        // Existing path via file:// URL round-trips correctly
+        let file_url = Url::from_directory_path(&tmp_path).unwrap();
+        let uri = parse_table_uri(file_url.as_str());
+        assert!(uri.is_ok());
+        let parsed_path = uri.unwrap().to_file_path().unwrap();
+        assert_eq!(tmp_path, std::fs::canonicalize(parsed_path).unwrap());
+    }
+
+    #[test]
+    fn test_parse_table_uri_local_nonexistent_path_fails() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let nonexistent = tmp_path.join("does_not_exist");
+
+        // parse_table_uri does NOT create directories, so a non-existent local
+        // path must return an error (canonicalize fails).
+        let uri = parse_table_uri(nonexistent.to_str().unwrap());
+        assert!(
+            uri.is_err(),
+            "parse_table_uri should fail for non-existent local paths"
+        );
+    }
+
+    #[test]
+    fn test_parse_table_uri_current_dir() {
+        // "." resolves to the current working directory, which always exists
+        let uri = parse_table_uri(".");
+        assert!(uri.is_ok());
+        let url = uri.unwrap();
+        assert_eq!(url.scheme(), "file");
+    }
+
+    #[test]
+    fn test_parse_table_uri_invalid_scheme() {
+        // Unknown multi-character schemes should return an error
+        let uri = parse_table_uri("hdfs://namenode/path");
+        assert!(
+            uri.is_err(),
+            "parse_table_uri should fail for unknown schemes"
+        );
     }
 
     #[test]

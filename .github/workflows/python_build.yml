@@ -16,6 +16,35 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
+  check-windows-python-dependencies:
+    name: Python Windows dependency graph
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+
+      - name: Assert Windows Python wheels do not select Unix-only OpenSSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p deltalake-python --target x86_64-pc-windows-msvc)
+
+          if grep -Eq '(^|[[:space:]])openssh v' <<<"$tree"; then
+            printf '%s\n' "$tree"
+            printf '%s\n' "openssh must not be selected for the Windows Python target"
+            exit 1
+          fi
+
+          if grep -Eq '(^|[[:space:]])opendal-service-sftp v' <<<"$tree"; then
+            printf '%s\n' "$tree"
+            printf '%s\n' "OpenDAL SFTP must not be selected for the Windows Python target"
+            exit 1
+          fi
+
   test-minimal:
     runs-on: ubuntu-latest
     steps:
