@@ -311,6 +311,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     /// writer, resolving schema evolution. Partitioning and parquet encoding
     /// happen incrementally; files are finalized at flush (or when a target file
     /// size is reached, or when a `MergeSchema` write widens the schema).
+    ///
+    /// Validation errors — schema mismatch, or nulls in a non-nullable column
+    /// (reported with row indices) — fail only this call and leave the flush
+    /// window untouched.
     async fn write_with_mode(
         &mut self,
         values: RecordBatch,
@@ -436,8 +440,16 @@ fn conform_to_schema(
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         match batch.column_by_name(field.name()) {
-            // Present column whose type matches: carried over unchanged.
-            Some(column) if column.data_type() == field.data_type() => cols.push(column.clone()),
+            // Present column whose type matches: carried over unchanged. Nulls in
+            // a non-nullable target field are reported with row indices here (a
+            // batch whose schema already equals the window schema skips this
+            // projection, but arrow rejects such nulls at batch construction).
+            Some(column) if column.data_type() == field.data_type() => {
+                if !field.is_nullable() && column.null_count() > 0 {
+                    return Err(non_nullable_violation_error(field.name(), column));
+                }
+                cols.push(column.clone())
+            }
             // Present but the type differs — e.g. a later MergeSchema write widened
             // this column's type while this batch was buffered under the old type.
             // Report a clear schema mismatch rather than a low-level arrow error.
@@ -459,6 +471,34 @@ fn conform_to_schema(
         }
     }
     Ok(RecordBatch::try_new(schema.clone(), cols)?)
+}
+
+/// Build a [`DeltaTableError::InvalidData`] naming the column and (capped) row
+/// indices of nulls in a non-nullable field. The null-mask scan runs only on
+/// this error path.
+fn non_nullable_violation_error(name: &str, column: &ArrayRef) -> DeltaWriterError {
+    use arrow_array::Array as _;
+    let indices: Vec<usize> = column
+        .nulls()
+        .map(|nulls| {
+            nulls
+                .iter()
+                .enumerate()
+                .filter_map(|(i, valid)| (!valid).then_some(i))
+                .take(super::INVALID_PREVIEW_CAP)
+                .collect()
+        })
+        .unwrap_or_default();
+    let more = match column.null_count().saturating_sub(indices.len()) {
+        0 => String::new(),
+        k => format!(" (+{k} more)"),
+    };
+    DeltaWriterError::DeltaTable(DeltaTableError::InvalidData {
+        message: format!(
+            "Column '{name}' is non-nullable but contains {} null values (row indices: {indices:?}{more})",
+            column.null_count(),
+        ),
+    })
 }
 
 /// Partition a RecordBatch along partition columns
@@ -919,6 +959,73 @@ mod tests {
         writer.write(reordered).await.unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_write_nulls_in_non_nullable_column_reports_rows() {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+        use arrow_array::{Int32Array, StringArray};
+        use arrow_schema::{DataType, Field};
+
+        let table_schema = StructType::try_new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])
+        .unwrap();
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = CreateBuilder::new()
+            .with_location(table_dir.path().to_str().unwrap())
+            .with_columns(table_schema.fields().cloned())
+            .await
+            .unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        let good = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("value", DataType::Int32, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["x", "y"])),
+                Arc::new(Int32Array::from(vec![Some(0), Some(1)])),
+            ],
+        )
+        .unwrap();
+        writer.write(good).await.unwrap();
+
+        // The batch's own schema marks `id` nullable, so it can carry nulls that
+        // violate the table's non-nullable field; the error names the rows.
+        let bad = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, true),
+                Field::new("value", DataType::Int32, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec![Some("a"), None, Some("c"), None])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])),
+            ],
+        )
+        .unwrap();
+        let err = writer.write(bad).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("'id'"), "got: {message}");
+                assert!(message.contains("[1, 3]"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
+
+        // The failed call left the window untouched: the good batch still flushes.
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
     }
 
     #[tokio::test]

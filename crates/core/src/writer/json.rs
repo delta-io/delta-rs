@@ -140,6 +140,46 @@ impl JsonWriter {
     }
 }
 
+/// Turn a batch decode failure into a [`DeltaTableError::InvalidData`] naming the
+/// offending records: re-decode each record individually (JSON decode only — no
+/// parquet, and only on this error path) and report the failures by input index.
+/// Falls back to the original error if every record decodes on its own.
+fn invalid_records_error(
+    schema: &ArrowSchemaRef,
+    values: &[Value],
+    batch_error: DeltaTableError,
+) -> DeltaTableError {
+    let bad: Vec<(usize, DeltaTableError)> = values
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, value)| {
+            record_batch_from_message(schema.clone(), std::slice::from_ref(value))
+                .err()
+                .map(|e| (idx, e))
+        })
+        .collect();
+    if bad.is_empty() {
+        return batch_error;
+    }
+    let preview = bad
+        .iter()
+        .take(super::INVALID_PREVIEW_CAP)
+        .map(|(idx, e)| format!("{idx}: {e}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let more = match bad.len().saturating_sub(super::INVALID_PREVIEW_CAP) {
+        0 => String::new(),
+        k => format!(" (+{k} more)"),
+    };
+    DeltaTableError::InvalidData {
+        message: format!(
+            "{} of {} records failed validation; offending records by input index: {preview}{more}",
+            bad.len(),
+            values.len(),
+        ),
+    }
+}
+
 #[async_trait::async_trait]
 impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// Write a chunk of values into the internal write buffers with the default write mode
@@ -151,11 +191,13 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// writer; partitioning and parquet encoding happen incrementally, and files
     /// are finalized at flush.
     ///
-    /// JSON decode and schema-mismatch errors are reported here, per write, and
-    /// leave the flush window untouched. Parquet-encoding / object-store errors can
-    /// surface here (encoding is incremental) or later at [`flush`](JsonWriter::flush);
-    /// either way they fail the whole flush window — every batch since the last
-    /// flush — rather than skipping the offending record.
+    /// JSON decode and validation errors (wrong types, nulls in non-nullable
+    /// columns) are reported here, per write, as [`DeltaTableError::InvalidData`]
+    /// naming the offending records by input index, and leave the flush window
+    /// untouched — drop or fix those records and retry the write. Parquet-encoding
+    /// / object-store errors can surface here (encoding is incremental) or later at
+    /// [`flush`](JsonWriter::flush); those fail the whole flush window — every
+    /// batch since the last flush.
     async fn write_with_mode(
         &mut self,
         values: Vec<Value>,
@@ -176,7 +218,10 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             return Err(DeltaWriterError::InvalidRecord(value.to_string()).into());
         }
         let schema = self.window.schema().clone();
-        let record_batch = record_batch_from_message(schema.clone(), values.as_slice())?;
+        let record_batch = match record_batch_from_message(schema.clone(), values.as_slice()) {
+            Ok(batch) => batch,
+            Err(err) => return Err(invalid_records_error(&schema, &values, err)),
+        };
 
         if record_batch.schema() != schema {
             return Err(DeltaWriterError::SchemaMismatch {
@@ -214,7 +259,6 @@ mod tests {
 
     use crate::kernel::scalars::ScalarExt;
 
-    use arrow_schema::ArrowError;
     #[cfg(feature = "datafusion")]
     use futures::TryStreamExt;
     use parquet::file::reader::FileReader;
@@ -426,13 +470,93 @@ mod tests {
             }
         );
 
-        let res = writer.write(vec![data]).await;
-        assert!(matches!(
-            res,
-            Err(DeltaTableError::Arrow {
-                source: ArrowError::JsonError(_)
-            })
-        ));
+        // A record that fails to decode is reported as InvalidData naming its
+        // input index, not as an opaque arrow error.
+        let err = writer.write(vec![data]).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("1 of 1 records"), "got: {message}");
+                assert!(message.contains("0:"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
+    }
+
+    /// Create a table whose `id` column is non-nullable.
+    async fn get_table_with_non_nullable_id(table_dir: &tempfile::TempDir) -> DeltaTable {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+        let schema = StructType::try_new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])
+        .unwrap();
+        CreateBuilder::new()
+            .with_location(table_dir.path().to_str().unwrap())
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_json_write_names_invalid_records_and_preserves_window() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_table_with_non_nullable_id(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        writer
+            .write(vec![serde_json::json!({"id": "good", "value": 1})])
+            .await
+            .unwrap();
+
+        // Record 1 is missing the non-nullable `id`; the whole call is rejected
+        // and the error names it by input index.
+        let records = vec![
+            serde_json::json!({"id": "a", "value": 2}),
+            serde_json::json!({"value": 3}),
+            serde_json::json!({"id": "c", "value": 4}),
+        ];
+        let err = writer.write(records).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("1 of 3 records"), "got: {message}");
+                assert!(message.contains("1:"), "got: {message}");
+                assert!(message.contains("id"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
+
+        // The failed call left the window untouched: the earlier good batch
+        // still flushes on its own.
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_json_write_invalid_records_preview_is_capped() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_table_with_non_nullable_id(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        // 12 bad records: the preview shows the first 10 and counts the rest.
+        let records: Vec<_> = (0..12)
+            .map(|i| serde_json::json!({"value": i}))
+            .collect();
+        let err = writer.write(records).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("12 of 12 records"), "got: {message}");
+                assert!(message.contains("(+2 more)"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
     }
 
     // The following sets of tests are related to #1386 and mergeSchema support

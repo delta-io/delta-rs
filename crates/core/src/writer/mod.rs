@@ -24,6 +24,9 @@ pub(crate) mod window;
 #[cfg(test)]
 pub mod test_utils;
 
+/// Preview cap for validation errors that enumerate offending records/rows.
+pub(crate) const INVALID_PREVIEW_CAP: usize = 10;
+
 pub(crate) fn ensure_legacy_writer_supports_table(
     table: &DeltaTable,
     operation: &str,
