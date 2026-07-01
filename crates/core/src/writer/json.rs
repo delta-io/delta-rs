@@ -99,10 +99,9 @@ impl JsonWriter {
         ))
     }
 
-    /// Approximate total encoded (parquet) size of the data buffered across all
-    /// in-progress files in the underlying dataset sink (one open file per
-    /// partition). May be used by the caller to decide when to finalize the
-    /// buffered writes by calling [`flush`](Self::flush).
+    /// Approximate encoded (parquet) size written since the last flush,
+    /// including files already finalized by a size roll. Monotonic within a
+    /// flush window, so usable as a threshold for calling [`flush`](Self::flush).
     pub fn buffer_len(&self) -> usize {
         self.window.buffered_size()
     }
@@ -114,13 +113,10 @@ impl JsonWriter {
 
     /// Resets internal state, discarding any data written since the last flush.
     ///
-    /// The sink streams to object storage as it writes, so by the time `reset` runs
-    /// bytes may already be uploaded: an in-progress multipart upload for the open
-    /// file, plus any files already finalized by a `target_file_size` roll. `reset`
-    /// drops the writer's in-process state without cleaning any of that up, so the
-    /// abandoned upload and finalized files are left in storage unreferenced by the
-    /// log (reclaimed only by a later vacuum). Call [`flush`](Self::flush) instead to
-    /// commit buffered data.
+    /// The sink streams to storage as it writes: open files' in-progress
+    /// multipart uploads are aborted in the background, while files already
+    /// finalized by a size roll are left unreferenced for a later vacuum. Call
+    /// [`flush`](Self::flush) instead to commit buffered data.
     pub fn reset(&mut self) {
         self.window.abort();
     }

@@ -344,13 +344,44 @@ impl DeltaWriter {
         Ok(())
     }
 
-    /// Total encoded (parquet) size currently buffered across all open partition
-    /// files (i.e. data written but not yet finalized into a closed file).
+    /// Approximate encoded (parquet) size written across all partitions and
+    /// not yet returned as `Add`s (which only surface at `close`).
     pub(crate) fn buffered_size(&self) -> usize {
         self.partition_writers
             .values()
             .map(PartitionWriter::buffered_size)
             .sum()
+    }
+
+    /// Abandon the writer, aborting every partition's in-progress multipart
+    /// upload. Already-completed files are left as orphans for vacuum.
+    pub async fn abort(mut self) -> DeltaResult<()> {
+        let mut first_err = None;
+        for (_, writer) in std::mem::take(&mut self.partition_writers) {
+            if let Err(e) = writer.abort().await {
+                warn!("failed to abort an in-progress multipart upload: {e}");
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// Best-effort [`abort`](Self::abort) for synchronous callers: spawns the
+    /// cleanup on the current tokio runtime, or logs and leaks the upload
+    /// parts when there is none.
+    pub(crate) fn abort_detached(self) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    if let Err(e) = self.abort().await {
+                        warn!("failed to abort in-progress multipart uploads: {e}");
+                    }
+                });
+            }
+            Err(_) => warn!(
+                "no tokio runtime available; abandoning in-progress multipart uploads without abort"
+            ),
+        }
     }
 
     /// Close the writer and get the new [Add] actions.
@@ -533,6 +564,16 @@ impl LazyArrowWriter {
             }
         }
     }
+
+    /// Abort the in-progress multipart upload, if any. Dropping the writer
+    /// instead would leak upload parts, which vacuum cannot see.
+    async fn abort(self) -> DeltaResult<()> {
+        if let LazyArrowWriter::Writing(_, arrow_writer) = self {
+            let mut buf_writer = arrow_writer.into_inner().into_inner();
+            buf_writer.abort().await?;
+        }
+        Ok(())
+    }
 }
 
 /// Partition writer implementation
@@ -550,6 +591,9 @@ pub struct PartitionWriter {
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
+    /// Approximate encoded size of files already rolled to background upload;
+    /// keeps `buffered_size` monotonic across rolls.
+    rolled_bytes: usize,
 }
 
 impl PartitionWriter {
@@ -573,6 +617,7 @@ impl PartitionWriter {
             num_indexed_cols,
             stats_columns,
             in_flight_writers: JoinSet::new(),
+            rolled_bytes: 0,
         })
     }
 
@@ -601,15 +646,18 @@ impl PartitionWriter {
         let state = std::mem::replace(&mut self.writer, new_writer);
 
         if let LazyArrowWriter::Writing(path, arrow_writer) = state {
+            self.rolled_bytes += arrow_writer.bytes_written() + arrow_writer.in_progress_size();
             self.in_flight_writers
                 .spawn(upload_parquet_file(arrow_writer, path));
         }
         Ok(())
     }
 
-    /// Encoded (parquet) size currently buffered in the in-progress file.
+    /// Approximate encoded (parquet) size written since creation: the
+    /// in-progress file plus already-rolled files. Monotonic, so usable as a
+    /// flush threshold.
     fn buffered_size(&self) -> usize {
-        self.writer.estimated_size()
+        self.rolled_bytes + self.writer.estimated_size()
     }
 
     /// Buffers record batches in-memory up to appx. `target_file_size`.
@@ -626,11 +674,30 @@ impl PartitionWriter {
             .into());
         }
 
+        // Don't materialize the lazy writer for a 0-row batch — `close` would
+        // upload an empty file and emit a spurious `Add`.
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
         let Some(target_file_size) = self.config.target_file_size else {
-            // No size target: hand the whole batch to the arrow writer in one call.
-            // It still forms row groups internally, so the output is identical, but
-            // we avoid fragmenting a large batch into many tiny `write_batch` calls.
-            self.writer.write_batch(batch).await?;
+            // No size target means no file rolling, but still slice at row-group
+            // boundaries: the async writer only uploads as row groups complete
+            // within a `write_batch` call, so one huge call would buffer every
+            // row group in memory first.
+            let step = self
+                .config
+                .writer_properties
+                .max_row_group_row_count()
+                .unwrap_or(self.config.write_batch_size)
+                .max(1);
+            let max_offset = batch.num_rows();
+            for offset in (0..max_offset).step_by(step) {
+                let length = usize::min(step, max_offset - offset);
+                self.writer
+                    .write_batch(&batch.slice(offset, length))
+                    .await?;
+            }
             return Ok(());
         };
 
@@ -697,6 +764,17 @@ impl PartitionWriter {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(adds)
+    }
+
+    /// Abandon the writer: let in-flight size-roll uploads finish (cancelling
+    /// mid-upload would leak parts vacuum cannot see; completed files are
+    /// orphans it can reclaim), then abort the open file's multipart upload.
+    pub async fn abort(mut self) -> DeltaResult<()> {
+        while let Some(result) = self.in_flight_writers.join_next().await {
+            // Outcome irrelevant: nothing from this writer is committed.
+            let _ = result;
+        }
+        self.writer.abort().await
     }
 }
 

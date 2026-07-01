@@ -121,26 +121,28 @@ impl DataFusionDataReader {
         Ok(Self::new(provider, session))
     }
 
-    /// Resolve logical projection column names against the provider schema.
-    fn projection_indices(&self, options: &ScanOptions) -> DeltaResult<Option<Vec<usize>>> {
-        let schema = self.provider.schema();
-        options
-            .projection
-            .as_ref()
-            .map(|cols| {
-                cols.iter()
-                    .map(|col| {
-                        schema
-                            .column_with_name(col)
-                            .map(|(idx, _)| idx)
-                            .ok_or_else(|| DeltaTableError::SchemaMismatch {
-                                msg: format!("Column '{col}' does not exist in table schema."),
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .transpose()
-    }
+}
+
+/// Resolve logical projection column names to their indices in `schema`.
+/// Shared by [`DataFusionDataReader::scan`] and the `load` operation.
+pub(crate) fn projection_indices(
+    schema: &arrow_schema::Schema,
+    columns: Option<&[String]>,
+) -> DeltaResult<Option<Vec<usize>>> {
+    columns
+        .map(|cols| {
+            cols.iter()
+                .map(|col| {
+                    schema
+                        .column_with_name(col)
+                        .map(|(idx, _)| idx)
+                        .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                            msg: format!("Column '{col}' does not exist in table schema."),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()
 }
 
 #[async_trait::async_trait]
@@ -150,7 +152,8 @@ impl DeltaDataReaderExt for DataFusionDataReader {
         session: &dyn Session,
         options: ScanOptions,
     ) -> DeltaResult<SendableRecordBatchStream> {
-        let projection = self.projection_indices(&options)?;
+        let projection =
+            projection_indices(&self.provider.schema(), options.projection.as_deref())?;
         coalesce_provider_scan(&self.provider, session, projection.as_ref(), options.limit).await
     }
 }

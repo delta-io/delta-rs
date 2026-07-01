@@ -26,7 +26,7 @@ use indexmap::IndexMap;
 use object_store::ObjectStore;
 use parquet::file::properties::WriterProperties;
 
-use crate::datafile::writer::{DeltaWriter as DataFileWriter, WriterConfig};
+use crate::datafile::writer::{DeltaWriter as DatasetSink, WriterConfig};
 use crate::errors::DeltaResult;
 use crate::kernel::Add;
 
@@ -44,7 +44,7 @@ pub(crate) struct SinkFactory {
 
 impl SinkFactory {
     /// Open a fresh streaming sink encoding under `schema`.
-    fn build(&self, schema: ArrowSchemaRef) -> DataFileWriter {
+    fn build(&self, schema: ArrowSchemaRef) -> DatasetSink {
         let config = WriterConfig::new(
             schema,
             self.partition_columns.clone(),
@@ -54,7 +54,7 @@ impl SinkFactory {
             self.num_indexed_cols,
             self.stats_columns.clone(),
         );
-        DataFileWriter::new(self.storage.clone(), config)
+        DatasetSink::new(self.storage.clone(), config)
     }
 }
 
@@ -67,7 +67,7 @@ pub(crate) struct WriteWindow {
     /// The last committed schema; the window reverts to it on `abort`.
     baseline: ArrowSchemaRef,
     /// Open streaming sink, created lazily on the first write of a window.
-    sink: Option<DataFileWriter>,
+    sink: Option<DatasetSink>,
     /// `Add` actions from sinks already sealed in this window (each `MergeSchema`
     /// widening seals the current sink and rotates to a fresh one).
     sealed: Vec<Add>,
@@ -108,9 +108,16 @@ impl WriteWindow {
         self.schema != self.baseline
     }
 
-    /// Approximate encoded (parquet) size buffered in the open sink.
+    /// Approximate encoded (parquet) size of all uncommitted data in the window:
+    /// sealed rotations plus the open sink. Monotonic within a flush window, so
+    /// usable as a flush threshold.
     pub(crate) fn buffered_size(&self) -> usize {
-        self.sink.as_ref().map_or(0, DataFileWriter::buffered_size)
+        let sealed: usize = self
+            .sealed
+            .iter()
+            .map(|add| add.size.max(0) as usize)
+            .sum();
+        sealed + self.sink.as_ref().map_or(0, DatasetSink::buffered_size)
     }
 
     /// The writer properties new sinks are opened with (used by tests asserting
@@ -172,13 +179,18 @@ impl WriteWindow {
     }
 
     /// Stream a pre-partitioned `batch` into the partition identified by
-    /// `partition_values`. Does not evolve the schema. All-or-nothing.
+    /// `partition_values`. As with [`write`](Self::write), a `Some` `widen_to`
+    /// seals the current sink and adopts the wider schema. All-or-nothing.
     pub(crate) async fn write_partition(
         &mut self,
         batch: RecordBatch,
         partition_values: &IndexMap<String, Scalar>,
+        widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
-        if let Err(e) = self.try_write_partition(batch, partition_values).await {
+        if let Err(e) = self
+            .try_write_partition(batch, partition_values, widen_to)
+            .await
+        {
             self.abort();
             return Err(e);
         }
@@ -189,7 +201,12 @@ impl WriteWindow {
         &mut self,
         batch: RecordBatch,
         partition_values: &IndexMap<String, Scalar>,
+        widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
+        if let Some(merged) = widen_to {
+            self.seal().await?;
+            self.schema = merged;
+        }
         if self.sink.is_none() {
             self.sink = Some(self.factory.build(self.schema.clone()));
         }
@@ -244,10 +261,13 @@ impl WriteWindow {
     /// rotations, batch count, and any uncommitted schema widening (schema reverts
     /// to the committed baseline) — so a later flush commits nothing.
     ///
-    /// Bytes already uploaded by the streaming sink (an in-progress multipart upload
-    /// can't be rolled back) are left unreferenced, reclaimed by a later vacuum.
+    /// The open sink's in-progress multipart uploads are aborted in the background
+    /// (their parts are invisible to vacuum); already-finalized files — size rolls
+    /// and sealed rotations — are left unreferenced for a later vacuum.
     pub(crate) fn abort(&mut self) {
-        self.sink = None;
+        if let Some(sink) = self.sink.take() {
+            sink.abort_detached();
+        }
         self.sealed.clear();
         self.count = 0;
         self.schema = self.baseline.clone();
@@ -393,7 +413,7 @@ mod tests {
     async fn write_partition_unpartitioned_roundtrips() {
         // With no partition columns the sink writes to the empty-path partition.
         let mut w = window(schema_one());
-        w.write_partition(batch_one(), &IndexMap::new())
+        w.write_partition(batch_one(), &IndexMap::new(), None)
             .await
             .unwrap();
         assert_eq!(w.count(), 1);

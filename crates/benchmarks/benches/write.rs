@@ -29,7 +29,8 @@ fn bench_write(bencher: Bencher, params: &WriteParams) {
             rt.block_on(async move {
                 run_write(table, batches, params).await.expect("write");
             });
-            drop(tmp_dir);
+            // Return the temp dir so divan drops it (recursive delete) untimed.
+            tmp_dir
         });
 }
 
