@@ -4,7 +4,6 @@ use arrow::{datatypes::FieldRef, datatypes::SchemaRef, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
-use serde_json::Value;
 
 use crate::DeltaTable;
 use crate::errors::{ColumnMappingOperation, DeltaTableError};
@@ -20,9 +19,13 @@ pub mod json;
 pub mod record_batch;
 pub(crate) mod stats;
 pub mod utils;
+pub(crate) mod window;
 
 #[cfg(test)]
 pub mod test_utils;
+
+/// Preview cap for validation errors that enumerate offending records/rows.
+pub(crate) const INVALID_PREVIEW_CAP: usize = 10;
 
 pub(crate) fn ensure_legacy_writer_supports_table(
     table: &DeltaTable,
@@ -63,18 +66,9 @@ pub(crate) enum DeltaWriterError {
     #[error("Arrow RecordBatch created from JSON buffer is a None value")]
     EmptyRecordBatch,
 
-    /// A record was written that was not a JSON object.
-    #[error("Record {0} is not a JSON object")]
+    /// A JSON value handed to the [`JsonWriter`] was not an object.
+    #[error("Invalid JSON record (expected an object): {0}")]
     InvalidRecord(String),
-
-    /// Indicates that a partial write was performed and error records were discarded.
-    #[error("Failed to write some values to parquet. Sample error: {sample_error}.")]
-    PartialParquetWrite {
-        /// Vec of tuples where the first element of each tuple is the skipped value and the second element is the [`ParquetError`] associated with it.
-        skipped_values: Vec<(Value, ParquetError)>,
-        /// A sample [`ParquetError`] representing the overall partial write.
-        sample_error: ParquetError,
-    },
 
     /// Serialization of delta log statistics failed.
     #[error("Failed to write statistics value {debug_value} with logical type {logical_type:?}")]

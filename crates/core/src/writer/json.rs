@@ -1,185 +1,37 @@
 //! Main writer API to write json messages to delta table
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use arrow::record_batch::*;
-use bytes::Bytes;
+use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::expressions::Scalar;
-use indexmap::IndexMap;
+use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use itertools::Itertools;
-use object_store::path::Path;
-use parquet::{arrow::ArrowWriter, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
 use tracing::*;
 use url::Url;
-use uuid::Uuid;
 
-use super::stats::create_add;
-use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions,
-};
+use super::utils::record_batch_from_message;
+use super::window::{SinkFactory, WriteWindow};
 use super::{DeltaWriter, DeltaWriterError, WriteMode, ensure_legacy_writer_supports_table};
 use crate::DeltaTable;
 use crate::errors::DeltaTableError;
-use crate::kernel::{Add, PartitionsExt, scalars::ScalarExt};
-use crate::logstore::ObjectStoreRetryExt;
+use crate::kernel::Add;
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
-use crate::writer::utils::ShareableBuffer;
-
-type BadValue = (Value, ParquetError);
 
 /// Writes messages to a delta lake table.
-#[derive(Debug)]
 pub struct JsonWriter {
-    table: DeltaTable,
-    /// Optional schema to use, otherwise try to rely on the schema from the [DeltaTable]
-    schema_ref: Option<ArrowSchemaRef>,
-    writer_properties: WriterProperties,
-    partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, DataArrowWriter>,
+    /// All mutable per-flush-window state. The schema is fixed at construction
+    /// (from the provided schema ref, or the table's schema). `JsonWriter` never
+    /// evolves the schema, so the window never widens.
+    window: WriteWindow,
 }
 
-/// Writes messages to an underlying arrow buffer.
-#[derive(Debug)]
-pub(crate) struct DataArrowWriter {
-    arrow_schema: Arc<ArrowSchema>,
-    writer_properties: WriterProperties,
-    buffer: ShareableBuffer,
-    arrow_writer: ArrowWriter<ShareableBuffer>,
-    partition_values: IndexMap<String, Scalar>,
-    buffered_record_batch_count: usize,
-}
-
-impl DataArrowWriter {
-    /// Writes the given JSON buffer and updates internal state accordingly.
-    /// This method buffers the write stream internally so it can be invoked for many json buffers and flushed after the appropriate number of bytes has been written.
-    async fn write_values(
-        &mut self,
-        partition_columns: &[String],
-        arrow_schema: Arc<ArrowSchema>,
-        json_buffer: Vec<Value>,
-    ) -> Result<(), DeltaWriterError> {
-        let record_batch = record_batch_from_message(arrow_schema.clone(), json_buffer.as_slice())?;
-
-        if record_batch.schema() != arrow_schema {
-            return Err(DeltaWriterError::SchemaMismatch {
-                record_batch_schema: record_batch.schema(),
-                expected_schema: arrow_schema,
-            });
-        }
-
-        let result = self
-            .write_record_batch(partition_columns, record_batch)
-            .await;
-
-        if let Err(DeltaWriterError::Parquet { source }) = result {
-            self.write_partial(partition_columns, arrow_schema, json_buffer, source)
-                .await
-        } else {
-            result
-        }
-    }
-
-    async fn write_partial(
-        &mut self,
-        partition_columns: &[String],
-        arrow_schema: Arc<ArrowSchema>,
-        json_buffer: Vec<Value>,
-        parquet_error: ParquetError,
-    ) -> Result<(), DeltaWriterError> {
-        warn!(
-            "Failed with parquet error while writing record batch. Attempting quarantine of bad records."
-        );
-        let (good, bad) = quarantine_failed_parquet_rows(arrow_schema.clone(), json_buffer)?;
-        let record_batch = record_batch_from_message(arrow_schema, good.as_slice())?;
-        self.write_record_batch(partition_columns, record_batch)
-            .await?;
-        info!(
-            "Wrote {} good records to record batch and quarantined {} bad records.",
-            good.len(),
-            bad.len()
-        );
-        Err(DeltaWriterError::PartialParquetWrite {
-            skipped_values: bad,
-            sample_error: parquet_error,
-        })
-    }
-
-    /// Writes the record batch in-memory and updates internal state accordingly.
-    /// This method buffers the write stream internally so it can be invoked for many record batches and flushed after the appropriate number of bytes has been written.
-    async fn write_record_batch(
-        &mut self,
-        partition_columns: &[String],
-        record_batch: RecordBatch,
-    ) -> Result<(), DeltaWriterError> {
-        if self.partition_values.is_empty() {
-            let partition_values = extract_partition_values(partition_columns, &record_batch)?;
-            self.partition_values = partition_values;
-        }
-
-        // Copy current buffered bytes so we can recover from failures
-        let buffer_bytes = self.buffer.to_vec();
-
-        let record_batch = record_batch_without_partitions(&record_batch, partition_columns)?;
-        let result = self.arrow_writer.write(&record_batch);
-
-        match result {
-            Ok(_) => {
-                self.buffered_record_batch_count += 1;
-                Ok(())
-            }
-            // If a write fails we need to reset the state of the DeltaArrowWriter
-            Err(e) => {
-                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
-                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
-                let arrow_writer = Self::new_underlying_writer(
-                    new_buffer,
-                    self.arrow_schema.clone(),
-                    self.writer_properties.clone(),
-                )?;
-                let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
-                self.partition_values.clear();
-
-                Err(e.into())
-            }
-        }
-    }
-
-    fn new(
-        arrow_schema: Arc<ArrowSchema>,
-        writer_properties: WriterProperties,
-    ) -> Result<Self, ParquetError> {
-        let buffer = ShareableBuffer::default();
-        let arrow_writer = Self::new_underlying_writer(
-            buffer.clone(),
-            arrow_schema.clone(),
-            writer_properties.clone(),
-        )?;
-
-        let partition_values = IndexMap::new();
-        let buffered_record_batch_count = 0;
-
-        Ok(Self {
-            arrow_schema,
-            writer_properties,
-            buffer,
-            arrow_writer,
-            partition_values,
-            buffered_record_batch_count,
-        })
-    }
-
-    fn new_underlying_writer(
-        buffer: ShareableBuffer,
-        arrow_schema: Arc<ArrowSchema>,
-        writer_properties: WriterProperties,
-    ) -> Result<ArrowWriter<ShareableBuffer>, ParquetError> {
-        ArrowWriter::try_new(buffer, arrow_schema, Some(writer_properties))
+impl std::fmt::Debug for JsonWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JsonWriter")
     }
 }
 
@@ -196,108 +48,135 @@ impl JsonWriter {
             .load()
             .await?;
         ensure_legacy_writer_supports_table(&table, "JsonWriter")?;
-
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
-
-        Ok(Self {
-            table,
-            schema_ref: Some(schema_ref),
-            writer_properties,
-            partition_columns: partition_columns.unwrap_or_default(),
-            arrow_writers: HashMap::new(),
-        })
+        Self::from_parts(&table, schema_ref, partition_columns.unwrap_or_default())
     }
 
-    /// Creates a JsonWriter to write to the given table
+    /// Creates a JsonWriter to write to the given table, using the table's schema.
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         ensure_legacy_writer_supports_table(table, "JsonWriter")?;
+        let (schema, partition_columns) = {
+            let snapshot = table.snapshot()?;
+            let partition_columns = snapshot.metadata().partition_columns().to_vec();
+            let schema: ArrowSchemaRef = Arc::new(snapshot.schema().as_ref().try_into_arrow()?);
+            (schema, partition_columns)
+        };
+        Self::from_parts(table, schema, partition_columns)
+    }
 
-        // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.snapshot()?.metadata();
-        let partition_columns = metadata.partition_columns().into();
-
-        // Initialize writer properties for the underlying arrow writer
-        let writer_properties = default_writer_properties(parquet::basic::Compression::SNAPPY);
-
-        Ok(Self {
-            table: table.clone(),
-            writer_properties,
+    /// Build a writer over `table` with a fixed `schema` and partitioning. The
+    /// stats configuration is resolved once here (mirroring `RecordBatchWriter`).
+    fn from_parts(
+        table: &DeltaTable,
+        schema: ArrowSchemaRef,
+        partition_columns: Vec<String>,
+    ) -> Result<Self, DeltaTableError> {
+        let (num_indexed_cols, stats_columns) = Self::read_stats_config(table)?;
+        let factory = SinkFactory {
+            storage: table.object_store(),
             partition_columns,
-            schema_ref: None,
-            arrow_writers: HashMap::new(),
+            writer_properties: default_writer_properties(parquet::basic::Compression::SNAPPY),
+            target_file_size: None,
+            num_indexed_cols,
+            stats_columns,
+        };
+        Ok(Self {
+            window: WriteWindow::new(factory, schema),
         })
     }
 
-    /// Returns the current byte length of the in memory buffer.
-    /// This may be used by the caller to decide when to finalize the file write.
-    pub fn buffer_len(&self) -> usize {
-        self.arrow_writers.values().map(|w| w.buffer.len()).sum()
-    }
-
-    /// Returns the number of records held in the current buffer.
-    pub fn buffered_record_batch_count(&self) -> usize {
-        self.arrow_writers
-            .values()
-            .map(|w| w.buffered_record_batch_count)
-            .sum()
-    }
-
-    /// Resets internal state.
-    pub fn reset(&mut self) {
-        self.arrow_writers.clear();
-    }
-
-    /// Returns the user-defined arrow schema representation or the schema defined for the wrapped
-    /// table.
-    ///
-    pub fn arrow_schema(&self) -> Arc<arrow::datatypes::Schema> {
-        if let Some(schema_ref) = self.schema_ref.as_ref() {
-            return schema_ref.clone();
-        }
-        let schema = self
-            .table
-            .snapshot()
-            .expect("Failed to unwrap snapshot for table")
-            .schema();
-        Arc::new(
-            schema
+    /// Resolve the data-skipping stats configuration from the table snapshot.
+    fn read_stats_config(
+        table: &DeltaTable,
+    ) -> Result<(DataSkippingNumIndexedCols, Option<Vec<String>>), DeltaTableError> {
+        let snapshot = table.snapshot()?;
+        let table_config = snapshot.table_config();
+        Ok((
+            table_config.num_indexed_cols(),
+            table_config
+                .data_skipping_stats_columns
                 .as_ref()
-                .try_into_arrow()
-                .expect("Failed to coerce delta schema to arrow"),
-        )
+                .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
+        ))
     }
 
-    fn divide_by_partition_values(
-        &self,
-        records: Vec<Value>,
-    ) -> Result<HashMap<String, Vec<Value>>, DeltaWriterError> {
-        let mut partitioned_records: HashMap<String, Vec<Value>> = HashMap::new();
-
-        for record in records {
-            let partition_value = self.json_to_partition_values(&record)?;
-            match partitioned_records.get_mut(&partition_value) {
-                Some(vec) => vec.push(record),
-                None => {
-                    partitioned_records.insert(partition_value, vec![record]);
-                }
-            };
-        }
-
-        Ok(partitioned_records)
+    /// Approximate encoded (parquet) size written since the last flush,
+    /// including files already finalized by a size roll. Monotonic within a
+    /// flush window, so usable as a threshold for calling [`flush`](Self::flush).
+    pub fn buffer_len(&self) -> usize {
+        self.window.buffered_size()
     }
 
-    fn json_to_partition_values(&self, value: &Value) -> Result<String, DeltaWriterError> {
-        if let Some(obj) = value.as_object() {
-            let key: Vec<String> = self
-                .partition_columns
-                .iter()
-                .map(|c| obj.get(c).unwrap_or(&Value::Null).to_string())
-                .collect();
-            return Ok(key.join("/"));
-        }
+    /// Returns the number of record batches streamed since the last flush.
+    pub fn buffered_record_batch_count(&self) -> usize {
+        self.window.count()
+    }
 
-        Err(DeltaWriterError::InvalidRecord(value.to_string()))
+    /// Resets internal state, discarding any data written since the last flush.
+    ///
+    /// The sink streams to storage as it writes: open files' in-progress
+    /// multipart uploads are aborted in the background, while files already
+    /// finalized by a size roll are left unreferenced for a later vacuum. Call
+    /// [`flush`](Self::flush) instead to commit buffered data.
+    pub fn reset(&mut self) {
+        self.window.abort();
+    }
+
+    /// Sets a target file size; once an in-progress file reaches it the writer
+    /// finalizes it and rolls a new one. Without this the writer emits a single
+    /// file per partition per flush (the default).
+    ///
+    /// A `target_file_size` of `0` means "no limit": size-based rolling is
+    /// disabled and the writer keeps one file per partition per flush, exactly
+    /// as if this method had not been called.
+    pub fn with_target_file_size(mut self, target_file_size: u64) -> Self {
+        self.window
+            .set_target_file_size(NonZeroU64::new(target_file_size));
+        self
+    }
+
+    /// Returns the arrow schema this writer encodes under (fixed at construction).
+    pub fn arrow_schema(&self) -> ArrowSchemaRef {
+        self.window.schema().clone()
+    }
+}
+
+/// Turn a batch decode failure into a [`DeltaTableError::InvalidData`] naming the
+/// offending records: re-decode each record individually (JSON decode only — no
+/// parquet, and only on this error path) and report the failures by input index.
+/// Falls back to the original error if every record decodes on its own.
+fn invalid_records_error(
+    schema: &ArrowSchemaRef,
+    values: &[Value],
+    batch_error: DeltaTableError,
+) -> DeltaTableError {
+    let bad: Vec<(usize, DeltaTableError)> = values
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, value)| {
+            record_batch_from_message(schema.clone(), std::slice::from_ref(value))
+                .err()
+                .map(|e| (idx, e))
+        })
+        .collect();
+    if bad.is_empty() {
+        return batch_error;
+    }
+    let preview = bad
+        .iter()
+        .take(super::INVALID_PREVIEW_CAP)
+        .map(|(idx, e)| format!("{idx}: {e}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let more = match bad.len().saturating_sub(super::INVALID_PREVIEW_CAP) {
+        0 => String::new(),
+        k => format!(" (+{k} more)"),
+    };
+    DeltaTableError::InvalidData {
+        message: format!(
+            "{} of {} records failed validation; offending records by input index: {preview}{more}",
+            bad.len(),
+            values.len(),
+        ),
     }
 }
 
@@ -308,7 +187,17 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         self.write_with_mode(values, WriteMode::Default).await
     }
 
-    /// Writes the given values to internal parquet buffers for each represented partition.
+    /// Decode the JSON values into a record batch and stream it into the dataset
+    /// writer; partitioning and parquet encoding happen incrementally, and files
+    /// are finalized at flush.
+    ///
+    /// JSON decode and validation errors (wrong types, nulls in non-nullable
+    /// columns) are reported here, per write, as [`DeltaTableError::InvalidData`]
+    /// naming the offending records by input index, and leave the flush window
+    /// untouched — drop or fix those records and retry the write. Parquet-encoding
+    /// / object-store errors can surface here (encoding is incremental) or later at
+    /// [`flush`](JsonWriter::flush); those fail the whole flush window — every
+    /// batch since the last flush.
     async fn write_with_mode(
         &mut self,
         values: Vec<Value>,
@@ -319,161 +208,57 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 "The JsonWriter does not currently support non-default write modes, falling back to default mode"
             );
         }
-        let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
-        let arrow_schema = self.arrow_schema();
-        let divided = self.divide_by_partition_values(values)?;
-        let partition_columns = self.partition_columns.clone();
-        let writer_properties = self.writer_properties.clone();
-
-        for (key, values) in divided {
-            match self.arrow_writers.get_mut(&key) {
-                Some(writer) => {
-                    let result = writer
-                        .write_values(&partition_columns, arrow_schema.clone(), values)
-                        .await;
-                    collect_partial_write_failure(&mut partial_writes, result)?;
-                }
-                None => {
-                    let schema = arrow_schema_without_partitions(&arrow_schema, &partition_columns);
-                    let mut writer = DataArrowWriter::new(schema, writer_properties.clone())?;
-                    let result = writer
-                        .write_values(&partition_columns, arrow_schema.clone(), values)
-                        .await;
-                    collect_partial_write_failure(&mut partial_writes, result)?;
-                    self.arrow_writers.insert(key, writer);
-                }
-            }
+        // An empty write is a no-op (the JSON decoder yields no batch for `[]`).
+        if values.is_empty() {
+            return Ok(());
         }
+        // Reject non-object records up front with a clear error, rather than an
+        // opaque arrow JSON-decoder failure.
+        if let Some(value) = values.iter().find(|v| !v.is_object()) {
+            return Err(DeltaWriterError::InvalidRecord(value.to_string()).into());
+        }
+        let schema = self.window.schema().clone();
+        let record_batch = match record_batch_from_message(schema.clone(), values.as_slice()) {
+            Ok(batch) => batch,
+            Err(err) => return Err(invalid_records_error(&schema, &values, err)),
+        };
 
-        if !partial_writes.is_empty() {
-            return Err(DeltaWriterError::PartialParquetWrite {
-                sample_error: match &partial_writes[0].1 {
-                    ParquetError::General(msg) => ParquetError::General(msg.to_owned()),
-                    ParquetError::ArrowError(msg) => ParquetError::ArrowError(msg.to_owned()),
-                    ParquetError::EOF(msg) => ParquetError::EOF(msg.to_owned()),
-                    ParquetError::External(err) => ParquetError::General(err.to_string()),
-                    ParquetError::IndexOutOfBound(u, v) => {
-                        ParquetError::IndexOutOfBound(u.to_owned(), v.to_owned())
-                    }
-                    ParquetError::NYI(msg) => ParquetError::NYI(msg.to_owned()),
-                    // ParquetError is non exhaustive, so have a fallback
-                    e => ParquetError::General(e.to_string()),
-                },
-                skipped_values: partial_writes,
+        if record_batch.schema() != schema {
+            return Err(DeltaWriterError::SchemaMismatch {
+                record_batch_schema: record_batch.schema(),
+                expected_schema: schema,
             }
             .into());
         }
 
-        Ok(())
+        // `JsonWriter` never evolves the schema, so the window never widens.
+        self.window.write(&record_batch, None).await
     }
 
-    /// Writes the existing parquet bytes to storage and resets internal state to handle another
-    /// file.
+    /// Finalize all files written since the last flush and return their [`Add`]
+    /// actions, resetting internal state to handle another flush window.
     ///
-    /// This function returns the [Add] actions which should be committed to the [DeltaTable] for
-    /// the written data files
-    #[instrument(skip(self), fields(writer_count = 0))]
+    /// These actions should be committed to the [DeltaTable] for the written data.
+    #[instrument(skip(self), fields(batch_count = 0))]
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
-        let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::with_capacity(writers.len());
-
-        Span::current().record("writer_count", writers.len());
-
-        for (_, writer) in writers {
-            let metadata = writer.arrow_writer.close()?;
-            let prefix = writer.partition_values.hive_partition_path();
-            let prefix = Path::parse(prefix)?;
-            let uuid = Uuid::new_v4();
-
-            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
-            let obj_bytes = Bytes::from(writer.buffer.to_vec());
-            let file_size = obj_bytes.len() as i64;
-
-            debug!(path = %path, size = file_size, rows = metadata.file_metadata().num_rows(), "writing data file");
-
-            self.table
-                .object_store()
-                .put_with_retries(&path, obj_bytes.into(), 15)
-                .await?;
-
-            let table_config = self.table.snapshot()?.table_config();
-
-            actions.push(create_add(
-                &writer.partition_values,
-                path.to_string(),
-                file_size,
-                &metadata,
-                table_config.num_indexed_cols(),
-                &table_config
-                    .data_skipping_stats_columns
-                    .as_ref()
-                    .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
-            )?);
-        }
+        Span::current().record("batch_count", self.window.count());
+        let actions = self.window.drain().await?;
         debug!(actions_count = actions.len(), "flush completed");
         Ok(actions)
     }
-}
-
-fn collect_partial_write_failure(
-    partial_writes: &mut Vec<(Value, ParquetError)>,
-    writer_result: Result<(), DeltaWriterError>,
-) -> Result<(), DeltaWriterError> {
-    match writer_result {
-        Err(DeltaWriterError::PartialParquetWrite { skipped_values, .. }) => {
-            partial_writes.extend(skipped_values);
-            Ok(())
-        }
-        _ => writer_result,
-    }
-}
-
-fn quarantine_failed_parquet_rows(
-    arrow_schema: Arc<ArrowSchema>,
-    values: Vec<Value>,
-) -> Result<(Vec<Value>, Vec<BadValue>), DeltaWriterError> {
-    let mut good: Vec<Value> = Vec::with_capacity(values.len());
-    let mut bad: Vec<BadValue> = Vec::with_capacity(values.len());
-
-    for value in values {
-        let record_batch =
-            record_batch_from_message(arrow_schema.clone(), std::slice::from_ref(&value))?;
-        let buffer = ShareableBuffer::default();
-        let mut writer = ArrowWriter::try_new(buffer.clone(), arrow_schema.clone(), None)?;
-
-        match writer.write(&record_batch) {
-            Ok(_) => good.push(value),
-            Err(e) => bad.push((value, e)),
-        }
-    }
-
-    Ok((good, bad))
-}
-
-fn extract_partition_values(
-    partition_cols: &[String],
-    record_batch: &RecordBatch,
-) -> Result<IndexMap<String, Scalar>, DeltaWriterError> {
-    let mut partition_values = IndexMap::new();
-
-    for col_name in partition_cols.iter() {
-        let arrow_schema = record_batch.schema();
-        let i = arrow_schema.index_of(col_name)?;
-        let col = record_batch.column(i);
-        let value = Scalar::from_array(col.as_ref(), 0)
-            .ok_or(DeltaWriterError::MissingPartitionColumn(col_name.clone()))?;
-
-        partition_values.insert(col_name.clone(), value);
-    }
-
-    Ok(partition_values)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use arrow_schema::ArrowError;
+    use arrow::datatypes::Schema as ArrowSchema;
+    use arrow::record_batch::RecordBatch;
+    use delta_kernel::expressions::Scalar;
+    use indexmap::IndexMap;
+
+    use crate::kernel::scalars::ScalarExt;
+
     #[cfg(feature = "datafusion")]
     use futures::TryStreamExt;
     use parquet::file::reader::FileReader;
@@ -484,6 +269,26 @@ mod tests {
     use crate::arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField};
     use crate::operations::create::CreateBuilder;
     use crate::writer::test_utils::get_delta_schema;
+
+    /// Extract partition scalar values from a record batch.
+    fn extract_partition_values(
+        partition_cols: &[String],
+        record_batch: &RecordBatch,
+    ) -> Result<IndexMap<String, Scalar>, DeltaWriterError> {
+        let mut partition_values = IndexMap::new();
+
+        for col_name in partition_cols.iter() {
+            let arrow_schema = record_batch.schema();
+            let i = arrow_schema.index_of(col_name)?;
+            let col = record_batch.column(i);
+            let value = Scalar::from_array(col.as_ref(), 0)
+                .ok_or(DeltaWriterError::MissingPartitionColumn(col_name.clone()))?;
+
+            partition_values.insert(col_name.clone(), value);
+        }
+
+        Ok(partition_values)
+    }
 
     /// Generate a simple test table which has been pre-created at version 0
     async fn get_test_table(table_dir: &tempfile::TempDir) -> DeltaTable {
@@ -500,6 +305,37 @@ mod tests {
         table.load().await.expect("Failed to load table");
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    #[tokio::test]
+    async fn test_json_write_empty_is_noop() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_test_table(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        // An empty write must be a no-op (not an error), and produce no files.
+        writer.write(vec![]).await.unwrap();
+        assert_eq!(writer.buffered_record_batch_count(), 0);
+        let add_actions = writer.flush().await.unwrap();
+        assert!(add_actions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_json_write_rejects_non_object_record() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_test_table(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        // A bare (non-object) JSON value must be rejected up front with a clear,
+        // record-naming error rather than an opaque arrow decode failure.
+        let err = writer
+            .write(vec![serde_json::json!(42)])
+            .await
+            .expect_err("a non-object JSON record must be rejected");
+        assert!(
+            err.to_string().contains("Invalid JSON record"),
+            "got: {err}"
+        );
     }
 
     #[tokio::test]
@@ -551,7 +387,7 @@ mod tests {
         let writer = JsonWriter::for_table(&table).unwrap();
 
         assert_eq!(
-            writer.writer_properties.created_by(),
+            writer.window.writer_properties().created_by(),
             format!("delta-rs version {}", crate::crate_version())
         );
     }
@@ -572,7 +408,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            writer.writer_properties.created_by(),
+            writer.window.writer_properties().created_by(),
             format!("delta-rs version {}", crate::crate_version())
         );
     }
@@ -634,13 +470,93 @@ mod tests {
             }
         );
 
-        let res = writer.write(vec![data]).await;
-        assert!(matches!(
-            res,
-            Err(DeltaTableError::Arrow {
-                source: ArrowError::JsonError(_)
-            })
-        ));
+        // A record that fails to decode is reported as InvalidData naming its
+        // input index, not as an opaque arrow error.
+        let err = writer.write(vec![data]).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("1 of 1 records"), "got: {message}");
+                assert!(message.contains("0:"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
+    }
+
+    /// Create a table whose `id` column is non-nullable.
+    async fn get_table_with_non_nullable_id(table_dir: &tempfile::TempDir) -> DeltaTable {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+        let schema = StructType::try_new(vec![
+            StructField::new(
+                "id".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::String),
+                false,
+            ),
+            StructField::new(
+                "value".to_string(),
+                DeltaDataType::Primitive(PrimitiveType::Integer),
+                true,
+            ),
+        ])
+        .unwrap();
+        CreateBuilder::new()
+            .with_location(table_dir.path().to_str().unwrap())
+            .with_columns(schema.fields().cloned())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_json_write_names_invalid_records_and_preserves_window() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_table_with_non_nullable_id(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        writer
+            .write(vec![serde_json::json!({"id": "good", "value": 1})])
+            .await
+            .unwrap();
+
+        // Record 1 is missing the non-nullable `id`; the whole call is rejected
+        // and the error names it by input index.
+        let records = vec![
+            serde_json::json!({"id": "a", "value": 2}),
+            serde_json::json!({"value": 3}),
+            serde_json::json!({"id": "c", "value": 4}),
+        ];
+        let err = writer.write(records).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("1 of 3 records"), "got: {message}");
+                assert!(message.contains("1:"), "got: {message}");
+                assert!(message.contains("id"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
+
+        // The failed call left the window untouched: the earlier good batch
+        // still flushes on its own.
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_json_write_invalid_records_preview_is_capped() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = get_table_with_non_nullable_id(&table_dir).await;
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+
+        // 12 bad records: the preview shows the first 10 and counts the rest.
+        let records: Vec<_> = (0..12)
+            .map(|i| serde_json::json!({"value": i}))
+            .collect();
+        let err = writer.write(records).await.unwrap_err();
+        match &err {
+            DeltaTableError::InvalidData { message } => {
+                assert!(message.contains("12 of 12 records"), "got: {message}");
+                assert!(message.contains("(+2 more)"), "got: {message}");
+            }
+            other => panic!("expected InvalidData, got: {other:?}"),
+        }
     }
 
     // The following sets of tests are related to #1386 and mergeSchema support

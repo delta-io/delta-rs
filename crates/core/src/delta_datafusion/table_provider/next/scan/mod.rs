@@ -34,7 +34,6 @@ use datafusion::{
         ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
         plan_err, stats::Precision,
     },
-    config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
@@ -657,10 +656,7 @@ async fn get_read_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
-    let pq_options = TableParquetOptions {
-        global: state.config().options().execution.parquet.clone(),
-        ..Default::default()
-    };
+    let pq_options = crate::datafile::ReaderProperties::default().to_table_parquet_options(state);
 
     let mut full_read_schema = SchemaBuilder::from(parquet_read_schema.as_ref().clone());
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));

@@ -33,5 +33,9 @@ name = "smoke"
 harness = false
 
 [[bench]]
+name = "write"
+harness = false
+
+[[bench]]
 name = "tpcds"
 harness = false

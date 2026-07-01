@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::SendableRecordBatchStream;
 use futures::future::BoxFuture;
 
 use super::CustomExecuteHandler;
 use crate::DeltaTable;
 use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
 use crate::delta_datafusion::{DataFusionMixins as _, create_session};
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStoreExt, LogStoreRef};
@@ -81,20 +80,10 @@ impl std::future::IntoFuture for LoadBuilder {
             PROTOCOL.can_read_from(&snapshot)?;
 
             let schema = snapshot.read_schema();
-            let projection = this
-                .columns
-                .map(|cols| {
-                    cols.iter()
-                        .map(|col| {
-                            schema.column_with_name(col).map(|(idx, _)| idx).ok_or(
-                                DeltaTableError::SchemaMismatch {
-                                    msg: format!("Column '{col}' does not exist in table schema."),
-                                },
-                            )
-                        })
-                        .collect::<Result<_, _>>()
-                })
-                .transpose()?;
+            let projection = crate::datafile::datafusion_ext::projection_indices(
+                &schema,
+                this.columns.as_deref(),
+            )?;
 
             let session = if let Some(session) = this.session {
                 session
@@ -112,12 +101,13 @@ impl std::future::IntoFuture for LoadBuilder {
 
             let table = DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
             let provider = table.table_provider().await?;
-            let scan_plan = provider
-                .scan(session.as_ref(), projection.as_ref(), &[], None)
-                .await?;
-
-            let plan = CoalescePartitionsExec::new(scan_plan);
-            let stream = plan.execute(0, session.task_ctx())?;
+            let stream = crate::datafile::datafusion_ext::coalesce_provider_scan(
+                &provider,
+                session.as_ref(),
+                projection.as_ref(),
+                None,
+            )
+            .await?;
 
             Ok((table, stream))
         })
