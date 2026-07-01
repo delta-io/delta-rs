@@ -769,7 +769,8 @@ mod tests {
     #[test]
     fn test_builder_from_valid_url_local_existing_path() {
         let tmp_dir = tempfile::tempdir().unwrap();
-        let table_url = Url::from_directory_path(tmp_dir.path()).unwrap();
+        let table_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let table_url = Url::from_directory_path(table_path).unwrap();
 
         let builder = builder_from_valid_url(table_url.clone()).unwrap();
         let built = builder.build().unwrap();

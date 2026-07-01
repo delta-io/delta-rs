@@ -757,10 +757,8 @@ mod tests {
         let file_url = Url::from_directory_path(&tmp_path).unwrap();
         let uri = parse_table_uri(file_url.as_str());
         assert!(uri.is_ok());
-        assert_eq!(
-            tmp_path.to_str().unwrap(),
-            uri.unwrap().to_file_path().unwrap().to_str().unwrap()
-        );
+        let parsed_path = uri.unwrap().to_file_path().unwrap();
+        assert_eq!(tmp_path, std::fs::canonicalize(parsed_path).unwrap());
     }
 
     #[test]
