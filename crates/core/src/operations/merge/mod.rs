@@ -87,7 +87,7 @@ use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, StructTypeExt, new_metadata,
     resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
@@ -852,9 +852,8 @@ async fn execute(
 
     let mut metrics = MergeMetrics::default();
     let exec_start = Instant::now();
-    // Determining whether we should write change data once so that computation of change data can
-    // be disabled in the common case(s)
-    let should_cdc = should_write_cdc(&snapshot)?;
+    // Determine once whether to write change data. The common cases skip change data work.
+    let should_cdc = should_write_cdc(snapshot.snapshot())?;
     // Change data may be collected and then written out at the completion of the merge
 
     if should_cdc {
@@ -892,7 +891,7 @@ async fn execute(
     let mut generated_col_exp = None;
     let mut missing_generated_col = None;
 
-    if gc_is_enabled(&snapshot) {
+    if gc_is_enabled(snapshot.snapshot()) {
         let generated_col_expressions = snapshot.schema().get_generated_columns()?;
         let (source_with_gc, missing_generated_columns) =
             add_missing_generated_columns(source, &generated_col_expressions)?;
@@ -924,7 +923,7 @@ async fn execute(
 
     let target_provider = provider_as_source(
         DeltaScanNext::builder()
-            .with_eager_snapshot(snapshot.clone())
+            .with_snapshot(snapshot.snapshot().clone())
             .with_log_store(log_store.clone())
             .with_session(state.clone().into())
             .with_file_column(file_column.as_str())
@@ -952,7 +951,7 @@ async fn execute(
     } else {
         try_construct_early_filter(
             predicate.clone(),
-            &snapshot,
+            snapshot.snapshot(),
             &state,
             &source,
             &source_name,
@@ -985,7 +984,7 @@ async fn execute(
 
     let target_provider = {
         let mut builder = DeltaScanNext::builder()
-            .with_eager_snapshot(snapshot.clone())
+            .with_snapshot(snapshot.snapshot().clone())
             .with_log_store(log_store.clone())
             .with_session(state.clone().into())
             .with_file_column(file_column.as_str());
@@ -1579,7 +1578,7 @@ async fn execute(
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
-        Some(&snapshot),
+        Some(snapshot.snapshot()),
         &state,
         write,
         table_partition_cols.to_vec(),
@@ -1663,7 +1662,7 @@ async fn execute(
     {
         metric
     } else {
-        let total_files = count_active_adds(&snapshot, log_store.as_ref()).await?;
+        let total_files = count_active_adds(snapshot.snapshot(), log_store.as_ref()).await?;
         let (derived, impossible_state) =
             derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
         if impossible_state {
@@ -1799,12 +1798,8 @@ fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize
     (total_files.saturating_sub(scanned_files), impossible_state)
 }
 
-async fn count_active_adds(
-    snapshot: &EagerSnapshot,
-    log_store: &dyn LogStore,
-) -> DeltaResult<usize> {
+async fn count_active_adds(snapshot: &Snapshot, log_store: &dyn LogStore) -> DeltaResult<usize> {
     let batches = snapshot
-        .snapshot()
         .active_add_batches(
             log_store,
             ActiveAddOptions {
@@ -2088,7 +2083,7 @@ mod tests {
 
         assert!(!snapshot.snapshot().has_materialized_files_for_test());
 
-        let total_files = super::count_active_adds(&snapshot, log_store.as_ref()).await?;
+        let total_files = super::count_active_adds(snapshot.snapshot(), log_store.as_ref()).await?;
 
         assert_eq!(total_files, 5);
         assert!(!snapshot.snapshot().has_materialized_files_for_test());
@@ -2273,7 +2268,7 @@ mod tests {
 
         let target_provider = provider_as_source(
             DeltaScanNext::builder()
-                .with_eager_snapshot(table.snapshot().unwrap().snapshot().clone())
+                .with_snapshot(table.snapshot().unwrap().snapshot().snapshot().clone())
                 .with_log_store(table.log_store.clone())
                 .with_session(state.clone().into())
                 .with_file_column(PATH_COLUMN)
@@ -2318,7 +2313,7 @@ mod tests {
 
         let target_provider = provider_as_source(
             DeltaScanNext::builder()
-                .with_eager_snapshot(table.snapshot().unwrap().snapshot().clone())
+                .with_snapshot(table.snapshot().unwrap().snapshot().snapshot().clone())
                 .with_log_store(table.log_store.clone())
                 .with_session(state.clone().into())
                 .with_file_column(PATH_COLUMN)

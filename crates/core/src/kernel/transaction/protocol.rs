@@ -7,7 +7,7 @@ use super::{TableReference, TransactionError};
 #[cfg(feature = "nanosecond-timestamps")]
 use crate::kernel::contains_timestamp_nanos;
 use crate::kernel::{
-    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, contains_timestampntz,
+    Action, EagerSnapshot, Protocol, ProtocolExt as _, Schema, Snapshot, contains_timestampntz,
     contains_variant,
 };
 use crate::protocol::DeltaOperation;
@@ -90,8 +90,12 @@ impl ProtocolChecker {
         2
     }
 
-    /// Check append-only at the high level (operation level)
+    /// Check append only at the operation level.
     pub fn check_append_only(&self, snapshot: &EagerSnapshot) -> Result<(), TransactionError> {
+        self.check_append_only_snapshot(snapshot.snapshot())
+    }
+
+    fn check_append_only_snapshot(&self, snapshot: &Snapshot) -> Result<(), TransactionError> {
         if snapshot.table_properties().append_only() {
             return Err(TransactionError::DeltaTableAppendOnly);
         }
@@ -100,7 +104,7 @@ impl ProtocolChecker {
 
     fn check_can_write_feature(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         contains_feature: bool,
         feature: TableFeature,
     ) -> Result<(), TransactionError> {
@@ -126,6 +130,14 @@ impl ProtocolChecker {
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
+        self.check_can_write_timestamp_ntz_snapshot(snapshot.snapshot(), schema)
+    }
+
+    fn check_can_write_timestamp_ntz_snapshot(
+        &self,
+        snapshot: &Snapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampntz");
         self.check_can_write_feature(
             snapshot,
@@ -141,6 +153,15 @@ impl ProtocolChecker {
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
+        self.check_can_write_timestamp_nanos_snapshot(snapshot.snapshot(), schema)
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    fn check_can_write_timestamp_nanos_snapshot(
+        &self,
+        snapshot: &Snapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampnanos");
         self.check_can_write_feature(
             snapshot,
@@ -153,6 +174,14 @@ impl ProtocolChecker {
     pub fn check_can_write_variant(
         &self,
         snapshot: &EagerSnapshot,
+        schema: &Schema,
+    ) -> Result<(), TransactionError> {
+        self.check_can_write_variant_snapshot(snapshot.snapshot(), schema)
+    }
+
+    fn check_can_write_variant_snapshot(
+        &self,
+        snapshot: &Snapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write variant");

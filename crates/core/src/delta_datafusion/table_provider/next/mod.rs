@@ -432,10 +432,29 @@ pub(crate) fn normalize_path_as_file_id(
     normalize_path_as_file_id_with_table_root(path, &table_root_url, context)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub enum SnapshotWrapper {
     Snapshot(Arc<Snapshot>),
-    EagerSnapshot(Arc<EagerSnapshot>),
+}
+
+impl<'de> Deserialize<'de> for SnapshotWrapper {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        enum SnapshotWrapperCompat {
+            Snapshot(Arc<Snapshot>),
+            EagerSnapshot(Arc<EagerSnapshot>),
+        }
+
+        Ok(match SnapshotWrapperCompat::deserialize(deserializer)? {
+            SnapshotWrapperCompat::Snapshot(snapshot) => SnapshotWrapper::Snapshot(snapshot),
+            SnapshotWrapperCompat::EagerSnapshot(snapshot) => {
+                SnapshotWrapper::Snapshot(snapshot.snapshot().clone().into())
+            }
+        })
+    }
 }
 
 impl From<Arc<Snapshot>> for SnapshotWrapper {
@@ -452,13 +471,13 @@ impl From<Snapshot> for SnapshotWrapper {
 
 impl From<Arc<EagerSnapshot>> for SnapshotWrapper {
     fn from(esnap: Arc<EagerSnapshot>) -> Self {
-        SnapshotWrapper::EagerSnapshot(esnap)
+        SnapshotWrapper::Snapshot(esnap.snapshot().clone().into())
     }
 }
 
 impl From<EagerSnapshot> for SnapshotWrapper {
     fn from(esnap: EagerSnapshot) -> Self {
-        SnapshotWrapper::EagerSnapshot(esnap.into())
+        SnapshotWrapper::Snapshot(esnap.snapshot().clone().into())
     }
 }
 
@@ -466,14 +485,12 @@ impl SnapshotWrapper {
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.table_configuration(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot().table_configuration(),
         }
     }
 
     pub(crate) fn snapshot(&self) -> &Snapshot {
         match self {
             SnapshotWrapper::Snapshot(snap) => snap.as_ref(),
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.snapshot(),
         }
     }
 }
@@ -781,12 +798,11 @@ impl TableProvider for DeltaScan {
 
         super::update_datafusion_session(state, log_store.as_ref(), self.read_operation_id)?;
 
-        let snapshot = match &self.snapshot {
-            SnapshotWrapper::EagerSnapshot(esnap) => esnap.as_ref().clone(),
-            SnapshotWrapper::Snapshot(snap) => {
-                EagerSnapshot::try_new_with_snapshot(log_store.as_ref(), snap.clone()).await?
-            }
-        };
+        let snapshot = EagerSnapshot::try_new_with_snapshot(
+            log_store.as_ref(),
+            self.snapshot.snapshot().clone().into(),
+        )
+        .await?;
 
         let save_mode = match insert_op {
             InsertOp::Append => SaveMode::Append,
@@ -1478,6 +1494,44 @@ mod tests {
             .unwrap_err();
         let err_str = err.to_string();
         assert!(err_str.contains("log_store"), "unexpected error: {err_str}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delta_scan_serde_accepts_legacy_eager_snapshot_wrapper() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::builder()
+            .with_snapshot(eager.snapshot().clone())
+            .build()
+            .await?;
+        let mut serialized = serde_json::to_value(&provider)?;
+
+        serialized
+            .as_object_mut()
+            .expect("serialized provider was not a JSON object")
+            .insert(
+                "snapshot".to_string(),
+                serde_json::json!({
+                    "EagerSnapshot": serde_json::to_value(&eager)?,
+                }),
+            );
+
+        let decoded: DeltaScan = serde_json::from_value(serialized)?;
+        let provider = decoded.with_log_store(log_store);
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let expected = vec![
+            "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }
@@ -2738,6 +2792,51 @@ mod tests {
 
         let deletion_vectors = provider.deletion_vectors(&state).await?;
         assert_eq!(deletion_vectors, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_builder_with_eager_snapshot_serializes_snapshot_wrapper_and_scans() -> TestResult
+    {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+
+        let provider = DeltaScan::builder()
+            .with_log_store(log_store.clone())
+            .with_eager_snapshot(eager)
+            .build()
+            .await?;
+        let serialized = serde_json::to_value(&provider)?;
+        let snapshot_wrapper = serialized
+            .get("snapshot")
+            .and_then(|value| value.as_object())
+            .expect("serialized snapshot wrapper was not a JSON object");
+        let wrapper_keys = snapshot_wrapper.keys().collect::<Vec<_>>();
+        assert!(
+            snapshot_wrapper.contains_key("Snapshot"),
+            "new eager snapshot providers should serialize using the Snapshot wrapper; got keys {wrapper_keys:?}"
+        );
+        assert!(
+            !snapshot_wrapper.contains_key("EagerSnapshot"),
+            "new eager snapshot providers should not emit legacy EagerSnapshot wrappers; got keys {wrapper_keys:?}"
+        );
+
+        let decoded: DeltaScan = serde_json::from_value(serialized)?;
+        let provider = decoded.with_log_store(log_store);
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+        let batches: Vec<_> = collect_partitioned(plan, session.task_ctx())
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let expected = vec![
+            "+----+", "| id |", "+----+", "| 5  |", "| 7  |", "| 9  |", "+----+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }

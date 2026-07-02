@@ -33,7 +33,7 @@ use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
-use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -140,11 +140,10 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
+    async fn create_fsck_plan(&self, snapshot: &Snapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
         let mut file_stream = snapshot
-            .snapshot()
             .active_adds(
                 log_store.as_ref(),
                 ActiveAddOptions {
@@ -263,7 +262,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
-            let plan = this.create_fsck_plan(&snapshot).await?;
+            let plan = this.create_fsck_plan(snapshot.snapshot()).await?;
             if this.dry_run {
                 return Ok((
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
