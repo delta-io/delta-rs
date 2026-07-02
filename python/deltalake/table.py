@@ -489,8 +489,9 @@ class DeltaTable:
 
         Returns:
             RecordBatchReader: A reader with two columns:
-                - filepath (str): fully-qualified file URI.
-                - selection_vector (list[bool]): row keep mask where True means keep and False means deleted.
+
+                - ``filepath (str)``: fully-qualified file URI.
+                - ``selection_vector (list[bool])``: row keep mask where True means keep and False means deleted.
 
         Notes:
             Only files that have deletion vectors are returned.
@@ -903,7 +904,7 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """
-        Restores table to a given version or datetime.
+        Restores table to a given version or datetime. See also [``load_as_version``](#deltalake.DeltaTable.load_as_version).
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -914,6 +915,13 @@ class DeltaTable:
 
         Returns:
             the metrics from restore.
+
+        Example:
+            Restore the table to version `1`.
+            ```python
+            dt = DeltaTable(table_path)
+            dt.restore(1)
+            ```
         """
         if isinstance(target, datetime):
             metrics = self._table.restore(
@@ -955,7 +963,7 @@ class DeltaTable:
                 This is for compatibility with systems like Polars that only support the large versions of Arrow types.
                 If `schema` is passed it takes precedence over this option.
 
-         More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
+         More info on [pyarrow dataset ParquetReadOptions](https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html).
 
         Example:
             ``deltalake`` will work with any storage compliant with [pyarrow.fs.FileSystem][pyarrow.fs.FileSystem], however the root of the filesystem has
@@ -1241,9 +1249,13 @@ class DeltaTable:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            A metrics dict. The ``num_deleted_rows`` key is omitted when this library
-            cannot determine the deleted row count without scanning data
-            files.
+            A metrics dict. The ``num_deleted_rows`` key is omitted when this library cannot determine the deleted row count without scanning data files.
+
+        Example:
+            ```python
+            dt = DeltaTable("tmp/my-table")
+            dt.delete("num > 2")
+            ```
         """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
