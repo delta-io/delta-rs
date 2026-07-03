@@ -240,10 +240,10 @@ struct WriteSinkConfig {
     column_mapping: Option<ColumnMappingState>,
 }
 
-/// Apply column mapping to a write plan: wrap it so its batches are emitted physically, translate
 /// A plan with its (physical) partition columns and optional random-prefix length.
 type ColumnMappedPlan = (Arc<dyn ExecutionPlan>, Vec<String>, Option<usize>);
 
+/// Apply column mapping to a write plan: wrap it so its batches are emitted physically, translate
 /// partition columns to physical names, and request a random file prefix. No-op (returns its
 /// inputs) when `column_mapping` is `None`.
 fn apply_column_mapping_to_plan(
@@ -510,7 +510,14 @@ pub(crate) async fn write_streams(
                 .map(|batch| (Ok::<_, DeltaTableError>(batch), rx))
         })
         .boxed();
-        let metrics = write_batches_timed(&mut writer, batches).await?;
+        let metrics = match write_batches_timed(&mut writer, batches).await {
+            Ok(metrics) => metrics,
+            Err(e) => {
+                // Abort rather than drop: dropping leaks the open multipart uploads.
+                let _ = writer.abort().await;
+                return Err(e);
+            }
+        };
         let adds = writer.close().await?;
         Ok::<(Vec<Add>, u64, u64), DeltaTableError>((
             adds,

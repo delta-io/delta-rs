@@ -8,7 +8,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
@@ -98,7 +98,18 @@ async fn upload_parquet_file(
     mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
     path: Path,
 ) -> DeltaResult<(Path, usize, ParquetMetaData)> {
-    let metadata = arrow_writer.finish().await?;
+    let metadata = match arrow_writer.finish().await {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            // A failed completion leaves multipart parts behind that vacuum
+            // cannot see; abort them (best-effort) before surfacing the error.
+            let mut buf_writer = arrow_writer.into_inner().into_inner();
+            if let Err(abort_err) = buf_writer.abort().await {
+                warn!("failed to abort multipart upload after a failed finish: {abort_err}");
+            }
+            return Err(e.into());
+        }
+    };
     let file_size = arrow_writer.bytes_written();
     Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
@@ -298,7 +309,14 @@ impl DeltaWriter {
             Some(writer) => writer.write(batch).await?,
             None => {
                 let mut writer = self.build_partition_writer(make_values())?;
-                writer.write(batch).await?;
+                if let Err(e) = writer.write(batch).await {
+                    // The writer was never inserted, so a later `DeltaWriter::abort`
+                    // can't reach it — clean up its upload here.
+                    if let Err(abort_err) = writer.abort().await {
+                        warn!("failed to abort an in-progress multipart upload: {abort_err}");
+                    }
+                    return Err(e);
+                }
                 let _ = self.partition_writers.insert(key, writer);
             }
         }
@@ -368,14 +386,13 @@ impl DeltaWriter {
 
     /// Best-effort [`abort`](Self::abort) for synchronous callers: spawns the
     /// cleanup on the current tokio runtime, or logs and leaks the upload
-    /// parts when there is none.
+    /// parts when there is none. `abort` warns per failed partition, so the
+    /// returned error needs no extra logging here.
     pub(crate) fn abort_detached(self) {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => {
                 handle.spawn(async move {
-                    if let Err(e) = self.abort().await {
-                        warn!("failed to abort in-progress multipart uploads: {e}");
-                    }
+                    let _ = self.abort().await;
                 });
             }
             Err(_) => warn!(
@@ -398,18 +415,25 @@ impl DeltaWriter {
             }
             return Ok(actions);
         }
-        let actions = futures::stream::iter(writers)
-            .map(|(_, writer)| async move {
-                let writer_actions = writer.close().await?;
-                Ok::<_, DeltaTableError>(writer_actions)
-            })
-            .buffered(num_cpus::get())
-            .try_fold(Vec::new(), |mut acc, actions| {
-                acc.extend(actions);
-                futures::future::ready(Ok(acc))
-            })
-            .await?;
-
+        // On error, keep draining the remaining closes rather than short-circuiting:
+        // cancelling them mid-upload would leak multipart parts vacuum can't see,
+        // while completed files are orphans it can reclaim.
+        let mut close_stream = futures::stream::iter(writers)
+            .map(|(_, writer)| writer.close())
+            .buffered(num_cpus::get());
+        let mut actions = Vec::new();
+        let mut first_err: Option<DeltaTableError> = None;
+        while let Some(result) = close_stream.next().await {
+            match result {
+                Ok(writer_actions) => actions.extend(writer_actions),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
         Ok(actions)
     }
 }
@@ -459,7 +483,11 @@ impl DeltaDataWriter for DeltaWriter {
         // just a bounded drain, metrics unused), but the bound is honored for any
         // future streaming caller.
         let buffered = batches.buffered(writer_batch_concurrency().max(1));
-        write_batches_timed(&mut self, buffered).await?;
+        if let Err(e) = write_batches_timed(&mut self, buffered).await {
+            // Abort rather than drop: dropping leaks the open multipart uploads.
+            let _ = (*self).abort().await;
+            return Err(e);
+        }
         (*self).close().await
     }
 }
@@ -729,19 +757,26 @@ impl PartitionWriter {
                 .spawn(upload_parquet_file(arrow_writer, path));
         }
 
+        // On a failed upload, keep draining the siblings rather than returning
+        // early: dropping the JoinSet would cancel them mid-multipart, leaking
+        // parts vacuum can't see (completed files are orphans it can reclaim).
         let mut results = Vec::new();
+        let mut first_err: Option<DeltaTableError> = None;
         while let Some(result) = self.in_flight_writers.join_next().await {
             match result {
                 Ok(Ok(data)) => results.push(data),
                 Ok(Err(e)) => {
-                    return Err(e);
+                    first_err.get_or_insert(e);
                 }
                 Err(e) => {
-                    return Err(DeltaTableError::GenericError {
+                    first_err.get_or_insert(DeltaTableError::GenericError {
                         source: Box::new(e),
                     });
                 }
             }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
 
         sort_completed_writes_by_path(&mut results);

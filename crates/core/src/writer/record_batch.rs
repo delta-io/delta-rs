@@ -32,6 +32,7 @@ use crate::kernel::{MetadataExt as _, Version};
 use crate::parquet_utils::default_writer_properties;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::DEFAULT_NUM_INDEX_COLS;
+use crate::writer::utils::{arrow_schema_without_partitions, record_batch_without_partitions};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -269,30 +270,39 @@ impl RecordBatchWriter {
     /// Write a record batch that belongs entirely to the partition identified by
     /// `partition_values`, streaming it into the partition's open file.
     ///
-    /// The batch may be provided with or without its partition columns (the sink
-    /// strips them before encoding) but must otherwise conform to the writer's
+    /// The batch may be provided with or without its partition columns (they are
+    /// stripped before encoding) but must otherwise conform to the writer's
     /// schema. Returns the writer's current arrow schema.
     ///
     /// With [`WriteMode::MergeSchema`] new columns widen the writer's schema
-    /// (sealing the files written so far) and the merged schema is returned.
+    /// (sealing the files written so far) and the merged schema is returned; a
+    /// widening write on a partitioned table is rejected as unsupported.
     /// Committing the evolved metadata is the caller's responsibility on this
-    /// low-level path — [`flush_and_commit`](Self::flush_and_commit) rejects
-    /// evolution on partitioned tables.
+    /// low-level path.
+    ///
+    /// Validation errors fail only this call and leave the flush window untouched.
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
         partition_values: &IndexMap<String, Scalar>,
         mode: WriteMode,
     ) -> Result<ArrowSchemaRef, DeltaTableError> {
-        let schema = self.window.schema().clone();
-        let (batch, widen_to) = if mode == WriteMode::MergeSchema && record_batch.schema() != schema
-        {
-            let merged = merge_arrow_schema(schema.clone(), record_batch.schema(), true)?;
-            let conformed = conform_to_schema(&record_batch, &merged, true)?;
-            let widen_to = (merged != schema).then_some(merged);
-            (conformed, widen_to)
+        // Phase 1 — validate against the partition-stripped file schema (what the
+        // sink encodes under), so bad caller data errors before any window state
+        // changes. Merging against the stripped schema also keeps a batch that
+        // legitimately omits partition columns from having them null-filled.
+        let partition_columns = self.window.partition_columns().to_vec();
+        let file_schema = arrow_schema_without_partitions(self.window.schema(), &partition_columns);
+        let batch = record_batch_without_partitions(&record_batch, &partition_columns)?;
+        let (batch, widen_to) = if batch.schema() != file_schema {
+            match mode {
+                WriteMode::MergeSchema => merge_and_conform(&batch, &file_schema)?,
+                WriteMode::Default => {
+                    (conform_to_schema(&batch, &file_schema, false, false)?, None)
+                }
+            }
         } else {
-            (record_batch, None)
+            (batch, None)
         };
         self.window
             .write_partition(batch, partition_values, widen_to)
@@ -346,16 +356,15 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             match mode {
                 WriteMode::MergeSchema => {
                     debug!("The writer and record batch schemas do not match, merging");
-                    let merged = merge_arrow_schema(schema.clone(), values.schema().clone(), true)?;
-                    let conformed = conform_to_schema(&values, &merged, true)?;
-                    let widen_to = (merged != schema).then_some(merged);
-                    (conformed, widen_to)
+                    merge_and_conform(&values, &schema)?
                 }
                 WriteMode::Default => {
-                    // Project reordered/superset batches onto the window schema by
-                    // name (the historical behavior); a missing or type-changed
-                    // column is still a schema mismatch.
-                    (conform_to_schema(&values, &schema, false)?, None)
+                    // Project reordered batches onto the window schema by name. Extra
+                    // columns are dropped only on partitioned tables (the historical
+                    // divide-by-partition behavior); unpartitioned writes reject them,
+                    // preserving the error that signals "use MergeSchema".
+                    let allow_extras = !self.window.partition_columns().is_empty();
+                    (conform_to_schema(&values, &schema, false, allow_extras)?, None)
                 }
             }
         } else {
@@ -379,6 +388,17 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         table: &mut DeltaTable,
     ) -> Result<Version, DeltaTableError> {
         use crate::kernel::StructType;
+        // Schema changes only via `MergeSchema` widening, so a difference from the
+        // committed baseline is the signal to evolve the metadata. The window rejects
+        // widening on partitioned tables at write time; this check (kept before
+        // `stage()` uploads anything) is a defensive backstop.
+        let evolve_schema = self.window.schema_evolved();
+        if evolve_schema && !self.window.partition_columns().is_empty() {
+            return Err(DeltaTableError::Generic(
+                "Merging Schemas with partition columns present is currently unsupported"
+                    .to_owned(),
+            ));
+        }
         // Stage (seal) without clearing: if the commit fails (e.g. a concurrent-writer
         // conflict) the data stays staged so the caller can retry without re-uploading,
         // and the schema baseline only advances once the commit lands.
@@ -391,16 +411,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             .map(Action::Add)
             .collect();
 
-        // Schema changes only via `MergeSchema` widening, so a difference from the
-        // committed baseline is the signal to evolve the metadata.
-        let evolve_schema = self.window.schema_evolved();
         if evolve_schema {
-            if !self.window.partition_columns().is_empty() {
-                return Err(DeltaTableError::Generic(
-                    "Merging Schemas with partition columns present is currently unsupported"
-                        .to_owned(),
-                ));
-            }
             let schema: StructType = self.window.schema().clone().try_into_kernel()?;
             // Evolve the schema on the passed table's *current* metadata (preserving
             // its config and table id), not a fresh one.
@@ -427,16 +438,45 @@ pub struct PartitionResult {
     pub record_batch: RecordBatch,
 }
 
-/// Project `batch` onto `schema` by column name, reordering and dropping extras.
-/// A field absent from the batch is null-filled when `null_fill_missing` is set
-/// (the MergeSchema path) and a schema mismatch otherwise (the Default path).
-/// Present columns must already match — a type change is a hard error, never a
-/// silent cast.
+/// MergeSchema phase 1: merge the batch schema into `schema`, conform the batch
+/// to the merged schema, and report the widened schema when it actually grew.
+fn merge_and_conform(
+    batch: &RecordBatch,
+    schema: &ArrowSchemaRef,
+) -> Result<(RecordBatch, Option<ArrowSchemaRef>), DeltaTableError> {
+    let merged = merge_arrow_schema(schema.clone(), batch.schema(), true)?;
+    // The merged schema contains every batch column, so extras cannot occur here.
+    let conformed = conform_to_schema(batch, &merged, true, true)?;
+    let widen_to = (merged != *schema).then_some(merged);
+    Ok((conformed, widen_to))
+}
+
+/// Project `batch` onto `schema` by column name, reordering as needed. A field
+/// absent from the batch is null-filled when `null_fill_missing` is set (the
+/// MergeSchema path) and a schema mismatch otherwise (the Default path). Batch
+/// columns absent from `schema` are dropped when `allow_extras` is set (the
+/// historical behavior of partitioned writes) and a schema mismatch otherwise —
+/// silently discarding a column's data is only acceptable where callers have
+/// always relied on it. Present columns must already match — a type change is a
+/// hard error, never a silent cast.
 fn conform_to_schema(
     batch: &RecordBatch,
     schema: &ArrowSchemaRef,
     null_fill_missing: bool,
+    allow_extras: bool,
 ) -> Result<RecordBatch, DeltaWriterError> {
+    if !allow_extras
+        && batch
+            .schema()
+            .fields()
+            .iter()
+            .any(|f| schema.field_with_name(f.name()).is_err())
+    {
+        return Err(DeltaWriterError::SchemaMismatch {
+            record_batch_schema: batch.schema(),
+            expected_schema: schema.clone(),
+        });
+    }
     let mut cols: Vec<ArrayRef> = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         match batch.column_by_name(field.name()) {
@@ -630,13 +670,13 @@ mod tests {
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true), // absent from the batch -> null-filled
         ]));
-        let out = conform_to_schema(&batch, &target, true).unwrap();
+        let out = conform_to_schema(&batch, &target, true, true).unwrap();
         assert_eq!(out.num_columns(), 2);
         assert_eq!(out.column(1).null_count(), 2);
 
         // Without null-filling (the Default write path), a missing column is a
         // schema mismatch instead.
-        let err = conform_to_schema(&batch, &target, false).unwrap_err();
+        let err = conform_to_schema(&batch, &target, false, true).unwrap_err();
         assert!(
             matches!(err, DeltaWriterError::SchemaMismatch { .. }),
             "expected SchemaMismatch, got: {err:?}"
@@ -665,7 +705,7 @@ mod tests {
             DataType::LargeUtf8,
             true,
         )]));
-        let err = conform_to_schema(&batch, &target, true).unwrap_err();
+        let err = conform_to_schema(&batch, &target, true, true).unwrap_err();
         assert!(
             matches!(err, DeltaWriterError::SchemaMismatch { .. }),
             "expected SchemaMismatch, got: {err:?}"
@@ -1087,6 +1127,217 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_partition_bad_batch_preserves_window() {
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType, Field};
+
+        // A Default-mode `write_partition` with bad caller data (here a type
+        // change) must fail this call only — earlier buffered batches survive.
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec!["modified".to_string()];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        assert_eq!(writer.buffered_record_batch_count(), 1);
+
+        // `id` is Utf8 in the table; an Int32 batch is bad caller data.
+        let bad = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, true),
+                Field::new("value", DataType::Int32, true),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+            ],
+        )
+        .unwrap();
+        let partition_values = IndexMap::from([(
+            "modified".to_string(),
+            Scalar::String("2021-02-01".to_string()),
+        )]);
+        let err = writer
+            .write_partition(bad, &partition_values, WriteMode::Default)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DeltaTableError::SchemaMismatch { .. }),
+            "expected SchemaMismatch, got: {err:?}"
+        );
+
+        // The failed call left the window untouched: the buffered batch still
+        // flushes (one file per `modified` partition).
+        assert_eq!(writer.buffered_record_batch_count(), 1);
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_write_partition_merge_schema_partitioned_rejected_early() {
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType, Field};
+
+        // A widening `write_partition(.., MergeSchema)` on a partitioned table is
+        // rejected at write time — before anything is uploaded — leaving earlier
+        // buffered data flushable and the schema unchanged.
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec!["modified".to_string()];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let original_schema = writer.arrow_schema();
+
+        writer.write(batch.clone()).await.unwrap();
+
+        let mut fields: Vec<Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields.push(Field::new("extra", DataType::Int32, true));
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(
+            (0..batch.num_rows() as i32).collect::<Vec<_>>(),
+        )));
+        let widened = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+
+        let partition_values = IndexMap::from([(
+            "modified".to_string(),
+            Scalar::String("2021-02-01".to_string()),
+        )]);
+        let err = writer
+            .write_partition(widened, &partition_values, WriteMode::MergeSchema)
+            .await
+            .unwrap_err();
+        match &err {
+            DeltaTableError::Generic(msg) => assert_eq!(
+                msg,
+                "Merging Schemas with partition columns present is currently unsupported"
+            ),
+            other => panic!("expected Generic, got: {other:?}"),
+        }
+
+        // Window untouched: no widening landed and the buffered batch flushes.
+        assert_eq!(writer.arrow_schema(), original_schema);
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_write_partition_without_partition_columns() {
+        // A pre-partitioned batch that (legitimately) omits the partition columns
+        // writes cleanly in both modes — nothing null-fills the absent partition
+        // column against the full table schema.
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec!["modified".to_string()];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        // Only `id` and `value` — the file schema, no `modified`.
+        let stripped = batch.project(&[0, 1]).unwrap();
+        let partition_values = IndexMap::from([(
+            "modified".to_string(),
+            Scalar::String("2021-02-01".to_string()),
+        )]);
+        writer
+            .write_partition(stripped.clone(), &partition_values, WriteMode::Default)
+            .await
+            .unwrap();
+        writer
+            .write_partition(stripped, &partition_values, WriteMode::MergeSchema)
+            .await
+            .unwrap();
+
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        assert!(
+            adds[0].path.contains("modified=2021-02-01"),
+            "got path: {}",
+            adds[0].path
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_extra_column_unpartitioned_is_rejected() {
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType, Field};
+
+        // On an unpartitioned table a Default-mode batch with an extra column must
+        // error (the signal to use MergeSchema), not silently drop the column.
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let batch = get_record_batch(None, false);
+        let table = create_initialized_table(table_path, &[]).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        let mut fields: Vec<Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields.push(Field::new("extra", DataType::Int32, true));
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(
+            (0..batch.num_rows() as i32).collect::<Vec<_>>(),
+        )));
+        let superset = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+
+        let err = writer.write(superset.clone()).await.unwrap_err();
+        assert!(
+            matches!(err, DeltaTableError::SchemaMismatch { .. }),
+            "expected SchemaMismatch, got: {err:?}"
+        );
+
+        // The same batch is accepted once the caller opts into schema evolution.
+        writer
+            .write_with_mode(superset, WriteMode::MergeSchema)
+            .await
+            .unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_write_extra_column_partitioned_is_dropped() {
+        use arrow_array::Int32Array;
+        use arrow_schema::{DataType, Field};
+
+        // On a partitioned table extras are dropped by the by-name projection —
+        // the historical divide-by-partition behavior existing callers rely on.
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path().to_str().unwrap();
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec!["modified".to_string()];
+        let table = create_initialized_table(table_path, &partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        let mut fields: Vec<Field> = batch
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect();
+        fields.push(Field::new("extra", DataType::Int32, true));
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(
+            (0..batch.num_rows() as i32).collect::<Vec<_>>(),
+        )));
+        let superset = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+
+        writer.write(superset).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 2);
+    }
+
+    #[tokio::test]
     async fn test_write_multiple_partitions() {
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path().to_str().unwrap();
@@ -1310,7 +1561,8 @@ mod tests {
 
             // A Default write that already matches the widened schema, before commit.
             let merged = writer.arrow_schema();
-            let matching = conform_to_schema(&get_record_batch(None, false), &merged, true).unwrap();
+            let matching =
+                conform_to_schema(&get_record_batch(None, false), &merged, true, true).unwrap();
             writer.write(matching).await.unwrap();
 
             writer.flush_and_commit(&mut table).await.unwrap();

@@ -143,38 +143,41 @@ impl JsonWriter {
 /// Turn a batch decode failure into a [`DeltaTableError::InvalidData`] naming the
 /// offending records: re-decode each record individually (JSON decode only — no
 /// parquet, and only on this error path) and report the failures by input index.
-/// Falls back to the original error if every record decodes on its own.
+/// The scan stops once the preview is full — identification is diagnostic, so a
+/// mostly-bad bulk write must not pay a full second decode pass. Falls back to
+/// the original error if every scanned record decodes on its own.
 fn invalid_records_error(
     schema: &ArrowSchemaRef,
     values: &[Value],
     batch_error: DeltaTableError,
 ) -> DeltaTableError {
-    let bad: Vec<(usize, DeltaTableError)> = values
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, value)| {
-            record_batch_from_message(schema.clone(), std::slice::from_ref(value))
-                .err()
-                .map(|e| (idx, e))
-        })
-        .collect();
+    let mut bad: Vec<(usize, DeltaTableError)> = Vec::new();
+    let mut scanned = 0usize;
+    for (idx, value) in values.iter().enumerate() {
+        scanned = idx + 1;
+        if let Err(e) = record_batch_from_message(schema.clone(), std::slice::from_ref(value)) {
+            bad.push((idx, e));
+            if bad.len() >= super::INVALID_PREVIEW_CAP {
+                break;
+            }
+        }
+    }
     if bad.is_empty() {
         return batch_error;
     }
     let preview = bad
         .iter()
-        .take(super::INVALID_PREVIEW_CAP)
         .map(|(idx, e)| format!("{idx}: {e}"))
         .collect::<Vec<_>>()
         .join("; ");
-    let more = match bad.len().saturating_sub(super::INVALID_PREVIEW_CAP) {
-        0 => String::new(),
-        k => format!(" (+{k} more)"),
+    let count = if scanned < values.len() {
+        format!("at least {}", bad.len())
+    } else {
+        bad.len().to_string()
     };
     DeltaTableError::InvalidData {
         message: format!(
-            "{} of {} records failed validation; offending records by input index: {preview}{more}",
-            bad.len(),
+            "{count} of {} records failed validation; offending records by input index: {preview}",
             values.len(),
         ),
     }
@@ -552,8 +555,9 @@ mod tests {
         let err = writer.write(records).await.unwrap_err();
         match &err {
             DeltaTableError::InvalidData { message } => {
-                assert!(message.contains("12 of 12 records"), "got: {message}");
-                assert!(message.contains("(+2 more)"), "got: {message}");
+                // The scan stops once the preview is full (10 of the 12), so the
+                // count is a lower bound rather than an exact total.
+                assert!(message.contains("at least 10 of 12 records"), "got: {message}");
             }
             other => panic!("expected InvalidData, got: {other:?}"),
         }

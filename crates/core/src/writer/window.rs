@@ -27,7 +27,7 @@ use object_store::ObjectStore;
 use parquet::file::properties::WriterProperties;
 
 use crate::datafile::writer::{DeltaWriter as DatasetSink, WriterConfig};
-use crate::errors::DeltaResult;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
 /// Everything needed to open a streaming sink for a given schema — exactly the
@@ -137,12 +137,42 @@ impl WriteWindow {
         self.factory.writer_properties = writer_properties;
     }
 
+    /// Schema widening rotates the whole window's sink, which only makes sense when
+    /// every file shares the (single) unpartitioned schema. Rejecting here — before
+    /// any window state is touched — covers every write entry point at once and
+    /// leaves buffered data intact.
+    fn ensure_can_widen(&self, widen_to: Option<&ArrowSchemaRef>) -> DeltaResult<()> {
+        if widen_to.is_some() && !self.factory.partition_columns.is_empty() {
+            return Err(DeltaTableError::Generic(
+                "Merging Schemas with partition columns present is currently unsupported"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The shared write prologue: adopt a widened schema (sealing the current sink —
+    /// its files predate the new column, so they read it back as null) and lazily
+    /// open the sink for the current schema.
+    async fn sink_for(
+        &mut self,
+        widen_to: Option<ArrowSchemaRef>,
+    ) -> DeltaResult<&mut DatasetSink> {
+        if let Some(merged) = widen_to {
+            self.seal().await?;
+            self.schema = merged;
+        }
+        if self.sink.is_none() {
+            self.sink = Some(self.factory.build(self.schema.clone()));
+        }
+        Ok(self.sink.as_mut().expect("sink was just created"))
+    }
+
     /// Stream `batch` into the open sink. It must conform to `schema()`, or to the
-    /// merged schema when `widen_to` is `Some` — in which case the current sink is
-    /// first sealed (its files predate the new column, so they read it back as null)
-    /// and the wider schema adopted.
+    /// merged schema when `widen_to` is `Some`.
     ///
-    /// All-or-nothing: any IO error [`abort`]s the window.
+    /// All-or-nothing: any IO error [`abort`]s the window (awaiting the upload
+    /// cleanup). The widen guard errors before any state changes.
     ///
     /// [`abort`]: WriteWindow::abort
     pub(crate) async fn write(
@@ -150,8 +180,9 @@ impl WriteWindow {
         batch: &RecordBatch,
         widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
+        self.ensure_can_widen(widen_to.as_ref())?;
         if let Err(e) = self.try_write(batch, widen_to).await {
-            self.abort();
+            self.abort_and_wait().await;
             return Err(e);
         }
         Ok(())
@@ -162,18 +193,7 @@ impl WriteWindow {
         batch: &RecordBatch,
         widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
-        if let Some(merged) = widen_to {
-            self.seal().await?;
-            self.schema = merged;
-        }
-        if self.sink.is_none() {
-            self.sink = Some(self.factory.build(self.schema.clone()));
-        }
-        self.sink
-            .as_mut()
-            .expect("sink was just created")
-            .write(batch)
-            .await?;
+        self.sink_for(widen_to).await?.write(batch).await?;
         self.count += 1;
         Ok(())
     }
@@ -187,11 +207,12 @@ impl WriteWindow {
         partition_values: &IndexMap<String, Scalar>,
         widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
+        self.ensure_can_widen(widen_to.as_ref())?;
         if let Err(e) = self
             .try_write_partition(batch, partition_values, widen_to)
             .await
         {
-            self.abort();
+            self.abort_and_wait().await;
             return Err(e);
         }
         Ok(())
@@ -203,16 +224,8 @@ impl WriteWindow {
         partition_values: &IndexMap<String, Scalar>,
         widen_to: Option<ArrowSchemaRef>,
     ) -> DeltaResult<()> {
-        if let Some(merged) = widen_to {
-            self.seal().await?;
-            self.schema = merged;
-        }
-        if self.sink.is_none() {
-            self.sink = Some(self.factory.build(self.schema.clone()));
-        }
-        self.sink
-            .as_mut()
-            .expect("sink was just created")
+        self.sink_for(widen_to)
+            .await?
             .write_partition(batch, partition_values)
             .await?;
         self.count += 1;
@@ -230,10 +243,7 @@ impl WriteWindow {
     /// `flush()`: seal the open sink and take every `Add`, emptying the window.
     /// On a seal error the window is aborted (nothing is left committable).
     pub(crate) async fn drain(&mut self) -> DeltaResult<Vec<Add>> {
-        if let Err(e) = self.seal().await {
-            self.abort();
-            return Err(e);
-        }
+        self.stage().await?;
         self.count = 0;
         Ok(std::mem::take(&mut self.sealed))
     }
@@ -243,7 +253,7 @@ impl WriteWindow {
     /// the staged `Add`s. On a seal error the window is aborted.
     pub(crate) async fn stage(&mut self) -> DeltaResult<&[Add]> {
         if let Err(e) = self.seal().await {
-            self.abort();
+            self.abort_and_wait().await;
             return Err(e);
         }
         Ok(&self.sealed)
@@ -263,14 +273,38 @@ impl WriteWindow {
     ///
     /// The open sink's in-progress multipart uploads are aborted in the background
     /// (their parts are invisible to vacuum); already-finalized files — size rolls
-    /// and sealed rotations — are left unreferenced for a later vacuum.
+    /// and sealed rotations — are left unreferenced for a later vacuum. The async
+    /// error paths use [`abort_and_wait`](Self::abort_and_wait) instead, which
+    /// awaits the cleanup; this sync form serves `reset()` and `Drop`.
     pub(crate) fn abort(&mut self) {
         if let Some(sink) = self.sink.take() {
             sink.abort_detached();
         }
+        self.discard_state();
+    }
+
+    /// [`abort`](Self::abort), but awaiting the upload cleanup — used on the async
+    /// error paths so the aborts can't be lost to a shutting-down runtime. Cleanup
+    /// failures are logged by the sink; the caller's original error wins.
+    async fn abort_and_wait(&mut self) {
+        if let Some(sink) = self.sink.take() {
+            let _ = sink.abort().await;
+        }
+        self.discard_state();
+    }
+
+    fn discard_state(&mut self) {
         self.sealed.clear();
         self.count = 0;
         self.schema = self.baseline.clone();
+    }
+}
+
+/// Dropping a window without flush/reset abandons the open sink; abort its
+/// uploads (best-effort, detached) instead of leaking multipart parts.
+impl Drop for WriteWindow {
+    fn drop(&mut self) {
+        self.abort();
     }
 }
 
