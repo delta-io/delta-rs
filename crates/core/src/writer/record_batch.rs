@@ -364,7 +364,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                     // divide-by-partition behavior); unpartitioned writes reject them,
                     // preserving the error that signals "use MergeSchema".
                     let allow_extras = !self.window.partition_columns().is_empty();
-                    (conform_to_schema(&values, &schema, false, allow_extras)?, None)
+                    (
+                        conform_to_schema(&values, &schema, false, allow_extras)?,
+                        None,
+                    )
                 }
             }
         } else {

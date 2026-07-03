@@ -120,7 +120,6 @@ impl DataFusionDataReader {
         let provider = table.table_provider().await?;
         Ok(Self::new(provider, session))
     }
-
 }
 
 /// Resolve logical projection column names to their indices in `schema`.

@@ -112,11 +112,7 @@ impl WriteWindow {
     /// sealed rotations plus the open sink. Monotonic within a flush window, so
     /// usable as a flush threshold.
     pub(crate) fn buffered_size(&self) -> usize {
-        let sealed: usize = self
-            .sealed
-            .iter()
-            .map(|add| add.size.max(0) as usize)
-            .sum();
+        let sealed: usize = self.sealed.iter().map(|add| add.size.max(0) as usize).sum();
         sealed + self.sink.as_ref().map_or(0, DatasetSink::buffered_size)
     }
 

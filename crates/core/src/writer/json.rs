@@ -549,15 +549,16 @@ mod tests {
         let mut writer = JsonWriter::for_table(&table).unwrap();
 
         // 12 bad records: the preview shows the first 10 and counts the rest.
-        let records: Vec<_> = (0..12)
-            .map(|i| serde_json::json!({"value": i}))
-            .collect();
+        let records: Vec<_> = (0..12).map(|i| serde_json::json!({"value": i})).collect();
         let err = writer.write(records).await.unwrap_err();
         match &err {
             DeltaTableError::InvalidData { message } => {
                 // The scan stops once the preview is full (10 of the 12), so the
                 // count is a lower bound rather than an exact total.
-                assert!(message.contains("at least 10 of 12 records"), "got: {message}");
+                assert!(
+                    message.contains("at least 10 of 12 records"),
+                    "got: {message}"
+                );
             }
             other => panic!("expected InvalidData, got: {other:?}"),
         }
