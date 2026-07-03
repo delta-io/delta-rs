@@ -41,6 +41,7 @@ Filter a specific suite:
 cargo bench -p delta-benchmarks --bench merge -- delete_only
 cargo bench -p delta-benchmarks --bench merge -- multiple_insert_only
 cargo bench -p delta-benchmarks --bench merge -- upsert_file_matched
+cargo bench -p delta-benchmarks --bench merge -- noop_heavy_upsert
 ```
 
 ## Profiling script
@@ -49,14 +50,18 @@ A simple CLI is available to run a single merge with configurable parameters (us
 
 Run (from repo root):
 ```bash
-cargo run --profile profiling -p delta-benchmarks -- merge --op upsert --matched 0.01 --not-matched 0.10
+cargo run --profile profiling -p delta-benchmarks -- merge upsert --matched 0.01 --not-matched 0.10
+cargo run --profile profiling -p delta-benchmarks -- merge noop-heavy-upsert --matched 1.0 --not-matched 0.05
 ```
 
 Options:
-- `--op <upsert|delete|insert>`: operation to benchmark
+- `<upsert|noop-heavy-upsert|delete|insert>`: operation to benchmark
 - `--matched <fraction>`: fraction of rows that match existing keys (default 0.01)
 - `--not-matched <fraction>`: fraction of rows that do not match (default 0.10)
 - `--case <name>`: run one of the predefined merge scenarios mirrored from the Delta Spark suite
+
+The `noop-heavy-upsert` operation profiles matched rows with a false update predicate
+and inserted rows.
 
 List cases with:
 ```bash
@@ -72,5 +77,5 @@ To start,
 ```bash
 cargo install samply --locked
 cargo build --profile profiling -p delta-benchmarks
-samply record ./target/profiling/delta-benchmarks upsert
+samply record ./target/profiling/delta-benchmarks merge upsert
 ```
