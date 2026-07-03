@@ -477,6 +477,55 @@ async fn test_merge_large_single_file_unique_source_does_not_report_duplicate_ma
 }
 
 #[tokio::test]
+async fn test_merge_noop_heavy_matched_update_with_inserts_does_not_rewrite_target_file()
+-> DeltaResult<()> {
+    let target_rows = 25_000;
+    let inserted_rows = 1_000;
+    let total_source_rows = target_rows + inserted_rows;
+    let table = single_file_id_value_table(target_rows).await;
+
+    let config = SessionConfig::new().with_target_partitions(4);
+    let ctx = SessionContext::new_with_config(config);
+    let source = ctx
+        .read_batch(id_value_batch(
+            (0..total_source_rows).collect::<Vec<_>>(),
+            vec![1_i64; total_source_rows as usize],
+        ))
+        .unwrap();
+
+    let (table, metrics) = table
+        .merge(source, col("target.id").eq(col("source.id")))
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .with_session_state(Arc::new(ctx.state()))
+        .when_matched_update(|update| {
+            update
+                .predicate(
+                    qualified_col("target", "value").not_eq(qualified_col("source", "value")),
+                )
+                .update("value", qualified_col("source", "value"))
+        })?
+        .when_not_matched_insert(|insert| {
+            insert
+                .set("id", qualified_col("source", "id"))
+                .set("value", qualified_col("source", "value"))
+        })?
+        .await?;
+
+    assert_eq!(metrics.num_source_rows, total_source_rows as usize);
+    assert_eq!(metrics.num_target_rows_updated, 0);
+    assert_eq!(metrics.num_target_rows_inserted, inserted_rows as usize);
+    assert_eq!(metrics.num_target_rows_deleted, 0);
+    assert_eq!(metrics.num_target_rows_copied, 0);
+    assert_eq!(metrics.num_output_rows, inserted_rows as usize);
+    assert_eq!(metrics.num_target_files_scanned, 1);
+    assert_eq!(metrics.num_target_files_removed, 0);
+
+    assert_id_value_table_complete(&table, total_source_rows, None, 0).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_merge_batch_boundary_update_does_not_drop_target_rows() -> DeltaResult<()> {
     let table = single_file_id_value_table(8_193).await;
 

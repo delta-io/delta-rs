@@ -823,6 +823,32 @@ const DUPLICATE_MATCH_MARKER_COLUMNS: &[&str] = &[
     TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
 ];
 
+fn build_merge_barrier_validation_plan(
+    input: LogicalPlan,
+    state: &SessionState,
+    ops: &[(
+        HashMap<Column, Expr>,
+        OperationType,
+        MatchParticipationClass,
+    )],
+    file_column: Arc<String>,
+    needs_duplicate_match_validation: bool,
+) -> DataFusionResult<LogicalPlan> {
+    let merge_barrier = LogicalPlan::Extension(Extension {
+        node: Arc::new(MergeBarrier {
+            input,
+            expr: col(file_column.as_str()),
+            file_column: Arc::clone(&file_column),
+        }),
+    });
+
+    if needs_duplicate_match_validation {
+        build_duplicate_match_validation_plan(merge_barrier, state, ops, file_column)
+    } else {
+        Ok(merge_barrier)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_url()))]
 async fn execute(
@@ -1477,28 +1503,20 @@ async fn execute(
             .build()?
     };
 
-    let new_columns = if !match_operations.is_empty() {
-        build_duplicate_match_validation_plan(new_columns, &state, &ops, Arc::clone(&file_column))?
-    } else {
-        new_columns
-    };
-
-    let distribute_expr = col(file_column.as_str());
-
-    let merge_barrier = LogicalPlan::Extension(Extension {
-        node: Arc::new(MergeBarrier {
-            input: new_columns.clone(),
-            expr: distribute_expr,
-            file_column: Arc::clone(&file_column),
-        }),
-    });
+    let merge_output = build_merge_barrier_validation_plan(
+        new_columns,
+        &state,
+        &ops,
+        Arc::clone(&file_column),
+        needs_duplicate_match_validation,
+    )?;
 
     // We should observe the metrics before we union the merge plan with the cdf_merge plan
     // so that we get the metrics only for the merge plan.
     let operation_count = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: OUTPUT_COUNT_ID.into(),
-            input: merge_barrier,
+            input: merge_output,
             enable_pushdown: false,
         }),
     });
@@ -1960,13 +1978,14 @@ mod tests {
         DataFusionMixins, DeltaScanNext, PATH_COLUMN, resolve_file_column_name,
     };
 
+    use super::barrier::MergeBarrier;
     use super::validation::MergeValidation;
     use super::{
         DELETE_COLUMN, MatchParticipationClass, MergeMetrics, OPERATION_COLUMN, OperationType,
         SOURCE_COLUMN, TARGET_COLUMN, TARGET_COPY_COLUMN, TARGET_DELETE_COLUMN,
         TARGET_INSERT_COLUMN, TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
         TARGET_ROW_ORDINAL_IN_FILE_COLUMN, TARGET_UPDATE_COLUMN,
-        build_duplicate_match_validation_plan,
+        build_duplicate_match_validation_plan, build_merge_barrier_validation_plan,
     };
 
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -2264,6 +2283,55 @@ mod tests {
         assert!(!field_names.contains(&TARGET_MATCH_CARDINALITY_CLASS_COLUMN));
     }
 
+    #[test]
+    fn test_noop_heavy_merge_applies_barrier_before_duplicate_validation() {
+        let input = duplicate_match_validation_input_plan();
+        let ops = vec![
+            (
+                HashMap::new(),
+                OperationType::Update,
+                MatchParticipationClass::MatchedAction,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Insert,
+                MatchParticipationClass::Ignore,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Copy,
+                MatchParticipationClass::MatchedNoop,
+            ),
+        ];
+        let state = SessionContext::new().state();
+
+        let plan = build_merge_barrier_validation_plan(
+            input,
+            &state,
+            &ops,
+            Arc::new(PATH_COLUMN.to_string()),
+            true,
+        )
+        .expect("merge barrier and duplicate validation plan builds");
+
+        let validation = find_merge_validation(&plan).expect("matched clauses require validation");
+        assert!(
+            contains_merge_barrier(&validation.input),
+            "expected MergeBarrier before duplicate validation; unchanged target files drop \
+             before validation buffers their rows: {}",
+            validation.input.display_indent()
+        );
+
+        let field_names = plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert!(!field_names.contains(&TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
+        assert!(!field_names.contains(&TARGET_MATCH_CARDINALITY_CLASS_COLUMN));
+    }
+
     #[tokio::test]
     async fn test_target_row_ordinal_scan_plan_has_no_window_or_sort() {
         let schema = get_arrow_schema(&None);
@@ -2450,6 +2518,16 @@ mod tests {
         }
 
         plan.inputs().into_iter().find_map(find_merge_validation)
+    }
+
+    fn contains_merge_barrier(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Extension(Extension { node }) = plan
+            && node.as_any().downcast_ref::<MergeBarrier>().is_some()
+        {
+            return true;
+        }
+
+        plan.inputs().into_iter().any(contains_merge_barrier)
     }
 
     fn count_unions(plan: &LogicalPlan) -> usize {
