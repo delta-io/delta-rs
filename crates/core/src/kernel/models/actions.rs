@@ -769,7 +769,7 @@ impl fmt::Display for TableFeatures {
 }
 
 impl TryFrom<&TableFeatures> for TableFeature {
-    type Error = strum::ParseError;
+    type Error = std::convert::Infallible;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
         TableFeature::try_from(value.as_ref())
