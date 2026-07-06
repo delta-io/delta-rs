@@ -423,13 +423,13 @@ async fn column_mapping_cdf_write_is_kernel_readable() -> TestResult {
     use datafusion::prelude::{col, lit};
     use delta_kernel::committer::FileSystemCommitter;
     use delta_kernel::engine::arrow_data::ArrowEngineData;
-    use delta_kernel::engine::default::DefaultEngineBuilder;
-    use delta_kernel::engine::default::executor::tokio::TokioMultiThreadExecutor;
     use delta_kernel::object_store::DynObjectStore;
     use delta_kernel::object_store::local::LocalFileSystem;
     use delta_kernel::schema::{DataType as KernelDataType, StructField, StructType};
     use delta_kernel::table_changes::TableChanges;
     use delta_kernel::transaction::create_table::create_table;
+    use delta_kernel_default_engine::DefaultEngineBuilder;
+    use delta_kernel_default_engine::executor::tokio::TokioMultiThreadExecutor;
 
     // 1. Create a name-mode column-mapped table with CDF enabled (via kernel, which assigns the
     //    physical names/ids; delta-rs can't create CM tables yet).
@@ -524,12 +524,12 @@ async fn create_kernel_cm_table(properties: &[(&str, &str)]) -> TestResult<(Temp
     use std::sync::Arc;
 
     use delta_kernel::committer::FileSystemCommitter;
-    use delta_kernel::engine::default::DefaultEngineBuilder;
-    use delta_kernel::engine::default::executor::tokio::TokioMultiThreadExecutor;
     use delta_kernel::object_store::DynObjectStore;
     use delta_kernel::object_store::local::LocalFileSystem;
     use delta_kernel::schema::{DataType as KernelDataType, StructField, StructType};
     use delta_kernel::transaction::create_table::create_table;
+    use delta_kernel_default_engine::DefaultEngineBuilder;
+    use delta_kernel_default_engine::executor::tokio::TokioMultiThreadExecutor;
 
     let tmp = tempfile::tempdir()?;
     let url = Url::from_directory_path(tmp.path()).unwrap();
