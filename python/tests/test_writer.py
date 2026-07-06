@@ -1136,6 +1136,92 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
     assert stats["nullCount"] == expected_nulls
 
 
+@pytest.mark.pyarrow
+def test_list_values_with_null_elements_and_empty_lists_read_with_default_stats(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    list_type = pa.list_(pa.field("element", pa.int32()))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("b", list_type)])
+    data = pa.table(
+        {
+            "id": pa.array(
+                ["with_element_null", "only_null_element", "empty", "true_null"],
+                type=pa.string(),
+            ),
+            "b": pa.array([[1, 2, None], [None], [], None], type=list_type),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    result_by_id = {row["id"]: row["b"] for row in dt.to_pyarrow_table().to_pylist()}
+    assert result_by_id == {
+        "with_element_null": [1, 2, None],
+        "only_null_element": [None],
+        "empty": [],
+        "true_null": None,
+    }
+
+    fragment_expressions = [
+        str(fragment.partition_expression)
+        for fragment in dt.to_pyarrow_dataset().get_fragments()
+    ]
+    assert all("is_null(b" not in expression for expression in fragment_expressions)
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    ("case_name", "expected"),
+    [
+        ("list", [[1, 2], [3, None]]),
+        ("large_list", [[1, 2], [3, None]]),
+        ("fixed_size_list", [[1, 2], [3, None]]),
+        ("map", [[("a", 1), ("b", None)], [("c", 2)]]),
+    ],
+)
+def test_container_null_count_stats_keep_parquet_values(
+    tmp_path: pathlib.Path,
+    case_name: str,
+    expected,
+):
+    import pyarrow as pa
+
+    if case_name == "list":
+        arrow_type = pa.list_(pa.field("element", pa.int32()))
+    elif case_name == "large_list":
+        arrow_type = pa.large_list(pa.field("element", pa.int32()))
+    elif case_name == "fixed_size_list":
+        arrow_type = pa.list_(pa.field("element", pa.int32()), 2)
+    elif case_name == "map":
+        arrow_type = pa.map_(pa.string(), pa.int32())
+    else:
+        raise AssertionError(f"unexpected case: {case_name}")
+
+    data = pa.table({"b": pa.array(expected, type=arrow_type)})
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+    stats = get_stats(dt)
+    assert "b" not in stats["nullCount"]
+
+    log_path = tmp_path / "_delta_log" / ("0" * 20 + ".json")
+    rewritten_lines = []
+    for line in log_path.read_text().splitlines():
+        action = json.loads(line)
+        if add := action.get("add"):
+            stats = json.loads(add["stats"])
+            stats.setdefault("nullCount", {})["b"] = stats["numRecords"]
+            add["stats"] = json.dumps(stats, separators=(",", ":"))
+        rewritten_lines.append(json.dumps(action, separators=(",", ":")))
+    log_path.write_text("\n".join(rewritten_lines) + "\n")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.to_pyarrow_table()["b"].to_pylist() == expected
+
+
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     def _normalize_path(t):  # who does not love Windows? ;)
         return t[0], t[1].replace("\\", "/") if t[1] else t[1]
