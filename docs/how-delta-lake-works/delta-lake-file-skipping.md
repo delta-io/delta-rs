@@ -72,6 +72,26 @@ pl.scan_delta("tmp/a_table").filter(pl.col("age") < 20).collect()
 
 Polars can use the Delta table metadata to skip the file that does not contain data relevant to the query.
 
+## File skipping with deltalake
+
+The same skipping is exposed directly on `DeltaTable`: file-listing and read
+methods accept a SQL `predicate` (or tuple filters) and prune files against the
+transaction log before any data is read.
+
+```python
+dt = DeltaTable("tmp/a_table")
+
+dt.file_uris(predicate="age < 20")  # only the file that may contain age < 20
+dt.to_pandas(predicate="age < 20", filters=[("age", "<", 20)])
+```
+
+On non-partition columns like `age` the pruning is conservative: a file is
+dropped only when its min/max statistics prove no row can match, so the file
+list is a complete superset of the matching files. Partition-column predicates
+prune exactly. See
+[Querying Delta Tables](../usage/querying-delta-tables.md#selecting-files-with-predicates)
+for details.
+
 ## How Delta Lake implements file skipping
 
 Here’s how engines execute queries on Delta tables:
