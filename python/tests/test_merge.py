@@ -3402,6 +3402,48 @@ def test_merge_streamed_exec_does_not_rescan_single_use_source(tmp_path: pathlib
 
 
 @pytest.mark.pyarrow
+def test_merge_when_matched_update_preserves_list_with_null_element(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    list_type = pa.list_(pa.field("element", pa.int32()))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("b", list_type)])
+    initial = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[1, 2, None]], type=list_type),
+        },
+        schema=schema,
+    )
+    write_deltalake(tmp_path, initial)
+
+    source = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[-9999, -9999, None]], type=list_type),
+        },
+        schema=schema,
+    )
+
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            source_alias="source",
+            target_alias="target",
+            predicate="source.id = target.id",
+        )
+        .when_matched_update(updates={"b": "source.b"})
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table()
+    row_b = result.filter(pa.compute.equal(result["id"], "row1"))["b"][0].as_py()
+    assert row_b == [-9999, -9999, None]
+
+
+@pytest.mark.pyarrow
 def test_merge_with_spill_config(tmp_path: pathlib.Path):
     """Verify merge accepts and uses spill configuration without error."""
     import pyarrow as pa

@@ -16,7 +16,10 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::arrow::{
+    self,
+    datatypes::{DataType as ArrowDataType, Schema as ArrowSchema},
+};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -2527,7 +2530,12 @@ fn filestats_to_expression_next<'py>(
     // NOTE: null_counts should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
+            let is_opaque_container_field = schema
+                .field_with_name(field.name())
+                .map(|field| is_opaque_container_arrow_type(field.data_type()))
+                .unwrap_or(false);
             if stats_columns.contains(field.name())
+                && !is_opaque_container_field
                 && let Scalar::Long(val) = value
             {
                 if *val == 0 {
@@ -2607,6 +2615,16 @@ fn filestats_to_expression_next<'py>(
             .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
             .transpose()
     }
+}
+
+fn is_opaque_container_arrow_type(data_type: &ArrowDataType) -> bool {
+    matches!(
+        data_type,
+        ArrowDataType::List(_)
+            | ArrowDataType::LargeList(_)
+            | ArrowDataType::FixedSizeList(_, _)
+            | ArrowDataType::Map(_, _)
+    )
 }
 
 #[pyfunction]
