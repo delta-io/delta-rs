@@ -183,8 +183,149 @@ impl TryFrom<&str> for DeltaTablePartition {
     }
 }
 
-#[allow(unused)] // TODO: remove once we use this in kernel log replay
-pub(crate) fn to_kernel_predicate(
+/// The value of a `(column, op, value)` filter literal: a single partition-value
+/// encoded string, or a set of them for `in` / `not in`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FilterValue<'a> {
+    /// A single encoded value, compared with one of `=`, `!=`, `<`, `<=`, `>`, `>=`.
+    Scalar(&'a str),
+    /// A set of encoded values, compared with `in` or `not in`.
+    Set(Vec<&'a str>),
+}
+
+/// A `(column, op, value)` comparison, mirroring the tuple filters accepted by
+/// the Python bindings.
+pub type FilterLiteral<'a> = (&'a str, &'a str, FilterValue<'a>);
+
+/// Translate a single filter literal into a kernel [`Predicate`].
+///
+/// The raw value is parsed against the schema type of `column`. A null scalar
+/// under `=` / `!=` becomes an IS [NOT] NULL check: in SQL NULL compares equal
+/// to nothing, itself included, but these filters have always allowed equality
+/// against the null partition value.
+pub fn literal_to_kernel_predicate(
+    literal: &FilterLiteral<'_>,
+    table_schema: &StructType,
+) -> DeltaResult<Predicate> {
+    let (column, op, value) = literal;
+    let op_matches_value = match value {
+        FilterValue::Scalar(_) => matches!(*op, "=" | "!=" | "<" | "<=" | ">" | ">="),
+        FilterValue::Set(_) => matches!(*op, "in" | "not in"),
+    };
+    if column.is_empty() || !op_matches_value {
+        return Err(invalid_filter_error(literal));
+    }
+    let Some(field) = table_schema.field(column) else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: format!("Field '{column}' is not a root table field."),
+        });
+    };
+    let Some(dt) = field.data_type().as_primitive_opt() else {
+        return Err(DeltaTableError::SchemaMismatch {
+            msg: format!("Field '{}' is not a primitive type", field.name()),
+        });
+    };
+
+    let col = Expression::column([field.name()]);
+    Ok(match (*op, value) {
+        ("=", FilterValue::Scalar(raw)) => {
+            let scalar = dt.parse_scalar(raw)?;
+            if scalar.is_null() {
+                col.is_null()
+            } else {
+                col.eq(scalar)
+            }
+        }
+        ("!=", FilterValue::Scalar(raw)) => {
+            let scalar = dt.parse_scalar(raw)?;
+            if scalar.is_null() {
+                col.is_not_null()
+            } else {
+                col.ne(scalar)
+            }
+        }
+        ("<", FilterValue::Scalar(raw)) => col.lt(dt.parse_scalar(raw)?),
+        ("<=", FilterValue::Scalar(raw)) => col.le(dt.parse_scalar(raw)?),
+        (">", FilterValue::Scalar(raw)) => col.gt(dt.parse_scalar(raw)?),
+        (">=", FilterValue::Scalar(raw)) => col.ge(dt.parse_scalar(raw)?),
+        (op @ ("in" | "not in"), FilterValue::Set(raws)) => {
+            let values = raws
+                .iter()
+                .map(|v| dt.parse_scalar(v))
+                .collect::<Result<Vec<_>, _>>()?;
+            let (term, junction): (Box<dyn Fn(Scalar) -> Predicate>, _) = if op == "in" {
+                (Box::new(|v| col.clone().eq(v)), JunctionPredicateOp::Or)
+            } else {
+                (Box::new(|v| col.clone().ne(v)), JunctionPredicateOp::And)
+            };
+            let predicates = values.into_iter().map(term).collect::<Vec<_>>();
+            Predicate::junction(junction, predicates)
+        }
+        _ => unreachable!("op/value shapes checked above"),
+    })
+}
+
+fn invalid_filter_error(literal: &FilterLiteral<'_>) -> DeltaTableError {
+    let (column, op, value) = literal;
+    let value = match value {
+        FilterValue::Scalar(v) => format!("{v:?}"),
+        FilterValue::Set(vs) => format!("{vs:?}"),
+    };
+    DeltaTableError::InvalidPartitionFilter {
+        partition_filter: format!("({column:?}, {op:?}, {value})"),
+    }
+}
+
+/// Translate a conjunction (AND) of filter literals into a kernel [`Predicate`].
+///
+/// Errors on an empty conjunction: an empty AND is vacuously true and would
+/// silently match every file.
+pub fn conjunction_to_kernel_predicate(
+    literals: &[FilterLiteral<'_>],
+    table_schema: &StructType,
+) -> DeltaResult<Predicate> {
+    if literals.is_empty() {
+        return Err(DeltaTableError::Generic(
+            "empty conjunction in filter; pass no filter to match all files".to_string(),
+        ));
+    }
+    let mut predicates = literals
+        .iter()
+        .map(|literal| literal_to_kernel_predicate(literal, table_schema))
+        .collect::<DeltaResult<Vec<_>>>()?;
+    Ok(match predicates.len() {
+        1 => predicates.pop().unwrap(),
+        _ => Predicate::junction(JunctionPredicateOp::And, predicates),
+    })
+}
+
+/// Translate filters in disjunctive normal form -- an OR across conjunctions
+/// (AND groups) of `(column, op, value)` literals -- into a kernel [`Predicate`].
+pub fn dnf_to_kernel_predicate(
+    dnf: &[Vec<FilterLiteral<'_>>],
+    table_schema: &StructType,
+) -> DeltaResult<Predicate> {
+    if dnf.is_empty() {
+        return Err(DeltaTableError::Generic(
+            "empty filter; pass no filter to match all files".to_string(),
+        ));
+    }
+    let mut groups = dnf
+        .iter()
+        .map(|conjunction| conjunction_to_kernel_predicate(conjunction, table_schema))
+        .collect::<DeltaResult<Vec<_>>>()?;
+    Ok(match groups.len() {
+        1 => groups.pop().unwrap(),
+        _ => Predicate::junction(JunctionPredicateOp::Or, groups),
+    })
+}
+
+/// Translate a conjunction of [`PartitionFilter`]s into a kernel [`Predicate`].
+///
+/// Unlike [`dnf_to_kernel_predicate`], an empty slice yields an empty AND
+/// junction, which is vacuously true: callers treat "no filters" as "match
+/// every file".
+pub fn to_kernel_predicate(
     filters: &[PartitionFilter],
     table_schema: &StructType,
 ) -> DeltaResult<Predicate> {
@@ -199,60 +340,23 @@ fn filter_to_kernel_predicate(
     filter: &PartitionFilter,
     table_schema: &StructType,
 ) -> DeltaResult<Predicate> {
-    let Some(field) = table_schema.field(&filter.key) else {
-        return Err(DeltaTableError::SchemaMismatch {
-            msg: format!("Field '{}' is not a root table field.", filter.key),
-        });
+    let (op, value) = match &filter.value {
+        PartitionValue::Equal(v) => ("=", FilterValue::Scalar(v)),
+        PartitionValue::NotEqual(v) => ("!=", FilterValue::Scalar(v)),
+        PartitionValue::GreaterThan(v) => (">", FilterValue::Scalar(v)),
+        PartitionValue::GreaterThanOrEqual(v) => (">=", FilterValue::Scalar(v)),
+        PartitionValue::LessThan(v) => ("<", FilterValue::Scalar(v)),
+        PartitionValue::LessThanOrEqual(v) => ("<=", FilterValue::Scalar(v)),
+        PartitionValue::In(vs) => (
+            "in",
+            FilterValue::Set(vs.iter().map(String::as_str).collect()),
+        ),
+        PartitionValue::NotIn(vs) => (
+            "not in",
+            FilterValue::Set(vs.iter().map(String::as_str).collect()),
+        ),
     };
-    let Some(dt) = field.data_type().as_primitive_opt() else {
-        return Err(DeltaTableError::SchemaMismatch {
-            msg: format!("Field '{}' is not a primitive type", field.name()),
-        });
-    };
-
-    let column = Expression::column([field.name()]);
-    Ok(match &filter.value {
-        // NOTE: In SQL NULL is not equal to anything, including itself. However when specifying partition filters
-        // we have allowed to equality against null. So here we have to handle null values explicitly by using
-        // is_null and is_not_null methods directly.
-        PartitionValue::Equal(raw) => {
-            let scalar = dt.parse_scalar(raw)?;
-            if scalar.is_null() {
-                column.is_null()
-            } else {
-                column.eq(scalar)
-            }
-        }
-        PartitionValue::NotEqual(raw) => {
-            let scalar = dt.parse_scalar(raw)?;
-            if scalar.is_null() {
-                column.is_not_null()
-            } else {
-                column.ne(scalar)
-            }
-        }
-        PartitionValue::LessThan(raw) => column.lt(dt.parse_scalar(raw)?),
-        PartitionValue::LessThanOrEqual(raw) => column.le(dt.parse_scalar(raw)?),
-        PartitionValue::GreaterThan(raw) => column.gt(dt.parse_scalar(raw)?),
-        PartitionValue::GreaterThanOrEqual(raw) => column.ge(dt.parse_scalar(raw)?),
-        op @ PartitionValue::In(raw_values) | op @ PartitionValue::NotIn(raw_values) => {
-            let values = raw_values
-                .iter()
-                .map(|v| dt.parse_scalar(v))
-                .collect::<Result<Vec<_>, _>>()?;
-            let (expr, operator): (Box<dyn Fn(Scalar) -> Predicate>, _) = match op {
-                PartitionValue::In(_) => {
-                    (Box::new(|v| column.clone().eq(v)), JunctionPredicateOp::Or)
-                }
-                PartitionValue::NotIn(_) => {
-                    (Box::new(|v| column.clone().ne(v)), JunctionPredicateOp::And)
-                }
-                _ => unreachable!(),
-            };
-            let predicates = values.into_iter().map(expr).collect::<Vec<_>>();
-            Predicate::junction(operator, predicates)
-        }
-    })
+    literal_to_kernel_predicate(&(filter.key.as_str(), op, value), table_schema)
 }
 
 #[cfg(test)]
@@ -585,6 +689,88 @@ mod tests {
             value: PartitionValue::LessThan("3.14".to_string()),
         };
         assert!(filter_to_kernel_predicate(&filter, &schema).is_ok());
+    }
+
+    fn dnf_test_schema() -> StructType {
+        StructType::try_new(vec![
+            StructField::new("year", DataType::Primitive(PrimitiveType::Integer), true),
+            StructField::new("month", DataType::Primitive(PrimitiveType::Integer), true),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn test_dnf_to_kernel_predicate_or_of_ands() {
+        let schema = dnf_test_schema();
+        let dnf = vec![
+            vec![
+                ("year", "=", FilterValue::Scalar("2020")),
+                ("month", "=", FilterValue::Scalar("2")),
+            ],
+            vec![("year", "=", FilterValue::Scalar("2021"))],
+        ];
+
+        let predicate = dnf_to_kernel_predicate(&dnf, &schema).unwrap();
+
+        let expected = Predicate::junction(
+            JunctionPredicateOp::Or,
+            vec![
+                Predicate::junction(
+                    JunctionPredicateOp::And,
+                    vec![
+                        Expression::column(["year"]).eq(Scalar::Integer(2020)),
+                        Expression::column(["month"]).eq(Scalar::Integer(2)),
+                    ],
+                ),
+                Expression::column(["year"]).eq(Scalar::Integer(2021)),
+            ],
+        );
+        assert_eq!(predicate, expected);
+    }
+
+    #[test]
+    fn test_dnf_to_kernel_predicate_single_conjunction_unwrapped() {
+        let schema = dnf_test_schema();
+        let literal = ("year", ">=", FilterValue::Scalar("2021"));
+
+        let predicate = dnf_to_kernel_predicate(&[vec![literal.clone()]], &schema).unwrap();
+
+        assert_eq!(
+            predicate,
+            literal_to_kernel_predicate(&literal, &schema).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_dnf_to_kernel_predicate_empty_errors() {
+        let schema = dnf_test_schema();
+        assert!(matches!(
+            dnf_to_kernel_predicate(&[], &schema).unwrap_err(),
+            DeltaTableError::Generic(_)
+        ));
+        assert!(matches!(
+            dnf_to_kernel_predicate(&[vec![]], &schema).unwrap_err(),
+            DeltaTableError::Generic(_)
+        ));
+    }
+
+    #[test]
+    fn test_literal_to_kernel_predicate_invalid_op() {
+        let schema = dnf_test_schema();
+        let result =
+            literal_to_kernel_predicate(&("year", "like", FilterValue::Scalar("2021")), &schema);
+        assert!(matches!(
+            result.unwrap_err(),
+            DeltaTableError::InvalidPartitionFilter { .. }
+        ));
+
+        // scalar ops reject set values and vice versa
+        let result =
+            literal_to_kernel_predicate(&("year", "=", FilterValue::Set(vec!["2021"])), &schema);
+        assert!(result.is_err());
+        let result =
+            literal_to_kernel_predicate(&("year", "in", FilterValue::Scalar("2021")), &schema);
+        assert!(result.is_err());
     }
 
     #[test]
