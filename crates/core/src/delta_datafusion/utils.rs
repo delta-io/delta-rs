@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::common::DFSchemaRef;
 use datafusion::common::tree_node::{Transformed, TreeNode as _};
 use datafusion::error::Result;
+use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::{BinaryExpr, Expr, ExprSchemable as _};
 use datafusion::logical_expr_common::operator::Operator;
@@ -173,6 +174,32 @@ pub(crate) fn coerce_predicate_literals(expr: Expr, schema: &DFSchema) -> Result
                         high,
                     },
                 )))
+            }
+            Expr::InList(in_list) => {
+                let expr_type = in_list.expr.get_type(schema)?;
+                let mut changed = false;
+
+                let list = in_list
+                    .list
+                    .iter()
+                    .map(|item| match item {
+                        Expr::Literal(value, _) if value.data_type() != expr_type => {
+                            changed = true;
+                            Ok(Expr::Literal(value.cast_to(&expr_type)?, None))
+                        }
+                        _ => Ok(item.clone()),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                if !changed {
+                    return Ok(Transformed::no(e));
+                }
+
+                Ok(Transformed::yes(Expr::InList(InList {
+                    expr: in_list.expr.clone(),
+                    list,
+                    negated: in_list.negated,
+                })))
             }
             _ => Ok(Transformed::no(e)),
         }
