@@ -1031,6 +1031,27 @@ def test_partitions_filtering_partitioned_table():
         partition in actual
 
 
+def test_partitions_filtering_with_primitive_values():
+    table_path = "../crates/test/tests/data/partition-type-primitives"
+    dt = DeltaTable(table_path)
+
+    def partition_set(filters):
+        return {frozenset(p.items()) for p in dt.partitions(filters)}
+
+    by_int = partition_set([("year", "=", 2020)])
+    assert by_int
+    assert by_int == partition_set([("year", "=", "2020")])
+    assert all(dict(p)["year"] == "2020" for p in by_int)
+
+    by_bool = partition_set([("is_active", "=", True)])
+    assert by_bool
+    assert by_bool == partition_set([("is_active", "=", "true")])
+
+    by_date = partition_set([("event_date", "=", date(2023, 1, 1))])
+    assert by_date
+    assert by_date == partition_set([("event_date", "=", "2023-01-01")])
+
+
 @pytest.mark.pyarrow
 def test_partitions_date_partitioned_table(tmp_path: Path):
     import pyarrow as pa

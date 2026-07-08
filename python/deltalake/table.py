@@ -353,7 +353,9 @@ class DeltaTable:
         """
 
         partitions: list[dict[str, str]] = []
-        for partition in self._table.get_active_partitions(partition_filters):
+        for partition in self._table.get_active_partitions(
+            self._stringify_partition_values(partition_filters)
+        ):
             if not partition:
                 continue
             partitions.append({k: v for (k, v) in partition})
