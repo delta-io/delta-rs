@@ -137,7 +137,7 @@ impl LogicalFileView {
     ///
     /// this tries to parse the file string and if that fails, it will return the string as is.
     // TODO assert consistent handling of the paths encoding when reading log data so this logic can be removed.
-    pub(crate) fn object_store_path(&self) -> Path {
+    pub fn object_store_path(&self) -> Path {
         let path = self.path();
         // Try to preserve percent encoding if possible
         match Path::parse(path.as_ref()) {
