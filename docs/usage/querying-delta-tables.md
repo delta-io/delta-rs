@@ -34,6 +34,47 @@ pyarrow.Table
 value: string
 ```
 
+## Selecting files with predicates
+
+The `partitions` filters shown above are one conjunction: every tuple in the
+list must hold (AND). To express OR, pass a list of such lists -- the filters
+are then evaluated in disjunctive normal form, an OR across the inner AND
+groups -- or pass a SQL predicate string instead:
+
+``` python
+>>> dt.to_pandas(
+...     partitions=[
+...         [("year", "=", "2020"), ("month", "=", "2")],
+...         [("year", "=", "2021"), ("month", "=", "12")],
+...     ],
+... )
+>>> dt.to_pandas(predicate="(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)")
+```
+
+Both forms are accepted everywhere files are selected: `to_pandas`,
+`to_pyarrow_table`, `to_pyarrow_dataset`, `file_uris`, and `partitions`.
+Predicates may reference any column, not just partition columns, and prune
+before any data is read:
+
+- **Partition columns** prune exactly: every returned file matches the
+  predicate, and only matching files are returned.
+- **Other columns** prune conservatively using the per-file min/max statistics
+  in the transaction log: files that provably contain no matching row are
+  dropped, every file that *may* contain one is kept, and files without
+  statistics for a referenced column are always kept. The result is a
+  complete superset of the matching files.
+
+Because file pruning selects whole files, `predicate=` on `to_pandas` and
+`to_pyarrow_table` does not filter rows. Pair it with an equivalent `filters=`
+expression when you need exact rows from a non-partition column:
+
+``` python
+>>> dt.to_pandas(predicate="value >= '5'", filters=[("value", ">=", "5")])
+```
+
+The full syntax for both forms is documented on
+[`DeltaTable.file_uris`](../api/delta_table/index.md).
+
 Converting to a PyArrow Dataset allows you to filter on columns other
 than partition columns and load the result as a stream of batches rather
 than a single table. Convert to a dataset using
@@ -91,10 +132,13 @@ VARCHAR
 ```
 
 Finally, you can always pass the list of file paths to an engine. For
-example, you can pass them to `dask.dataframe.read_parquet`:
+example, you can pass them to `dask.dataframe.read_parquet`. `file_uris`
+accepts the same predicates, so the file list can be pruned before it ever
+reaches the other engine:
 
 ``` python
 >>> import dask.dataframe as dd
+>>> df = dd.read_parquet(dt.file_uris(predicate="year = 2021 OR month = 2"))
 >>> df = dd.read_parquet(dt.file_uris())
 >>> df
 Dask DataFrame Structure:
