@@ -44,20 +44,20 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Writer Version | Requirement                                   | Status |
 |----------------|-----------------------------------------------|:------:|
-| Version 2      | Append Only Tables                            |   ✅    |
-| Version 2      | Column Invariants                             |   ✅    |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |   ✅    |
-| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |   ✅    |
-| Version 3      | CHECK constraints                             |   ✅    |
-| Version 4      | Change Data Feed                              |   ✅    |
-| Version 4      | Generated Columns                             |   ✅    |
-| Version 5      | Column Mapping                                |    -    |
-| Version 6      | Identity Columns                              |     -   |
-| Version 7      | Table Features                                |   ✅    |
+| Version 2      | Append Only Tables                            |   ✅   |
+| Version 2      | Column Invariants                             |   ✅   |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsJson`   |   ✅   |
+| Version 3      | Enforce `delta.checkpoint.writeStatsAsStruct` |   ✅   |
+| Version 3      | CHECK constraints                             |   ✅   |
+| Version 4      | Change Data Feed                              |   ✅   |
+| Version 4      | Generated Columns                             |   ✅   |
+| Version 5      | Column Mapping                                |   ✅   |
+| Version 6      | Identity Columns                              |   -    |
+| Version 7      | Table Features                                |   ✅   |
 
 | Reader Version | Requirement                         | Status |
 |----------------|-------------------------------------|--------|
-| Version 2      | Column Mapping                      | -      |
-| Version 3      | Table Features (requires reader V7) | ✅      |
+| Version 2      | Column Mapping                      | ✅     |
+| Version 3      | Table Features (requires reader V7) | ✅     |
 
 [protocol]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
