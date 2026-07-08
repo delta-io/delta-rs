@@ -377,31 +377,25 @@ class DeltaTable:
         Returns:
             list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
 
-        Predicates are expressed in disjunctive normal form (DNF), like `[("x", "=", "a"), ...]`.
-        DNF allows arbitrary boolean logical combinations of single partition predicates.
-        The innermost tuples each describe a single partition predicate. The list of inner
-        predicates is interpreted as a conjunction (AND), forming a more selective and
-        multiple partition predicates.
+        Filters are a conjunction (AND) of predicates, each expressed as a
+        `(key, op, value)` tuple comparing a partition column against a value.
 
-        Each tuple has format: `(key, op, value)` and compares the key with the value.
-
-        The supported op are: `=`, `!=`, `in`, and `not in`. If the op is `in` or `not in`,
-        the value must be a collection such as a list, a set or a tuple.
-        The supported type for value is `str`. Use empty string `''` for Null partition value.
+        The supported ops are `=`, `!=`, `<`, `<=`, `>`, `>=`, `in`, and `not in`.
+        For `in` and `not in`, the value must be a collection such as a list, a set
+        or a tuple. Values are compared as partition-encoded strings; use the empty
+        string `''` for a null partition value.
 
         Example:
             ```
             ("x", "=", "a")
             ("x", "!=", "a")
             ("y", "in", ["a", "b", "c"])
-            ("z", "not in", ["a","b"])
+            ("z", "not in", ["a", "b"])
             ```
         """
         return self._table.file_uris(
             self._stringify_partition_values(partition_filters)
         )
-
-    file_uris.__doc__ = ""
 
     def load_as_version(self, version: int | str | datetime) -> None:
         """
@@ -953,7 +947,7 @@ class DeltaTable:
         Build a PyArrow Dataset using data from the DeltaTable.
 
         Args:
-            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
             schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
@@ -1097,7 +1091,7 @@ class DeltaTable:
         Build a PyArrow Table using data from the DeltaTable.
 
         Args:
-            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
@@ -1127,7 +1121,7 @@ class DeltaTable:
         Build a pandas dataframe using data from the DeltaTable.
 
         Args:
-            partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
