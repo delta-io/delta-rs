@@ -78,6 +78,31 @@ FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = list[tuple[str, str, Union[str, list[str]]]]
 
 
+def _require_exclusive_filter(
+    filters_name: str, filters: FilterType | None, predicate: str | None
+) -> None:
+    if filters is not None and predicate is not None:
+        raise ValueError(
+            f"`{filters_name}` and `predicate` are mutually exclusive; pass only one"
+        )
+
+
+def _encode_filter_conjunction(
+    conjunction: FilterConjunctionType,
+) -> PartitionFilterType:
+    """Encode the values of one conjunction of filter tuples to their partition
+    string form."""
+    encoded: PartitionFilterType = []
+    for field, op, value in conjunction:
+        str_value: str | list[str]
+        if isinstance(value, (list, tuple)):
+            str_value = [encode_partition_value(val) for val in value]
+        else:
+            str_value = encode_partition_value(value)
+        encoded.append((field, op, str_value))
+    return encoded
+
+
 class _KeywordArgDefault:
     """Sentinel that preserves the rendered default while tracking omission."""
 
@@ -340,7 +365,9 @@ class DeltaTable:
 
     def partitions(
         self,
-        partition_filters: list[tuple[str, str, Any]] | None = None,
+        partition_filters: FilterType | None = None,
+        *,
+        predicate: str | None = None,
     ) -> list[dict[str, str]]:
         """
         Returns the partitions as a list of dicts.
@@ -349,12 +376,19 @@ class DeltaTable:
           `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
 
         Args:
-            partition_filters: The partition filters that will be used for getting the matched partitions, defaults to `None` (no filtering).
+            partition_filters: Tuple filters with the syntax described in `file_uris`,
+                defaults to `None` (no filtering). Mutually exclusive with `predicate`.
+            predicate: A SQL predicate string with the syntax described in `file_uris`.
+
+        When a filter references a non-partition column, the result contains the
+        partitions of every file that may hold matching rows, following the pruning
+        semantics described in `file_uris`.
         """
+        _require_exclusive_filter("partition_filters", partition_filters, predicate)
 
         partitions: list[dict[str, str]] = []
         for partition in self._table.get_active_partitions(
-            self._stringify_partition_values(partition_filters)
+            self._stringify_partition_values(partition_filters), predicate
         ):
             if not partition:
                 continue
@@ -362,7 +396,10 @@ class DeltaTable:
         return partitions
 
     def file_uris(
-        self, partition_filters: FilterConjunctionType | None = None
+        self,
+        partition_filters: FilterType | None = None,
+        *,
+        predicate: str | None = None,
     ) -> list[str]:
         """
         Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
@@ -370,33 +407,58 @@ class DeltaTable:
         Local files will be just plain absolute paths, without a scheme. (That is,
         no 'file://' prefix.)
 
-        Use the partition_filters parameter to retrieve a subset of files that match the
-        given filters.
+        Files can be selected with tuple filters (`partition_filters`) or with a SQL
+        predicate string (`predicate`); the two parameters are mutually exclusive.
 
-        Args:
-            partition_filters: the partition filters that will be used for getting the matched files
+        **Tuple filters.** Each filter is a `(column, op, value)` tuple. A flat list
+        is a conjunction (AND) of its filters. A list of such lists is interpreted in
+        disjunctive normal form: an OR across the inner AND groups.
 
-        Returns:
-            list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
+        ```python
+        dt.file_uris([("year", "=", "2021"), ("month", "=", "12")])
+        # year = 2021 AND month = 12
 
-        Filters are a conjunction (AND) of predicates, each expressed as a
-        `(key, op, value)` tuple comparing a partition column against a value.
+        dt.file_uris([
+            [("year", "=", "2021")],
+            [("year", "=", "2020"), ("month", ">=", "10")],
+        ])
+        # year = 2021 OR (year = 2020 AND month >= 10)
+        ```
 
         The supported ops are `=`, `!=`, `<`, `<=`, `>`, `>=`, `in`, and `not in`.
         For `in` and `not in`, the value must be a collection such as a list, a set
-        or a tuple. Values are compared as partition-encoded strings; use the empty
-        string `''` for a null partition value.
+        or a tuple. Values may be Python primitives (str, int, float, bool, date,
+        datetime); each is encoded to its partition string form and parsed against
+        the column's type. Comparisons follow that type: on a string column,
+        `("month", ">=", 12)` compares lexicographically, so `"4" >= "12"`. Use
+        the empty string `''` to match a null partition value, or a `predicate`
+        with `IS NULL`.
 
-        Example:
-            ```
-            ("x", "=", "a")
-            ("x", "!=", "a")
-            ("y", "in", ["a", "b", "c"])
-            ("z", "not in", ["a", "b"])
-            ```
+        **SQL predicates.** Any boolean SQL expression built from column comparisons
+        (`=`, `!=`, `<`, `<=`, `>`, `>=`), `IS [NOT] NULL`, `[NOT] IN`,
+        `[NOT] BETWEEN`, `NOT`, `AND` and `OR`:
+
+        ```python
+        dt.file_uris(predicate="year = 2021 AND (month = 1 OR day > 15)")
+        ```
+
+        **Pruning semantics.** Filters on partition columns select files exactly.
+        Filters on other columns are evaluated against per-file min/max statistics
+        and select a superset: every file that may contain a matching row is
+        returned, files that provably contain none are dropped, and files without
+        statistics for a referenced column are always retained. Filter the rows
+        after reading when you need exact results.
+
+        Args:
+            partition_filters: tuple filters as described above
+            predicate: a SQL predicate string as described above
+
+        Returns:
+            list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
         """
+        _require_exclusive_filter("partition_filters", partition_filters, predicate)
         return self._table.file_uris(
-            self._stringify_partition_values(partition_filters)
+            self._stringify_partition_values(partition_filters), predicate
         )
 
     def load_as_version(self, version: int | str | datetime) -> None:
@@ -939,17 +1001,19 @@ class DeltaTable:
 
     def to_pyarrow_dataset(
         self,
-        partitions: FilterConjunctionType | None = None,
+        partitions: FilterType | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         parquet_read_options: ParquetReadOptions | None = None,
         schema: pyarrow.Schema | None = None,
         as_large_types: bool = False,
+        predicate: str | None = None,
     ) -> "pyarrow.dataset.Dataset":
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
         Args:
-            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
+            partitions: Tuple filters selecting the files to include; see the `file_uris`
+                docstring for the syntax and pruning semantics. Mutually exclusive with `predicate`
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
             schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
@@ -958,6 +1022,8 @@ class DeltaTable:
             as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
                 This is for compatibility with systems like Polars that only support the large versions of Arrow types.
                 If `schema` is passed it takes precedence over this option.
+            predicate: A SQL predicate string selecting the files to include; see the
+                `file_uris` docstring for the syntax and pruning semantics
 
          More info on [pyarrow dataset ParquetReadOptions](https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html).
 
@@ -980,6 +1046,7 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
+        _require_exclusive_filter("partitions", partitions, predicate)
         try:
             from pyarrow.dataset import (
                 FileSystemDataset,
@@ -1058,7 +1125,7 @@ class DeltaTable:
                 self.schema().to_arrow(as_large_types=as_large_types)
             )
 
-        partitions = self._stringify_partition_values(partitions)
+        encoded_partitions = self._stringify_partition_values(partitions)
 
         fragments = [
             format.make_fragment(
@@ -1067,7 +1134,7 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                schema, partitions
+                schema, encoded_partitions, predicate
             )
         ]
 
@@ -1084,19 +1151,31 @@ class DeltaTable:
 
     def to_pyarrow_table(
         self,
-        partitions: list[tuple[str, str, Any]] | None = None,
+        partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
+        predicate: str | None = None,
     ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
+        `partitions` and `predicate` select which *files* are read, pruning at the
+        file level before any data is scanned; see the `file_uris` docstring for
+        their syntax and pruning semantics. `filters` filters *rows* while scanning.
+        A predicate on a non-partition column selects a superset of files, so pair
+        it with an equivalent `filters` expression when you need exact rows:
+
+        ```python
+        dt.to_pyarrow_table(predicate="value >= 100", filters=[("value", ">=", 100)])
+        ```
+
         Args:
-            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
+            partitions: Tuple filters selecting the files to read; mutually exclusive with `predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
+            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
+            predicate: A SQL predicate string selecting the files to read
         """
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
@@ -1108,31 +1187,45 @@ class DeltaTable:
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
-            partitions=partitions, filesystem=filesystem
+            partitions=partitions, filesystem=filesystem, predicate=predicate
         ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
         self,
-        partitions: list[tuple[str, str, Any]] | None = None,
+        partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
+        predicate: str | None = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
+        `partitions` and `predicate` select which *files* are read, pruning at the
+        file level before any data is scanned; see the `file_uris` docstring for
+        their syntax and pruning semantics. `filters` filters *rows* while scanning.
+        A predicate on a non-partition column selects a superset of files, so pair
+        it with an equivalent `filters` expression when you need exact rows:
+
+        ```python
+        dt.to_pandas(predicate="value >= 100", filters=[("value", ">=", 100)])
+        ```
+
         Args:
-            partitions: A list of partition filters; see the `file_uris` docstring for filter syntax
+            partitions: Tuple filters selecting the files to read; mutually exclusive with `predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass ``partitions``
+            filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
+            types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
+            predicate: A SQL predicate string selecting the files to read
         """
         return self.to_pyarrow_table(
             partitions=partitions,
             columns=columns,
             filesystem=filesystem,
             filters=filters,
+            predicate=predicate,
         ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:
@@ -1162,19 +1255,28 @@ class DeltaTable:
         self._table.cleanup_metadata()
 
     def _stringify_partition_values(
-        self, partition_filters: FilterConjunctionType | None
-    ) -> PartitionFilterType | None:
-        if partition_filters is None:
-            return partition_filters
-        out = []
-        for field, op, value in partition_filters:
-            str_value: str | list[str]
-            if isinstance(value, (list, tuple)):
-                str_value = [encode_partition_value(val) for val in value]
-            else:
-                str_value = encode_partition_value(value)
-            out.append((field, op, str_value))
-        return out
+        self, partition_filters: FilterType | None
+    ) -> list[PartitionFilterType] | None:
+        """Normalize tuple filters to disjunctive normal form -- a list of
+        conjunctions -- and encode every value to its partition string form."""
+        if not partition_filters:
+            return None
+        conjunctions: FilterDNFType
+        if all(isinstance(conjunction, list) for conjunction in partition_filters):
+            conjunctions = cast(FilterDNFType, partition_filters)
+        elif all(isinstance(literal, tuple) for literal in partition_filters):
+            conjunctions = [cast(FilterConjunctionType, partition_filters)]
+        else:
+            raise ValueError(
+                "filters must be a list of (column, op, value) tuples (a conjunction), "
+                "or a list of such lists (an OR across conjunctions), not a mix of both"
+            )
+        for conjunction in conjunctions:
+            if not conjunction:
+                raise ValueError(
+                    "empty conjunction in filters; pass no filter to match all files"
+                )
+        return [_encode_filter_conjunction(conjunction) for conjunction in conjunctions]
 
     def get_add_actions(self, flatten: bool = False) -> Table:
         """Return an Arrow table describing every file currently in the table.
@@ -2299,7 +2401,9 @@ class TableOptimizer:
             min_commit_interval = int(min_commit_interval.total_seconds())
 
         metrics = self.table._table.compact_optimize(
-            self.table._stringify_partition_values(partition_filters),
+            _encode_filter_conjunction(partition_filters)
+            if partition_filters
+            else None,
             target_size,
             max_concurrent_tasks,
             max_spill_size,
@@ -2382,7 +2486,9 @@ class TableOptimizer:
 
         metrics = self.table._table.z_order_optimize(
             list(columns),
-            self.table._stringify_partition_values(partition_filters),
+            _encode_filter_conjunction(partition_filters)
+            if partition_filters
+            else None,
             target_size,
             max_concurrent_tasks,
             max_spill_size,

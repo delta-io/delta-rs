@@ -108,8 +108,16 @@ class RawDeltaTable:
     def table_config(self) -> tuple[bool, int, bool]: ...
     def load_version(self, version: int) -> None: ...
     def load_with_datetime(self, ds: str) -> None: ...
-    def files(self, partition_filters: PartitionFilterType | None) -> list[str]: ...
-    def file_uris(self, partition_filters: PartitionFilterType | None) -> list[str]: ...
+    def files(
+        self,
+        partition_filters: PartitionFilterDNFType | None = None,
+        predicate: str | None = None,
+    ) -> list[str]: ...
+    def file_uris(
+        self,
+        partition_filters: PartitionFilterDNFType | None = None,
+        predicate: str | None = None,
+    ) -> list[str]: ...
     def generate(self) -> None: ...
     def vacuum(
         self,
@@ -210,7 +218,8 @@ class RawDeltaTable:
     def dataset_partitions(
         self,
         schema: ArrowSchemaExportable,
-        partition_filters: FilterConjunctionType | None,
+        partition_filters: PartitionFilterDNFType | None = None,
+        predicate: str | None = None,
     ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
     def compact_logs(self, starting_version: int, ending_version: int) -> None: ...
@@ -255,7 +264,9 @@ class RawDeltaTable:
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
-        self, partitions_filters: FilterType | None = None
+        self,
+        partitions_filters: PartitionFilterDNFType | None = None,
+        predicate: str | None = None,
     ) -> Any: ...
     def create_write_transaction(
         self,
@@ -1077,6 +1088,7 @@ FilterConjunctionType = list[FilterLiteralType]
 FilterDNFType = list[FilterConjunctionType]
 FilterType = FilterConjunctionType | FilterDNFType
 PartitionFilterType = list[tuple[str, str, str | list[str]]]
+PartitionFilterDNFType = list[PartitionFilterType]
 
 class Transaction:
     app_id: str
