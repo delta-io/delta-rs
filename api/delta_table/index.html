@@ -438,6 +438,8 @@
       
         
       
+        
+      
     
     
     
@@ -514,6 +516,26 @@
   
   <span class="md-ellipsis">
     Delta Lake for big and small data
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../feature-table/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Delta Lake Feature table
   </span>
   
 
@@ -1503,6 +1525,8 @@
       
         
       
+        
+      
     
     
     
@@ -1646,6 +1670,26 @@
   
   <span class="md-ellipsis">
     LakeFS
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../integrations/object-storage/opendal/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    OpenDAL Storage Backends
   </span>
   
 
@@ -3091,33 +3135,19 @@ they are rewritten without the records.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A metrics dict. The <code>num_deleted_rows</code> key is omitted when this library</p>
-            </div>
-          </td>
-        </tr>
-        <tr>
-          <td>
-                <code>dict[str, <span title="typing.Any">Any</span>]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>cannot determine the deleted row count without scanning data</p>
-            </div>
-          </td>
-        </tr>
-        <tr>
-          <td>
-                <code>dict[str, <span title="typing.Any">Any</span>]</code>
-          </td>
-          <td>
-            <div class="doc-md-description">
-              <p>files.</p>
+              <p>A metrics dict. The <code>num_deleted_rows</code> key is omitted when this library cannot determine the deleted row count without scanning data files.</p>
             </div>
           </td>
         </tr>
     </tbody>
   </table>
 
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp/my-table&quot;</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">delete</span><span class="p">(</span><span class="s2">&quot;num &gt; 2&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+</details>
   </div>
 
 </div>
@@ -3156,9 +3186,11 @@ they are rewritten without the records.</p>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A reader with two columns:
-- filepath (str): fully-qualified file URI.
-- selection_vector (list[bool]): row keep mask where True means keep and False means deleted.</p>
+              <p>A reader with two columns:</p>
+<ul>
+<li><code>filepath (str)</code>: fully-qualified file URI.</li>
+<li><code>selection_vector (list[bool])</code>: row keep mask where True means keep and False means deleted.</li>
+</ul>
             </div>
           </td>
         </tr>
@@ -4334,7 +4366,7 @@ Results in
 
   <div class="doc doc-contents ">
   
-      <p>Restores table to a given version or datetime.</p>
+      <p>Restores table to a given version or datetime. See also <a href="#deltalake.DeltaTable.restore--deltalake.DeltaTable.load_as_version"><code>load_as_version</code></a>.</p>
 
 
 
@@ -4446,6 +4478,13 @@ Results in
     </tbody>
   </table>
 
+<details class="example" open>
+  <summary>Example</summary>
+  <p>Restore the table to version <code>1</code>.
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">table_path</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">dt</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</span></code></pre></div></p>
+</details>
   </div>
 
 </div>
@@ -4694,7 +4733,7 @@ If <code>schema</code> is passed it takes precedence over this option.</p>
         </tr>
     </tbody>
   </table>
-      <p>More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html</p>
+      <p>More info on <a href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html">pyarrow dataset ParquetReadOptions</a>.</p>
 
 <details class="example" open>
   <summary>Example</summary>

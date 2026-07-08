@@ -8,28 +8,28 @@
       
       
       
-        <link rel="canonical" href="https://github.com/delta-io/delta-rs/usage/installation/">
+        <link rel="canonical" href="https://github.com/delta-io/delta-rs/integrations/object-storage/opendal/">
       
       
-        <link rel="prev" href="../../latest/">
+        <link rel="prev" href="../lakefs/">
       
       
-        <link rel="next" href="../overview/">
+        <link rel="next" href="../special_configuration/">
       
       
-      <link rel="icon" href="../../delta-rust-no-whitespace.svg">
+      <link rel="icon" href="../../../delta-rust-no-whitespace.svg">
       <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.4.5">
     
     
       
-        <title>Installation - Delta Lake Documentation</title>
+        <title>OpenDAL Storage Backends - Delta Lake Documentation</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.6a10b989.min.css">
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.6a10b989.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.356b1318.min.css">
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.356b1318.min.css">
       
       
 
@@ -48,11 +48,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_markdown_exec_ansi.css">
+      <link rel="stylesheet" href="../../../assets/_markdown_exec_ansi.css">
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -81,7 +81,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#installation" class="md-skip">
+        <a href="#opendal-storage-backends" class="md-skip">
           Skip to content
         </a>
       
@@ -97,9 +97,9 @@
 
 <header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-header__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     <label class="md-header__button md-icon" for="__drawer">
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Installation
+              OpenDAL Storage Backends
             
           </span>
         </div>
@@ -226,7 +226,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../.." class="md-tabs__link">
+        <a href="../../.." class="md-tabs__link">
           
   
     
@@ -242,13 +242,11 @@
         
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../../usage/installation/" class="md-tabs__link">
           
   
     
@@ -268,7 +266,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../api/delta_writer/" class="md-tabs__link">
+        <a href="../../../api/delta_writer/" class="md-tabs__link">
           
   
     
@@ -284,17 +282,21 @@
         
   
   
+    
+  
   
     
     
       
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../integrations/object-storage/adls/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../adls/" class="md-tabs__link">
           
   
     
@@ -317,7 +319,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
+        <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-tabs__link">
           
   
     
@@ -337,7 +339,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
+        <a href="../../../upgrade-guides/guide-1.0.0/" class="md-tabs__link">
           
   
     
@@ -357,7 +359,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../about/contributing/" class="md-tabs__link">
+        <a href="../../../about/contributing/" class="md-tabs__link">
           
   
     
@@ -398,9 +400,9 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
+    <a href="../../.." title="Delta Lake Documentation" class="md-nav__button md-logo" aria-label="Delta Lake Documentation" data-md-component="logo">
       
-  <img src="../../delta-rust-no-whitespace.svg" alt="logo">
+  <img src="../../../delta-rust-no-whitespace.svg" alt="logo">
 
     </a>
     Delta Lake Documentation
@@ -459,7 +461,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../.." class="md-nav__link ">
+            <a href="../../.." class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -491,7 +493,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../why-use-delta-lake/" class="md-nav__link">
+      <a href="../../../why-use-delta-lake/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -511,7 +513,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../delta-lake-big-data-small-data/" class="md-nav__link">
+      <a href="../../../delta-lake-big-data-small-data/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -531,7 +533,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../feature-table/" class="md-nav__link">
+      <a href="../../../feature-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -551,7 +553,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../latest/" class="md-nav__link">
+      <a href="../../../latest/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -576,8 +578,6 @@
       
   
   
-    
-  
   
     
     
@@ -621,12 +621,14 @@
       
       
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
       
         
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
         
           
           <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
@@ -640,7 +642,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             Usage
@@ -651,29 +653,9 @@
                 
   
   
-    
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  <span class="md-ellipsis">
-    Installation
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../../usage/installation/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -682,47 +664,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#install-delta-lake-for-python" class="md-nav__link">
-    Install Delta Lake for Python
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#install-delta-lake-for-rust" class="md-nav__link">
-    Install Delta Lake for Rust
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#run-delta-lake-and-pandas-in-a-jupyter-notebook" class="md-nav__link">
-    Run Delta Lake and pandas in a Jupyter Notebook
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -734,7 +675,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../overview/" class="md-nav__link">
+      <a href="../../../usage/overview/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -754,7 +695,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../create-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/create-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -774,7 +715,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../loading-table/" class="md-nav__link">
+      <a href="../../../usage/loading-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -794,7 +735,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../appending-overwriting-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/appending-overwriting-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -814,7 +755,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../constraints/" class="md-nav__link">
+      <a href="../../../usage/constraints/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -834,7 +775,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../read-cdf/" class="md-nav__link">
+      <a href="../../../usage/read-cdf/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -854,7 +795,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../examining-table/" class="md-nav__link">
+      <a href="../../../usage/examining-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -874,7 +815,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../querying-delta-tables/" class="md-nav__link">
+      <a href="../../../usage/querying-delta-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -894,7 +835,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../merging-tables/" class="md-nav__link">
+      <a href="../../../usage/merging-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -914,7 +855,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../managing-tables/" class="md-nav__link">
+      <a href="../../../usage/managing-tables/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -934,7 +875,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../working-with-partitions/" class="md-nav__link">
+      <a href="../../../usage/working-with-partitions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -978,7 +919,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../writing/" class="md-nav__link ">
+            <a href="../../../usage/writing/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1010,7 +951,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
+      <a href="../../../usage/writing/writing-to-s3-with-locking-provider/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1038,7 +979,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../deleting-rows-from-delta-lake-table/" class="md-nav__link">
+      <a href="../../../usage/deleting-rows-from-delta-lake-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1058,7 +999,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delta-lake-best-practices/" class="md-nav__link">
+      <a href="../../../usage/delta-lake-best-practices/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1122,7 +1063,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/small-file-compaction-with-optimize/" class="md-nav__link">
+      <a href="../../../usage/optimize/small-file-compaction-with-optimize/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1142,7 +1083,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../optimize/delta-lake-z-order/" class="md-nav__link">
+      <a href="../../../usage/optimize/delta-lake-z-order/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1234,7 +1175,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_writer/" class="md-nav__link">
+      <a href="../../../api/delta_writer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1284,7 +1225,7 @@
           
           
           <div class="md-nav__link md-nav__container">
-            <a href="../../api/delta_table/" class="md-nav__link ">
+            <a href="../../../api/delta_table/" class="md-nav__link ">
               
   
   <span class="md-ellipsis">
@@ -1316,7 +1257,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/metadata/" class="md-nav__link">
+      <a href="../../../api/delta_table/metadata/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1336,7 +1277,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_merger/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_merger/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1356,7 +1297,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_optimizer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1376,7 +1317,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/delta_table/delta_table_alterer/" class="md-nav__link">
+      <a href="../../../api/delta_table/delta_table_alterer/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1404,7 +1345,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/schema/" class="md-nav__link">
+      <a href="../../../api/schema/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1424,7 +1365,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/storage/" class="md-nav__link">
+      <a href="../../../api/storage/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1444,7 +1385,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/query/" class="md-nav__link">
+      <a href="../../../api/query/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1464,7 +1405,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/transaction/" class="md-nav__link">
+      <a href="../../../api/transaction/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1484,7 +1425,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../api/exceptions/" class="md-nav__link">
+      <a href="../../../api/exceptions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1509,6 +1450,8 @@
       
   
   
+    
+  
   
     
     
@@ -1536,14 +1479,12 @@
       
       
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
           <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
@@ -1557,7 +1498,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             Integrations
@@ -1568,6 +1509,8 @@
                 
   
   
+    
+  
   
     
     
@@ -1592,14 +1535,12 @@
     
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
         
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_1" checked>
         
           
           <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
@@ -1613,7 +1554,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4_1">
             <span class="md-nav__icon md-icon"></span>
             Object Storage
@@ -1626,7 +1567,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/adls/" class="md-nav__link">
+      <a href="../adls/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1646,7 +1587,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/gcs/" class="md-nav__link">
+      <a href="../gcs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1666,7 +1607,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/hdfs/" class="md-nav__link">
+      <a href="../hdfs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1686,7 +1627,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/s3/" class="md-nav__link">
+      <a href="../s3/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1706,7 +1647,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/s3-like/" class="md-nav__link">
+      <a href="../s3-like/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1726,7 +1667,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/lakefs/" class="md-nav__link">
+      <a href="../lakefs/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1744,9 +1685,29 @@
                 
   
   
+    
   
-    <li class="md-nav__item">
-      <a href="../../integrations/object-storage/opendal/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    OpenDAL Storage Backends
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   <span class="md-ellipsis">
@@ -1755,6 +1716,68 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#url-schemes" class="md-nav__link">
+    URL schemes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#passing-service-configuration" class="md-nav__link">
+    Passing service configuration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-an-s3-compatible-service" class="md-nav__link">
+    Example: an S3-compatible service
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-local-filesystem" class="md-nav__link">
+    Example: local filesystem
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-huggingface-hub-datasets-and-models" class="md-nav__link">
+    Example: HuggingFace Hub — datasets and models
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-huggingface-hub-buckets" class="md-nav__link">
+    Example: HuggingFace Hub — buckets
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1766,7 +1789,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/object-storage/special_configuration/" class="md-nav__link">
+      <a href="../special_configuration/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1794,7 +1817,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-arrow/" class="md-nav__link">
+      <a href="../../delta-lake-arrow/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1814,7 +1837,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-daft/" class="md-nav__link">
+      <a href="../../delta-lake-daft/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1834,7 +1857,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-dagster/" class="md-nav__link">
+      <a href="../../delta-lake-dagster/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1854,7 +1877,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-dask/" class="md-nav__link">
+      <a href="../../delta-lake-dask/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1874,7 +1897,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-datafusion/" class="md-nav__link">
+      <a href="../../delta-lake-datafusion/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1894,7 +1917,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-pandas/" class="md-nav__link">
+      <a href="../../delta-lake-pandas/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1914,7 +1937,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../integrations/delta-lake-polars/" class="md-nav__link">
+      <a href="../../delta-lake-polars/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -1990,7 +2013,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/architecture-of-delta-table/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2010,7 +2033,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-acid-transactions/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2030,7 +2053,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
+      <a href="../../../how-delta-lake-works/delta-lake-file-skipping/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2102,7 +2125,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
+      <a href="../../../upgrade-guides/guide-1.0.0/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2176,7 +2199,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../about/contributing/" class="md-nav__link">
+      <a href="../../../about/contributing/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2196,7 +2219,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../about/history/" class="md-nav__link">
+      <a href="../../../about/history/" class="md-nav__link">
         
   
   <span class="md-ellipsis">
@@ -2244,22 +2267,43 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#install-delta-lake-for-python" class="md-nav__link">
-    Install Delta Lake for Python
+  <a href="#url-schemes" class="md-nav__link">
+    URL schemes
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#install-delta-lake-for-rust" class="md-nav__link">
-    Install Delta Lake for Rust
+  <a href="#passing-service-configuration" class="md-nav__link">
+    Passing service configuration
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#run-delta-lake-and-pandas-in-a-jupyter-notebook" class="md-nav__link">
-    Run Delta Lake and pandas in a Jupyter Notebook
+  <a href="#example-an-s3-compatible-service" class="md-nav__link">
+    Example: an S3-compatible service
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-local-filesystem" class="md-nav__link">
+    Example: local filesystem
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-huggingface-hub-datasets-and-models" class="md-nav__link">
+    Example: HuggingFace Hub — datasets and models
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-huggingface-hub-buckets" class="md-nav__link">
+    Example: HuggingFace Hub — buckets
   </a>
   
 </li>
@@ -2282,39 +2326,111 @@
   
 
 
-<h1 id="installation">Installation</h1>
-<p>The <code>deltalake</code> project can be installed via pip for Python or Cargo for Rust.</p>
-<h2 id="install-delta-lake-for-python">Install Delta Lake for Python</h2>
-<p>With pip:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>deltalake
+<h1 id="opendal-storage-backends">OpenDAL Storage Backends</h1>
+<p><code>delta-rs</code> can reach any storage service supported by
+<a href="https://opendal.apache.org/">Apache OpenDAL</a> through a single generic backend.
+This complements the native backends (S3, ADLS, GCS, HDFS, LakeFS): when a
+service has no dedicated native integration — or you simply want to use the
+OpenDAL implementation — you can address it through an OpenDAL scheme without
+any service-specific code in delta-rs.</p>
+<p>The Python wheel ships with these OpenDAL services enabled: <code>fs</code>, <code>memory</code>,
+<code>s3</code>, <code>gcs</code>, <code>azblob</code>, <code>azdls</code>, <code>oss</code>, <code>obs</code>, <code>cos</code>, <code>tos</code>, <code>b2</code>, <code>swift</code>,
+<code>webhdfs</code>, <code>webdav</code>, <code>ftp</code>, <code>sftp</code>, and <code>hf</code> (HuggingFace Hub).</p>
+<h2 id="url-schemes">URL schemes</h2>
+<p>Every enabled service is reachable under an unambiguous <code>opendal+&lt;service&gt;://</code>
+scheme, for example <code>opendal+s3://</code>. When the service's natural scheme does
+<strong>not</strong> collide with a native delta backend, it is <em>also</em> registered under that
+bare scheme, so <code>hf://</code>, <code>fs://</code>, <code>gcs://</code>, <code>oss://</code>, … work directly.</p>
+<p>Services whose natural scheme is owned by a native backend (<code>s3</code>, <code>memory</code>) are
+reachable <strong>only</strong> via the <code>opendal+</code> form (<code>opendal+s3://</code>,
+<code>opendal+memory://</code>), so enabling them never shadows the native <code>s3://</code> backend.</p>
+<h2 id="passing-service-configuration">Passing service configuration</h2>
+<p>All OpenDAL configuration is passed through <code>storage_options</code> using the
+<code>opendal.&lt;key&gt;</code> convention. Each <code>opendal.&lt;key&gt; = &lt;value&gt;</code> entry is forwarded to
+the OpenDAL operator as <code>&lt;key&gt; = &lt;value&gt;</code>, with the <code>opendal.</code> prefix stripped.
+This keeps delta's own reserved option keys (retries, timeouts, …) separate from
+the service config and lets you reach any documented OpenDAL service key without
+a per-service allow-list. See the
+<a href="https://opendal.apache.org/docs/rust/opendal/services/index.html">OpenDAL service docs</a>
+for the keys each service accepts.</p>
+<p>How the URL maps onto the operator for the simple (bucket-rooted) services:</p>
+<ul>
+<li>the URL <strong>host</strong> becomes the <code>bucket</code> (unless you set <code>opendal.bucket</code>
+  explicitly),</li>
+<li>the URL <strong>path</strong> becomes the table prefix within that bucket,</li>
+<li>the operator is scoped at the bucket root.</li>
+</ul>
+<h2 id="example-an-s3-compatible-service">Example: an S3-compatible service</h2>
+<p>Any S3-compatible object store (here, a self-hosted MinIO) via the OpenDAL S3
+service. The bucket comes from the URL host, the table path from the URL path.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="s2">&quot;opendal.endpoint&quot;</span><span class="p">:</span> <span class="s2">&quot;http://localhost:9000&quot;</span><span class="p">,</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="s2">&quot;opendal.region&quot;</span><span class="p">:</span> <span class="s2">&quot;us-east-1&quot;</span><span class="p">,</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="s2">&quot;opendal.access_key_id&quot;</span><span class="p">:</span> <span class="s2">&quot;minioadmin&quot;</span><span class="p">,</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    <span class="s2">&quot;opendal.secret_access_key&quot;</span><span class="p">:</span> <span class="s2">&quot;minioadmin&quot;</span><span class="p">,</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="p">}</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="n">df</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="s2">&quot;opendal+s3://my-bucket/my_table&quot;</span><span class="p">,</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="p">)</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;opendal+s3://my-bucket/my_table&quot;</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </span></code></pre></div>
-<p>With Conda:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>conda<span class="w"> </span>install<span class="w"> </span>-c<span class="w"> </span>conda-forge<span class="w"> </span>deltalake
+<h2 id="example-local-filesystem">Example: local filesystem</h2>
+<p>The <code>fs</code> service has no native counterpart, so it is available under its bare
+<code>fs://</code> scheme (delta's core owns <code>file://</code>, not <code>fs://</code>). <code>opendal.root</code> scopes
+the operator at a directory; the URL path is the table prefix within it.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;opendal.root&quot;</span><span class="p">:</span> <span class="s2">&quot;/tmp/delta-data&quot;</span><span class="p">}</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;fs://localhost/my_table&quot;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="install-delta-lake-for-rust">Install Delta Lake for Rust</h2>
-<p>With Cargo:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span>add<span class="w"> </span>deltalake
+<h2 id="example-huggingface-hub-datasets-and-models">Example: HuggingFace Hub — datasets and models</h2>
+<p>Dataset and model repositories are addressed as
+<code>hf://&lt;repo_type&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;table_path&gt;</code>. An optional revision
+(branch, tag, or commit SHA) can be embedded in the URL as
+<code>hf://&lt;repo_type&gt;/&lt;owner&gt;/&lt;repo&gt;@&lt;revision&gt;/&lt;table_path&gt;</code>.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;opendal.token&quot;</span><span class="p">:</span> <span class="s2">&quot;hf_...&quot;</span><span class="p">,</span>  <span class="c1"># a HuggingFace access token</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="p">}</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Write to the default branch</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="s2">&quot;hf://datasets/my-org/my-dataset/my_table&quot;</span><span class="p">,</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="p">)</span>
+</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
+</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Read from a specific revision</span>
+</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span>
+</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>    <span class="s2">&quot;hf://datasets/my-org/my-dataset@v1.0/my_table&quot;</span><span class="p">,</span>
+</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="p">)</span>
 </span></code></pre></div>
-<h2 id="run-delta-lake-and-pandas-in-a-jupyter-notebook">Run Delta Lake and pandas in a Jupyter Notebook</h2>
-<p>You can easily run Delta Lake and pandas in a Jupyter notebook.</p>
-<p>Create an environment file with the dependencies as follows:</p>
-<div class="language-yaml highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deltalake-minimal</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">channels</span><span class="p">:</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">conda-forge</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">defaults</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">dependencies</span><span class="p">:</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">python=3.11</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ipykernel</span>
-</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pandas</span>
-</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">polars</span>
-</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">jupyterlab</span>
-</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">deltalake</span>
+<h2 id="example-huggingface-hub-buckets">Example: HuggingFace Hub — buckets</h2>
+<p>HuggingFace <a href="https://huggingface.co/docs/huggingface_hub/en/guides/buckets">Buckets</a>
+are S3-like object stores (no git history) addressed as
+<code>hf://buckets/&lt;owner&gt;/&lt;bucket&gt;/&lt;table_path&gt;</code>. Buckets do not support
+revisions.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;opendal.token&quot;</span><span class="p">:</span> <span class="s2">&quot;hf_...&quot;</span><span class="p">,</span>  <span class="c1"># a HuggingFace access token</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="p">}</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="n">write_deltalake</span><span class="p">(</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="s2">&quot;hf://buckets/my-org/my-bucket/my_table&quot;</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">df</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>    <span class="s2">&quot;hf://buckets/my-org/my-bucket/my_table&quot;</span><span class="p">,</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>    <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">,</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="p">)</span>
 </span></code></pre></div>
-<p>Create a virtual environment with the dependencies:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>conda<span class="w"> </span>env<span class="w"> </span>create<span class="w"> </span>-f<span class="w"> </span>deltalake-minimal.yml
-</span></code></pre></div>
-<p>Open the Jupyter notebook and run commands as follows:</p>
-<p><img alt="" src="../jupyter-example.png" /></p>
 
 
 
@@ -2338,7 +2454,7 @@
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../latest/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Latest changes">
+          <a href="../lakefs/" class="md-footer__link md-footer__link--prev" aria-label="Previous: LakeFS">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
@@ -2348,20 +2464,20 @@
                 Previous
               </span>
               <div class="md-ellipsis">
-                Latest changes
+                LakeFS
               </div>
             </div>
           </a>
         
         
           
-          <a href="../overview/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
+          <a href="../special_configuration/" class="md-footer__link md-footer__link--next" aria-label="Next: Advanced object storage configuration">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Overview
+                Advanced object storage configuration
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -2402,10 +2518,10 @@
     </div>
     
     
-    <script id="__config" type="application/json">{"base": "../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.tracking", "navigation.instant", "navigation.expand", "navigation.tabs", "navigation.indexes", "navigation.tabs.sticky", "navigation.footer", "content.tabs.link", "content.code.annotation", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.f886a092.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.aecac24b.min.js"></script>
+      <script src="../../../assets/javascripts/bundle.aecac24b.min.js"></script>
       
     
   </body>
