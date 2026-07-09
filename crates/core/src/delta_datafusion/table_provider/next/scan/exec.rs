@@ -29,14 +29,13 @@ use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSe
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
-};
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
+use super::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use super::plan::KernelScanPlan;
 use crate::delta_datafusion::file_id::file_id_field;
 use crate::kernel::ARROW_HANDLER;
@@ -425,7 +424,7 @@ impl ExecutionPlan for DeltaScanExec {
             ));
         }
 
-        let adapter_factory = DefaultPhysicalExprAdapterFactory {};
+        let adapter_factory = DeltaPhysicalExprAdapterFactory;
         let adapted_filters = adapter_factory
             .create(
                 Arc::clone(&self.scan_plan.contract.result_schema),
