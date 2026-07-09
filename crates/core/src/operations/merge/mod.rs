@@ -87,8 +87,8 @@ use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
-    resolve_snapshot,
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, MetadataExt, StructTypeExt,
+    new_metadata, resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
@@ -1105,11 +1105,14 @@ async fn execute(
         new_schema = Some(schema.clone());
         let schema_struct: StructType = schema.try_into_kernel()?;
         if &schema_struct != snapshot.schema().as_ref() {
-            let action = Action::Metadata(new_metadata(
-                &schema_struct,
-                current_metadata.partition_columns(),
-                snapshot.metadata().configuration(),
-            )?);
+            let action = Action::Metadata(
+                new_metadata(
+                    &schema_struct,
+                    current_metadata.partition_columns(),
+                    snapshot.metadata().configuration(),
+                )?
+                .with_format_options(snapshot.metadata().format_options()?)?,
+            );
             schema_action = Some(action);
         }
     }
