@@ -17,8 +17,13 @@ repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
+# CDC (content-defined chunking) needs the format.options read fix in the kernel's
+# MetadataVisitor, rebased onto buoyant-data's 0.28 release (buoyant/dev ab665890); pin
+# that fork revision until the fix lands in a buoyant-data release, then switch back to
+# the release below.
+delta_kernel = { package = "buoyant_kernel", git = "https://github.com/kszucs/delta-kernel-rs", rev = "a12995f4d87cb693eefbeb683b4a98725f51b62f", features = [
 #delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", rev = "ab66589067127b81c87690370e9b2c6e5129bcdf", features = [
-delta_kernel = { package = "buoyant_kernel", version = "0.28.1,<0.28.100", features = [
+#delta_kernel = { package = "buoyant_kernel", version = "0.28.1,<0.28.100", features = [
     "arrow-59",
     "internal-api",
 ] }
