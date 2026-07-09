@@ -485,13 +485,17 @@ pub(crate) async fn write_exec_plan(
     operation_id: Option<Uuid>,
     target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
+    writer_properties: Option<WriterProperties>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = session
-        .config_options()
-        .execution
-        .parquet
-        .into_writer_properties_builder()?
-        .build();
+    let writer_properties = match writer_properties {
+        Some(props) => props,
+        None => session
+            .config_options()
+            .execution
+            .parquet
+            .into_writer_properties_builder()?
+            .build(),
+    };
     let stats_config = WriterStatsConfig::from_config(table_config);
     let object_store = log_store.object_store(operation_id);
     let sink_config = WriteSinkConfig {

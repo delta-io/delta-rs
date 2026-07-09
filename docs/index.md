@@ -48,7 +48,7 @@ With `deltalake` you can manage data stored on a local file system or in the clo
     df = DeltaTable("tmp/some-table", version=0)
     ```
 
-1. Confirm the reversion by printing the contents of the table using the Pandas[to_markdown()](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.to_markdown.html) function:
+1. Confirm the reversion by printing the contents of the table using the Pandas [to_markdown()](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.to_markdown.html) function:
 
     ```python
     print(df.to_pandas().to_markdown())
