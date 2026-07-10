@@ -165,6 +165,57 @@ pub struct WriteBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
+/// Key in `Metadata.format.options` that enables Parquet content-defined chunking.
+const PARQUET_CDC_ENABLED: &str = "contentDefinedChunking.enabled";
+/// Key in `Metadata.format.options` for the minimum CDC chunk size in bytes.
+const PARQUET_CDC_MIN_CHUNK_SIZE: &str = "contentDefinedChunking.minChunkSize";
+/// Key in `Metadata.format.options` for the maximum CDC chunk size in bytes.
+const PARQUET_CDC_MAX_CHUNK_SIZE: &str = "contentDefinedChunking.maxChunkSize";
+/// Key in `Metadata.format.options` for the Gear hash normalization level.
+const PARQUET_CDC_NORM_LEVEL: &str = "contentDefinedChunking.normLevel";
+
+/// Build [`WriterProperties`] from a table's `Metadata.format.options`, or `None` when
+/// content-defined chunking is not enabled.
+///
+/// For existing tables the stored format options are read from the snapshot; for new tables
+/// the write-time `format_options` map is consulted instead.
+fn writer_properties_from_format_options(
+    snapshot_format_options: &HashMap<String, String>,
+    format_options: &HashMap<String, String>,
+) -> Option<WriterProperties> {
+    let get = |key: &str| -> Option<&str> {
+        snapshot_format_options
+            .get(key)
+            .or_else(|| format_options.get(key))
+            .map(|s| s.as_str())
+    };
+
+    if !get(PARQUET_CDC_ENABLED)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let cdc = parquet::file::properties::CdcOptions {
+        min_chunk_size: get(PARQUET_CDC_MIN_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE),
+        max_chunk_size: get(PARQUET_CDC_MAX_CHUNK_SIZE)
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE),
+        norm_level: get(PARQUET_CDC_NORM_LEVEL)
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(parquet::file::properties::DEFAULT_CDC_NORM_LEVEL),
+    };
+
+    Some(
+        WriterProperties::builder()
+            .set_content_defined_chunking(Some(cdc))
+            .build(),
+    )
+}
+
 #[derive(Default, Debug, Serialize, Deserialize)]
 /// Metrics for the Write Operation
 pub struct WriteMetrics {
@@ -526,17 +577,9 @@ impl std::future::IntoFuture for WriteBuilder {
                     let snapshot_format_options = this
                         .snapshot
                         .as_ref()
-                        .and_then(|s| s.snapshot().metadata().format_options().ok())
+                        .and_then(|s| s.metadata().format_options().ok())
                         .unwrap_or_default();
-                    crate::table::config::parquet_cdc_options(
-                        &snapshot_format_options,
-                        &this.format_options,
-                    )
-                    .map(|cdc| {
-                        WriterProperties::builder()
-                            .set_content_defined_chunking(Some(cdc))
-                            .build()
-                    })
+                    writer_properties_from_format_options(&snapshot_format_options, &this.format_options)
                 });
 
                 let prepared_write = plan::prepare_write(plan::WritePreparationInput {
@@ -682,6 +725,30 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::TableProperty;
+
+    #[test]
+    fn writer_properties_from_format_options_disabled_by_default() {
+        assert!(writer_properties_from_format_options(&HashMap::new(), &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn writer_properties_from_format_options_uses_snapshot_over_write_time() {
+        let snapshot = HashMap::from([
+            (PARQUET_CDC_ENABLED.to_string(), "true".to_string()),
+            (PARQUET_CDC_MIN_CHUNK_SIZE.to_string(), "2048".to_string()),
+        ]);
+        // Write-time value is ignored when the snapshot already sets the key.
+        let write_time =
+            HashMap::from([(PARQUET_CDC_MIN_CHUNK_SIZE.to_string(), "1024".to_string())]);
+
+        let props = writer_properties_from_format_options(&snapshot, &write_time).unwrap();
+        let cdc = props.content_defined_chunking().unwrap();
+        assert_eq!(cdc.min_chunk_size, 2048);
+        assert_eq!(
+            cdc.max_chunk_size,
+            parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE
+        );
+    }
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
