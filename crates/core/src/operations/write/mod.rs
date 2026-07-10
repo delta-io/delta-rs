@@ -3968,4 +3968,86 @@ mod tests {
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
     }
+
+    /// `format_options` with CDC enabled must genuinely reach the real parquet writer -- not just
+    /// get parsed and discarded. Writing enough pseudo-random payload data with a small
+    /// max_chunk_size should split a single column into many unevenly sized data pages
+    /// (content-defined boundaries), unlike fixed-size page chunking.
+    #[tokio::test]
+    async fn test_content_defined_chunking_produces_uneven_data_pages() {
+        use arrow_array::{RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use object_store::ObjectStoreExt;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use std::sync::Arc;
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "payload",
+            DataType::Utf8,
+            false,
+        )]));
+
+        // Deterministic pseudo-random payload per row (a repeated filler template would produce
+        // artificially uniform pages regardless of CDC).
+        let mut state: u64 = 0x1234_5678_9abc_def0;
+        let payloads: Vec<String> = (0..2000)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                format!(
+                    "{state:016x}{:016x}",
+                    state.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                )
+            })
+            .collect();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(payloads))]).unwrap();
+
+        let writer_properties = WriterProperties::builder()
+            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .set_content_defined_chunking(Some(CdcOptions {
+                min_chunk_size: 256,
+                max_chunk_size: 1024,
+                norm_level: DEFAULT_CDC_NORM_LEVEL,
+            }))
+            .build();
+
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_writer_properties(writer_properties)
+            .await
+            .unwrap();
+
+        let files: Vec<_> = table.snapshot().unwrap().log_data().iter().collect();
+        assert_eq!(files.len(), 1, "expected exactly one data file");
+        let path = object_store::path::Path::from(files[0].path().as_ref());
+        let bytes = table
+            .object_store()
+            .get(&path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        let row_group = reader.get_row_group(0).unwrap();
+        let mut page_reader = row_group.get_column_page_reader(0).unwrap();
+        let mut page_sizes = Vec::new();
+        while let Some(page) = page_reader.get_next_page().unwrap() {
+            page_sizes.push(page.buffer().len());
+        }
+
+        assert!(
+            page_sizes.len() >= 10,
+            "expected content-defined chunking to split this column into at least 10 pages, got {}",
+            page_sizes.len()
+        );
+        assert!(
+            page_sizes.iter().min() != page_sizes.iter().max(),
+            "content-defined chunking should produce unevenly sized pages, got uniform sizes: {page_sizes:?}"
+        );
+    }
 }
