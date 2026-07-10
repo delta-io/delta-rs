@@ -40,7 +40,10 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{
+    CdcOptions, DEFAULT_CDC_MAX_CHUNK_SIZE, DEFAULT_CDC_MIN_CHUNK_SIZE, DEFAULT_CDC_NORM_LEVEL,
+    WriterProperties,
+};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
@@ -165,15 +168,6 @@ pub struct WriteBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-/// Key in `Metadata.format.options` that enables Parquet content-defined chunking.
-const PARQUET_CDC_ENABLED: &str = "contentDefinedChunking.enabled";
-/// Key in `Metadata.format.options` for the minimum CDC chunk size in bytes.
-const PARQUET_CDC_MIN_CHUNK_SIZE: &str = "contentDefinedChunking.minChunkSize";
-/// Key in `Metadata.format.options` for the maximum CDC chunk size in bytes.
-const PARQUET_CDC_MAX_CHUNK_SIZE: &str = "contentDefinedChunking.maxChunkSize";
-/// Key in `Metadata.format.options` for the Gear hash normalization level.
-const PARQUET_CDC_NORM_LEVEL: &str = "contentDefinedChunking.normLevel";
-
 /// Build [`WriterProperties`] from a table's `Metadata.format.options`, or `None` when
 /// content-defined chunking is not enabled.
 ///
@@ -190,23 +184,23 @@ fn writer_properties_from_format_options(
             .map(|s| s.as_str())
     };
 
-    if !get(PARQUET_CDC_ENABLED)
+    if !get("contentDefinedChunking.enabled")
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
         return None;
     }
 
-    let cdc = parquet::file::properties::CdcOptions {
-        min_chunk_size: get(PARQUET_CDC_MIN_CHUNK_SIZE)
+    let cdc = CdcOptions {
+        min_chunk_size: get("contentDefinedChunking.minChunkSize")
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MIN_CHUNK_SIZE),
-        max_chunk_size: get(PARQUET_CDC_MAX_CHUNK_SIZE)
+            .unwrap_or(DEFAULT_CDC_MIN_CHUNK_SIZE),
+        max_chunk_size: get("contentDefinedChunking.maxChunkSize")
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE),
-        norm_level: get(PARQUET_CDC_NORM_LEVEL)
+            .unwrap_or(DEFAULT_CDC_MAX_CHUNK_SIZE),
+        norm_level: get("contentDefinedChunking.normLevel")
             .and_then(|v| v.parse::<i32>().ok())
-            .unwrap_or(parquet::file::properties::DEFAULT_CDC_NORM_LEVEL),
+            .unwrap_or(DEFAULT_CDC_NORM_LEVEL),
     };
 
     Some(
@@ -734,20 +728,25 @@ mod tests {
     #[test]
     fn writer_properties_from_format_options_uses_snapshot_over_write_time() {
         let snapshot = HashMap::from([
-            (PARQUET_CDC_ENABLED.to_string(), "true".to_string()),
-            (PARQUET_CDC_MIN_CHUNK_SIZE.to_string(), "2048".to_string()),
+            (
+                "contentDefinedChunking.enabled".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "contentDefinedChunking.minChunkSize".to_string(),
+                "2048".to_string(),
+            ),
         ]);
         // Write-time value is ignored when the snapshot already sets the key.
-        let write_time =
-            HashMap::from([(PARQUET_CDC_MIN_CHUNK_SIZE.to_string(), "1024".to_string())]);
+        let write_time = HashMap::from([(
+            "contentDefinedChunking.minChunkSize".to_string(),
+            "1024".to_string(),
+        )]);
 
         let props = writer_properties_from_format_options(&snapshot, &write_time).unwrap();
         let cdc = props.content_defined_chunking().unwrap();
         assert_eq!(cdc.min_chunk_size, 2048);
-        assert_eq!(
-            cdc.max_chunk_size,
-            parquet::file::properties::DEFAULT_CDC_MAX_CHUNK_SIZE
-        );
+        assert_eq!(cdc.max_chunk_size, DEFAULT_CDC_MAX_CHUNK_SIZE);
     }
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
