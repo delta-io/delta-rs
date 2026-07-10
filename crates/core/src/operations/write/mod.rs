@@ -3987,20 +3987,9 @@ mod tests {
             false,
         )]));
 
-        // Deterministic pseudo-random payload per row (a repeated filler template would produce
-        // artificially uniform pages regardless of CDC).
-        let mut state: u64 = 0x1234_5678_9abc_def0;
-        let payloads: Vec<String> = (0..2000)
-            .map(|_| {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                format!(
-                    "{state:016x}{:016x}",
-                    state.wrapping_mul(0x9E37_79B9_7F4A_7C15)
-                )
-            })
-            .collect();
+        // A repeated filler template would produce artificially uniform pages regardless of CDC;
+        // a plain ascending range gives each row distinct, non-repeating bytes instead.
+        let payloads: Vec<String> = (0..2000).map(|i| i.to_string()).collect();
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(payloads))]).unwrap();
 
