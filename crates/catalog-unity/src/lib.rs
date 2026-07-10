@@ -1353,6 +1353,14 @@ mod tests {
             "Credential provider should be resolved from custom credential"
         );
 
+        assert!(
+            matches!(
+                credential_provider.as_ref(),
+                Some(crate::credential::CredentialProvider::TokenCredential(_, _))
+            ),
+            "Expected TokenCredential variant, got BearerToken"
+        );
+
         if let Some(crate::credential::CredentialProvider::TokenCredential(_, token_credential)) =
             credential_provider
         {
@@ -1364,8 +1372,6 @@ mod tests {
                 token.token, "test_credential_token",
                 "Fetched token should match the test credential token"
             );
-        } else {
-            panic!("Expected TokenCredential variant, got BearerToken");
         }
     }
 }
