@@ -531,6 +531,67 @@ def test_add_features(existing_sample_table: DeltaTable):
     )  # type: ignore
 
 
+def _non_null_table() -> Table:
+    return Table(
+        {
+            "id": Array(["1", "2"], DataType.string()),
+            "value": Array([10, 20], DataType.int64()),
+        },
+        schema=Schema(
+            fields=[
+                Field("id", type=DataType.string(), nullable=False),
+                Field("value", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+
+def test_drop_column_not_null(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is False
+
+    dt.alter.drop_column_not_null("id")
+
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is True
+    # Other columns are left untouched.
+    assert fields_by_name["value"].nullable is True
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "CHANGE COLUMN"
+
+
+def test_drop_column_not_null_roundtrip_metadata(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.alter.drop_column_not_null("id", commit_properties=commit_properties)
+
+    assert dt.history(1)[0]["userName"] == "John Doe"
+
+
+def test_drop_column_not_null_unknown_column(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError):
+        dt.alter.drop_column_not_null("does_not_exist")
+
+
+def test_drop_column_not_null_already_nullable(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError):
+        dt.alter.drop_column_not_null("value")
+
+
 def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
