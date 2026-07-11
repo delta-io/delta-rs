@@ -17,12 +17,14 @@ repository = "https://github.com/delta-io/delta.rs"
 
 [workspace.dependencies]
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
-#delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
-delta_kernel = { package = "buoyant_kernel", version = "0.25.0,<0.25.100", features = [
+delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
+#delta_kernel = { package = "buoyant_kernel", version = "0.25.0,<0.25.100", features = [
     "arrow-58",
     "internal-api",
 ] }
-delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.25.0,<0.25.100", features = ["arrow-58", "rustls"], default-features = false }
+#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  path = "../delta-kernel-rs/default-engine", features = ["arrow-58", "rustls"], default-features = false }
+delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = ["arrow-58", "rustls"], default-features = false }
+#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.25.0,<0.25.100", features = ["arrow-58", "rustls"], default-features = false }
 
 
 # arrow
