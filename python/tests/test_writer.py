@@ -3273,7 +3273,11 @@ def test_write_timestamp_ns_normalize(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
-def test_write_timestamp_ntz_ns_normalize(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("ns_enabled", [False, True])
+def test_write_timestamp_ntz_ns_normalize(tmp_path: pathlib.Path, ns_enabled: bool):
+    if ns_enabled and not _NANOSECOND_TIMESTAMPS:
+        pytest.skip("nanosecond timestamps not enabled in build")
+
     import pyarrow as pa
 
     ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456)
@@ -3292,12 +3296,19 @@ def test_write_timestamp_ntz_ns_normalize(tmp_path: pathlib.Path):
         schema=schema,
     )
 
-    write_deltalake(tmp_path, table)
+    if ns_enabled:
+        enable_nanosecond_timestamps()
+    try:
+        write_deltalake(tmp_path, table)
 
-    dt = DeltaTable(tmp_path)
-    result = dt.to_pyarrow_table()
+        dt = DeltaTable(tmp_path)
+        result = dt.to_pyarrow_table()
+
+    finally:
+        _disable_nanosecond_timestamps()
+
     assert result.num_rows == 1
-    expected_resolution = "ns" if _NANOSECOND_TIMESTAMPS else "us"
+    expected_resolution = "ns" if ns_enabled else "us"
     assert result.schema.field("ts_ntz").type == pa.timestamp(expected_resolution)
 
 

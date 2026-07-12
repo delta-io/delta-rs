@@ -3520,7 +3520,8 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
         enable_nanosecond_timestamps()
         try:
             with pytest.raises(
-                DeltaError, match="does not have the required 'timestampNanos' and 'timestampNtz' features"
+                DeltaError,
+                match="does not have the required 'timestampNanos' and 'timestampNtz' features",
             ):
                 do_merge()
         finally:

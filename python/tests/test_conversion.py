@@ -3,13 +3,8 @@ import pathlib
 import pytest
 from arro3.core import DataType, Field, Schema
 
-from deltalake import DeltaTable, _nanosecond_timestamps_enabled, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.writer._conversion import _convert_arro3_schema_to_delta
-
-if _nanosecond_timestamps_enabled():
-    _ns_converted_unit = "ns"
-else:
-    _ns_converted_unit = "us"
 
 
 @pytest.mark.parametrize(
@@ -60,13 +55,11 @@ else:
             Schema(
                 fields=[Field("foo", DataType.timestamp("ns", tz="Europe/Amsterdam"))]
             ),
-            Schema(
-                fields=[Field("foo", DataType.timestamp(_ns_converted_unit, tz="UTC"))]
-            ),
+            Schema(fields=[Field("foo", DataType.timestamp("us", tz="UTC"))]),
         ),
         (
             Schema(fields=[Field("foo", DataType.timestamp("ns"))]),
-            Schema(fields=[Field("foo", DataType.timestamp(_ns_converted_unit))]),
+            Schema(fields=[Field("foo", DataType.timestamp("us"))]),
         ),
         # Nullability variations
         (
@@ -75,11 +68,7 @@ else:
         ),
         (
             Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
-            Schema(
-                fields=[
-                    Field("foo", DataType.timestamp(_ns_converted_unit), nullable=True)
-                ]
-            ),
+            Schema(fields=[Field("foo", DataType.timestamp("us"), nullable=True)]),
         ),
         # List of unsigned ints
         (
@@ -209,7 +198,7 @@ else:
                         DataType.struct(
                             [
                                 Field("a", DataType.int64()),
-                                Field("b", DataType.timestamp(_ns_converted_unit)),
+                                Field("b", DataType.timestamp("us")),
                                 Field("c", DataType.int32()),
                             ]
                         ),
@@ -316,7 +305,7 @@ else:
                 fields=[
                     Field(
                         "bar",
-                        DataType.timestamp(_ns_converted_unit),
+                        DataType.timestamp("us"),
                         nullable=True,
                         metadata={"origin": "sensor_7"},
                     )
@@ -422,10 +411,10 @@ def test_schema_conversion(input_schema: Schema, expected_schema: Schema):
             ),
             Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
         ),
-        # Nanosecond timestamps without a timezone are still converted to microseconds
+        # Nanosecond timestamps without a timezone are also converted to microseconds
         (
             Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
-            Schema(fields=[Field("foo", DataType.timestamp("us"), nullable=True)]),
+            Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
         ),
         # Nanosecond timestamp nested in a struct, with a timezone
         (
@@ -645,9 +634,7 @@ def test_null_conversion_without_existing_schema():
 
     assert converted.field("id").type == DataType.int64()
     assert DataType.is_null(converted.field("null_field").type)
-    assert converted.field("timestamp_field").type == DataType.timestamp(
-        _ns_converted_unit
-    )
+    assert converted.field("timestamp_field").type == DataType.timestamp("us")
 
 
 @pytest.mark.pandas
