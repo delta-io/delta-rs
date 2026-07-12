@@ -52,15 +52,12 @@ def _convert_arro3_schema_to_delta(
         elif DataType.is_struct(dtype):
             return struct_to_delta_dtype(dtype)
         elif DataType.is_timestamp(dtype):
-            if dtype.tz is None:
-                return DataType.timestamp("us")
-            elif dtype.time_unit == "ns" and _nanosecond_timestamps_enabled():
-                return DataType.timestamp("ns", tz="UTC")
+            if dtype.time_unit == "ns" and _nanosecond_timestamps_enabled():
+                time_unit = "ns"
             else:
-                if dtype.tz is None:
-                    return DataType.timestamp("us")
-                else:
-                    return DataType.timestamp("us", tz="UTC")
+                time_unit = "us"
+            tz = None if dtype.tz is None else "UTC"
+            return DataType.timestamp(time_unit, tz=tz)
         elif DataType.is_fixed_size_binary(dtype):
             return DataType.binary()
         elif DataType.is_unsigned_integer(dtype):

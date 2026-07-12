@@ -17,10 +17,10 @@ from deltalake import (
     DeltaTable,
     WriterProperties,
     _disable_nanosecond_timestamps,
-    _nanosecond_timestamps_enabled,
     enable_nanosecond_timestamps,
     write_deltalake,
 )
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -243,9 +243,7 @@ def azurite_sas_creds(azurite_creds):
     ids=["base", "with_nanos"],
 )
 def sample_data_pyarrow(request) -> "pa.Table":
-    nanosecond_timestamps = (
-        request.param["ns_timestamps"] and _nanosecond_timestamps_enabled()
-    )
+    nanosecond_timestamps = request.param["ns_timestamps"] and _NANOSECOND_TIMESTAMPS
     nrows = 5
     import pyarrow as pa
 
@@ -405,7 +403,6 @@ def writer_properties():
 @pytest.fixture()
 def nanosecond_timestamps_enabled():
     from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
-    from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
     if not _NANOSECOND_TIMESTAMPS:
         pytest.skip("Rust library built without nanosecond timestamp support")
