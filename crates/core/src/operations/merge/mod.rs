@@ -971,22 +971,16 @@ async fn execute(
     // In the case where there are partition columns in the join predicate, we can scan the source table
     // to get the distinct list of partitions affected and constrain the search to those.
 
-    let target_subset_filter: Option<Expr> = if !not_match_source_operations.is_empty() {
-        // It's only worth trying to create an early filter where there are no `when_not_matched_source` operators, since
-        // that implies a full scan
-        None
-    } else {
-        try_construct_early_filter(
-            predicate.clone(),
-            &snapshot,
-            &state,
-            &source,
-            &source_name,
-            &target_name,
-            streaming,
-        )
-        .await?
-    }
+    let target_subset_filter: Option<Expr> = try_construct_early_filter(
+        predicate.clone(),
+        &snapshot,
+        &state,
+        &source,
+        &source_name,
+        &target_name,
+        streaming,
+    )
+    .await?
     .map(|e| normalize_target_subset_filter(target.schema().clone(), e))
     .transpose()?;
 
