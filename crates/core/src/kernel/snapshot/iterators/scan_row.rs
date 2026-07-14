@@ -560,6 +560,18 @@ fn primitive_partition_values_to_array(
             )?)
             .with_timezone("UTC"),
         ) as ArrayRef,
+        #[cfg(feature = "nanosecond-timestamps")]
+        PrimitiveType::TimestampNanosNtz => {
+            Arc::new(TimestampNanosecondArray::from_iter(typed_partition_values(
+                field_name,
+                expected_data_type,
+                values,
+                |value| match value {
+                    Scalar::TimestampNanosNtz(value) => Some(*value),
+                    _ => None,
+                },
+            )?)) as ArrayRef
+        }
         PrimitiveType::TimestampNtz => Arc::new(TimestampMicrosecondArray::from_iter(
             typed_partition_values(
                 field_name,
@@ -635,6 +647,8 @@ fn scalar_type_name(value: &Scalar) -> &'static str {
         Scalar::Timestamp(_) => "Timestamp",
         #[cfg(feature = "nanosecond-timestamps")]
         Scalar::TimestampNanos(_) => "TimestampNanos",
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanosNtz(_) => "TimestampNanosNtz",
         Scalar::TimestampNtz(_) => "TimestampNtz",
         Scalar::Decimal(_) => "Decimal",
         Scalar::Struct(_) => "Struct",

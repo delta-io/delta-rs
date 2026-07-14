@@ -544,44 +544,6 @@ impl AddAssign for AggregatedStats {
     }
 }
 
-/// For a list field, we don't want the inner field names. We need to chuck out
-/// the list and items fields from the path, but also need to handle the
-/// peculiar case where the user named the list field "list" or "item".
-///
-/// NOTE: As of delta_kernel 0.3.1 the name switched from `item` to `element` to line up with the
-/// parquet spec, see
-/// [here](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists)
-///
-/// For example:
-///
-/// * ["some_nested_list", "list", "item", "list", "item"] -> "some_nested_list"
-/// * ["some_list", "list", "item"] -> "some_list"
-/// * ["list", "list", "item"] -> "list"
-/// * ["item", "list", "item"] -> "item"
-fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
-    let max_rep_levels = column_descr.max_rep_level();
-    let column_path_parts = column_descr.path().parts();
-
-    // If there are more nested names, we can't handle them yet.
-    if column_path_parts.len() > (2 * max_rep_levels + 1) as usize {
-        return None;
-    }
-
-    let mut column_path_parts = column_path_parts.to_vec();
-    let mut items_seen = 0;
-    let mut lists_seen = 0;
-    while let Some(part) = column_path_parts.pop() {
-        match (part.as_str(), lists_seen, items_seen) {
-            ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
-            ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
-            ("list", _, _) => lists_seen += 1,
-            ("element", _, _) => items_seen += 1,
-            (other, _, _) => return Some(other.to_string()),
-        }
-    }
-    None
-}
-
 fn apply_min_max_for_column(
     statistics: AggregatedStats,
     column_descr: Arc<ColumnDescriptor>,
@@ -590,14 +552,8 @@ fn apply_min_max_for_column(
     max_values: &mut HashMap<String, ColumnValueStat>,
     null_counts: &mut HashMap<String, ColumnCountStat>,
 ) -> Result<(), DeltaWriterError> {
-    // Special handling for list column
+    // Repeated leaf null counts describe nested values only.
     if column_descr.max_rep_level() > 0 {
-        let key = get_list_field_name(&column_descr);
-
-        if let Some(key) = key {
-            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
-        }
-
         return Ok(());
     }
 
@@ -932,8 +888,7 @@ mod tests {
         let stats = add[0].get_stats().unwrap().unwrap();
 
         let min_max_keys = vec!["meta", "some_int", "some_string", "some_bool", "uuid"];
-        let mut null_count_keys = vec!["some_list", "some_nested_list"];
-        null_count_keys.extend_from_slice(min_max_keys.as_slice());
+        let null_count_keys = min_max_keys.clone();
 
         assert_eq!(
             min_max_keys.len(),
@@ -1032,13 +987,89 @@ mod tests {
                 ("some_int", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_bool", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_string", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
-                ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
-                ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 k => panic!("Key {k:?} should not be present in null_count"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_repeated_leaf_stats_skip_container_null_counts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let table_path = temp_dir.path();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "id", "type": "string", "nullable": true, "metadata": {} },
+                {
+                    "name": "b",
+                    "type": {
+                        "type": "array",
+                        "elementType": "integer",
+                        "containsNull": true
+                    },
+                    "nullable": true, "metadata": {}
+                },
+                {
+                    "name": "m",
+                    "type": {
+                        "type": "map",
+                        "keyType": "string",
+                        "valueType": "integer",
+                        "valueContainsNull": true
+                    },
+                    "nullable": true, "metadata": {}
+                }
+            ]
+        });
+        create_temp_table_with_schema(table_path, &schema);
+
+        let table_uri = Url::from_directory_path(table_path).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer = writer.with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        );
+
+        let arrow_schema = writer.arrow_schema();
+        let rows = [
+            json!({
+                "id": "with_null_element",
+                "b": [1, null, 2],
+                "m": {"a": 1, "b": null},
+            }),
+            json!({
+                "id": "empty",
+                "b": [],
+                "m": {},
+            }),
+        ];
+        let batch = record_batch_from_message(arrow_schema, rows.as_slice()).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let add = writer.flush().await.unwrap();
+        assert_eq!(add.len(), 1);
+        let stats = add[0].get_stats().unwrap().unwrap();
+
+        assert!(
+            !stats.null_count.contains_key("b"),
+            "writer copied list element null counts into list nullCount: {:?}",
+            stats.null_count
+        );
+        assert!(
+            !stats.null_count.contains_key("m"),
+            "writer copied map value null counts into map nullCount: {:?}",
+            stats.null_count
+        );
+        assert_eq!(
+            Some(&ColumnCountStat::Value(0)),
+            stats.null_count.get("id"),
+            "writer kept scalar null counts"
+        );
     }
 
     // Regression test for delta-io/delta-rs#3172: leaves under a nested
@@ -1149,6 +1180,37 @@ mod tests {
         std::fs::write(
             log_path.join("00000000000000000000.json"),
             V0_COMMIT.as_str(),
+        )
+        .unwrap();
+    }
+
+    fn create_temp_table_with_schema(table_path: &Path, schema: &Value) {
+        let log_path = table_path.join("_delta_log");
+        let schema_string = serde_json::to_string(schema).unwrap();
+        let jsons = [
+            json!({
+                "protocol":{"minReaderVersion":1,"minWriterVersion":2}
+            }),
+            json!({
+                "metaData": {
+                    "id": "22ef18ba-191c-4c36-a606-3dad5cdf3830",
+                    "format": {
+                        "provider": "parquet", "options": {}
+                    },
+                    "schemaString": schema_string,
+                    "partitionColumns": [], "configuration": {}, "createdTime": 1564524294376i64
+                }
+            }),
+        ];
+
+        std::fs::create_dir(log_path.as_path()).unwrap();
+        std::fs::write(
+            log_path.join("00000000000000000000.json"),
+            jsons
+                .iter()
+                .map(|j| serde_json::to_string(j).unwrap())
+                .collect::<Vec<String>>()
+                .join("\n"),
         )
         .unwrap();
     }

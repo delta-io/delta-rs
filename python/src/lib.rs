@@ -16,7 +16,10 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::arrow::{
+    self,
+    datatypes::{DataType as ArrowDataType, Schema as ArrowSchema},
+};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -1026,6 +1029,36 @@ impl RawDeltaTable {
                 .drop_constraints()
                 .with_constraint(name)
                 .with_raise_if_not_exists(raise_if_not_exists);
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
+    #[pyo3(signature = (column_name, commit_properties=None, post_commithook_properties=None))]
+    pub fn drop_column_not_null(
+        &self,
+        py: Python,
+        column_name: String,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.detach(|| {
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = table.drop_column_not_null().with_column(column_name);
 
             if let Some(commit_properties) =
                 maybe_create_commit_properties(commit_properties, post_commithook_properties)
@@ -2432,6 +2465,11 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             let value = value.serialize();
             format!("{value}Z").into_py_any(py)?
         }
+        #[cfg(feature = "nanosecond-timestamps")]
+        TimestampNanosNtz(_) => {
+            let value = value.serialize();
+            value.into_py_any(py)?
+        }
         TimestampNtz(_) => {
             let value = value.serialize();
             value.into_py_any(py)?
@@ -2527,7 +2565,12 @@ fn filestats_to_expression_next<'py>(
     // NOTE: null_counts should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
+            let is_opaque_container_field = schema
+                .field_with_name(field.name())
+                .map(|field| is_opaque_container_arrow_type(field.data_type()))
+                .unwrap_or(false);
             if stats_columns.contains(field.name())
+                && !is_opaque_container_field
                 && let Scalar::Long(val) = value
             {
                 if *val == 0 {
@@ -2607,6 +2650,16 @@ fn filestats_to_expression_next<'py>(
             .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
             .transpose()
     }
+}
+
+fn is_opaque_container_arrow_type(data_type: &ArrowDataType) -> bool {
+    matches!(
+        data_type,
+        ArrowDataType::List(_)
+            | ArrowDataType::LargeList(_)
+            | ArrowDataType::FixedSizeList(_, _)
+            | ArrowDataType::Map(_, _)
+    )
 }
 
 #[pyfunction]
