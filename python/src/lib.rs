@@ -1562,6 +1562,7 @@ impl RawDeltaTable {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         add_actions,
+        remove_actions,
         mode,
         partition_by,
         schema,
@@ -1573,6 +1574,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         add_actions: Vec<PyAddAction>,
+        remove_actions: Vec<PyRemoveAction>,
         mode: &str,
         partition_by: Vec<String>,
         schema: PyRef<PySchema>,
@@ -1589,9 +1591,13 @@ impl RawDeltaTable {
                 Ok(snapshot.schema().clone())
             })?;
 
-            let mut actions: Vec<Action> = add_actions
+            // Remove actions must precede add actions. Delta's log replay
+            // deduplicates file actions using "first seen wins" semantics, so
+            // ordering removes first ensures they win over adds for the same path.
+            let mut actions: Vec<Action> = remove_actions
                 .iter()
-                .map(|add| Action::Add(add.into()))
+                .map(|remove| Action::Remove(remove.into()))
+                .chain(add_actions.iter().map(|add| Action::Add(add.into())))
                 .collect();
 
             match mode {

@@ -261,6 +261,7 @@ class RawDeltaTable:
     def create_write_transaction(
         self,
         add_actions: list[AddAction],
+        remove_actions: list[RemoveAction],
         mode: str,
         partition_by: list[str],
         schema: Schema,
