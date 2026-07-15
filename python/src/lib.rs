@@ -3115,7 +3115,7 @@ fn create_deltalake(
     commit_properties=None,
     post_commithook_properties=None
 ))]
-fn create_table_with_actions(
+fn create_table_with_add_actions(
     py: Python,
     table_uri: String,
     schema: PyRef<PySchema>,
@@ -3298,7 +3298,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(init_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(shutdown_tracing, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(create_deltalake, m)?)?;
-    m.add_function(pyo3::wrap_pyfunction!(create_table_with_actions, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_table_with_add_actions, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_to_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(convert_to_deltalake, m)?)?;
     m.add_class::<RawDeltaTable>()?;

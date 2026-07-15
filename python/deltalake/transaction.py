@@ -7,7 +7,7 @@ from typing import Any, Literal
 from deltalake import Schema
 from deltalake._internal import Transaction as Transaction
 from deltalake._internal import (
-    create_table_with_actions as _create_table_with_actions,
+    create_table_with_add_actions as _create_table_with_add_actions,
 )
 from deltalake._util import deprecate_positional_commit_args
 
@@ -109,50 +109,11 @@ def create_table_with_add_actions(
     )
     if isinstance(partition_by, str):
         partition_by = [partition_by]
-    _create_table_with_actions(
+    _create_table_with_add_actions(
         table_uri=table_uri,
         schema=schema,
         add_actions=add_actions,
         remove_actions=[],
-        mode=mode,
-        partition_by=partition_by or [],
-        name=name,
-        description=description,
-        configuration=configuration,
-        storage_options=storage_options,
-        commit_properties=commit_properties,
-        post_commithook_properties=post_commithook_properties,
-    )
-
-
-def create_table_with_actions(
-    table_uri: str,
-    schema: Schema,
-    add_actions: list[AddAction],
-    remove_actions: list[RemoveAction],
-    mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-    partition_by: list[str] | str | None = None,
-    name: str | None = None,
-    description: str | None = None,
-    configuration: Mapping[str, str | None] | None = None,
-    storage_options: dict[str, str] | None = None,
-    *,
-    commit_properties: CommitProperties | None = None,
-    post_commithook_properties: PostCommitHookProperties | None = None,
-) -> None:
-    """Create (or overwrite) a table by directly supplying both add and remove actions.
-
-    This is a generalization of [create_table_with_add_actions][deltalake.transaction.create_table_with_add_actions]
-    that also accepts `remove_actions`, allowing callers to commit tombstones for files
-    alongside newly added files in a single commit.
-    """
-    if isinstance(partition_by, str):
-        partition_by = [partition_by]
-    _create_table_with_actions(
-        table_uri=table_uri,
-        schema=schema,
-        add_actions=add_actions,
-        remove_actions=remove_actions,
         mode=mode,
         partition_by=partition_by or [],
         name=name,
