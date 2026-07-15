@@ -16,13 +16,71 @@ use url::Url;
 
 use crate::DeltaTableConfig;
 
-use super::{EagerSnapshot, MaterializedFiles, MaterializedFilesScope, Snapshot};
+use super::{
+    EagerSnapshot, MaterializedFiles, MaterializedFilesPolicy, MaterializedFilesScope, Snapshot,
+    SnapshotIdentity, SnapshotMaterializationMode,
+};
+
+#[derive(Serialize, Deserialize)]
+enum MaterializedFilesScopeWire {
+    FullTable,
+    #[serde(other)]
+    Unsupported,
+}
+
+impl From<MaterializedFilesScope> for MaterializedFilesScopeWire {
+    fn from(value: MaterializedFilesScope) -> Self {
+        match value {
+            MaterializedFilesScope::FullTable => Self::FullTable,
+        }
+    }
+}
+
+impl MaterializedFilesScopeWire {
+    fn into_materialized(self) -> Option<MaterializedFilesScope> {
+        match self {
+            Self::FullTable => Some(MaterializedFilesScope::FullTable),
+            Self::Unsupported => None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+enum MaterializedFilesPolicyWire {
+    FullTablePreserveRaw,
+    FullTableWithoutStats,
+    #[serde(other)]
+    Unsupported,
+}
+
+impl From<MaterializedFilesPolicy> for MaterializedFilesPolicyWire {
+    fn from(value: MaterializedFilesPolicy) -> Self {
+        match value {
+            MaterializedFilesPolicy::FullTablePreserveRaw => Self::FullTablePreserveRaw,
+            MaterializedFilesPolicy::FullTableWithoutStats => Self::FullTableWithoutStats,
+        }
+    }
+}
+
+impl MaterializedFilesPolicyWire {
+    fn into_materialized(self) -> Option<MaterializedFilesPolicy> {
+        match self {
+            Self::FullTablePreserveRaw => Some(MaterializedFilesPolicy::FullTablePreserveRaw),
+            Self::FullTableWithoutStats => Some(MaterializedFilesPolicy::FullTableWithoutStats),
+            Self::Unsupported => None,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct MaterializedFilesWire {
     version: delta_kernel::Version,
-    scope: MaterializedFilesScope,
+    scope: MaterializedFilesScopeWire,
     batches: Vec<u8>,
+    #[serde(default)]
+    identity: Option<SnapshotIdentity>,
+    #[serde(default)]
+    policy: Option<MaterializedFilesPolicyWire>,
 }
 
 impl MaterializedFilesWire {
@@ -35,18 +93,65 @@ impl MaterializedFilesWire {
 
         Ok(Self {
             version: value.version,
-            scope: value.scope,
+            scope: value.scope.into(),
             batches: serialize_batches(value.batches.as_ref())?,
+            identity: Some(value.identity.clone()),
+            policy: Some(value.policy.into()),
         })
     }
 
-    fn into_materialized(self) -> Result<MaterializedFiles, String> {
-        Ok(MaterializedFiles {
+    fn into_materialized(
+        self,
+        owning_snapshot: &Snapshot,
+    ) -> Result<Option<MaterializedFiles>, String> {
+        let Some(scope) = self.scope.into_materialized() else {
+            tracing::trace!(
+                snapshot_version = owning_snapshot.version(),
+                "dropping materialized snapshot cache with unsupported scope"
+            );
+            return Ok(None);
+        };
+        let expected_policy = owning_snapshot.materialized_files_policy();
+        let policy = match self.policy {
+            Some(policy) => {
+                let Some(policy) = policy.into_materialized() else {
+                    tracing::trace!(
+                        snapshot_version = owning_snapshot.version(),
+                        "dropping materialized snapshot cache with unsupported policy"
+                    );
+                    return Ok(None);
+                };
+                policy
+            }
+            None => expected_policy,
+        };
+        let identity = self.identity.unwrap_or_else(|| owning_snapshot.identity());
+
+        if self.version != identity.version
+            || !identity.is_for(owning_snapshot)
+            || policy != expected_policy
+        {
+            tracing::trace!(
+                wire_version = self.version,
+                identity_version = identity.version,
+                snapshot_version = owning_snapshot.version(),
+                wire_policy = ?policy,
+                expected_policy = ?expected_policy,
+                "dropping incompatible materialized snapshot cache from serde payload"
+            );
+            return Ok(None);
+        }
+
+        let materialized_files = MaterializedFiles {
+            identity,
+            policy,
             version: self.version,
-            scope: self.scope,
+            scope,
             existing_predicate: None,
             batches: deserialize_batches(self.batches)?.into(),
-        })
+        };
+
+        Ok(Some(materialized_files))
     }
 }
 
@@ -62,12 +167,14 @@ fn materialized_files_from_legacy_eager_payload(
         return Ok(None);
     };
 
-    if legacy_payload.is_empty() && !snapshot.load_config().require_files {
+    if legacy_payload.is_empty()
+        && snapshot.materialization_mode() == SnapshotMaterializationMode::Lazy
+    {
         return Ok(None);
     }
 
     Ok(Some(Arc::new(MaterializedFiles::full(
-        snapshot.version(),
+        snapshot,
         deserialize_batches(legacy_payload)?,
     ))))
 }
@@ -161,8 +268,7 @@ impl Serialize for Snapshot {
 
         seq.serialize_element(&self.config)?;
         let materialized_files = self
-            .materialized_files
-            .as_ref()
+            .materialized_files()
             .map(|value| MaterializedFilesWire::try_from_materialized(value))
             .transpose()
             .map_err(serde::ser::Error::custom)?;
@@ -311,14 +417,22 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         let snapshot = KernelSnapshot::new(log_segment, table_configuration);
 
-        Ok(Snapshot {
+        let snapshot = Snapshot {
             inner: Arc::new(snapshot),
             config,
-            materialized_files: materialized_files
-                .map(|value| value.into_materialized().map_err(de::Error::custom))
-                .transpose()?
-                .map(Arc::new),
-        })
+            materialized_files: None,
+        };
+        let materialized_files = materialized_files
+            .map(|value| {
+                value
+                    .into_materialized(&snapshot)
+                    .map_err(de::Error::custom)
+            })
+            .transpose()?
+            .flatten()
+            .map(Arc::new);
+
+        Ok(snapshot.with_materialized_files(materialized_files))
     }
 }
 
@@ -369,6 +483,13 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
                 }
                 _ => snapshot,
             };
+        if snapshot.materialization_mode() == SnapshotMaterializationMode::Eager
+            && snapshot.materialized_files().is_none()
+        {
+            return Err(de::Error::custom(
+                "cannot deserialize eager snapshot without valid materialized files",
+            ));
+        }
         Ok(EagerSnapshot { snapshot })
     }
 }
