@@ -3259,9 +3259,7 @@ def test_create_write_transaction_with_remove_actions(tmp_path: pathlib.Path) ->
         tags=None,
     )
 
-    dt.create_write_transaction(
-        actions=[remove, add], mode="append", schema=schema
-    )
+    dt.create_write_transaction(actions=[remove, add], mode="append", schema=schema)
 
     # Reload the table and verify the old file was removed, only the new one remains
     dt = DeltaTable(tmp_path)
@@ -3334,9 +3332,7 @@ def test_create_write_transaction_remove_wins_over_add_same_path(
         tags=None,
     )
 
-    dt.create_write_transaction(
-        actions=[add, remove], mode="append", schema=schema
-    )
+    dt.create_write_transaction(actions=[add, remove], mode="append", schema=schema)
 
     # Reload the table and verify the file was removed
     dt = DeltaTable(tmp_path)
