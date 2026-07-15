@@ -92,7 +92,7 @@ impl MaterializedFilesWire {
         }
 
         Ok(Self {
-            version: value.identity.version,
+            version: value.version,
             scope: value.scope.into(),
             batches: serialize_batches(value.batches.as_ref())?,
             identity: Some(value.identity.clone()),
@@ -112,8 +112,8 @@ impl MaterializedFilesWire {
             return Ok(None);
         };
         let expected_policy = owning_snapshot.materialized_files_policy();
-        let (identity, policy) = match (self.identity, self.policy) {
-            (Some(identity), Some(policy)) => {
+        let policy = match self.policy {
+            Some(policy) => {
                 let Some(policy) = policy.into_materialized() else {
                     tracing::trace!(
                         snapshot_version = owning_snapshot.version(),
@@ -121,28 +121,11 @@ impl MaterializedFilesWire {
                     );
                     return Ok(None);
                 };
-                (identity, policy)
+                policy
             }
-            (None, None) => {
-                // Snapshot serde is a trusted persistence format, not an authentication boundary.
-                // Payloads written before cache identity and policy existed contain neither field,
-                // so derive both from the owning snapshot to preserve wire compatibility. Identity
-                // and policy still guard current-format caches against accidental reuse; they do
-                // not prove the provenance of caller-supplied serialized bytes.
-                tracing::trace!(
-                    snapshot_version = owning_snapshot.version(),
-                    "accepting trusted pre-identity materialized snapshot cache"
-                );
-                (owning_snapshot.identity(), expected_policy)
-            }
-            _ => {
-                tracing::trace!(
-                    snapshot_version = owning_snapshot.version(),
-                    "dropping materialized snapshot cache with mixed identity and policy fields"
-                );
-                return Ok(None);
-            }
+            None => expected_policy,
         };
+        let identity = self.identity.unwrap_or_else(|| owning_snapshot.identity());
 
         if self.version != identity.version
             || !identity.is_for(owning_snapshot)
@@ -162,6 +145,7 @@ impl MaterializedFilesWire {
         let materialized_files = MaterializedFiles {
             identity,
             policy,
+            version: self.version,
             scope,
             existing_predicate: None,
             batches: deserialize_batches(self.batches)?.into(),
