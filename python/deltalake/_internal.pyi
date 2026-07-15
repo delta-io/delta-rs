@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         AddAction,
         CommitProperties,
         PostCommitHookProperties,
+        RemoveAction,
     )
     from deltalake.writer.properties import (
         WriterProperties,
@@ -308,10 +309,11 @@ class RawDeltaTable:
 def rust_core_version() -> str: ...
 def init_tracing(endpoint: Optional[str] = None) -> None: ...
 def shutdown_tracing() -> None: ...
-def create_table_with_add_actions(
+def create_table_with_actions(
     table_uri: str,
     schema: Schema,
     add_actions: list[AddAction],
+    remove_actions: list[RemoveAction],
     mode: Literal["error", "append", "overwrite", "ignore"],
     partition_by: list[str],
     name: str | None,
