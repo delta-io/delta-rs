@@ -92,7 +92,7 @@ impl MaterializedFilesWire {
         }
 
         Ok(Self {
-            version: value.version,
+            version: value.identity.version,
             scope: value.scope.into(),
             batches: serialize_batches(value.batches.as_ref())?,
             identity: Some(value.identity.clone()),
@@ -145,7 +145,6 @@ impl MaterializedFilesWire {
         let materialized_files = MaterializedFiles {
             identity,
             policy,
-            version: self.version,
             scope,
             existing_predicate: None,
             batches: deserialize_batches(self.batches)?.into(),
