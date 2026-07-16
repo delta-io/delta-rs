@@ -2349,63 +2349,31 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_snapshot_legacy_wire_defaults_cache_policy() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
-            .ensure_materialized_files(&log_store)
-            .await?;
-        let mut value = serde_json::to_value(snapshot.as_ref())?;
-        let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
-        materialized_files.remove("policy");
-
-        let actual: Snapshot = serde_json::from_value(value)?;
-        let actual_materialized = actual
+    #[test]
+    fn test_eager_snapshot_deserializes_pre_identity_fixture() -> TestResult {
+        let actual: EagerSnapshot = serde_json::from_str(include_str!(
+            "../../../tests/serde/eager_snapshot_pre_identity.json"
+        ))?;
+        let materialized_files = actual
+            .snapshot()
             .materialized_files()
-            .expect("legacy payload did not restore the materialized cache policy");
+            .expect("pre-identity fixture did not restore materialized files");
 
-        assert_eq!(actual_materialized.identity, actual.identity());
+        assert_eq!(actual.version(), 1);
+        assert_eq!(materialized_files.identity, actual.snapshot().identity());
         assert_eq!(
-            actual_materialized.policy,
+            materialized_files.policy,
             MaterializedFilesPolicy::FullTablePreserveRaw
         );
+        assert_eq!(materialized_files.scope, MaterializedFilesScope::FullTable);
+        assert_eq!(actual.try_log_data()?.num_files(), 1);
         assert_eq!(
-            actual.try_log_data()?.num_files(),
-            snapshot.try_log_data()?.num_files()
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_snapshot_legacy_wire_defaults_cache_policy_without_stats() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
-            .ensure_materialized_files(&log_store)
-            .await?;
-        let mut value = serde_json::to_value(snapshot.as_ref())?;
-        let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
-        materialized_files.remove("policy");
-
-        let actual: Snapshot = serde_json::from_value(value)?;
-        let actual_materialized = actual
-            .materialized_files()
-            .expect("legacy payload did not restore the materialized cache policy");
-
-        assert_eq!(actual_materialized.identity, actual.identity());
-        assert_eq!(
-            actual_materialized.policy,
-            MaterializedFilesPolicy::FullTableWithoutStats
-        );
-        assert!(
             actual
                 .try_log_data()?
                 .iter()
-                .all(|file| file.stats().is_none())
+                .map(|file| file.path_raw().to_string())
+                .collect_vec(),
+            vec!["legacy-fixture.parquet"]
         );
 
         Ok(())
@@ -2502,7 +2470,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_snapshot_wire_drops_same_version_identityless_foreign_cache() -> TestResult {
+    async fn test_snapshot_wire_drops_mixed_identity_and_policy_foreign_cache() -> TestResult {
         let (_owner_dir, mut owner_table) = local_test_table().await?;
         let (_foreign_dir, mut foreign_table) = local_test_table().await?;
         append_test_add(&mut owner_table, "owner-only.snappy.parquet").await?;
@@ -2542,6 +2510,62 @@ mod tests {
             active_add_paths(&actual, owner_log_store.as_ref()).await?,
             expected
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_accepts_trusted_pre_identity_cache() -> TestResult {
+        let (_owner_dir, mut owner_table) = local_test_table().await?;
+        let (_foreign_dir, mut foreign_table) = local_test_table().await?;
+        append_test_add(&mut owner_table, "owner-only.snappy.parquet").await?;
+        append_test_add(&mut foreign_table, "trusted-legacy.snappy.parquet").await?;
+
+        let owner_log_store = owner_table.log_store();
+        let foreign_log_store = foreign_table.log_store();
+        let owner =
+            Arc::new(Snapshot::try_new(owner_log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(owner_log_store.as_ref())
+                .await?;
+        let foreign = Arc::new(
+            Snapshot::try_new(foreign_log_store.as_ref(), Default::default(), None).await?,
+        )
+        .ensure_materialized_files(foreign_log_store.as_ref())
+        .await?;
+
+        assert_eq!(owner.version(), foreign.version());
+        assert_ne!(owner.identity().table_root, foreign.identity().table_root);
+        let owner_paths = active_add_paths(owner.as_ref(), owner_log_store.as_ref()).await?;
+        let trusted_legacy_paths =
+            active_add_paths(foreign.as_ref(), foreign_log_store.as_ref()).await?;
+        assert_ne!(owner_paths, trusted_legacy_paths);
+
+        // Pre-identity payloads have neither identity nor policy. Serde payloads are trusted
+        // persistence input, so this exact historical shape is accepted for compatibility.
+        let mut owner_value = serde_json::to_value(owner.as_ref())?;
+        let foreign_value = serde_json::to_value(foreign.as_ref())?;
+        owner_value[10] = foreign_value[10].clone();
+        let materialized_files = snapshot_materialized_files_wire_mut(&mut owner_value);
+        materialized_files.remove("identity");
+        materialized_files.remove("policy");
+
+        let actual: Snapshot = serde_json::from_value(owner_value)?;
+        let materialized_files = actual
+            .materialized_files()
+            .expect("trusted pre-identity cache was not restored");
+        let mut actual_paths = actual
+            .try_log_data()?
+            .iter()
+            .map(|file| file.path_raw().to_string())
+            .collect_vec();
+        actual_paths.sort();
+
+        assert_eq!(materialized_files.identity, actual.identity());
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTablePreserveRaw
+        );
+        assert_eq!(actual_paths, trusted_legacy_paths);
 
         Ok(())
     }

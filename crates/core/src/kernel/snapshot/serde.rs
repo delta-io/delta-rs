@@ -111,16 +111,9 @@ impl MaterializedFilesWire {
             );
             return Ok(None);
         };
-        let Some(identity) = self.identity else {
-            tracing::trace!(
-                snapshot_version = owning_snapshot.version(),
-                "dropping materialized snapshot cache without an authenticated identity"
-            );
-            return Ok(None);
-        };
         let expected_policy = owning_snapshot.materialized_files_policy();
-        let policy = match self.policy {
-            Some(policy) => {
+        let (identity, policy) = match (self.identity, self.policy) {
+            (Some(identity), Some(policy)) => {
                 let Some(policy) = policy.into_materialized() else {
                     tracing::trace!(
                         snapshot_version = owning_snapshot.version(),
@@ -128,9 +121,27 @@ impl MaterializedFilesWire {
                     );
                     return Ok(None);
                 };
-                policy
+                (identity, policy)
             }
-            None => expected_policy,
+            (None, None) => {
+                // Snapshot serde is a trusted persistence format, not an authentication boundary.
+                // Payloads written before cache identity and policy existed contain neither field,
+                // so derive both from the owning snapshot to preserve wire compatibility. Identity
+                // and policy still guard current-format caches against accidental reuse; they do
+                // not prove the provenance of caller-supplied serialized bytes.
+                tracing::trace!(
+                    snapshot_version = owning_snapshot.version(),
+                    "accepting trusted pre-identity materialized snapshot cache"
+                );
+                (owning_snapshot.identity(), expected_policy)
+            }
+            _ => {
+                tracing::trace!(
+                    snapshot_version = owning_snapshot.version(),
+                    "dropping materialized snapshot cache with mixed identity and policy fields"
+                );
+                return Ok(None);
+            }
         };
 
         if self.version != identity.version
