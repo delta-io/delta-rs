@@ -6,8 +6,8 @@ use crate::delta_datafusion::DeltaSessionConfig;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{Action, EagerSnapshot, Remove};
 use crate::logstore::{LogStore, LogStoreRef};
-use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::execution::write_execution_plan_v2;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::config::TablePropertiesExt;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -15,7 +15,7 @@ use arrow_array::Array;
 use datafusion::common::JoinType;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::{col, lit, Expr};
+use datafusion::logical_expr::{Expr, col, lit};
 use datafusion::prelude::{DataFrame, SessionContext};
 use itertools::Itertools;
 use parquet::file::properties::WriterProperties;
@@ -179,7 +179,9 @@ impl UpsertBuilder {
             .collect();
 
         // Create target DataFrame with partition filtering
-        let target_df = self.create_target_dataframe(&state, &partition_filters)?;
+        let target_df = self
+            .create_target_dataframe(&state, &partition_filters)
+            .await?;
 
         // Check for conflicts between source and target and cache the result for reuse
         let conflicts_df =
@@ -271,23 +273,11 @@ impl UpsertBuilder {
     }
 
     /// Create a DataFrame for the target table with partition filtering
-    fn create_target_dataframe(
+    async fn create_target_dataframe(
         &self,
         state: &SessionState,
         partition_filters: &HashMap<String, Vec<String>>,
     ) -> DeltaResult<DataFrame> {
-        let scan_config = crate::delta_datafusion::DeltaScanConfigBuilder::default()
-            .with_file_column_name(&FILE_PATH_COLUMN.to_string())
-            .with_parquet_pushdown(true)
-            .with_schema(self.snapshot.arrow_schema())
-            .build(&self.snapshot)?;
-
-        let target_provider = Arc::new(crate::delta_datafusion::DeltaTableProvider::try_new(
-            self.snapshot.clone(),
-            self.log_store.clone(),
-            scan_config,
-        )?);
-
         // Create partition filters to limit scan scope
         let mut filters = Vec::new();
         for (column, values) in partition_filters {
@@ -315,15 +305,27 @@ impl UpsertBuilder {
             }
         }
 
+        let mut builder = crate::delta_datafusion::DeltaScanNext::builder()
+            .with_eager_snapshot(self.snapshot.clone())
+            .with_log_store(self.log_store.clone())
+            .with_session(Arc::new(state.clone()))
+            .with_file_column(FILE_PATH_COLUMN);
+
+        // Limit the scan scope to files matching the source partition values.
+        if !filters.is_empty() {
+            builder = builder.with_file_skipping_predicates(filters);
+        }
+
+        let target_provider = datafusion::datasource::provider_as_source(builder.await?);
+
         let target_df = DataFrame::new(
             state.clone(),
-            datafusion::logical_expr::LogicalPlanBuilder::scan_with_filters(
+            datafusion::logical_expr::LogicalPlanBuilder::scan(
                 datafusion::common::TableReference::bare("target"),
-                datafusion::datasource::provider_as_source(target_provider),
+                target_provider,
                 None,
-                filters,
             )?
-                .build()?,
+            .build()?,
         );
 
         Ok(target_df)
@@ -366,9 +368,9 @@ impl UpsertBuilder {
             WriterStatsConfig::new(self.snapshot.table_properties().num_indexed_cols(), None),
             None,
             false,
-            None
+            None,
         )
-            .await?;
+        .await?;
 
         let mut metrics = UpsertMetrics::default();
 
@@ -426,9 +428,9 @@ impl UpsertBuilder {
             WriterStatsConfig::new(self.snapshot.table_properties().num_indexed_cols(), None),
             None,
             false,
-            None
+            None,
         )
-            .await?;
+        .await?;
 
         // Store metrics before moving add_actions
         let mut metrics = UpsertMetrics::default();
@@ -460,20 +462,29 @@ impl UpsertBuilder {
         Ok(filtered_target_df)
     }
 
-    async fn files_to_remove(&self, conflicting_file_names: &Vec<String>) -> DeltaResult<Vec<Action>> {
+    async fn files_to_remove(
+        &self,
+        conflicting_file_names: &Vec<String>,
+    ) -> DeltaResult<Vec<Action>> {
+        use crate::delta_datafusion::normalize_path_as_file_id;
         use futures::stream::StreamExt;
-        
+
+        let table_root = self.snapshot.table_configuration().table_root();
+
         let mut remove_actions = Vec::new();
         let mut file_stream = self.snapshot.file_views(&self.log_store, None);
-        
+
         while let Some(file_view) = file_stream.next().await {
             let file_view = file_view?;
-            let path = file_view.path().to_string();
-            if conflicting_file_names.contains(&path) {
+            let path = file_view.path();
+            let file_id = normalize_path_as_file_id(path.as_ref(), table_root, "upsert remove")?;
+            if conflicting_file_names.contains(&file_id)
+                || conflicting_file_names.contains(&path.to_string())
+            {
                 remove_actions.push(self.logical_file_to_remove(file_view));
             }
         }
-        
+
         Ok(remove_actions)
     }
 
@@ -782,7 +793,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             Arc::new(Int32Array::from(vec![1, 1, 1])),
         ])
-            .unwrap();
+        .unwrap();
 
         // Add some initial data, second batch
         let batch_2 = create_batch(vec![
@@ -791,7 +802,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![4, 5])),
             Arc::new(Int32Array::from(vec![1, 1])),
         ])
-            .unwrap();
+        .unwrap();
 
         setup_with_batches(vec![batch_1, batch_2], vec!["workspace_id".to_string()]).await
     }
@@ -813,18 +824,22 @@ mod tests {
         for batch in data {
             let id_col = batch.column_by_name("id").unwrap();
             let value_col = batch.column_by_name("value").unwrap();
-            
+
             // Handle both StringArray and StringViewArray
-            let id_array: Vec<String> = if let Some(arr) = id_col.as_any().downcast_ref::<StringArray>() {
-                arr.iter().flatten().map(|s| s.to_string()).collect()
-            } else if let Some(arr) = id_col.as_any().downcast_ref::<arrow::array::StringViewArray>() {
-                arr.iter().flatten().map(|s| s.to_string()).collect()
-            } else {
-                panic!("Unexpected id column type");
-            };
-            
+            let id_array: Vec<String> =
+                if let Some(arr) = id_col.as_any().downcast_ref::<StringArray>() {
+                    arr.iter().flatten().map(|s| s.to_string()).collect()
+                } else if let Some(arr) = id_col
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringViewArray>()
+                {
+                    arr.iter().flatten().map(|s| s.to_string()).collect()
+                } else {
+                    panic!("Unexpected id column type");
+                };
+
             let value_array = value_col.as_any().downcast_ref::<Int32Array>().unwrap();
-            
+
             for i in 0..batch.num_rows() {
                 if id_array[i] == expected_id {
                     found = true;
@@ -851,7 +866,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![6, 7])),
             Arc::new(Int32Array::from(vec![1, 1])),
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -886,7 +901,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![10, 6])),     // Updated value for A
             Arc::new(Int32Array::from(vec![1, 1])),      // Same workspace as existing A
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -930,7 +945,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![10, 50, 6])),      // Updated value for A and E
             Arc::new(Int32Array::from(vec![1, 1, 1])),        // Same workspace
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -970,18 +985,18 @@ mod tests {
                     Arc::new(Int32Array::from(vec![1, 2])),
                     Arc::new(Int32Array::from(vec![1, 1])),
                 ])
-                    .unwrap(),
+                .unwrap(),
                 create_batch(vec![
                     Arc::new(StringArray::from(vec!["2023-01-01", "2023-01-01"])),
                     Arc::new(StringArray::from(vec!["A", "C"])),
                     Arc::new(Int32Array::from(vec![3, 4])),
                     Arc::new(Int32Array::from(vec![1, 1])),
                 ])
-                    .unwrap(),
+                .unwrap(),
             ],
             vec!["workspace_id".to_string()],
         )
-            .await;
+        .await;
 
         let input_rows = table_rows(&get_table_data(table.clone()).await);
 
@@ -991,7 +1006,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![10])),   // Updated value for A
             Arc::new(Int32Array::from(vec![1])),    // Same workspace as existing A
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -1026,7 +1041,7 @@ mod tests {
             Arc::new(Int32Array::from(Vec::<i32>::new())),
             Arc::new(Int32Array::from(Vec::<i32>::new())),
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -1058,7 +1073,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 4])),
             Arc::new(Int32Array::from(vec![2, 2])), // Different workspace
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -1092,7 +1107,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![6])),
             Arc::new(Int32Array::from(vec![1])),
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -1128,7 +1143,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2])),
             Arc::new(Int32Array::from(vec![1, 1])),
         ])
-            .unwrap();
+        .unwrap();
 
         let batch_2 = create_batch(vec![
             Arc::new(StringArray::from(vec!["2023-01-01", "2023-01-02"])),
@@ -1136,13 +1151,13 @@ mod tests {
             Arc::new(Int32Array::from(vec![3, 4])),
             Arc::new(Int32Array::from(vec![1, 1])),
         ])
-            .unwrap();
+        .unwrap();
 
         let table = setup_with_batches(
             vec![batch_1, batch_2],
             vec!["workspace_id".to_string(), "date".to_string()],
         )
-            .await;
+        .await;
 
         let input_rows = table_rows(&get_table_data(table.clone()).await);
 
@@ -1159,7 +1174,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![10, 11, 6])), // Updated value for A, new value for F
             Arc::new(Int32Array::from(vec![1, 1, 1])),   // Same workspace
         ])
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
@@ -1211,7 +1226,7 @@ mod tests {
                 Arc::new(StringArray::from(vec!["2023-01-01", "2023-01-01"])), // date
             ],
         )
-            .unwrap();
+        .unwrap();
 
         let ctx = SessionContext::new();
         let source_df = ctx.read_batches(vec![source_batch]).unwrap();
