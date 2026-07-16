@@ -481,7 +481,10 @@ pub(crate) fn is_public_min_max_stats_eligible_primitive(data_type: &PrimitiveTy
     #[cfg(not(feature = "nanosecond-timestamps"))]
     let matches_nanos = false;
     #[cfg(feature = "nanosecond-timestamps")]
-    let matches_nanos = matches!(data_type, &PrimitiveType::TimestampNanos);
+    let matches_nanos = matches!(
+        data_type,
+        &PrimitiveType::TimestampNanos | &PrimitiveType::TimestampNanosNtz
+    );
     matches!(
         data_type,
         &PrimitiveType::Byte

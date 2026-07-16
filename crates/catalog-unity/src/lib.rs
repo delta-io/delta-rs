@@ -23,7 +23,8 @@ use tracing::instrument;
 use typed_builder::TypedBuilder;
 
 use crate::credential::{
-    AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, WorkspaceOAuthProvider,
+    AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider, TokenCredential,
+    WorkspaceOAuthProvider,
 };
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
@@ -410,6 +411,10 @@ pub struct UnityCatalogBuilder {
     /// Options for the underlying http client
     #[builder(default)]
     client_options: client::ClientOptions,
+
+    /// When set, this token credential will be used for acquiring access tokens
+    #[builder(default)]
+    token_credential: Option<Box<dyn TokenCredential>>,
 }
 
 #[allow(deprecated)]
@@ -588,7 +593,14 @@ impl UnityCatalogBuilder {
         Ok((storage_location, credentials))
     }
 
-    fn get_credential_provider(&self) -> Option<CredentialProvider> {
+    fn get_credential_provider(&mut self) -> Option<CredentialProvider> {
+        if let Some(token_credential) = self.token_credential.take() {
+            return Some(CredentialProvider::TokenCredential(
+                Default::default(),
+                token_credential,
+            ));
+        }
+
         if let Some(token) = self.bearer_token.as_ref() {
             return Some(CredentialProvider::BearerToken(token.clone()));
         }
@@ -632,7 +644,7 @@ impl UnityCatalogBuilder {
     }
 
     /// Build an instance of [`UnityCatalog`]
-    pub fn build(self) -> DataCatalogResult<UnityCatalog> {
+    pub fn build(mut self) -> DataCatalogResult<UnityCatalog> {
         let credential = self
             .get_credential_provider()
             .ok_or(UnityCatalogError::MissingCredential)?;
@@ -1024,10 +1036,13 @@ impl std::fmt::Debug for UnityCatalog {
 mod tests {
     use crate::UnityCatalogBuilder;
     use crate::client::ClientOptions;
+    use crate::client::token::TemporaryToken;
+    use crate::credential::TokenCredential;
     use crate::models::tests::{GET_SCHEMA_RESPONSE, GET_TABLE_RESPONSE, LIST_SCHEMAS_RESPONSE};
     use crate::models::*;
     use deltalake_core::DataCatalog;
     use httpmock::prelude::*;
+    use reqwest_middleware::ClientWithMiddleware;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -1300,6 +1315,63 @@ mod tests {
                     crate::UnityCatalogError::InvalidTableURI { .. }
                 ));
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unitycatalogbuilder_with_custom_credential() {
+        #[derive(Debug)]
+        struct TestCredential;
+
+        #[async_trait::async_trait]
+        impl TokenCredential for TestCredential {
+            async fn fetch_token(
+                &self,
+                _client: &ClientWithMiddleware,
+            ) -> Result<TemporaryToken<String>, crate::UnityCatalogError> {
+                Ok(TemporaryToken {
+                    token: "test_credential_token".to_string(),
+                    expiry: None,
+                })
+            }
+        }
+
+        let builder = UnityCatalogBuilder::builder()
+            .workspace_url("http://localhost:8080")
+            .token_credential(Some(Box::new(TestCredential)))
+            .build();
+
+        assert!(
+            builder.token_credential.is_some(),
+            "Custom credential should be set on builder"
+        );
+
+        let mut builder_mut = builder;
+        let credential_provider = builder_mut.get_credential_provider();
+        assert!(
+            credential_provider.is_some(),
+            "Credential provider should be resolved from custom credential"
+        );
+
+        assert!(
+            matches!(
+                credential_provider.as_ref(),
+                Some(crate::credential::CredentialProvider::TokenCredential(_, _))
+            ),
+            "Expected TokenCredential variant, got BearerToken"
+        );
+
+        if let Some(crate::credential::CredentialProvider::TokenCredential(_, token_credential)) =
+            credential_provider
+        {
+            let token = token_credential
+                .fetch_token(&builder_mut.client_options.client().unwrap())
+                .await
+                .unwrap();
+            assert_eq!(
+                token.token, "test_credential_token",
+                "Fetched token should match the test credential token"
+            );
         }
     }
 }

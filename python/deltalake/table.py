@@ -2050,6 +2050,36 @@ class TableAlterer:
             post_commithook_properties,
         )
 
+    def drop_column_not_null(
+        self,
+        column_name: str,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Drop the ``NOT NULL`` constraint on a column, making it nullable.
+
+        This is the equivalent of ``ALTER TABLE <table> ALTER COLUMN <name> DROP NOT NULL``.
+        Only relaxing a column from non-nullable to nullable is supported.
+
+        Args:
+            column_name: the name of the column to make nullable.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.drop_column_not_null("id")
+            ```
+        """
+        self.table._table.drop_column_not_null(
+            column_name,
+            commit_properties,
+            post_commithook_properties,
+        )
+
     def set_table_properties(
         self,
         properties: dict[str, str],
