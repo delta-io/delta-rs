@@ -7,7 +7,7 @@ use std::{
 };
 
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
-use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
@@ -15,7 +15,7 @@ use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
+use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
 };
@@ -30,8 +30,8 @@ use deltalake_core::{
 };
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt as _;
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
@@ -2146,6 +2146,133 @@ async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>>
             .to_string()
             .contains("\"value\" is not a struct type")
     );
+
+    Ok(())
+}
+
+/// Regression test: optimize must succeed on tables whose parquet files mark a
+/// nested struct field as nullable while the Delta log schema declares it
+/// non-nullable (the on-disk layout produced by Spark). Nullability in the log
+/// schema is a write-time invariant, not a read-time physical constraint.
+#[tokio::test]
+async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    let table_url = url::Url::from_directory_path(tmp_dir.path()).unwrap();
+
+    // Delta log schema: metadata_col.int_id is NOT nullable.
+    let meta_type = StructType::try_new(vec![StructField::new(
+        "int_id",
+        DataType::Primitive(PrimitiveType::String),
+        false,
+    )])?;
+    DeltaTable::try_from_url(table_url.clone())
+        .await?
+        .create()
+        .with_columns(vec![
+            StructField::new("id", DataType::Primitive(PrimitiveType::Long), false),
+            StructField::new("metadata_col", DataType::Struct(Box::new(meta_type)), true),
+        ])
+        .await?;
+
+    // Parquet files whose arrow schema marks int_id as nullable (mimicking
+    // Spark's writer), registered via raw Add actions to bypass the delta-rs
+    // writer which would cast to the table schema. Two files so optimize bins
+    // them for compaction.
+    let meta_fields = Fields::from(vec![Field::new("int_id", ArrowDataType::Utf8, true)]);
+    let file_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", ArrowDataType::Int64, false),
+        Field::new(
+            "metadata_col",
+            ArrowDataType::Struct(meta_fields.clone()),
+            true,
+        ),
+    ]));
+    for (name, ids, int_ids) in [
+        ("part-00000.parquet", vec![1i64, 2], vec!["t1", "t2"]),
+        ("part-00001.parquet", vec![3i64, 4], vec!["t3", "t4"]),
+    ] {
+        let meta = arrow_array::StructArray::new(
+            meta_fields.clone(),
+            vec![Arc::new(StringArray::from(int_ids)) as arrow_array::ArrayRef],
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![Arc::new(Int64Array::from(ids)), Arc::new(meta)],
+        )?;
+
+        let file_path = tmp_dir.path().join(name);
+        let file = std::fs::File::create(&file_path)?;
+        let mut writer = ArrowWriter::try_new(file, file_schema.clone(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let size = std::fs::metadata(&file_path)?.len() as i64;
+
+        let table = open_table(table_url.clone()).await?;
+        let add = Add {
+            path: name.to_string(),
+            size,
+            data_change: true,
+            ..Default::default()
+        };
+        CommitBuilder::default()
+            .with_actions(vec![Action::Add(add)])
+            .build(
+                Some(table.snapshot()?),
+                table.log_store(),
+                DeltaOperation::Write {
+                    mode: deltalake_core::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+    }
+
+    let table = open_table(table_url).await?;
+    assert_eq!(table.snapshot()?.log_data().num_files(), 2);
+
+    let (table, metrics) = table.optimize().await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(table.snapshot()?.log_data().num_files(), 1);
+
+    // Verify the compacted file preserved all rows.
+    let file = table.snapshot()?.log_data().into_iter().next().unwrap();
+    let path =
+        Path::parse(file.path().as_ref()).unwrap_or_else(|_| Path::from(file.path().as_ref()));
+    let batch = read_parquet_file(&path, table.object_store()).await?;
+    assert_eq!(batch.num_rows(), 4);
+
+    // Verify strict output schema: int_id must be non-nullable in the compacted file.
+    let batch_schema = batch.schema();
+    let ArrowDataType::Struct(out_meta_fields) =
+        batch_schema.field_with_name("metadata_col")?.data_type()
+    else {
+        panic!("expected struct");
+    };
+    assert!(
+        !out_meta_fields[0].is_nullable(),
+        "compacted file must preserve the strict (non-nullable) schema for int_id"
+    );
+
+    // Verify nested values: all int_id strings are present and correct.
+    let meta_col = batch
+        .column_by_name("metadata_col")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let int_id_col = meta_col
+        .column_by_name("int_id")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
+    actual.sort_unstable();
+    assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
 
     Ok(())
 }
