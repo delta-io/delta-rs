@@ -73,6 +73,8 @@ pub mod set_tbl_properties;
 pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
+#[cfg(feature = "datafusion")]
+pub mod upsert;
 
 #[cfg(all(test, feature = "datafusion"))]
 mod session_fallback_policy_tests;
@@ -244,6 +246,21 @@ impl DeltaTable {
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Upsert data from a source DataFrame into the target table
+    #[must_use]
+    pub fn upsert(
+        self,
+        source: datafusion::prelude::DataFrame,
+        join_keys: Vec<String>,
+    ) -> upsert::UpsertBuilder {
+        let snapshot = self
+            .state
+            .clone()
+            .map(|s| s.snapshot)
+            .expect("Table state is required for upsert");
+        upsert::UpsertBuilder::new(self.log_store(), snapshot, join_keys, source)
     }
 }
 
@@ -493,6 +510,19 @@ impl DeltaOps {
     #[deprecated(note = "Use [`DeltaTable::drop_constraints`] instead")]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
+    }
+
+    /// Upsert data from a source DataFrame into the target table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    #[deprecated(note = "Use [`DeltaTable::upsert`] instead")]
+    pub fn upsert(
+        self,
+        source: datafusion::prelude::DataFrame,
+        join_keys: Vec<String>,
+    ) -> upsert::UpsertBuilder {
+        let snapshot = self.0.state.map(|s| s.snapshot).expect("Table state is required for upsert");
+        upsert::UpsertBuilder::new(self.0.log_store, snapshot, join_keys, source)
     }
 
     /// Set table properties
