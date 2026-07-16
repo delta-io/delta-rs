@@ -378,6 +378,12 @@ pub enum DeltaOperation {
         /// The metadata update to apply
         metadata_update: crate::operations::update_table_metadata::TableMetadataUpdate,
     },
+    /// Drop the `NOT NULL` constraint on a column, making it nullable
+    #[serde(rename_all = "camelCase")]
+    DropColumnNotNull {
+        /// The name of the column whose `NOT NULL` constraint was dropped
+        column: StructField,
+    },
 }
 
 impl DeltaOperation {
@@ -407,6 +413,7 @@ impl DeltaOperation {
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
             DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
             DeltaOperation::UpdateTableMetadata { .. } => "UPDATE TABLE METADATA",
+            DeltaOperation::DropColumnNotNull { .. } => "CHANGE COLUMN",
         }
     }
 
@@ -434,6 +441,7 @@ impl DeltaOperation {
             Self::Optimize { .. }
             | Self::UpdateFieldMetadata { .. }
             | Self::UpdateTableMetadata { .. }
+            | Self::DropColumnNotNull { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }

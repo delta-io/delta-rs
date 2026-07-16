@@ -335,6 +335,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 snapshot.clone(),
                 &session,
                 operation_id,
+                this.writer_properties.clone(),
             )
             .await?;
 
@@ -426,6 +427,7 @@ async fn execute(
     snapshot: EagerSnapshot,
     session: &dyn Session,
     operation_id: Uuid,
+    writer_properties: Option<WriterProperties>,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics {
@@ -626,6 +628,7 @@ async fn execute(
         Some(operation_id),
         target_file_size,
         write_cdc,
+        writer_properties.clone(),
     )
     .await?;
 

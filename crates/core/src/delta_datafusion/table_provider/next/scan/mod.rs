@@ -51,8 +51,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
-    BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapterFactory,
-    PhysicalExprAdapterFactory,
+    BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
 };
 use delta_kernel::{
     Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
@@ -66,6 +65,7 @@ use url::Url;
 
 pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
+use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
 use super::{FileSelection, ResolvedFileSelection};
@@ -82,6 +82,7 @@ use crate::{
 
 mod exec;
 mod exec_meta;
+mod expr_adapter;
 mod plan;
 mod replay;
 
@@ -657,6 +658,13 @@ async fn get_read_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
+    // Relax nested-field nullability on the schema handed to the parquet source:
+    // Delta's `nullable = false` is a write-time invariant, and Spark-written files
+    // may mark nested fields optional. The logical schema is restored above the
+    // parquet scan by DeltaScanExec's transforms.
+    let parquet_read_schema = Arc::new(relax_schema_nested_nullability(parquet_read_schema));
+    let parquet_read_schema = &parquet_read_schema;
+
     let pq_options = TableParquetOptions {
         global: state.config().options().execution.parquet.clone(),
         ..Default::default()
@@ -666,7 +674,7 @@ async fn get_read_plan(
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
     let full_read_schema = Arc::new(full_read_schema.finish());
     let parquet_predicate_df_schema = parquet_predicate_schema.clone().to_dfschema()?;
-    let adapter_factory = Arc::new(DefaultPhysicalExprAdapterFactory {});
+    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory);
 
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
@@ -766,7 +774,21 @@ fn finalize_transformed_batch(
     let result = if result.schema_ref().eq(&scan_plan.contract.result_schema) {
         result
     } else {
-        schema_adapter.adapt(result)?
+        let adapted = schema_adapter.adapt(result)?;
+        if adapted.schema_ref().eq(&scan_plan.contract.result_schema) {
+            adapted
+        } else {
+            // The batch adapter targets a nullability-relaxed schema (see
+            // `expr_adapter`). Restamp to the strict logical schema; this
+            // validates actual data nulls rather than declared nullability.
+            crate::kernel::cast_record_batch(
+                &adapted,
+                scan_plan.contract.result_schema.clone(),
+                false,
+                false,
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+        }
     };
     if let Some((arr, field)) = file_id_col {
         let arr = if arr.data_type() != field.data_type() {
@@ -804,7 +826,8 @@ struct SchemaAdapter {
 impl SchemaAdapter {
     fn new(target_schema: SchemaRef) -> Self {
         Self {
-            factory: BatchAdapterFactory::new(target_schema),
+            factory: BatchAdapterFactory::new(target_schema)
+                .with_adapter_factory(Arc::new(DeltaPhysicalExprAdapterFactory)),
             cached_source: None,
             cached_adapter: None,
         }
@@ -1540,6 +1563,101 @@ mod tests {
             "+----+--------------------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    /// Reading a file that contains actual null values in a nested field declared
+    /// non-nullable in the table schema must fail: the nullability relaxation in
+    /// the expression adapter only accommodates Spark-style relaxed on-disk
+    /// schemas, while the final `cast_record_batch` in
+    /// `finalize_transformed_batch` validates the actual data.
+    #[tokio::test]
+    async fn test_scan_rejects_actual_nested_nulls() -> TestResult {
+        let store_url = Url::parse("memory:///")?;
+        let log_store =
+            crate::logstore::logstore_for(&store_url, crate::logstore::StorageConfig::default())?;
+
+        // Delta log schema: metadata_col.int_id is NOT nullable.
+        let meta_type = crate::kernel::StructType::try_new(vec![crate::kernel::StructField::new(
+            "int_id",
+            crate::kernel::DataType::Primitive(crate::kernel::PrimitiveType::String),
+            false,
+        )])?;
+        let table = crate::operations::create::CreateBuilder::new()
+            .with_log_store(log_store.clone())
+            .with_columns(vec![crate::kernel::StructField::new(
+                "metadata_col",
+                crate::kernel::DataType::Struct(Box::new(meta_type)),
+                true,
+            )])
+            .await?;
+
+        // Parquet file whose data contains an actual null in int_id, registered
+        // via a raw Add action to bypass the delta-rs writer.
+        let meta_fields = Fields::from(vec![Field::new("int_id", DataType::Utf8, true)]);
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "metadata_col",
+            DataType::Struct(meta_fields.clone()),
+            true,
+        )]));
+        let meta = StructArray::try_new(
+            meta_fields,
+            vec![Arc::new(StringArray::from(vec![Some("t1"), None])) as ArrayRef],
+            None,
+        )?;
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![Arc::new(meta)])?;
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, file_schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let size = buffer.len() as i64;
+
+        let store = log_store.object_store(None);
+        store
+            .put(&Path::from("part-00000.parquet"), buffer.into())
+            .await?;
+
+        crate::kernel::transaction::CommitBuilder::default()
+            .with_actions(vec![crate::kernel::Action::Add(crate::kernel::Add {
+                path: "part-00000.parquet".to_string(),
+                size,
+                data_change: true,
+                ..Default::default()
+            })])
+            .build(
+                Some(table.snapshot()?),
+                log_store.clone(),
+                crate::protocol::DeltaOperation::Write {
+                    mode: crate::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store);
+        session.register_table("delta_table", provider)?;
+
+        let result = session
+            .sql("SELECT * FROM delta_table")
+            .await?
+            .collect()
+            .await;
+        assert!(
+            result.is_err(),
+            "expected error when reading actual nulls in a non-nullable nested field, got: {result:?}"
+        );
 
         Ok(())
     }

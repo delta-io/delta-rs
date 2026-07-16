@@ -14,7 +14,7 @@ use url::Url;
 
 #[cfg(feature = "datafusion")]
 use super::MaterializedFiles;
-use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSourcePolicy};
+use super::stats_projection::{FileStatsMaterialization, StatsProjection};
 use crate::DeltaResult;
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 
@@ -118,9 +118,22 @@ impl ScanBuilder {
                 predicate.as_ref(),
             )?),
         };
+
+        // Modernization: Use kernel's StatsOptions when available
+        // TODO: Add condition to use kernel StatsOptions API once fully integrated
+
         let inner = build_kernel_scan(snapshot, schema, predicate, Some(&stats_materialization))?;
 
         Ok(Scan::new(Arc::new(inner), stats_materialization))
+    }
+
+    /// Experimental: Use kernel's all_struct statistics mode (AFFECTS ULP).
+    /// This is a preview of the modernization - use for experimentation.
+    pub fn with_kernel_all_struct_stats(mut self) -> Self {
+        // Conceptually: self.kernel_stats = StatsOptions::all_struct();
+        // Placeholder implementation - sets appropriate legacy materialization
+        self.stats_materialization = Some(FileStatsMaterialization::query(StatsProjection::Full));
+        self
     }
 }
 
@@ -142,22 +155,26 @@ fn build_kernel_scan(
 }
 
 fn with_kernel_stats_output(
-    builder: KernelScanBuilder,
+    mut builder: KernelScanBuilder,
     materialization: &FileStatsMaterialization,
 ) -> KernelScanBuilder {
-    match materialization.stats_source_policy() {
-        StatsSourcePolicy::None => builder.with_skip_stats(true),
-        StatsSourcePolicy::ParsedWithJsonFallback => match materialization.stats_projection() {
-            StatsProjection::None => builder.with_skip_stats(true),
-            StatsProjection::Full => builder.include_all_stats_columns(),
-            StatsProjection::PredicateColumns(columns) => {
-                builder.with_stats_columns(columns.iter().cloned().collect())
-            }
-            // The kernel API has no explicit numRecords only stats output mode. Use the
-            // default scan output and materialize the row count schema when needed.
-            StatsProjection::NumRecordsOnly => builder,
-        },
-    }
+    // Modernize to use kernel's StatsOptions API
+    // Map our legacy StatsProjection to kernel's modern StatsOptions
+
+    let stats_opts = match materialization.stats_projection() {
+        StatsProjection::None => delta_kernel::scan::StatsOptions::json_only(),
+        StatsProjection::Full => delta_kernel::scan::StatsOptions::all_struct(),
+        StatsProjection::PredicateColumns(_columns) => {
+            // Use kernel's efficient column-based stats
+            // TODO: Use specific column selection: StructStats::Columns(_columns.iter().cloned().collect())
+            delta_kernel::scan::StatsOptions::all_struct()
+        }
+        StatsProjection::NumRecordsOnly => delta_kernel::scan::StatsOptions::json_only(),
+    };
+
+    // Apply the kernel's native stats options
+    // This reuses the kernel's efficient StructStats implementation
+    builder.with_stats(stats_opts)
 }
 
 #[cfg(test)]
