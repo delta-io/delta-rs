@@ -111,6 +111,13 @@ impl MaterializedFilesWire {
             );
             return Ok(None);
         };
+        let Some(identity) = self.identity else {
+            tracing::trace!(
+                snapshot_version = owning_snapshot.version(),
+                "dropping materialized snapshot cache without an authenticated identity"
+            );
+            return Ok(None);
+        };
         let expected_policy = owning_snapshot.materialized_files_policy();
         let policy = match self.policy {
             Some(policy) => {
@@ -125,7 +132,6 @@ impl MaterializedFilesWire {
             }
             None => expected_policy,
         };
-        let identity = self.identity.unwrap_or_else(|| owning_snapshot.identity());
 
         if self.version != identity.version
             || !identity.is_for(owning_snapshot)
