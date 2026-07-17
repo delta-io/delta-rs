@@ -31,7 +31,7 @@ use crate::delta_datafusion::{
     ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
 };
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
+use crate::kernel::{Action, Add, AddCDCFile, Snapshot, StructType, StructTypeExt};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
@@ -312,7 +312,7 @@ pub(crate) struct WriteStreamMetrics {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -359,7 +359,7 @@ pub(crate) async fn write_execution_plan_cdc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -389,7 +389,7 @@ pub(crate) async fn write_execution_plan(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,

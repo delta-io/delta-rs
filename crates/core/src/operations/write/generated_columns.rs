@@ -11,13 +11,13 @@ use tracing::debug;
 use crate::{
     DeltaResult,
     delta_datafusion::expr::parse_generated_column_expression,
-    kernel::{DataCheck, EagerSnapshot},
+    kernel::{DataCheck, Snapshot},
     table::GeneratedColumn,
 };
 
 /// check if the writer version is able to write generated columns
 #[inline]
-pub fn gc_is_enabled(snapshot: &EagerSnapshot) -> bool {
+pub fn gc_is_enabled(snapshot: &Snapshot) -> bool {
     snapshot
         .table_configuration()
         .is_feature_enabled(&TableFeature::GeneratedColumns)

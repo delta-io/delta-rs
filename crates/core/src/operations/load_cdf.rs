@@ -37,7 +37,7 @@ use crate::delta_datafusion::{
 use crate::errors::{ColumnMappingOperation, DeltaResult};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
-    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
+    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Snapshot, Version, resolve_snapshot,
 };
 use crate::logstore::{LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
@@ -147,7 +147,7 @@ impl CdfLoadBuilder {
         self
     }
 
-    async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
+    async fn calculate_earliest_version(&self, snapshot: &Snapshot) -> DeltaResult<Version> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
@@ -170,7 +170,7 @@ impl CdfLoadBuilder {
     /// than I have right now. I plan to extend the checks once we have a stable state of the initial implementation.
     async fn determine_files_to_read(
         &self,
-        snapshot: &EagerSnapshot,
+        snapshot: &Snapshot,
         partition_pruning: Option<&PartitionPruningPredicate>,
     ) -> DeltaResult<(
         Vec<CdcDataSpec<AddCDCFile>>,
@@ -467,7 +467,7 @@ impl CdfLoadBuilder {
         let partition_pruning =
             self.partition_pruning_predicate(session, &schema, partition_values)?;
         let (cdc, add, remove) = self
-            .determine_files_to_read(&snapshot, partition_pruning.as_ref())
+            .determine_files_to_read(snapshot.snapshot(), partition_pruning.as_ref())
             .await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
 

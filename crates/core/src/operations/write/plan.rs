@@ -34,8 +34,8 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
-    Metadata, ProtocolExt as _, Remove, StructType, StructTypeExt,
+    Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, Metadata,
+    ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -87,7 +87,7 @@ pub(super) struct PreparedWrite {
 
 /// Inputs required to normalize source rows into table shaped insert data.
 pub(super) struct WritePreparationInput<'a> {
-    pub(super) snapshot: Option<&'a EagerSnapshot>,
+    pub(super) snapshot: Option<&'a Snapshot>,
     pub(super) session: &'a dyn Session,
     pub(super) source: LogicalPlan,
     pub(super) mode: SaveMode,
@@ -419,7 +419,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
 }
 
 pub(super) async fn plan_overwrite_rewrite(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     log_store: &LogStoreRef,
     session: &dyn Session,
     mode: SaveMode,
@@ -575,12 +575,11 @@ fn planned_deletion_timestamp_ms() -> DeltaResult<i64> {
 }
 
 async fn collect_all_existing_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: &LogStoreRef,
 ) -> DeltaResult<MatchedExistingFiles> {
     Ok(MatchedExistingFiles::new(
         snapshot
-            .snapshot()
             .active_adds(
                 log_store.as_ref(),
                 ActiveAddOptions {
@@ -595,14 +594,13 @@ async fn collect_all_existing_files(
 }
 
 async fn collect_matched_existing_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: &LogStoreRef,
     files_scan: &crate::delta_datafusion::MatchedFilesScan,
 ) -> DeltaResult<MatchedExistingFiles> {
     let table_root = Arc::new(snapshot.table_configuration().table_root().clone());
     let valid_files = Arc::new(files_scan.files_set());
     let files = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -686,7 +684,7 @@ fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaRe
 }
 
 fn build_exec_options(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     partition_columns: Vec<String>,
     target_file_size: Option<Option<NonZeroU64>>,
     write_batch_size: Option<usize>,
@@ -760,7 +758,7 @@ fn metadata_with_schema_and_partition_columns(
 }
 
 fn schema_delta_for_prepared_source(
-    snapshot: Option<&EagerSnapshot>,
+    snapshot: Option<&Snapshot>,
     insert_plan: &LogicalPlan,
     partition_columns: &[String],
     mode: SaveMode,
@@ -858,6 +856,10 @@ mod tests {
         .unwrap()
     }
 
+    fn snapshot_for_write_planning(table: &DeltaTable) -> &Snapshot {
+        table.snapshot().unwrap().snapshot().snapshot()
+    }
+
     fn assert_passthrough_overwrite_plan(
         overwrite_plan: &MatchedFilesRewritePlan,
         prepared: &PreparedWrite,
@@ -898,7 +900,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Append,
@@ -940,7 +942,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Overwrite,
@@ -1000,8 +1002,9 @@ mod tests {
             .await
             .unwrap();
 
+        let snapshot = snapshot_for_write_planning(&table_with_snapshot);
         let prepared_append = prepare_write(WritePreparationInput {
-            snapshot: Some(table_with_snapshot.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot),
             session: &session,
             source: source_plan_for_batch(get_record_batch(None, false)),
             mode: SaveMode::Append,
@@ -1017,7 +1020,7 @@ mod tests {
         .unwrap();
 
         let overwrite_plan_append = plan_overwrite_rewrite(
-            Some(table_with_snapshot.snapshot().unwrap().snapshot()),
+            Some(snapshot),
             &table_with_snapshot.log_store(),
             &session,
             SaveMode::Append,
@@ -1040,7 +1043,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(get_record_batch(None, false)),
             mode: SaveMode::Append,
@@ -1056,7 +1059,7 @@ mod tests {
         .unwrap();
 
         let _ = plan_overwrite_rewrite(
-            Some(table.snapshot().unwrap().snapshot()),
+            Some(snapshot_for_write_planning(&table)),
             &table.log_store(),
             &session,
             SaveMode::Overwrite,
@@ -1086,7 +1089,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Overwrite,
@@ -1102,7 +1105,7 @@ mod tests {
         .unwrap();
 
         let overwrite_plan = plan_overwrite_rewrite(
-            Some(table.snapshot().unwrap().snapshot()),
+            Some(snapshot_for_write_planning(&table)),
             &table.log_store(),
             &session,
             SaveMode::Overwrite,
@@ -1142,7 +1145,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Overwrite,
@@ -1158,7 +1161,7 @@ mod tests {
         .unwrap();
 
         let overwrite_plan = plan_overwrite_rewrite(
-            Some(table.snapshot().unwrap().snapshot()),
+            Some(snapshot_for_write_planning(&table)),
             &table.log_store(),
             &session,
             SaveMode::Overwrite,
@@ -1208,7 +1211,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Overwrite,
@@ -1224,7 +1227,7 @@ mod tests {
         .unwrap();
 
         let overwrite_plan = plan_overwrite_rewrite(
-            Some(table.snapshot().unwrap().snapshot()),
+            Some(snapshot_for_write_planning(&table)),
             &table.log_store(),
             &session,
             SaveMode::Overwrite,
@@ -1270,7 +1273,7 @@ mod tests {
         let session = create_session().state();
         let configuration = HashMap::new();
         let prepared = prepare_write(WritePreparationInput {
-            snapshot: Some(table.snapshot().unwrap().snapshot()),
+            snapshot: Some(snapshot_for_write_planning(&table)),
             session: &session,
             source: source_plan_for_batch(batch),
             mode: SaveMode::Overwrite,
@@ -1286,7 +1289,7 @@ mod tests {
         .unwrap();
 
         let overwrite_plan = plan_overwrite_rewrite(
-            Some(table.snapshot().unwrap().snapshot()),
+            Some(snapshot_for_write_planning(&table)),
             &table.log_store(),
             &session,
             SaveMode::Overwrite,

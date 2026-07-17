@@ -36,7 +36,8 @@ use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, TombstoneView, Version, resolve_snapshot,
+    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, TombstoneView, Version,
+    resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
@@ -223,10 +224,7 @@ impl VacuumBuilder {
     }
 
     /// Determine which files can be deleted. Does not actually perform the deletion
-    async fn create_vacuum_plan(
-        &self,
-        snapshot: &EagerSnapshot,
-    ) -> Result<VacuumPlan, VacuumError> {
+    async fn create_vacuum_plan(&self, snapshot: &Snapshot) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
             info!(
                 "Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!"
@@ -255,41 +253,7 @@ impl VacuumBuilder {
         };
 
         let keep_files = match &self.keep_versions {
-            Some(versions) => {
-                let mut sorted_versions = versions.clone();
-                sorted_versions.sort();
-                let mut sorted_versions = sorted_versions.into_iter();
-                match sorted_versions.next() {
-                    Some(initial_version) => {
-                        let mut keep_files: HashSet<String> = HashSet::new();
-                        let mut state = DeltaTableState::try_new(
-                            &self.log_store,
-                            DeltaTableConfig::default(),
-                            Some(initial_version),
-                        )
-                        .await?;
-                        let mut record_keep_files = |version: Version, state: &DeltaTableState| {
-                            let files: Vec<String> = state
-                                .log_data()
-                                .into_iter()
-                                .map(|add| add.object_store_path())
-                                .map(|path| path.to_string())
-                                .collect();
-                            debug!("keep version:{version}\n, {files:#?}");
-                            keep_files.extend(files);
-                        };
-
-                        record_keep_files(initial_version, &state);
-                        for version in sorted_versions {
-                            state.update(&self.log_store, Some(version)).await?;
-                            record_keep_files(version, &state);
-                        }
-
-                        keep_files
-                    }
-                    None => HashSet::new(),
-                }
-            }
+            Some(versions) => collect_keep_version_files(self.log_store.as_ref(), versions).await?,
             _ => HashSet::new(),
         };
 
@@ -306,7 +270,6 @@ impl VacuumBuilder {
             )
         };
         let valid_files: HashSet<_> = snapshot
-            .snapshot()
             .active_adds(
                 self.log_store.as_ref(),
                 ActiveAddOptions {
@@ -418,7 +381,7 @@ impl std::future::IntoFuture for VacuumBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            let plan = this.create_vacuum_plan(&snapshot).await?;
+            let plan = this.create_vacuum_plan(snapshot.snapshot()).await?;
 
             if this.dry_run {
                 return Ok((
@@ -606,12 +569,11 @@ fn ok_to_delete(
 }
 
 async fn collect_full_mode_tombstones(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
     snapshot
-        .snapshot()
         .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
@@ -630,14 +592,13 @@ async fn collect_full_mode_tombstones(
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 async fn get_stale_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     retention_period: Duration,
     now_timestamp_millis: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<Vec<TombstoneView>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
-        .snapshot()
         .active_tombstones(store)
         .try_filter(|tombstone| {
             ready(is_tombstone_expired(
@@ -647,6 +608,55 @@ async fn get_stale_files(
         })
         .try_collect::<Vec<_>>()
         .await
+}
+
+async fn collect_keep_version_files(
+    log_store: &dyn LogStore,
+    versions: &[Version],
+) -> DeltaResult<HashSet<String>> {
+    let mut sorted_versions = versions.to_vec();
+    sorted_versions.sort();
+    sorted_versions.dedup();
+
+    let mut snapshots = Vec::with_capacity(sorted_versions.len());
+    for version in sorted_versions {
+        snapshots.push(
+            Snapshot::try_new(
+                log_store,
+                DeltaTableConfig {
+                    require_files: false,
+                    ..Default::default()
+                },
+                Some(version),
+            )
+            .await?,
+        );
+    }
+
+    collect_keep_files_from_snapshots(log_store, snapshots.iter()).await
+}
+
+async fn collect_keep_files_from_snapshots<'a>(
+    log_store: &dyn LogStore,
+    snapshots: impl IntoIterator<Item = &'a Snapshot>,
+) -> DeltaResult<HashSet<String>> {
+    let mut keep_files = HashSet::new();
+    for snapshot in snapshots {
+        let files: Vec<String> = snapshot
+            .active_adds(
+                log_store,
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .map_ok(|add| add.object_store_path().to_string())
+            .try_collect()
+            .await?;
+        debug!("keep version:{}\n, {files:#?}", snapshot.version());
+        keep_files.extend(files);
+    }
+    Ok(keep_files)
 }
 
 fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp: i64) -> bool {
@@ -839,6 +849,45 @@ mod tests {
         descending_files.sort();
 
         assert_eq!(descending_files, ascending_files);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_collect_keep_version_files_uses_lazy_snapshot_active_adds() -> DeltaResult<()> {
+        let table_loc = "../test/tests/data/simple_table";
+        let table_uri = ensure_table_uri(table_loc).unwrap();
+        let table = open_table(table_uri).await?;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let version_2 =
+            Snapshot::try_new(table.log_store().as_ref(), config.clone(), Some(2)).await?;
+        let version_3 = Snapshot::try_new(table.log_store().as_ref(), config, Some(3)).await?;
+
+        assert!(!version_2.has_materialized_files_for_test());
+        assert!(!version_3.has_materialized_files_for_test());
+
+        let keep_files =
+            collect_keep_files_from_snapshots(table.log_store().as_ref(), [&version_2, &version_3])
+                .await?;
+
+        assert!(
+            keep_files
+                .contains("part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet"),
+            "v2 active files should be retained for keep-version planning: {keep_files:#?}"
+        );
+        assert!(
+            keep_files
+                .contains("part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet"),
+            "v3 active files should be retained for keep-version planning: {keep_files:#?}"
+        );
+        assert!(
+            !version_2.has_materialized_files_for_test()
+                && !version_3.has_materialized_files_for_test(),
+            "keep-version collection should not require eager materialized files"
+        );
+
         Ok(())
     }
 

@@ -30,7 +30,7 @@ use crate::delta_datafusion::{
     normalize_path_as_file_id, resolve_file_column_name,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView};
+use crate::kernel::{ActiveAddOptions, Add, AddStatsPolicy, LogicalFileView, Snapshot};
 use crate::logstore::{LogStore, LogStoreRef};
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -53,7 +53,7 @@ pub(crate) struct FindFiles {
     )
 )]
 pub(crate) async fn find_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     predicate: Option<Expr>,
@@ -91,7 +91,7 @@ pub(crate) async fn find_files(
         None => {
             let result = FindFiles {
                 candidates: snapshot
-                    .file_views(&log_store, None)
+                    .file_views(log_store.as_ref(), None)
                     .map_ok(|f| f.to_add())
                     .try_collect()
                     .await?,
@@ -289,7 +289,7 @@ struct MatchingFilesScanSeed {
 
 async fn collect_matching_files(
     session: &dyn Session,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: Option<&LogStoreRef>,
     predicate: Expr,
     file_column_name: &str,
@@ -310,7 +310,7 @@ async fn collect_matching_files(
     let predicate = analysis.predicate();
 
     let mut builder = DeltaScanNext::builder()
-        .with_snapshot(snapshot.snapshot().clone())
+        .with_snapshot(snapshot.clone())
         .with_file_skipping_predicates(skipping_pred.clone())
         .with_file_column(file_column_name);
     if let Some(log_store) = log_store {
@@ -412,13 +412,13 @@ fn join_batches_with_add_actions(
     )
 )]
 pub(in crate::delta_datafusion) async fn find_files_scan(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     session: &dyn Session,
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
-    let table_root = snapshot.snapshot().inner.table_root().clone();
+    let table_root = snapshot.inner.table_root().clone();
     let mut candidate_map: HashMap<_, _> = snapshot
         .file_views(log_store.as_ref(), None)
         .try_fold(HashMap::new(), |mut candidate_map, view| {
@@ -472,13 +472,13 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
     Ok(result)
 }
 
-/// Build a partition-metadata MemTable from snapshot add actions.
+/// Build a MemTable with partition metadata from snapshot add actions.
 ///
 /// Projects only the `path` column and `partition.*` columns for evaluating
-/// partition predicates without materializing full add-action metadata.
+/// partition predicates without materializing full add action metadata.
 /// Returns `None` when the snapshot contains no add actions.
 pub(crate) fn add_actions_partition_mem_table(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
 ) -> DeltaResult<Option<MemTable>> {
     add_actions_partition_mem_table_from_batches(snapshot.add_actions_partition_batches()?)
 }
@@ -540,7 +540,7 @@ fn add_actions_partition_mem_table_from_batches(
 }
 
 async fn scan_memory_table(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: &dyn LogStore,
     predicate: &Expr,
 ) -> DeltaResult<Vec<Add>> {
@@ -548,10 +548,7 @@ async fn scan_memory_table(
         predicate: None,
         stats: AddStatsPolicy::None,
     };
-    let add_action_batches = snapshot
-        .snapshot()
-        .active_add_batches(log_store, options)
-        .await?;
+    let add_action_batches = snapshot.active_add_batches(log_store, options).await?;
     let actions: Vec<Add> = add_action_batches
         .iter()
         .flat_map(|batch| {
@@ -559,9 +556,7 @@ async fn scan_memory_table(
         })
         .collect_vec();
 
-    let partition_batches = snapshot
-        .snapshot()
-        .active_add_partition_batches_from(&add_action_batches)?;
+    let partition_batches = snapshot.active_add_partition_batches_from(&add_action_batches)?;
     let Some(mem_table) = add_actions_partition_mem_table_from_batches(partition_batches)? else {
         return Ok(vec![]);
     };
@@ -615,22 +610,19 @@ impl MatchedFilesScan {
 /// Create a table scan plan for reading all data from
 /// all files which contain any data matching a predicate.
 ///
-/// This is useful for DML where we need to re-write files by
-/// updating/removing some records so we require all records
-/// but only from matching files.
+/// This supports DML that updates or removes records and needs all rows from
+/// files that contain matches.
 ///
 /// ## Returns
 ///
 /// If no files contain matching data, `None` is returned.
 ///
-/// Otherwise:
-/// - The logical plan for reading data from matched files only.
-/// - The set of matched file URLs.
-/// - The potentially simplified predicate applied when matching data.
-/// - A kernel predicate (best effort) which can be used to filter log replays.
+/// Otherwise returns the logical plan for reading matched files, the matched
+/// file URLs, the predicate applied while matching data, and a best effort
+/// kernel predicate for filtering log replays.
 pub(crate) async fn scan_files_where_matches(
     session: &dyn Session,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: LogStoreRef,
     predicate: Expr,
 ) -> Result<Option<MatchedFilesScan>> {
@@ -661,7 +653,7 @@ pub(crate) async fn scan_files_where_matches(
     )
     .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
     let selected_provider = DeltaScanNext::builder()
-        .with_snapshot(snapshot.snapshot().clone())
+        .with_snapshot(snapshot.clone())
         .with_file_skipping_predicates(file_skipping_predicates)
         .with_file_column(FILE_ID_COLUMN_DEFAULT)
         .with_log_store(log_store)
@@ -696,6 +688,7 @@ mod tests {
         delta_datafusion::{
             DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
         },
+        kernel::EagerSnapshot,
         protocol::SaveMode,
         test_utils::{
             TestResult, multibatch_add_actions_for_partition,
@@ -752,7 +745,7 @@ mod tests {
         let log_store = table.log_store();
         let predicate = col("id").gt(lit(-1i64));
         let Some(scan) =
-            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
+            scan_files_where_matches(&session, snapshot.snapshot(), log_store, predicate).await?
         else {
             panic!("Expected at least one matching file");
         };
@@ -774,7 +767,7 @@ mod tests {
         let log_store = table.log_store();
         let predicate = col("id").gt(lit(-1i64));
         let Some(scan) =
-            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
+            scan_files_where_matches(&session, snapshot.snapshot(), log_store, predicate).await?
         else {
             panic!("Expected at least one matching file");
         };
@@ -803,7 +796,7 @@ mod tests {
         let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
 
         let by_id = find_files_scan(
-            &snapshot,
+            snapshot.snapshot(),
             log_store.clone(),
             &session,
             col("id").eq(lit(7i64)),
@@ -820,7 +813,7 @@ mod tests {
         let matched_paths = by_id.iter().map(|add| add.path.as_str()).collect_vec();
 
         let matches = find_files_scan(
-            &snapshot,
+            snapshot.snapshot(),
             log_store.clone(),
             &session,
             col("id")
@@ -845,7 +838,7 @@ mod tests {
             "find_files test path",
         )?;
         let no_matches = find_files_scan(
-            &snapshot,
+            snapshot.snapshot(),
             log_store,
             &session,
             col("id")
@@ -874,8 +867,13 @@ mod tests {
         let ctx = create_session().into_inner();
         let session = ctx.state();
 
-        let matches =
-            find_files_scan(&snapshot, log_store, &session, col("id").eq(lit(7i64))).await?;
+        let matches = find_files_scan(
+            snapshot.snapshot(),
+            log_store,
+            &session,
+            col("id").eq(lit(7i64)),
+        )
+        .await?;
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].path.ends_with(".parquet"));
@@ -915,8 +913,13 @@ mod tests {
         let snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
 
-        let matches =
-            find_files_scan(&snapshot, log_store, &session, col("price").eq(lit(10i64))).await?;
+        let matches = find_files_scan(
+            snapshot.snapshot(),
+            log_store,
+            &session,
+            col("price").eq(lit(10i64)),
+        )
+        .await?;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(
@@ -995,7 +998,7 @@ mod tests {
         assert_eq!(file_column_name, format!("{PATH_COLUMN}_2"));
 
         let matches = find_files_scan(
-            &snapshot,
+            snapshot.snapshot(),
             log_store,
             &session,
             col("id")
@@ -1029,9 +1032,13 @@ mod tests {
         let ctx = create_session().into_inner();
         let session = ctx.state();
 
-        let Some(scan) =
-            scan_files_where_matches(&session, &snapshot, log_store, col("id").eq(lit(7i64)))
-                .await?
+        let Some(scan) = scan_files_where_matches(
+            &session,
+            snapshot.snapshot(),
+            log_store,
+            col("id").eq(lit(7i64)),
+        )
+        .await?
         else {
             panic!("Expected at least one matching file");
         };
@@ -1067,7 +1074,7 @@ mod tests {
             .await?;
         let predicate = col("modified").eq(lit("2021-02-02"));
         let matches = scan_memory_table(
-            table.snapshot()?.snapshot(),
+            table.snapshot()?.snapshot().snapshot(),
             table.log_store().as_ref(),
             &predicate,
         )
@@ -1091,7 +1098,8 @@ mod tests {
         let snapshot = table.snapshot()?.snapshot();
         let total_actions = snapshot.log_data().iter().count();
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
+        let matches =
+            scan_memory_table(snapshot.snapshot(), table.log_store().as_ref(), &predicate).await?;
 
         assert!(!matches.is_empty());
         assert!(matches.len() < total_actions);
@@ -1119,7 +1127,8 @@ mod tests {
         assert!(!snapshot.snapshot().has_materialized_files_for_test());
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+        let matches =
+            scan_memory_table(snapshot.snapshot(), log_store.as_ref(), &predicate).await?;
 
         assert!(!matches.is_empty());
         assert!(!snapshot.snapshot().has_materialized_files_for_test());
@@ -1162,7 +1171,8 @@ mod tests {
             .count();
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+        let matches =
+            scan_memory_table(snapshot.snapshot(), log_store.as_ref(), &predicate).await?;
         let replay_reads = drain_recorded_ops(&mut operations)
             .await
             .into_iter()
@@ -1195,14 +1205,15 @@ mod tests {
             .await?;
 
         let snapshot = table.snapshot()?.snapshot();
-        let add_action_batches = snapshot.add_actions_partition_batches()?;
+        let add_action_batches = snapshot.snapshot().add_actions_partition_batches()?;
         assert!(
             add_action_batches.len() > 1,
             "expected multi-batch partition metadata fixture"
         );
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
+        let matches =
+            scan_memory_table(snapshot.snapshot(), table.log_store().as_ref(), &predicate).await?;
 
         assert_eq!(matches.len(), expected_matches);
 
