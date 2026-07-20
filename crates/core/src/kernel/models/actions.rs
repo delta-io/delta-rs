@@ -1073,7 +1073,7 @@ impl Transaction {
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
+/// However, the reference implementation as well as delta-rs store useful information that may for instance
 /// allow us to be more permissive in commit conflict resolution.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1081,6 +1081,10 @@ pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
+
+    /// Same as timestamp above, but cooler
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_commit_timestamp: Option<i64>,
 
     /// Id of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
