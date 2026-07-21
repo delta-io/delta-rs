@@ -155,7 +155,50 @@ impl DeltaScanConfigBuilder {
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             schema_force_view_types: true,
+            file_sort_order: Vec::new(),
+            infer_file_sort_order: false,
         })
+    }
+}
+
+/// A column in a per-file sort order declaration.
+///
+/// Describes how data is sorted *within* each parquet file of a table, so scans
+/// can expose the ordering to DataFusion and avoid re-sorting already-sorted
+/// data. See [`TableProviderBuilder::with_file_sort_order`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileSortColumn {
+    /// Logical (table schema) column name.
+    pub column: String,
+    /// Whether the column is sorted descending rather than ascending.
+    pub descending: bool,
+    /// Whether nulls sort before non-null values.
+    pub nulls_first: bool,
+}
+
+impl FileSortColumn {
+    /// Declare a column sorted ascending with nulls last.
+    pub fn asc(column: impl ToString) -> Self {
+        Self {
+            column: column.to_string(),
+            descending: false,
+            nulls_first: false,
+        }
+    }
+
+    /// Declare a column sorted descending with nulls first.
+    pub fn desc(column: impl ToString) -> Self {
+        Self {
+            column: column.to_string(),
+            descending: true,
+            nulls_first: true,
+        }
+    }
+
+    /// Set whether nulls sort before non-null values.
+    pub fn with_nulls_first(mut self, nulls_first: bool) -> Self {
+        self.nulls_first = nulls_first;
+        self
     }
 }
 
@@ -173,6 +216,14 @@ pub struct DeltaScanConfig {
     pub schema_force_view_types: bool,
     /// Schema to read as
     pub schema: Option<SchemaRef>,
+    /// Lexicographic sort order that every parquet data file in the table
+    /// adheres to, if any. Empty means no ordering is declared.
+    #[serde(default)]
+    pub file_sort_order: Vec<FileSortColumn>,
+    /// Infer the file sort order from the parquet `sorting_columns` metadata
+    /// at scan time. Ignored when [`Self::file_sort_order`] is declared.
+    #[serde(default)]
+    pub infer_file_sort_order: bool,
 }
 
 impl Default for DeltaScanConfig {
@@ -190,6 +241,8 @@ impl DeltaScanConfig {
             enable_parquet_pushdown: true,
             schema_force_view_types: true,
             schema: None,
+            file_sort_order: Vec::new(),
+            infer_file_sort_order: false,
         }
     }
 
@@ -203,6 +256,8 @@ impl DeltaScanConfig {
             enable_parquet_pushdown: config_options.execution.parquet.pushdown_filters,
             schema_force_view_types: config_options.execution.parquet.schema_force_view_types,
             schema: None,
+            file_sort_order: Vec::new(),
+            infer_file_sort_order: false,
         }
     }
 
@@ -233,6 +288,25 @@ impl DeltaScanConfig {
         self.schema = Some(schema);
         self
     }
+
+    /// Declare the sort order that every parquet data file in the table adheres to.
+    ///
+    /// See [`TableProviderBuilder::with_file_sort_order`].
+    pub fn with_file_sort_order(
+        mut self,
+        columns: impl IntoIterator<Item = FileSortColumn>,
+    ) -> Self {
+        self.file_sort_order = columns.into_iter().collect();
+        self
+    }
+
+    /// Infer the file sort order from parquet `sorting_columns` metadata.
+    ///
+    /// See [`TableProviderBuilder::with_inferred_file_sort_order`].
+    pub fn with_inferred_file_sort_order(mut self, infer: bool) -> Self {
+        self.infer_file_sort_order = infer;
+        self
+    }
 }
 
 /// Builder for a datafusion [TableProvider] for a Delta table
@@ -250,6 +324,8 @@ pub struct TableProviderBuilder {
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
     file_selection: Option<next::FileSelection>,
+    file_sort_order: Option<Vec<FileSortColumn>>,
+    infer_file_sort_order: Option<bool>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -263,6 +339,8 @@ impl fmt::Debug for TableProviderBuilder {
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
             .field("file_selection", &self.file_selection)
+            .field("file_sort_order", &self.file_sort_order)
+            .field("infer_file_sort_order", &self.infer_file_sort_order)
             .finish()
     }
 }
@@ -284,6 +362,8 @@ impl TableProviderBuilder {
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
+            file_sort_order: None,
+            infer_file_sort_order: None,
         }
     }
 
@@ -371,6 +451,39 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Declare the sort order that every parquet data file in the table adheres to.
+    ///
+    /// When set, scans expose this ordering to DataFusion, which can then avoid
+    /// full sorts for queries whose `ORDER BY` matches (a prefix of) the file
+    /// sort order, provided file statistics show the files do not overlap.
+    ///
+    /// The declared order is trusted: files whose data is not actually sorted
+    /// this way will produce incorrectly ordered query results.
+    ///
+    /// Only regular data columns are supported. Partition columns are injected
+    /// above the parquet scan and cannot participate in a file-level sort order.
+    pub fn with_file_sort_order(
+        mut self,
+        columns: impl IntoIterator<Item = FileSortColumn>,
+    ) -> Self {
+        self.file_sort_order = Some(columns.into_iter().collect());
+        self
+    }
+
+    /// Infer the sort order of the parquet data files from their
+    /// `sorting_columns` metadata at scan time.
+    ///
+    /// Every file's footer is read during query planning (results are stored
+    /// in the session's file metadata cache); the table-level ordering is the
+    /// longest sort-order prefix shared by all files. Prefer
+    /// [`Self::with_file_sort_order`] when the sort order is known up front,
+    /// which declares the order without reading any footers. Ignored when a
+    /// sort order is declared explicitly.
+    pub fn with_inferred_file_sort_order(mut self, infer: bool) -> Self {
+        self.infer_file_sort_order = Some(infer);
+        self
+    }
+
     /// Consume the builder and resolve it into an executable [`next::DeltaScan`].
     pub async fn build(self) -> Result<next::DeltaScan> {
         let TableProviderBuilder {
@@ -382,6 +495,8 @@ impl TableProviderBuilder {
             table_version,
             file_skipping_predicates,
             file_selection,
+            file_sort_order,
+            infer_file_sort_order,
         } = self;
 
         let mut config = session
@@ -391,6 +506,12 @@ impl TableProviderBuilder {
             });
         if let Some(file_column) = file_column {
             config = config.with_file_column_name(file_column);
+        }
+        if let Some(file_sort_order) = file_sort_order {
+            config = config.with_file_sort_order(file_sort_order);
+        }
+        if let Some(infer) = infer_file_sort_order {
+            config = config.with_inferred_file_sort_order(infer);
         }
 
         let snapshot = match snapshot {

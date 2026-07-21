@@ -71,7 +71,7 @@ Implemented in `crates/core/tests/it_datafusion/sort_order.rs`. Verified:
 Gotcha: `ListingOptions::new` defaults to one target partition and no
 statistics collection; session config must be applied explicitly.
 
-2. Add end-to-end DeltaLake test
+2. Add end-to-end DeltaLake test — **done**
 
 Add an integration test that writes partitioned Parquet files to
 a delta-rs table where each write is ordered by "timestamp", and writes
@@ -83,7 +83,12 @@ Query the DeltaTable with Datafusion and add a check that the
 optimized sort push down is used. This check should fail initially,
 but correctly sorted data should be returned.
 
-3. Configure sorting in TableProviderBuilder
+Implemented as `delta_table_sorted_scan_avoids_sort` in
+`crates/core/tests/it_datafusion/sort_order.rs`; failed as expected
+(`SortExec` over `DeltaScanExec` over a single-group `DataSourceExec` with no
+`output_ordering`) until step 3 landed.
+
+3. Configure sorting in TableProviderBuilder — **done**
 
 Add a "with_file_sort_order" option on the TableProviderBuilder.
 This will define the sort order used by all Parquet files.
@@ -107,35 +112,61 @@ Delta partition columns are injected above the parquet scan by kernel
 transforms in `DeltaScanExec`, so they cannot appear in the file-level
 `output_ordering`.
 
-### Things to clarify during step 3
+Implemented:
+
+- `FileSortColumn` (serializable: column name + descending + nulls_first) and
+  `with_file_sort_order` on `TableProviderBuilder`, `DeltaScanConfig`
+  (`file_sort_order` field, `#[serde(default)]` for wire compatibility).
+- Sort columns are validated in `DeltaScan::new` (must exist, must not be
+  partition columns).
+- `resolve_file_sort_order` (scan/mod.rs) maps the declared order to a
+  physical `LexOrdering` over the parquet read schema (column mapping aware;
+  truncates to a prefix when the projection drops a sort column, degrading
+  gracefully).
+- File groups are formed with
+  `FileScanConfig::split_groups_by_statistics_with_target_partitions` when an
+  ordering is declared (falling back to default chunking when stats are
+  missing or a group would exceed the file-id dictionary key space), and the
+  ordering is set as the `FileScanConfig` `output_ordering`.
+- **Stats materialization**: the kernel scan only materializes per-file
+  min/max stats for predicate columns by default (`NumRecordsOnly` without a
+  predicate), which made the statistics-based grouping fail. The scan builder
+  now supports `with_extra_stats_columns` /
+  `StatsProjection::with_extra_columns` so sort columns always get parsed
+  stats; the replay-side stats extraction was extended the same way.
+- `DeltaScanExec` now derives its `EquivalenceProperties` orderings from its
+  input (remapping physical parquet column names to logical output names),
+  and implements `try_pushdown_sort` delegating to the inner
+  `DataSourceExec`. `maintains_input_order` was left untouched.
+
+Resulting plan shape for the step-2 test: `SortPreservingMergeExec` →
+`DeltaScanExec` → `DataSourceExec` with `output_ordering` set and
+statistics-split file groups; no `SortExec`.
+
+### Things clarified during step 3
 
 - `DeltaScanExec` has `maintains_input_order` commented out with a TODO
-  ("setting this will fail certain tests, but why"). Understand the failure
-  before advertising orderings — don't just re-enable it.
+  ("setting this will fail certain tests, but why"). Not needed for this
+  work: deriving the exec's own equivalence orderings from its input was
+  sufficient, so the TODO was left as is.
 - Kernel transforms (partition value injection, column mapping, deletion
-  vector filtering) should all be row-order-preserving; confirm this holds
-  for every transform the scan can produce.
-- File groups are currently chunked by file-id dictionary cardinality
-  (65536 files per group), i.e. effectively one big group. Check whether
-  `FileScanConfig::try_pushdown_sort`'s per-query regrouping is sufficient,
-  or whether we need to build groups differently when a sort order is
-  declared. Also check the interaction with `repartition_file_scans`
-  (byte-range splitting), which must not split files when ordering matters.
-- Are the Delta log (Add action) statistics that delta-rs attaches to
-  `PartitionedFile`s sufficient for `MinMaxStatistics`? The sort column must
-  have min/max stats (by default Delta only collects stats for the first 32
-  columns).
-- `DeltaScanConfig` is `Serialize`/`Deserialize` (used by the proto codec),
-  so if the sort order lives there it needs a serializable representation
-  (column names + ASC/DESC + NULLS FIRST/LAST), not physical expressions.
+  vector filtering) are per-file row-level maps/filters and preserve row
+  order.
+- `FileScanConfig::try_pushdown_sort` deliberately does **not** redistribute
+  files across groups (only reorders within groups), so per-query pushdown
+  alone cannot reach `Exact` from delta-rs's single big file group. Groups
+  must be formed by statistics at scan-build time; both `EnforceSorting` and
+  `PushdownSort` then eliminate the sort.
+- Delta log stats attached to `PartitionedFile`s are sufficient for
+  `MinMaxStatistics` (`Precision::Inexact` is accepted), but only once the
+  stats projection actually materializes the sort columns (see above).
 - Multi-object-store tables produce a `UnionExec` of per-store scans, which
-  destroys ordering. This can stay unsupported, but must degrade gracefully
-  (no false ordering advertised) rather than error.
-- LIMIT / TopK interaction: `PushdownSort` pushes fetch into the scan on the
-  `Exact` path — make sure `DeltaScanExec::with_fetch`/limit handling is
-  consistent with that.
+  destroys ordering. Each per-store scan still declares its ordering, but
+  `UnionExec` does not propagate it — degrades to a sort, no false claims.
+- LIMIT / TopK interaction relies on `DeltaScanExec::with_fetch`, which
+  already delegates to its input; not exercised by a dedicated test yet.
 
-4. Infer file sort order
+4. Infer file sort order — **done**
 
 Add an "with_inferred_file_sort_order(bool)" method to TableProviderBuilder.
 This should read the Parquet sorting columns from Parquet metadata at scan
@@ -143,12 +174,26 @@ time to infer the sort order, reusing DataFusion's
 `ordering_from_parquet_metadata` and per-file `PartitionedFile::ordering` +
 common-prefix derivation where possible.
 
-### Things to clarify during step 4
+Implemented:
 
-- Cost: delta-rs deliberately reads statistics from the Delta log, not
-  Parquet footers. Inference adds one footer read per file per scan on the
-  gated path. Consider caching, or documenting that users should prefer
+- `with_inferred_file_sort_order(bool)` on `TableProviderBuilder` and
+  `DeltaScanConfig` (`infer_file_sort_order`, `#[serde(default)]`). A
+  declared `with_file_sort_order` takes precedence.
+- At planning time each file's footer is fetched through DataFusion's
+  `DFParquetMetadata` with the session's file metadata cache, so execution
+  reuses the fetched footers. Fetches run 16-at-a-time per store.
+- The table ordering is the longest `sorting_columns` prefix (first row
+  group) shared by all files; any file without resolvable metadata disables
+  the ordering. DataFusion's own `ordering_from_parquet_metadata` was *not*
+  reused because it silently skips unresolvable sort columns mid-order,
+  which can fabricate an invalid ordering (e.g. `[a, c]` from `[a, b, c]`);
+  our conversion truncates at the first unresolvable column instead.
+- With inference enabled the sort columns are unknown when the kernel scan
+  is built, so the full stats schema is materialized
+  (`with_kernel_all_struct_stats`).
+
+### Cost notes for step 4
+
+- Inference adds one footer read per file per scan on the gated path
+  (mitigated by the shared file metadata cache). Users should prefer
   `with_file_sort_order` for large tables once the order is known.
-- DataFusion's `ordering_from_parquet_metadata` only reads the *first* row
-  group's `sorting_columns` and the table ordering is the common prefix
-  across files — confirm these semantics are acceptable.

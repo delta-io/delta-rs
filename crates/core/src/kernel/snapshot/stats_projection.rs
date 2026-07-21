@@ -255,6 +255,56 @@ impl StatsProjection {
         }
     }
 
+    /// Extend this projection so parsed stats are also materialized for the
+    /// given logical columns (e.g. declared file sort order columns).
+    ///
+    /// Columns that have no entry in the table's stats schema are ignored. An
+    /// explicit [`StatsProjection::None`] is preserved, as it represents an
+    /// intentional decision to skip stats.
+    pub(crate) fn with_extra_columns(
+        self,
+        snapshot: &KernelSnapshot,
+        schema: Option<&KernelSchemaRef>,
+        extra_columns: impl IntoIterator<Item = ColumnName>,
+    ) -> DeltaResult<Self> {
+        if matches!(self, Self::None | Self::Full) {
+            return Ok(self);
+        }
+
+        let snapshot_schema;
+        let logical_schema = match schema {
+            Some(schema) => schema.as_ref(),
+            None => {
+                snapshot_schema = snapshot.schema();
+                snapshot_schema.as_ref()
+            }
+        };
+        let stats_schema = snapshot.table_configuration().stats_schema()?;
+        let column_mapping_mode = snapshot.table_configuration().column_mapping_mode();
+
+        let extra = extra_columns
+            .into_iter()
+            .filter_map(|column| {
+                let physical =
+                    physicalize_column_path(logical_schema, &column, column_mapping_mode)?;
+                stats_schema_contains_data_column(stats_schema.as_ref(), &physical)
+                    .then_some(physical)
+            })
+            .collect::<BTreeSet<_>>();
+        if extra.is_empty() {
+            return Ok(self);
+        }
+
+        Ok(match self {
+            Self::PredicateColumns(mut columns) => {
+                columns.extend(extra);
+                Self::PredicateColumns(columns)
+            }
+            Self::NumRecordsOnly => Self::PredicateColumns(extra),
+            Self::None | Self::Full => unreachable!("handled above"),
+        })
+    }
+
     pub(crate) fn stats_schema(&self, snapshot: &KernelSnapshot) -> DeltaResult<KernelSchemaRef> {
         match self {
             Self::None => Ok(Arc::new(StructType::try_new([])?)),

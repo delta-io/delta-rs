@@ -22,12 +22,14 @@ use datafusion::common::{
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::utils::collect_columns;
-use datafusion::physical_expr::{Distribution, EquivalenceProperties};
+use datafusion::physical_expr::{
+    Distribution, EquivalenceProperties, LexOrdering, PhysicalSortExpr,
+};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
+    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, SortOrderPushdownResult, Statistics,
 };
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
@@ -88,6 +90,78 @@ pub(crate) fn consume_dv_mask(
             should_remove: true,
         }
     }
+}
+
+/// Map a physical parquet column name used by the inner scan back to the
+/// logical column name exposed by [`DeltaScanExec`].
+fn input_to_logical_column_name(scan_plan: &KernelScanPlan, physical_name: &str) -> Option<String> {
+    let table_config = scan_plan.table_configuration();
+    if table_config.is_feature_enabled(&TableFeature::ColumnMapping) {
+        let mode = table_config.column_mapping_mode();
+        scan_plan.scan.logical_schema().fields().find_map(|field| {
+            let physical = field.make_physical(mode).ok()?;
+            (physical.name() == physical_name).then(|| field.name().to_string())
+        })
+    } else {
+        Some(physical_name.to_string())
+    }
+}
+
+/// Map a logical column name exposed by [`DeltaScanExec`] to the physical
+/// parquet column name used by the inner scan.
+fn logical_to_input_column_name(scan_plan: &KernelScanPlan, logical_name: &str) -> Option<String> {
+    let table_config = scan_plan.table_configuration();
+    if table_config.is_feature_enabled(&TableFeature::ColumnMapping) {
+        let physical = scan_plan
+            .scan
+            .logical_schema()
+            .field(logical_name)?
+            .make_physical(table_config.column_mapping_mode())
+            .ok()?;
+        Some(physical.name().to_string())
+    } else {
+        Some(logical_name.to_string())
+    }
+}
+
+/// Derive the orderings this exec's output satisfies from the orderings of its
+/// input. The per-file kernel transforms (partition value injection, column
+/// mapping, deletion vector filtering) preserve row order, so any input
+/// ordering whose columns survive into the output schema carries over,
+/// possibly truncated to a prefix.
+fn derive_output_orderings(
+    scan_plan: &KernelScanPlan,
+    input: &Arc<dyn ExecutionPlan>,
+) -> Vec<LexOrdering> {
+    let output_schema = &scan_plan.contract.output_schema;
+    let mut orderings = Vec::new();
+    for ordering in input
+        .properties()
+        .equivalence_properties()
+        .oeq_class()
+        .iter()
+    {
+        let mut mapped = Vec::new();
+        for sort_expr in ordering.iter() {
+            let Some(column) = sort_expr.expr.downcast_ref::<Column>() else {
+                break;
+            };
+            let Some(logical_name) = input_to_logical_column_name(scan_plan, column.name()) else {
+                break;
+            };
+            let Ok(index) = output_schema.index_of(&logical_name) else {
+                break;
+            };
+            mapped.push(PhysicalSortExpr::new(
+                Arc::new(Column::new(&logical_name, index)),
+                sort_expr.options,
+            ));
+        }
+        if let Some(ordering) = LexOrdering::new(mapped) {
+            orderings.push(ordering);
+        }
+    }
+    orderings
 }
 
 /// Physical execution plan for scanning Delta tables.
@@ -165,7 +239,10 @@ impl DeltaScanExec {
             .retain_file_id
             .then(|| scan_plan.contract.file_id_field.name().to_owned());
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&scan_plan.contract.output_schema)),
+            EquivalenceProperties::new_with_orderings(
+                Arc::clone(&scan_plan.contract.output_schema),
+                derive_output_orderings(&scan_plan, &input),
+            ),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
@@ -182,6 +259,19 @@ impl DeltaScanExec {
             file_id_column,
             properties,
         }
+    }
+
+    /// Rebuild this exec around a new input plan, recomputing plan properties.
+    fn with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        Arc::new(Self::new(
+            self.scan_plan.clone(),
+            input,
+            self.transforms.clone(),
+            self.selection_vectors.clone(),
+            self.public_file_ids.clone(),
+            self.partition_stats.clone(),
+            self.metrics.clone(),
+        ))
     }
 
     /// Transform the statistics from the inner physical parquet read plan to the logical
@@ -307,15 +397,47 @@ impl ExecutionPlan for DeltaScanExec {
         if children.len() != 1 {
             return plan_err!("DeltaScan: wrong number of children {}", children.len());
         }
-        Ok(Arc::new(Self::new(
-            self.scan_plan.clone(),
-            children[0].clone(),
-            self.transforms.clone(),
-            self.selection_vectors.clone(),
-            self.public_file_ids.clone(),
-            self.partition_stats.clone(),
-            self.metrics.clone(),
-        )))
+        Ok(self.with_new_input(children[0].clone()))
+    }
+
+    fn try_pushdown_sort(
+        &self,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
+        // The kernel transforms applied above the input preserve row order, so
+        // the input's ordering guarantees carry over to this exec's output.
+        // Delegate the request to the inner parquet scan with the sort columns
+        // remapped to its schema.
+        let input_schema = self.input.schema();
+        let mut mapped = Vec::with_capacity(order.len());
+        for sort_expr in order {
+            let Some(column) = sort_expr.expr.downcast_ref::<Column>() else {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            let Some(physical_name) = logical_to_input_column_name(&self.scan_plan, column.name())
+            else {
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            let Ok(index) = input_schema.index_of(&physical_name) else {
+                // Columns materialized above the parquet scan (partition
+                // columns, file id, row index) cannot be pushed down.
+                return Ok(SortOrderPushdownResult::Unsupported);
+            };
+            mapped.push(PhysicalSortExpr::new(
+                Arc::new(Column::new(&physical_name, index)),
+                sort_expr.options,
+            ));
+        }
+
+        Ok(match self.input.try_pushdown_sort(&mapped)? {
+            SortOrderPushdownResult::Exact { inner } => SortOrderPushdownResult::Exact {
+                inner: self.with_new_input(inner),
+            },
+            SortOrderPushdownResult::Inexact { inner } => SortOrderPushdownResult::Inexact {
+                inner: self.with_new_input(inner),
+            },
+            SortOrderPushdownResult::Unsupported => SortOrderPushdownResult::Unsupported,
+        })
     }
 
     fn repartitioned(

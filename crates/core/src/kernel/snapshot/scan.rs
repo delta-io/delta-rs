@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+use delta_kernel::expressions::ColumnName;
 use delta_kernel::scan::{Scan as KernelScan, ScanBuilder as KernelScanBuilder, ScanMetadata};
 use delta_kernel::schema::SchemaRef;
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
@@ -28,6 +29,7 @@ pub struct ScanBuilder {
     schema: Option<SchemaRef>,
     predicate: Option<PredicateRef>,
     stats_materialization: Option<FileStatsMaterialization>,
+    extra_stats_columns: Vec<ColumnName>,
 }
 
 impl ScanBuilder {
@@ -38,6 +40,7 @@ impl ScanBuilder {
             schema: None,
             predicate: None,
             stats_materialization: None,
+            extra_stats_columns: Vec::new(),
         }
     }
 
@@ -101,6 +104,19 @@ impl ScanBuilder {
         self
     }
 
+    /// Request parsed file statistics for additional logical columns beyond
+    /// those the scan would materialize by default (e.g. declared file sort
+    /// order columns). Ignored when an explicit stats materialization override
+    /// is set.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn with_extra_stats_columns(
+        mut self,
+        columns: impl IntoIterator<Item = ColumnName>,
+    ) -> Self {
+        self.extra_stats_columns = columns.into_iter().collect();
+        self
+    }
+
     /// Finalize the builder into a [`Scan`], validating the configured schema and predicate.
     pub fn build(self) -> DeltaResult<Scan> {
         let Self {
@@ -108,15 +124,26 @@ impl ScanBuilder {
             schema,
             predicate,
             stats_materialization,
+            extra_stats_columns,
         } = self;
 
         let stats_materialization = match stats_materialization {
             Some(stats_materialization) => stats_materialization,
-            None => FileStatsMaterialization::query(StatsProjection::for_scan_inputs(
-                snapshot.as_ref(),
-                schema.as_ref(),
-                predicate.as_ref(),
-            )?),
+            None => {
+                let mut projection = StatsProjection::for_scan_inputs(
+                    snapshot.as_ref(),
+                    schema.as_ref(),
+                    predicate.as_ref(),
+                )?;
+                if !extra_stats_columns.is_empty() {
+                    projection = projection.with_extra_columns(
+                        snapshot.as_ref(),
+                        schema.as_ref(),
+                        extra_stats_columns,
+                    )?;
+                }
+                FileStatsMaterialization::query(projection)
+            }
         };
 
         // Modernization: Use kernel's StatsOptions when available

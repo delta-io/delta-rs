@@ -26,6 +26,7 @@ use datafusion::prelude::Expr;
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource::file_scan_config::wrap_partition_type_in_dict;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::expressions::ColumnName;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::TableFeature;
@@ -290,9 +291,25 @@ impl KernelScanPlan {
             kernel_predicate
         };
 
-        let scan_builder = snapshot
+        let mut scan_builder = snapshot
             .scan_builder()
             .with_predicate(scan_predicate.clone());
+
+        if !config.file_sort_order.is_empty() {
+            // Materialize file statistics for the declared sort order columns so
+            // scan file groups can be formed (and orderings validated) from
+            // per-file min/max values.
+            scan_builder = scan_builder.with_extra_stats_columns(
+                config
+                    .file_sort_order
+                    .iter()
+                    .map(|sort_column| ColumnName::new([sort_column.column.as_str()])),
+            );
+        } else if config.infer_file_sort_order {
+            // The sort order columns are not known until file footers are read
+            // at planning time, so materialize the full stats schema.
+            scan_builder = scan_builder.with_kernel_all_struct_stats();
+        }
 
         let scan = if contract.kernel_projection.is_some() {
             let kernel_projection_names = contract

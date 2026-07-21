@@ -24,7 +24,7 @@ use delta_kernel::{
     Engine, ExpressionRef,
     engine::{arrow_conversion::TryIntoArrow, arrow_data::ArrowEngineData},
     engine_data::FilteredEngineData,
-    expressions::{Scalar, StructData},
+    expressions::{ColumnName, Scalar, StructData},
     scan::{
         Scan as KernelScan, ScanMetadata,
         state::{DvInfo, ScanFile},
@@ -175,6 +175,27 @@ where
                     Err(err) => return Poll::Ready(Some(Err(err))),
                 };
                 let snapshot = this.kernel_scan.snapshot();
+                // Also extract stats for file sort order columns so scan file
+                // groups can be formed from per-file min/max values. With an
+                // inferred sort order the columns are not known yet, so all
+                // stats are extracted.
+                let stats_projection = if this.scan_config.infer_file_sort_order {
+                    StatsProjection::Full
+                } else if this.scan_config.file_sort_order.is_empty() {
+                    stats_projection
+                } else {
+                    match stats_projection.with_extra_columns(
+                        snapshot,
+                        None,
+                        this.scan_config
+                            .file_sort_order
+                            .iter()
+                            .map(|sort_column| ColumnName::new([sort_column.column.as_str()])),
+                    ) {
+                        Ok(projection) => projection,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    }
+                };
                 let stats_schema = match stats_projection.stats_schema(snapshot) {
                     Ok(schema) => schema,
                     Err(err) => return Poll::Ready(Some(Err(err))),

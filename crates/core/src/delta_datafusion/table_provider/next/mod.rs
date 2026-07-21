@@ -520,6 +520,7 @@ impl DeltaScan {
         Self::validate_supported_reader_features(&snapshot)
             .map_err(crate::DeltaTableError::from)?;
         let scan_schema = config.table_schema(snapshot.table_configuration())?;
+        Self::validate_file_sort_order(&config, &snapshot, &scan_schema)?;
         let full_schema = if let Some(file_id_column) =
             config.provider_file_id_column(None, scan_schema.as_ref())
         {
@@ -601,6 +602,35 @@ impl DeltaScan {
     pub(crate) fn with_operation_id(mut self, operation_id: Uuid) -> Self {
         self.read_operation_id = Some(operation_id);
         self
+    }
+
+    /// Validate that a configured file sort order only references data columns
+    /// that exist in the scan schema. Partition columns are materialized above
+    /// the parquet scan, so they cannot participate in a file-level sort order.
+    fn validate_file_sort_order(
+        config: &DeltaScanConfig,
+        snapshot: &SnapshotWrapper,
+        scan_schema: &SchemaRef,
+    ) -> Result<()> {
+        let partition_columns = snapshot
+            .table_configuration()
+            .metadata()
+            .partition_columns();
+        for sort_column in &config.file_sort_order {
+            if partition_columns.contains(&sort_column.column) {
+                return Err(DataFusionError::Plan(format!(
+                    "file sort order column '{}' is a partition column; only data columns can participate in a file sort order",
+                    sort_column.column
+                )));
+            }
+            if scan_schema.field_with_name(&sort_column.column).is_err() {
+                return Err(DataFusionError::Plan(format!(
+                    "file sort order column '{}' does not exist in the table schema",
+                    sort_column.column
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn validate_supported_reader_features(
