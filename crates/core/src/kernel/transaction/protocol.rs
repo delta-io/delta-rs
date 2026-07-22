@@ -317,6 +317,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::TimestampNanos);
     writer_features.insert(TableFeature::VariantType);
     writer_features.insert(TableFeature::VariantTypePreview);
+    writer_features.insert(TableFeature::V2Checkpoint);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(TableFeature::ChangeDataFeed);
