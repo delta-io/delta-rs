@@ -26,6 +26,8 @@ pub struct UpdateFieldMetadataBuilder {
     field_name: String,
     /// HashMap of the metadata to upsert
     metadata: HashMap<String, MetadataValue>,
+    /// When set, also update the field's `nullable` flag in the schema
+    nullable: Option<bool>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Additional information to add to the commit
@@ -48,6 +50,7 @@ impl UpdateFieldMetadataBuilder {
         Self {
             metadata: HashMap::new(),
             field_name: String::new(),
+            nullable: None,
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
@@ -64,6 +67,16 @@ impl UpdateFieldMetadataBuilder {
     /// Specify the metadata to be added or modified on a field
     pub fn with_metadata(mut self, metadata: HashMap<String, MetadataValue>) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Also update the field's `nullable` flag in the table schema.
+    ///
+    /// Relaxing (`false` → `true`) is always safe. Tightening (`true` → `false`) is only valid
+    /// when the column contains no NULL values — the caller is responsible for verifying this
+    /// before committing; this operation does not scan the data.
+    pub fn with_nullable(mut self, nullable: bool) -> Self {
+        self.nullable = Some(nullable);
         self
     }
 
@@ -84,6 +97,7 @@ fn plan_update_field_metadata_actions(
     snapshot: SnapshotMetadataRef<'_>,
     field_name: &str,
     metadata_update: HashMap<String, MetadataValue>,
+    nullable: Option<bool>,
 ) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
     let table_schema = snapshot.table_configuration.logical_schema();
 
@@ -112,6 +126,11 @@ fn plan_update_field_metadata_actions(
             })
             .or_insert(value);
     });
+
+    // Apply the nullability change, if requested (see `with_nullable` for the contract)
+    if let Some(nullable) = nullable {
+        field.nullable = nullable;
+    }
 
     let updated_table_schema =
         StructType::try_new(table_schema.fields().map(|f| match f.name == field.name {
@@ -161,6 +180,7 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
                 snapshot.snapshot().metadata_state(),
                 &this.field_name,
                 this.metadata.clone(),
+                this.nullable,
             )?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
@@ -219,7 +239,74 @@ mod tests {
             .await?;
 
         assert!(!snapshot.snapshot().has_materialized_files_for_test());
+        Ok(())
+    }
+}
 
+#[cfg(feature = "datafusion")]
+#[cfg(test)]
+mod nullable_tests {
+    use delta_kernel::schema::MetadataValue;
+    use std::collections::HashMap;
+
+    use crate::DeltaResult;
+    use crate::writer::test_utils::{create_bare_table, get_record_batch};
+
+    /// `with_nullable(false)` must flip the schema field's `nullable` flag, not just its
+    /// metadata map — reporting and NOT NULL enforcement read the flag.
+    #[tokio::test]
+    async fn with_nullable_updates_the_schema_flag() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = create_bare_table().write(vec![batch]).await.unwrap();
+        assert!(
+            table.snapshot()?.schema().field("value").unwrap().nullable,
+            "test premise: 'value' starts nullable"
+        );
+
+        let table = table
+            .update_field_metadata()
+            .with_field_name("value")
+            .with_nullable(false)
+            .await
+            .unwrap();
+
+        let field = table.snapshot()?.schema().field("value").unwrap().clone();
+        assert!(!field.nullable, "nullable flag updated in the schema");
+
+        // And back: relaxing is always safe.
+        let table = table
+            .update_field_metadata()
+            .with_field_name("value")
+            .with_nullable(true)
+            .await
+            .unwrap();
+        assert!(table.snapshot()?.schema().field("value").unwrap().nullable);
+        Ok(())
+    }
+
+    /// Without `with_nullable`, the operation keeps its metadata-only behavior.
+    #[tokio::test]
+    async fn metadata_only_update_leaves_nullable_untouched() -> DeltaResult<()> {
+        let batch = get_record_batch(None, false);
+        let table = create_bare_table().write(vec![batch]).await.unwrap();
+
+        let table = table
+            .update_field_metadata()
+            .with_field_name("value")
+            .with_metadata(HashMap::from([(
+                "isUnique".to_string(),
+                MetadataValue::Boolean(true),
+            )]))
+            .await
+            .unwrap();
+
+        let field = table.snapshot()?.schema().field("value").unwrap().clone();
+        assert!(field.nullable, "nullable flag unchanged");
+        assert_eq!(
+            field.metadata.get("isUnique"),
+            Some(&MetadataValue::Boolean(true)),
+            "metadata written"
+        );
         Ok(())
     }
 }
