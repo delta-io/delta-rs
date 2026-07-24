@@ -39,7 +39,28 @@ pub fn create_session_state_with_spill_config(
     max_spill_size: Option<usize>,
     max_temp_directory_size: Option<u64>,
 ) -> SessionState {
-    if max_spill_size.is_none() && max_temp_directory_size.is_none() {
+    create_session_state_with_execution_config(max_spill_size, max_temp_directory_size, None)
+}
+
+/// Create a [`SessionState`] with optional spill-to-disk and execution-parallelism
+/// configuration.
+///
+/// Behaves like [`create_session_state_with_spill_config`] but additionally allows
+/// overriding `datafusion.execution.target_partitions`. Setting it to `1` removes the
+/// `RepartitionExec` from the plan, which lets a bounded-memory operation spill to disk
+/// instead of deadlocking on a partitioned hash join (see delta-io/delta-rs#4614).
+///
+/// # Arguments
+/// * `max_spill_size` – Maximum bytes kept in memory before spilling. `None` uses DataFusion's default (unbounded) pool.
+/// * `max_temp_directory_size` – Maximum disk space for temporary spill files. `None` uses DataFusion's default disk manager.
+/// * `target_partitions` – Number of partitions DataFusion uses for query execution. `None` uses DataFusion's default (number of CPU cores).
+pub fn create_session_state_with_execution_config(
+    max_spill_size: Option<usize>,
+    max_temp_directory_size: Option<u64>,
+    target_partitions: Option<usize>,
+) -> SessionState {
+    if max_spill_size.is_none() && max_temp_directory_size.is_none() && target_partitions.is_none()
+    {
         return DeltaSessionContext::new().state();
     }
 
@@ -51,7 +72,12 @@ pub fn create_session_state_with_spill_config(
         builder = builder.with_max_temp_directory_size(directory_size);
     }
 
-    DeltaSessionContext::with_runtime_env(builder.build()).state()
+    let mut config: SessionConfig = DeltaSessionConfig::default().into();
+    if let Some(partitions) = target_partitions {
+        config = config.with_target_partitions(partitions);
+    }
+
+    DeltaSessionContext::new_with_config_and_runtime(config, builder.build()).state()
 }
 
 pub(crate) trait DeltaSessionExt: DataFusionSession {
@@ -427,6 +453,21 @@ mod tests {
             table_uri: None,
             cdc: false,
         }
+    }
+
+    #[test]
+    fn spill_config_state_applies_target_partitions() {
+        let state = create_session_state_with_execution_config(None, None, Some(1));
+        assert_eq!(state.config().target_partitions(), 1);
+    }
+
+    #[test]
+    fn spill_config_wrapper_preserves_two_arg_signature() {
+        // The original 2-arg entry point must keep working unchanged (source
+        // compatibility for downstream callers).
+        let state = create_session_state_with_spill_config(Some(1024 * 1024), None);
+        // target_partitions was not requested, so DataFusion's default applies.
+        assert!(state.config().target_partitions() >= 1);
     }
 
     #[test]

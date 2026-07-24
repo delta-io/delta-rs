@@ -34,7 +34,7 @@ use pyo3_arrow::PyDataType;
 use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
 };
-use deltalake::delta_datafusion::create_session_state_with_spill_config;
+use deltalake::delta_datafusion::create_session_state_with_execution_config;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -763,6 +763,7 @@ impl RawDeltaTable {
         max_concurrent_tasks = None,
         max_spill_size = None,
         max_temp_directory_size = None,
+        target_partitions = None,
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
@@ -777,6 +778,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         max_spill_size: Option<usize>,
         max_temp_directory_size: Option<u64>,
+        target_partitions: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -788,9 +790,15 @@ impl RawDeltaTable {
                 .optimize()
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
 
-            if max_spill_size.is_some() || max_temp_directory_size.is_some() {
-                let session =
-                    create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
+            if max_spill_size.is_some()
+                || max_temp_directory_size.is_some()
+                || target_partitions.is_some()
+            {
+                let session = create_session_state_with_execution_config(
+                    max_spill_size,
+                    max_temp_directory_size,
+                    target_partitions,
+                );
                 cmd = cmd.with_session_state(Arc::new(session));
             }
 
@@ -839,6 +847,7 @@ impl RawDeltaTable {
         max_concurrent_tasks = None,
         max_spill_size = None,
         max_temp_directory_size = None,
+        target_partitions = None,
         min_commit_interval = None,
         writer_properties=None,
         commit_properties=None,
@@ -853,6 +862,7 @@ impl RawDeltaTable {
         max_concurrent_tasks: Option<usize>,
         max_spill_size: Option<usize>,
         max_temp_directory_size: Option<u64>,
+        target_partitions: Option<usize>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -866,9 +876,15 @@ impl RawDeltaTable {
                 .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
                 .with_type(OptimizeType::ZOrder(z_order_columns));
 
-            if max_spill_size.is_some() || max_temp_directory_size.is_some() {
-                let session =
-                    create_session_state_with_spill_config(max_spill_size, max_temp_directory_size);
+            if max_spill_size.is_some()
+                || max_temp_directory_size.is_some()
+                || target_partitions.is_some()
+            {
+                let session = create_session_state_with_execution_config(
+                    max_spill_size,
+                    max_temp_directory_size,
+                    target_partitions,
+                );
                 cmd = cmd.with_session_state(Arc::new(session));
             }
 
@@ -1211,6 +1227,7 @@ impl RawDeltaTable {
         streamed_exec = false,
         max_spill_size = None,
         max_temp_directory_size = None,
+        target_partitions = None,
         writer_properties = None,
         post_commithook_properties = None,
         commit_properties = None,
@@ -1228,6 +1245,7 @@ impl RawDeltaTable {
         streamed_exec: bool,
         max_spill_size: Option<usize>,
         max_temp_directory_size: Option<u64>,
+        target_partitions: Option<usize>,
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
@@ -1253,6 +1271,7 @@ impl RawDeltaTable {
                 streamed_exec,
                 max_spill_size,
                 max_temp_directory_size,
+                target_partitions,
                 writer_properties,
                 post_commithook_properties,
                 commit_properties,
