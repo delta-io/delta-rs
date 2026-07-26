@@ -1942,6 +1942,7 @@ mod tests {
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::test_utils::get_non_null_arrow_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
     use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
@@ -2012,6 +2013,57 @@ mod tests {
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![999])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-01"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let predicate = col("target.id")
+            .eq(col("source.id"))
+            .and(col("target.modified").eq(col("source.modified")));
+
+        let (table, metrics) = table
+            .merge(source, predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 999   | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_non_null() {
+        let schema = get_non_null_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+
+        let ctx = SessionContext::new();
+        let null_schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&null_schema),
             vec![
                 Arc::new(arrow::array::StringArray::from(vec!["A"])),
                 Arc::new(arrow::array::Int32Array::from(vec![999])),

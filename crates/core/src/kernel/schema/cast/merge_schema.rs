@@ -146,7 +146,7 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 right.name(),
                 Dictionary(key_type.clone(), Box::new(batch_type.clone())),
-                left.is_nullable() || right.is_nullable(),
+                left.is_nullable(),
             ))
         }
         (Dictionary(key_type, value_type), _)
@@ -161,12 +161,12 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 right.name(),
                 Dictionary(key_type.clone(), Box::new(batch_type.clone())),
-                left.is_nullable() || right.is_nullable(),
+                left.is_nullable(),
             ))
         }
-        (Dictionary(_, value_type), _) if value_type.equals_datatype(batch_type) => Ok(left
-            .clone()
-            .with_nullable(left.is_nullable() || right.is_nullable())),
+        (Dictionary(_, value_type), _) if value_type.equals_datatype(batch_type) => {
+            Ok(left.clone().with_nullable(left.is_nullable()))
+        }
 
         (_, Dictionary(_, value_type))
             if matches!(
@@ -177,9 +177,7 @@ pub(crate) fn merge_arrow_field(
                 DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             ) =>
         {
-            Ok(right
-                .clone()
-                .with_nullable(left.is_nullable() || right.is_nullable()))
+            Ok(right.clone().with_nullable(left.is_nullable()))
         }
         (_, Dictionary(_, value_type))
             if matches!(
@@ -190,13 +188,11 @@ pub(crate) fn merge_arrow_field(
                 DataType::Binary | DataType::LargeBinary | DataType::BinaryView
             ) =>
         {
-            Ok(right
-                .clone()
-                .with_nullable(left.is_nullable() || right.is_nullable()))
+            Ok(right.clone().with_nullable(left.is_nullable()))
         }
-        (_, Dictionary(_, value_type)) if value_type.equals_datatype(table_type) => Ok(right
-            .clone()
-            .with_nullable(left.is_nullable() || right.is_nullable())),
+        (_, Dictionary(_, value_type)) if value_type.equals_datatype(table_type) => {
+            Ok(right.clone().with_nullable(left.is_nullable()))
+        }
         // With Utf8/binary we always take  the right type since that is coming from the incoming data
         // by doing that we allow passthrough of any string flavor
         (
@@ -209,7 +205,7 @@ pub(crate) fn merge_arrow_field(
         ) => Ok(ArrowField::new(
             left.name(),
             batch_type.clone(),
-            right.is_nullable() || left.is_nullable(),
+            left.is_nullable(),
         )),
         (
             DataType::List(left_child_fields) | DataType::LargeList(left_child_fields),
@@ -220,7 +216,7 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 left.name(),
                 DataType::LargeList(merged.into()),
-                right.is_nullable() || left.is_nullable(),
+                left.is_nullable(),
             ))
         }
         (
@@ -232,7 +228,7 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 left.name(),
                 DataType::List(merged.into()),
-                right.is_nullable() || left.is_nullable(),
+                left.is_nullable(),
             ))
         }
         (DataType::Struct(left_child_fields), DataType::Struct(right_child_fields)) => {
@@ -241,7 +237,7 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 left.name(),
                 DataType::Struct(merged.into()),
-                right.is_nullable() || left.is_nullable(),
+                left.is_nullable(),
             ))
         }
         (DataType::Map(left_field, left_sorted), DataType::Map(right_field, right_sorted))
@@ -251,7 +247,7 @@ pub(crate) fn merge_arrow_field(
             Ok(ArrowField::new(
                 left.name(),
                 DataType::Map(merged.into(), *right_sorted),
-                right.is_nullable() || left.is_nullable(),
+                left.is_nullable(),
             ))
         }
         _ => {
