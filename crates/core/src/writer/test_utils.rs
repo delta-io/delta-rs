@@ -70,6 +70,27 @@ pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
     }
 }
 
+/// Return the Arrow schema matching the columns produced by [`get_record_batch`] for `part` with
+/// `id` non-nullable.
+pub fn get_non_null_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
+    match part {
+        Some(key) if key.contains("/id=") => Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )])),
+        Some(_) => Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+        ])),
+        _ => Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ])),
+    }
+}
+
 fn data_with_null() -> (Int32Array, StringArray, StringArray) {
     let base_int = Int32Array::from(vec![
         Some(1),
