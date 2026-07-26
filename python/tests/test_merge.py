@@ -4,10 +4,12 @@ import pathlib
 from decimal import Decimal
 
 import pytest
-from arro3.core import Array, DataType, Table
+from arro3.core import Array, DataType
 from arro3.core import Field as ArrowField
+from arro3.core import Table
 
-from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltalake
+from deltalake import (CommitProperties, DeltaTable, Field, Schema,
+                       write_deltalake)
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
@@ -2580,11 +2582,11 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
     data = Table(
         {
             "submittedAt": Array(
-                [122, 123],
+                [122, 124],
                 ArrowField("submittedAt", type=DataType.int64(), nullable=True),
             ),
             "id": Array(
-                ["test1", "test2"],
+                ["test", "test2"],
                 ArrowField("id", type=DataType.string_view(), nullable=True),
             ),
         }
@@ -2621,8 +2623,8 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
 
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
 
-    assert result["submittedAt"].to_pylist() == [122, 123]
-    assert result["id"].to_pylist() == ["test1", "test"]
+    assert result["submittedAt"].to_pylist() == [123, 124]
+    assert result["id"].to_pylist() == ["test", "test2"]
 
 
 @pytest.mark.pandas
@@ -3538,7 +3540,8 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
     """
     import pyarrow as pa
 
-    from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
+    from deltalake import (_disable_nanosecond_timestamps,
+                           enable_nanosecond_timestamps)
     from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
     write_deltalake(
