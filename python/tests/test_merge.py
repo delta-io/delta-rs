@@ -7,13 +7,7 @@ import pytest
 from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
-from deltalake import (
-    CommitProperties,
-    DeltaTable,
-    Field,
-    Schema,
-    write_deltalake,
-)
+from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltalake
 from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.schema import PrimitiveType
@@ -2570,6 +2564,65 @@ def test_merge_camelcase_non_nullable_column_4082(tmp_path: pathlib.Path):
     result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
     assert result["submittedAt"].to_pylist() == [123]
     assert result["id"].to_pylist() == ["test"]
+
+
+def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
+    # Regression test for https://github.com/delta-io/delta-rs/issues/4527
+    schema = Schema(
+        [
+            Field("submittedAt", PrimitiveType("long"), nullable=False),
+            Field("id", PrimitiveType("string"), nullable=True),
+        ]
+    )
+
+    dt = DeltaTable.create(tmp_path, schema=schema, mode="ignore")
+
+    data = Table(
+        {
+            "submittedAt": Array(
+                [122, 124],
+                ArrowField("submittedAt", type=DataType.int64(), nullable=True),
+            ),
+            "id": Array(
+                ["test", "test2"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(dt, data, mode="append")
+
+    source_table = Table(
+        {
+            "submittedAt": Array(
+                [123],
+                ArrowField("submittedAt", type=DataType.int64(), nullable=True),
+            ),
+            "id": Array(
+                ["test"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    (
+        dt.merge(
+            source=source_table,
+            predicate="source.id = target.id",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    assert dt.history(1)[0]["operation"] == "MERGE"
+
+    result = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+
+    assert result["submittedAt"].to_pylist() == [123, 124]
+    assert result["id"].to_pylist() == ["test", "test2"]
 
 
 @pytest.mark.pandas
