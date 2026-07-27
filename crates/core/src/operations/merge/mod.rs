@@ -2054,7 +2054,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_non_null() {
-        let schema = get_non_null_arrow_schema(&None);
+        let schema = get_non_null_arrow_schema();
         let table = setup_table(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
