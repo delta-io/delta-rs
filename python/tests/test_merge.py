@@ -2611,6 +2611,7 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
             predicate="source.id = target.id",
             source_alias="source",
             target_alias="target",
+            merge_schema=True,
         )
         .when_matched_update_all()
         .when_not_matched_insert_all()
