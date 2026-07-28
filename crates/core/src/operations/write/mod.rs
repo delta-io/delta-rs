@@ -3993,19 +3993,13 @@ mod tests {
         let batch =
             RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(payloads))]).unwrap();
 
-        let writer_properties = WriterProperties::builder()
-            .set_compression(parquet::basic::Compression::UNCOMPRESSED)
-            .set_dictionary_enabled(false)
-            .set_content_defined_chunking(Some(CdcOptions {
-                min_chunk_size: 256,
-                max_chunk_size: 1024,
-                norm_level: DEFAULT_CDC_NORM_LEVEL,
-            }))
-            .build();
-
         let table = crate::DeltaTable::new_in_memory()
             .write(vec![batch])
-            .with_writer_properties(writer_properties)
+            .with_format_options([
+                ("contentDefinedChunking.enabled", "true"),
+                ("contentDefinedChunking.minChunkSize", "256"),
+                ("contentDefinedChunking.maxChunkSize", "1024"),
+            ])
             .await
             .unwrap();
 
