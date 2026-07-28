@@ -2570,8 +2570,8 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
     # Regression test for https://github.com/delta-io/delta-rs/issues/4527
     schema = Schema(
         [
-            Field("submittedAt", PrimitiveType("long"), nullable=False),
-            Field("id", PrimitiveType("string"), nullable=True),
+            Field("submittedAt", PrimitiveType("long"), nullable=True),
+            Field("id", PrimitiveType("string"), nullable=False),
         ]
     )
 
@@ -2585,7 +2585,7 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
             ),
             "id": Array(
                 ["test", "test2"],
-                ArrowField("id", type=DataType.string_view(), nullable=True),
+                ArrowField("id", type=DataType.string_view(), nullable=False),
             ),
         }
     )
@@ -2596,11 +2596,11 @@ def test_merge_non_nullable_column_4527(tmp_path: pathlib.Path):
         {
             "submittedAt": Array(
                 [123],
-                ArrowField("submittedAt", type=DataType.int64(), nullable=True),
+                ArrowField("submittedAt", type=DataType.int64()),
             ),
             "id": Array(
                 ["test"],
-                ArrowField("id", type=DataType.string_view(), nullable=True),
+                ArrowField("id", type=DataType.string_view()),
             ),
         }
     )
