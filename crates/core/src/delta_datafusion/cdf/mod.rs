@@ -6,7 +6,7 @@ use arrow_schema::{DataType, Field, TimeUnit};
 
 pub(crate) use self::scan_utils::*;
 use crate::DeltaResult;
-use crate::kernel::{Add, AddCDCFile, Remove, Version};
+use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Remove, Version};
 
 /// Scan-related types and helpers for reading Change Data Feed (CDF) batches.
 pub mod scan;
@@ -62,6 +62,18 @@ impl<F: FileAction> CdcDataSpec<F> {
     }
 }
 
+/// Depending on the kind of file action we build the access plan differently. Adds are a deletion
+/// vector while deletes are a selection vector. For CDCFiles we don't build anything
+#[derive(Debug)]
+pub enum FileActionType {
+    /// An add action (and deletion vector)
+    Add,
+    /// A delete action (and selection vector)
+    Delete,
+    /// We do nothing with this variant
+    CdcFile,
+}
+
 /// This trait defines a generic set of operations used by CDF Reader
 pub trait FileAction {
     /// Adds partition values
@@ -70,6 +82,14 @@ pub trait FileAction {
     fn path(&self) -> String;
     /// Byte size of the physical file
     fn size(&self) -> DeltaResult<usize>;
+    /// Possibly provide the deletion vector for the action
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor>;
+    /// Return what variant of file action this action is
+    fn action_type(&self) -> FileActionType;
+    /// Whether this file action contains a deletion vector
+    fn has_deletion_vector(&self) -> bool {
+        false
+    }
 }
 
 impl FileAction for Add {
@@ -84,6 +104,18 @@ impl FileAction for Add {
     fn size(&self) -> DeltaResult<usize> {
         Ok(self.size as usize)
     }
+
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector.clone()
+    }
+
+    fn action_type(&self) -> FileActionType {
+        FileActionType::Add
+    }
+
+    fn has_deletion_vector(&self) -> bool {
+        self.deletion_vector.is_some()
+    }
 }
 
 impl FileAction for AddCDCFile {
@@ -97,6 +129,13 @@ impl FileAction for AddCDCFile {
 
     fn size(&self) -> DeltaResult<usize> {
         Ok(self.size as usize)
+    }
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        None
+    }
+
+    fn action_type(&self) -> FileActionType {
+        FileActionType::CdcFile
     }
 }
 
@@ -131,5 +170,17 @@ impl FileAction for Remove {
                 )),
             }
         }
+    }
+
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector.clone()
+    }
+
+    fn action_type(&self) -> FileActionType {
+        FileActionType::Delete
+    }
+
+    fn has_deletion_vector(&self) -> bool {
+        self.deletion_vector.is_some()
     }
 }
