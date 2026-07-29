@@ -72,9 +72,9 @@ pub mod set_tbl_properties;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
-pub mod write;
-#[cfg(feature = "datafusion")]
 pub mod upsert;
+#[cfg(feature = "datafusion")]
+pub mod write;
 
 #[cfg(all(test, feature = "datafusion"))]
 mod session_fallback_policy_tests;
@@ -521,7 +521,11 @@ impl DeltaOps {
         source: datafusion::prelude::DataFrame,
         join_keys: Vec<String>,
     ) -> upsert::UpsertBuilder {
-        let snapshot = self.0.state.map(|s| s.snapshot).expect("Table state is required for upsert");
+        let snapshot = self
+            .0
+            .state
+            .map(|s| s.snapshot)
+            .expect("Table state is required for upsert");
         upsert::UpsertBuilder::new(self.0.log_store, snapshot, join_keys, source)
     }
 
