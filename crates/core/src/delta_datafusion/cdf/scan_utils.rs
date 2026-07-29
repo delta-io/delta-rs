@@ -1,19 +1,28 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::delta_datafusion::cdf::{CHANGE_TYPE_COL, CdcDataSpec, FileAction, FileActionType};
+use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use crate::kernel::StorageType;
+use crate::{DeltaResult, DeltaTableError};
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use dashmap::DashMap;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
+use delta_kernel::Engine;
+use delta_kernel::actions::deletion_vector::{DeletionVectorDescriptor, DeletionVectorStorageType};
+use object_store::path::Path;
+use object_store::{DynObjectStore, ObjectStore};
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions, RowSelection};
+use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::file::metadata::ParquetMetaData;
 use serde_json::Value;
-use tracing::log;
-
-use crate::DeltaResult;
-use crate::delta_datafusion::cdf::CHANGE_TYPE_COL;
-use crate::delta_datafusion::cdf::{CdcDataSpec, FileAction};
-use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use tracing::{log, warn};
+use url::Url;
 
 pub fn map_action_to_scalar<F: FileAction>(
     action: &F,
@@ -94,11 +103,15 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
-pub fn create_partition_values<F: FileAction>(
+pub async fn create_partition_values<F: FileAction>(
     schema: SchemaRef,
     specs: Vec<CdcDataSpec<F>>,
     table_partition_cols: &[String],
     action_type: Option<ScalarValue>,
+    engine: Arc<dyn Engine>,
+    root_object_store: Arc<dyn ObjectStore>,
+    table_root: Url,
+    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
 ) -> DeltaResult<HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>> {
     let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
@@ -113,9 +126,21 @@ pub fn create_partition_values<F: FileAction>(
 
             let mut new_part_values = spec_partition_values.clone();
             new_part_values.extend(partition_values);
-            let part_file = PartitionedFile::new(action.path(), action.size()? as u64)
+            let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
                 .with_partition_values(new_part_values.clone());
 
+            if action.has_deletion_vector()
+                && let Some(access_plan) = create_file_scan_plan(
+                    Arc::clone(&engine),
+                    action,
+                    table_root.clone(),
+                    Arc::clone(&root_object_store),
+                    Arc::clone(&parquet_metadata_cache),
+                )
+                .await?
+            {
+                part_file = part_file.with_extension(access_plan);
+            }
             file_groups
                 .entry(new_part_values)
                 .or_default()
@@ -251,12 +276,162 @@ pub fn prune_specs_by_partition<F: FileAction>(
     Ok(pruned)
 }
 
+impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescriptor {
+    type Error = DeltaTableError;
+
+    fn try_into(self) -> DeltaResult<DeletionVectorDescriptor> {
+        let storage_type = match self.storage_type {
+            StorageType::UuidRelativePath => DeletionVectorStorageType::PersistedRelative,
+            StorageType::Inline => DeletionVectorStorageType::Inline,
+            StorageType::AbsolutePath => DeletionVectorStorageType::PersistedAbsolute,
+        };
+
+        Ok(DeletionVectorDescriptor::try_new(
+            storage_type,
+            self.path_or_inline_dv,
+            self.offset,
+            self.size_in_bytes,
+            self.cardinality,
+        )?)
+    }
+}
+
+fn treemap_to_bools_with(treemap: roaring::RoaringTreemap, set_bit: bool) -> Vec<bool> {
+    #[inline]
+    fn combine(high_bits: u32, low_bits: u32) -> usize {
+        ((u64::from(high_bits) << 32) | u64::from(low_bits)) as usize
+    }
+
+    match treemap.max() {
+        Some(max) => {
+            let mut result = vec![!set_bit; max as usize + 1];
+            let bitmaps = treemap.bitmaps();
+            for (index, bitmap) in bitmaps {
+                for bit in bitmap.iter() {
+                    let vec_index = combine(index, bit);
+                    result[vec_index] = set_bit;
+                }
+            }
+            result
+        }
+        None => {
+            // empty set, return empty vec
+            vec![]
+        }
+    }
+}
+
+async fn read_parquet_metadata(
+    engine_objectstore: Arc<DynObjectStore>,
+    file_path: Path,
+    file_size: u64,
+) -> DeltaResult<Arc<ParquetMetaData>> {
+    let mut object_reader = ParquetObjectReader::new(engine_objectstore, file_path);
+    if file_size > 0 {
+        object_reader = object_reader.with_file_size(file_size);
+    }
+    let arrow_opts = ArrowReaderOptions::new();
+    let arrow_metadata_reader =
+        ArrowReaderMetadata::load_async(&mut object_reader, arrow_opts).await?;
+    Ok(Arc::clone(arrow_metadata_reader.metadata()))
+}
+
+async fn get_metadata_from_cache(
+    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    engine_objectstore: Arc<DynObjectStore>,
+    file_path: &Path,
+    file_size: u64,
+) -> DeltaResult<Arc<ParquetMetaData>> {
+    if let Some(pmd) = parquet_metadata_cache.get(file_path.as_ref()) {
+        Ok(Arc::clone(pmd.value()))
+    } else {
+        let new_pmd =
+            read_parquet_metadata(engine_objectstore, file_path.clone(), file_size).await?;
+        parquet_metadata_cache.insert(file_path.to_string(), Arc::clone(&new_pmd));
+        Ok(new_pmd)
+    }
+}
+
+async fn create_file_scan_plan<F: FileAction>(
+    engine: Arc<dyn Engine>,
+    file_action: F,
+    table_root_url: Url,
+    root_object_store: Arc<DynObjectStore>,
+    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+) -> DeltaResult<Option<ParquetAccessPlan>> {
+    if let Some(dv) = file_action.deletion_vector() {
+        let tp = table_root_url.path().strip_prefix('/').unwrap();
+        let dv_path = format!("{}{}", tp, file_action.path());
+        let file_path = Path::parse(dv_path)?;
+
+        let kernel_dv: DeletionVectorDescriptor = dv.try_into()?;
+        let vector_direction = match file_action.action_type() {
+            FileActionType::Delete => true,
+            FileActionType::Add => false,
+            _ => unreachable!(),
+        };
+
+        let raw_tree_map = kernel_dv.read(engine.storage_handler(), &table_root_url)?;
+        let mut tree_map = treemap_to_bools_with(raw_tree_map, vector_direction);
+
+        let parquet_metadata = get_metadata_from_cache(
+            parquet_metadata_cache,
+            root_object_store,
+            &file_path,
+            file_action.size()? as u64,
+        )
+        .await?;
+        if matches!(file_action.action_type(), FileActionType::Delete) {
+            let total_rows = parquet_metadata
+                .row_groups()
+                .iter()
+                .map(|rg| rg.num_rows() as usize)
+                .sum();
+            tree_map.resize(total_rows, true);
+        }
+        let mut access_plan = match file_action.action_type() {
+            FileActionType::Add => ParquetAccessPlan::new_all(parquet_metadata.num_row_groups()),
+            FileActionType::Delete => ParquetAccessPlan::new_all(parquet_metadata.num_row_groups()),
+            _ => unreachable!(),
+        };
+        let mut offset = 0usize;
+        for (rg_idx, rg) in parquet_metadata.row_groups().iter().enumerate() {
+            let num_rows = rg.num_rows() as usize;
+            if let Some(slice) = tree_map.get(offset..(offset + num_rows)) {
+                let keep = BooleanArray::from(slice.to_vec());
+                if keep.true_count() == 0 {
+                    access_plan.skip(rg_idx);
+                } else if keep.false_count() == 0 {
+                    access_plan.scan(rg_idx);
+                } else {
+                    let selection = RowSelection::from_filters(&[keep]);
+                    access_plan.set(rg_idx, RowGroupAccess::Selection(selection));
+                }
+                offset += num_rows;
+            } else {
+                warn!(
+                    "Row group indexes were out of bounds: {offset} to {} for {file_path}",
+                    offset + num_rows
+                );
+            }
+        }
+        return Ok(Some(access_plan));
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::kernel::{Add, Remove};
+    use arrow_select::concat::concat_batches;
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
+    use delta_kernel::engine::arrow_data::EngineDataArrowExt;
+    use delta_kernel::table_changes::TableChanges;
+    use delta_kernel_default_engine::DefaultEngine;
+    use itertools::Itertools;
+    use object_store::local::LocalFileSystem;
     use std::collections::HashMap;
 
     /// A constant `false` pruning predicate over an empty schema.
@@ -508,5 +683,30 @@ mod tests {
             kept.is_empty(),
             "constant `false` must prune even a Remove without partition metadata: {kept:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn dv_scan_plan_creation() -> DeltaResult<()> {
+        let ctx = SessionContext::new();
+        let fs = Arc::new(LocalFileSystem::new());
+        let engine = DefaultEngine::builder(fs.clone()).build();
+
+        let table_url = delta_kernel::try_parse_uri(
+            "C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table\\",
+        )?;
+        let cdc = TableChanges::try_new(table_url, &engine, 6, None)?
+            .into_scan_builder()
+            .build()?;
+
+        let batches: Vec<RecordBatch> = cdc
+            .execute(Arc::new(engine))?
+            .map(EngineDataArrowExt::try_into_record_batch)
+            .try_collect()?;
+        let total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        dbg!(total);
+        let all_batches = concat_batches(&batches[0].schema().clone(), &batches);
+        ctx.register_batch("kernel", all_batches?)?;
+        ctx.sql("select row_number() over (partition by birthyear) as row_num, name, age, birthyear from kernel order by birthyear, name").await?.show().await?;
+        Ok(())
     }
 }

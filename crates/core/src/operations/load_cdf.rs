@@ -10,11 +10,9 @@
 //! let provider = DeltaCdfTableProvider::try_new(builder)?;
 //! let df = ctx.read_table(provider).await?;
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
 use arrow_schema::{ArrowError, Field, Schema};
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
@@ -27,7 +25,11 @@ use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
+use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
 use delta_kernel::table_features::ColumnMappingMode;
+use parquet::file::metadata::ParquetMetaData;
+use std::sync::Arc;
+use std::time::SystemTime;
 use tracing::log;
 
 use crate::DeltaTableError;
@@ -39,8 +41,14 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
 };
-use crate::logstore::{LogStoreRef, get_actions};
+use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
+
+#[derive(Debug, Default)]
+struct DvPair {
+    add_dv: Option<DeletionVectorDescriptor>,
+    deletion_dv: Option<DeletionVectorDescriptor>,
+}
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -66,6 +74,9 @@ pub struct CdfLoadBuilder {
     /// conjuncts are ignored here and row-level correctness must be enforced by a
     /// separate `FilterExec` wrapped around the resulting plan.
     filter: Option<Expr>,
+
+    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    dv_cache: Arc<DashMap<String, DvPair>>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -95,6 +106,8 @@ impl CdfLoadBuilder {
             allow_out_of_range: false,
             session: None,
             filter: None,
+            parquet_metadata_cache: Arc::new(DashMap::new()),
+            dv_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -271,7 +284,8 @@ impl CdfLoadBuilder {
 
             let mut ts = 0;
             let mut cdc_actions = vec![];
-
+            let mut add_actions = vec![];
+            let mut remove_actions = vec![];
             if self.starting_timestamp.is_some() || self.ending_timestamp.is_some() {
                 // TODO: fallback on other actions for timestamps because CommitInfo action is optional
                 // theoretically.
@@ -301,9 +315,12 @@ impl CdfLoadBuilder {
                 }
             }
 
-            for action in &version_actions {
+            for action in version_actions {
                 match action {
-                    Action::Cdc(f) => cdc_actions.push(f.clone()),
+                    Action::CommitInfo(ci) => {
+                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0)
+                    }
+                    Action::Cdc(f) => cdc_actions.push(f),
                     Action::Metadata(md) => {
                         log::info!("Metadata: {md:?}");
                         if let Some(key) = &md.configuration().get("delta.enableChangeDataFeed") {
@@ -321,9 +338,8 @@ impl CdfLoadBuilder {
                             return Err(DeltaTableError::ChangeDataNotEnabled { version });
                         };
                     }
-                    Action::CommitInfo(ci) => {
-                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0);
-                    }
+                    Action::Add(a) if a.data_change => add_actions.push(a),
+                    Action::Remove(r) if r.data_change => remove_actions.push(r),
                     _ => {}
                 }
             }
@@ -335,34 +351,18 @@ impl CdfLoadBuilder {
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
-                let add_actions = version_actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        Action::Add(a) if a.data_change => Some(a.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Add>>();
-
-                let remove_actions = version_actions
-                    .iter()
-                    .filter_map(|r| match r {
-                        Action::Remove(r) if r.data_change => Some(r.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Remove>>();
-
                 if !add_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        add_actions.len(),
+                        "Located {} add cdf actions for version: {version}",
+                        add_actions.len()
                     );
                     add_files.push(CdcDataSpec::new(version, ts, add_actions));
                 }
 
                 if !remove_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        remove_actions.len(),
+                        "Located {} remove cdf actions for version: {version}",
+                        remove_actions.len()
                     );
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
@@ -514,19 +514,41 @@ impl CdfLoadBuilder {
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let cdc_file_groups = create_partition_values(schema.clone(), cdc, partition_values, None)?;
+        let engine = self.log_store.engine(None);
+        let root_obj_store = self.log_store.root_object_store(None);
+        let cdc_file_groups = create_partition_values(
+            schema.clone(),
+            cdc,
+            partition_values,
+            None,
+            Arc::clone(&engine),
+            Arc::clone(&root_obj_store),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+        )
+        .await?;
         let add_file_groups = create_partition_values(
             schema.clone(),
             add,
             partition_values,
             Self::get_add_action_type(),
-        )?;
+            Arc::clone(&engine),
+            Arc::clone(&root_obj_store),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+        )
+        .await?;
         let remove_file_groups = create_partition_values(
             schema.clone(),
             remove,
             partition_values,
             Self::get_remove_action_type(),
-        )?;
+            Arc::clone(&engine),
+            Arc::clone(&root_obj_store),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+        )
+        .await?;
 
         let cdc_partition_fields: Vec<Arc<Field>> =
             cdc_partition_cols.into_iter().map(Arc::new).collect();
@@ -1400,6 +1422,23 @@ pub(crate) mod tests {
             DeltaTableError::ChangeDataNotEnabled { .. }
         ));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_dv_cdf() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table\\");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            .with_starting_version(6);
+        // 968
+        let provider = Arc::new(DeltaCdfTableProvider::try_new(table)?);
+        let df = ctx.read_table(provider)?;
+        dbg!(df.clone().count().await?);
+        df.show().await?;
         Ok(())
     }
 
