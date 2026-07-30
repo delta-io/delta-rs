@@ -15,8 +15,8 @@ use deltalake_core::logstore::object_store::{
     Result as ObjectStoreResult, path::Path,
 };
 use deltalake_core::logstore::{
-    ObjectStoreFactory, ObjectStoreRef, StorageConfig, client_options_from_certificate,
-    config::str_is_truthy,
+    CloudCredentialProvider, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    client_options_from_certificate, config::str_is_truthy,
 };
 use deltalake_core::{DeltaResult, DeltaTableError};
 use futures::Future;
@@ -69,7 +69,9 @@ impl ObjectStoreFactory for S3ObjectStoreFactory {
         }
 
         let s3_options = S3StorageOptions::from_map(&options)?;
-        if let Some(ref sdk_config) = s3_options.sdk_config {
+        if let Some(CloudCredentialProvider::Aws(credentials)) = &config.credentials {
+            builder = builder.with_credentials(credentials.clone());
+        } else if let Some(ref sdk_config) = s3_options.sdk_config {
             builder =
                 builder.with_credentials(Arc::new(AWSForObjectStore::new(sdk_config.clone())));
         }

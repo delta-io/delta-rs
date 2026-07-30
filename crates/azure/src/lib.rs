@@ -3,8 +3,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
-    client_options_from_certificate, default_logstore, logstore_factories, object_store_factories,
+    CloudCredentialProvider, LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef,
+    StorageConfig, client_options_from_certificate, default_logstore, logstore_factories,
+    object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use object_store::ObjectStoreScheme;
@@ -53,6 +54,10 @@ impl ObjectStoreFactory for AzureFactory {
             && let Some(ref path) = cert_config.certificate_path
         {
             builder = builder.with_client_options(client_options_from_certificate(path)?);
+        }
+
+        if let Some(CloudCredentialProvider::Azure(credentials)) = &config.credentials {
+            builder = builder.with_credentials(credentials.clone());
         }
 
         let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;

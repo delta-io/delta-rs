@@ -15,6 +15,35 @@ use super::storage::{CertificateConfig, LimitConfig};
 use super::{IORuntime, storage::runtime::RuntimeConfig};
 use crate::{DeltaResult, DeltaTableError};
 
+/// A credential provider for one cloud's object store.
+///
+/// Lets a caller that vends expiring credentials (a catalog handing out temporary
+/// tokens, say) hand the object store something it can re-ask, instead of static
+/// credentials that stop working once the token lapses.
+#[cfg(feature = "cloud")]
+#[derive(Clone)]
+pub enum CloudCredentialProvider {
+    /// Credentials for S3 and S3-compatible stores.
+    Aws(::object_store::aws::AwsCredentialProvider),
+    /// Credentials for Azure blob storage.
+    Azure(::object_store::azure::AzureCredentialProvider),
+    /// Credentials for Google Cloud Storage.
+    Gcp(::object_store::gcp::GcpCredentialProvider),
+}
+
+#[cfg(feature = "cloud")]
+impl std::fmt::Debug for CloudCredentialProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The providers hold live credentials, so name the cloud and nothing else.
+        let cloud = match self {
+            Self::Aws(_) => "Aws",
+            Self::Azure(_) => "Azure",
+            Self::Gcp(_) => "Gcp",
+        };
+        write!(f, "CloudCredentialProvider::{cloud}")
+    }
+}
+
 /// A configuration type that can be incrementally populated from string key/value pairs.
 ///
 /// Implemented by the various storage configuration structs so that options coming from user
@@ -119,6 +148,14 @@ pub struct StorageConfig {
     ///
     /// Configuration for custom TLS root certificates.
     pub certificate: Option<CertificateConfig>,
+
+    /// Credential provider for the object store.
+    ///
+    /// When set, the cloud's object store factory asks this provider for
+    /// credentials rather than resolving them from the raw options, so expiring
+    /// credentials can be refreshed under a live store.
+    #[cfg(feature = "cloud")]
+    pub credentials: Option<CloudCredentialProvider>,
 
     /// Properties that are not recognized by the storage configuration.
     ///
@@ -257,6 +294,13 @@ impl StorageConfig {
     /// Attach a dedicated IO [`IORuntime`] used to execute storage operations.
     pub fn with_io_runtime(mut self, rt: IORuntime) -> Self {
         self.runtime = Some(rt);
+        self
+    }
+
+    /// Attach a [`CloudCredentialProvider`] for the object store to ask for credentials.
+    #[cfg(feature = "cloud")]
+    pub fn with_credentials(mut self, credentials: CloudCredentialProvider) -> Self {
+        self.credentials = Some(credentials);
         self
     }
 }

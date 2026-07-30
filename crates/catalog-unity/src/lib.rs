@@ -9,7 +9,7 @@ compile_error!(
 
 use dashmap::DashMap;
 use deltalake_core::logstore::{
-    LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories,
+    LogStore, LogStoreFactory, StorageConfig, default_logstore, logstore_factories, logstore_for,
     object_store::RetryConfig,
 };
 use reqwest::Url;
@@ -29,13 +29,13 @@ use crate::credential::{
 use crate::models::{
     ErrorResponse, GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
     ListTableSummariesResponse, Table, TableTempCredentialsResponse, TableType,
-    TemporaryTableCredentialsRequest, TokenErrorResponse,
+    TemporaryTableCredentials, TemporaryTableCredentialsRequest, TokenErrorResponse,
 };
 
 use deltalake_core::data_catalog::DataCatalogResult;
 use deltalake_core::{
-    DataCatalog, DataCatalogError, DeltaResult, DeltaTableBuilder, DeltaTableError,
-    ObjectStoreError, Path, ensure_table_uri,
+    DataCatalog, DataCatalogError, DeltaResult, DeltaTableError, ObjectStoreError, Path,
+    ensure_table_uri,
 };
 
 use crate::client::retry::*;
@@ -50,6 +50,7 @@ const STORE_NAME: &str = "UnityCatalogObjectStore";
 pub mod datafusion;
 pub mod models;
 pub mod prelude;
+mod store_credentials;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]
@@ -544,53 +545,31 @@ impl UnityCatalogBuilder {
         let database_name = uri_parts[1];
         let table_name = uri_parts[2];
 
-        let unity_catalog = if let Some(options) = storage_options {
-            let mut builder = UnityCatalogBuilder::from_env();
-            builder =
-                builder.try_with_options(options.iter().map(|(k, v)| (k.as_str(), v.as_str())))?;
-            builder.build()?
-        } else {
-            UnityCatalogBuilder::from_env().build()?
-        };
+        let unity_catalog = Self::build_catalog(storage_options)?;
 
         let storage_location = unity_catalog
             .get_table_storage_location(Some(catalog_id.to_string()), database_name, table_name)
             .await?;
-        // Attempt to get read/write permissions to begin with.
-        let temp_creds_res = unity_catalog
-            .get_temp_table_credentials_with_permission(
-                catalog_id,
-                database_name,
-                table_name,
-                "READ_WRITE",
-            )
-            .await?;
-        let credentials = match temp_creds_res {
-            TableTempCredentialsResponse::Success(temp_creds) => temp_creds
-                .get_credentials()
-                .ok_or_else(|| UnityCatalogError::MissingCredential)?,
-            TableTempCredentialsResponse::Error(rw_error) => {
-                // If that fails attempt to get just read permissions.
-                match unity_catalog
-                    .get_temp_table_credentials(catalog_id, database_name, table_name)
-                    .await?
-                {
-                    TableTempCredentialsResponse::Success(temp_creds) => temp_creds
-                        .get_credentials()
-                        .ok_or_else(|| UnityCatalogError::MissingCredential)?,
-                    TableTempCredentialsResponse::Error(read_error) => {
-                        return Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
-                            error_code: read_error.error_code,
-                            message: format!(
-                                "READ_WRITE failed: {}. READ failed: {}",
-                                rw_error.message, read_error.message
-                            ),
-                        });
-                    }
-                }
-            }
-        };
+        let credentials = unity_catalog
+            .vend_temp_table_credentials(catalog_id, database_name, table_name)
+            .await?
+            .get_credentials()
+            .ok_or(UnityCatalogError::MissingCredential)?;
+
         Ok((storage_location, credentials))
+    }
+
+    /// Build a [`UnityCatalog`] client from the environment, overridden by
+    /// `storage_options` when provided.
+    fn build_catalog(
+        storage_options: Option<&HashMap<String, String>>,
+    ) -> Result<UnityCatalog, UnityCatalogError> {
+        let builder = match storage_options {
+            Some(options) => UnityCatalogBuilder::from_env()
+                .try_with_options(options.iter().map(|(k, v)| (k.as_str(), v.as_str())))?,
+            None => UnityCatalogBuilder::from_env(),
+        };
+        Ok(builder.build()?)
     }
 
     fn get_credential_provider(&mut self) -> Option<CredentialProvider> {
@@ -928,6 +907,44 @@ impl UnityCatalog {
 
         Ok(response.json().await?)
     }
+
+    /// Vend temporary credentials for a table, asking for read/write first and
+    /// falling back to read-only.
+    pub async fn vend_temp_table_credentials(
+        &self,
+        catalog_id: &str,
+        database_name: &str,
+        table_name: &str,
+    ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
+        let rw = self
+            .get_temp_table_credentials_with_permission(
+                catalog_id,
+                database_name,
+                table_name,
+                "READ_WRITE",
+            )
+            .await?;
+        let rw_error = match rw {
+            TableTempCredentialsResponse::Success(credentials) => return Ok(credentials),
+            TableTempCredentialsResponse::Error(err) => err,
+        };
+
+        match self
+            .get_temp_table_credentials(catalog_id, database_name, table_name)
+            .await?
+        {
+            TableTempCredentialsResponse::Success(credentials) => Ok(credentials),
+            TableTempCredentialsResponse::Error(read_error) => {
+                Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
+                    error_code: read_error.error_code,
+                    message: format!(
+                        "READ_WRITE failed: {}. READ failed: {}",
+                        rw_error.message, read_error.message
+                    ),
+                })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Default, Debug)]
@@ -946,20 +963,24 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         let mut storage_options = config.raw.clone();
         storage_options.extend(temp_creds);
 
-        // TODO(roeap): we should not have to go through the table here.
-        // ideally we just create the right storage ...
         let table_url = ensure_table_uri(&table_path)?;
-        let mut builder = DeltaTableBuilder::from_url(table_url)?;
+        let mut storage_config = StorageConfig::parse_options(storage_options)?;
 
         if let Some(runtime) = &config.runtime {
-            builder = builder.with_io_runtime(runtime.clone());
+            storage_config = storage_config.with_io_runtime(runtime.clone());
         }
 
-        if !storage_options.is_empty() {
-            builder = builder.with_storage_options(storage_options.clone());
+        // Let the store re-vend the temporary token rather than freezing the one
+        // we just fetched, which expires within the hour.
+        let catalog = UnityCatalogBuilder::build_catalog(Some(&config.raw))?;
+        if let Some(credentials) =
+            store_credentials::provider_for(&table_url, table_uri.as_str(), catalog)?
+        {
+            storage_config = storage_config.with_credentials(credentials);
         }
+
         let prefix = Path::parse(table_uri.path())?;
-        let store = builder.build_storage()?.object_store(None);
+        let store = logstore_for(&table_url, storage_config)?.object_store(None);
 
         Ok((store, prefix))
     }

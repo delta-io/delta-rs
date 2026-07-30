@@ -78,6 +78,8 @@ use crate::kernel::{Action, Version, spawn_blocking_with_span};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
+#[cfg(feature = "cloud")]
+pub use self::config::CloudCredentialProvider;
 pub use self::config::StorageConfig;
 pub use self::factories::{
     LogStoreFactory, LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
