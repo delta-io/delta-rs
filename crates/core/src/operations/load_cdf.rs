@@ -28,6 +28,7 @@ use datafusion::physical_plan::union::UnionExec;
 use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
 use delta_kernel::table_features::ColumnMappingMode;
 use parquet::file::metadata::ParquetMetaData;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::log;
@@ -193,6 +194,7 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<AddCDCFile>>,
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
+        Vec<ResolvedPair>,
     )> {
         if self.starting_version.is_none() && self.starting_timestamp.is_none() {
             return Err(DeltaTableError::NoStartingVersionOrTimestamp);
@@ -206,12 +208,13 @@ impl CdfLoadBuilder {
         let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
         let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
         let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
+        let mut resolved_pairs: Vec<ResolvedPair> = vec![];
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
             Ok(latest_version) => latest_version,
             Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
-                return Ok((change_files, add_files, remove_files));
+                return Ok((change_files, add_files, remove_files, resolved_pairs));
             }
             Err(e) => return Err(e),
         };
@@ -224,14 +227,14 @@ impl CdfLoadBuilder {
 
         if end < start {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
         if start > latest_version {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::InvalidVersion(start))
             };
@@ -262,7 +265,7 @@ impl CdfLoadBuilder {
             && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
             };
@@ -351,12 +354,31 @@ impl CdfLoadBuilder {
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
-                if !add_actions.is_empty() {
+                let mut removes_by_path: HashMap<String, Remove> = remove_actions
+                    .into_iter()
+                    .map(|r| (r.path.clone(), r))
+                    .collect();
+                let mut unpaired_adds: Vec<Add> = Vec::with_capacity(add_actions.len());
+                for add in add_actions {
+                    if let Some(remove) = removes_by_path.remove(&add.path) {
+                        resolved_pairs.push(ResolvedPair {
+                            version,
+                            timestamp: ts,
+                            rm_dv: remove.deletion_vector.clone(),
+                            add,
+                        });
+                    } else {
+                        unpaired_adds.push(add);
+                    }
+                }
+                let remove_actions: Vec<Remove> = removes_by_path.into_values().collect();
+
+                if !unpaired_adds.is_empty() {
                     log::debug!(
                         "Located {} add cdf actions for version: {version}",
-                        add_actions.len()
+                        unpaired_adds.len()
                     );
-                    add_files.push(CdcDataSpec::new(version, ts, add_actions));
+                    add_files.push(CdcDataSpec::new(version, ts, unpaired_adds));
                 }
 
                 if !remove_actions.is_empty() {
@@ -375,7 +397,7 @@ impl CdfLoadBuilder {
             remove_files = prune_specs_by_partition(remove_files, partition_pruning)?;
         }
 
-        Ok((change_files, add_files, remove_files))
+        Ok((change_files, add_files, remove_files, resolved_pairs))
     }
 
     #[inline]
@@ -482,7 +504,7 @@ impl CdfLoadBuilder {
 
         let partition_pruning =
             self.partition_pruning_predicate(session, &schema, partition_values)?;
-        let (cdc, add, remove) = self
+        let (cdc, add, remove, pairs) = self
             .determine_files_to_read(&snapshot, partition_pruning.as_ref())
             .await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
@@ -527,7 +549,7 @@ impl CdfLoadBuilder {
             Arc::clone(&self.parquet_metadata_cache),
         )
         .await?;
-        let add_file_groups = create_partition_values(
+        let mut add_file_groups = create_partition_values(
             schema.clone(),
             add,
             partition_values,
@@ -538,11 +560,24 @@ impl CdfLoadBuilder {
             Arc::clone(&self.parquet_metadata_cache),
         )
         .await?;
-        let remove_file_groups = create_partition_values(
+        let mut remove_file_groups = create_partition_values(
             schema.clone(),
             remove,
             partition_values,
             Self::get_remove_action_type(),
+            Arc::clone(&engine),
+            Arc::clone(&root_obj_store),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+        )
+        .await?;
+
+        extend_groups_with_pairs(
+            schema.clone(),
+            pairs,
+            partition_values,
+            &mut add_file_groups,
+            &mut remove_file_groups,
             Arc::clone(&engine),
             Arc::clone(&root_obj_store),
             self.log_store.table_root_url(),
@@ -737,6 +772,62 @@ pub(crate) mod tests {
             "| 9  | Ada    | 2023-12-25 | insert       |",
             "+----+--------+------------+--------------+",
         ], &batches }
+        Ok(())
+    }
+
+    /// Same-file add/remove deletion-vector pairs (in-place DV updates) must be resolved by
+    /// DV set-subtraction, not read as independent inserts and deletes. `cdf-table-with-dv`
+    /// has no CDC files -- every commit v1..=v6 is such a pair on a single 10-row file -- so
+    /// each version's change rows come purely from `add_dv`/`rm_dv` resolution. Expected
+    /// per-version `(change_type, count)` pairs match delta-kernel's own CDF reader.
+    #[rstest::rstest]
+    #[case(1, &[("delete", 2)])]
+    #[case(2, &[("insert", 2)])]
+    #[case(3, &[("delete", 4)])]
+    #[case(4, &[("insert", 2)])]
+    #[case(5, &[("delete", 1), ("insert", 2)])]
+    #[case(6, &[("insert", 1)])]
+    #[tokio::test]
+    async fn dv_pair_resolves_change_rows(
+        #[case] version: u64,
+        #[case] expected: &[(&str, i64)],
+    ) -> TestResult {
+        let table_path = Path::new("../test/tests/data/cdf-table-with-dv");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let ctx: SessionContext = SessionContext::new();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let provider = DeltaCdfTableProvider::try_new(
+            table
+                .scan_cdf()
+                .with_starting_version(version)
+                .with_ending_version(version),
+        )?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+        let batches = ctx
+            .sql("SELECT _change_type, count(*) c FROM cdf GROUP BY _change_type ORDER BY _change_type")
+            .await?
+            .collect()
+            .await?;
+
+        let mut actual: Vec<(String, i64)> = vec![];
+        for b in &batches {
+            let types = b
+                .column(0)
+                .as_any()
+                .downcast_ref::<arrow_array::StringArray>()
+                .unwrap();
+            let counts = b
+                .column(1)
+                .as_any()
+                .downcast_ref::<arrow_array::Int64Array>()
+                .unwrap();
+            for i in 0..b.num_rows() {
+                actual.push((types.value(i).to_string(), counts.value(i)));
+            }
+        }
+        let expected: Vec<(String, i64)> =
+            expected.iter().map(|(t, c)| (t.to_string(), *c)).collect();
+        assert_eq!(actual, expected, "mismatch at version {version}");
         Ok(())
     }
 
