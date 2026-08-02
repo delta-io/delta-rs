@@ -1953,6 +1953,7 @@ mod tests {
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::test_utils::get_delta_schema_non_null_id;
     use crate::writer::test_utils::get_non_null_arrow_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
     use crate::{DeltaTable, DeltaTableConfig};
@@ -2003,6 +2004,20 @@ mod tests {
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
         let table_schema = get_delta_schema();
 
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(partitions.unwrap_or_default())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+        table
+    }
+
+    pub(crate) async fn setup_table_with_non_null_column(
+        partitions: Option<Vec<&str>>,
+    ) -> DeltaTable {
+        let table_schema = get_delta_schema_non_null_id();
         let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
@@ -2066,7 +2081,7 @@ mod tests {
     #[tokio::test]
     async fn test_merge_non_null() {
         let schema = get_non_null_arrow_schema();
-        let table = setup_table(Some(vec!["modified"])).await;
+        let table = setup_table_with_non_null_column(Some(vec!["modified"])).await;
         let table = write_data(table, &schema).await;
         assert_eq!(table.version(), Some(1));
         assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
@@ -2114,6 +2129,9 @@ mod tests {
             "| D  | 100   | 2021-02-02 |",
             "+----+-------+------------+",
         ];
+        let schema = table.snapshot().unwrap().schema();
+        let id_field = schema.field("id").unwrap();
+        assert!(!id_field.is_nullable());
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }

@@ -166,6 +166,27 @@ pub fn get_delta_schema() -> StructType {
     .unwrap()
 }
 
+pub fn get_delta_schema_non_null_id() -> StructType {
+    StructType::try_new(vec![
+        StructField::new(
+            "id".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            false,
+        ),
+        StructField::new(
+            "value".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
+            true,
+        ),
+        StructField::new(
+            "modified".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+    ])
+    .unwrap()
+}
+
 /// Return table metadata for the sample schema with the given partition columns.
 pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     let table_schema = get_delta_schema();
