@@ -2107,6 +2107,7 @@ mod tests {
             .merge(source, predicate)
             .with_source_alias("source")
             .with_target_alias("target")
+            .with_merge_schema(true)
             .when_matched_update(|update| {
                 update
                     .update("id", col("source.id"))
