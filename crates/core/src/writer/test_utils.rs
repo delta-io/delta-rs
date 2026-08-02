@@ -166,6 +166,7 @@ pub fn get_delta_schema() -> StructType {
     .unwrap()
 }
 
+/// Return the canonical sample Delta schema (id, value, modified) with id non-nullable.
 pub fn get_delta_schema_non_null_id() -> StructType {
     StructType::try_new(vec![
         StructField::new(
