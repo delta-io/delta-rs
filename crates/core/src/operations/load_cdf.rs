@@ -25,7 +25,6 @@ use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
 use delta_kernel::table_features::ColumnMappingMode;
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
@@ -44,12 +43,6 @@ use crate::kernel::{
 };
 use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
-
-#[derive(Debug, Default)]
-struct DvPair {
-    add_dv: Option<DeletionVectorDescriptor>,
-    deletion_dv: Option<DeletionVectorDescriptor>,
-}
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -75,9 +68,7 @@ pub struct CdfLoadBuilder {
     /// conjuncts are ignored here and row-level correctness must be enforced by a
     /// separate `FilterExec` wrapped around the resulting plan.
     filter: Option<Expr>,
-
     parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
-    dv_cache: Arc<DashMap<String, DvPair>>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -108,7 +99,6 @@ impl CdfLoadBuilder {
             session: None,
             filter: None,
             parquet_metadata_cache: Arc::new(DashMap::new()),
-            dv_cache: Arc::new(DashMap::new()),
         }
     }
 
@@ -205,10 +195,10 @@ impl CdfLoadBuilder {
             self.calculate_earliest_version(snapshot).await?
         };
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
-        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
-        let mut resolved_pairs: Vec<ResolvedPair> = vec![];
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = Vec::with_capacity(1024);
+        let mut add_files: Vec<CdcDataSpec<Add>> = Vec::with_capacity(1024);
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::with_capacity(1024);
+        let mut resolved_pairs: Vec<ResolvedPair> = Vec::with_capacity(1024);
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
@@ -286,9 +276,9 @@ impl CdfLoadBuilder {
             let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?)?;
 
             let mut ts = 0;
-            let mut cdc_actions = vec![];
-            let mut add_actions = vec![];
-            let mut remove_actions = vec![];
+            let mut cdc_actions = Vec::with_capacity(1024);
+            let mut add_actions = Vec::with_capacity(1024);
+            let mut remove_actions = Vec::with_capacity(1024);
             if self.starting_timestamp.is_some() || self.ending_timestamp.is_some() {
                 // TODO: fallback on other actions for timestamps because CommitInfo action is optional
                 // theoretically.
@@ -692,7 +682,12 @@ pub(crate) mod tests {
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaTable, TableProperty};
+    use delta_kernel::engine::arrow_data::EngineDataArrowExt;
+    use delta_kernel::table_changes::TableChanges;
+    use delta_kernel_default_engine::DefaultEngine;
+    use object_store::local::LocalFileSystem;
     use std::path::Path;
+    use std::time::Instant;
     use url::Url;
 
     /// Regression test for partition pruning in `load_cdf`.
@@ -1517,23 +1512,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_dv_cdf() -> TestResult {
-        let ctx = SessionContext::new();
-        let table_path = Path::new("C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table\\");
-        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
-        let table = DeltaTable::try_from_url(table_uri)
-            .await?
-            .scan_cdf()
-            .with_starting_version(6);
-        // 968
-        let provider = Arc::new(DeltaCdfTableProvider::try_new(table)?);
-        let df = ctx.read_table(provider)?;
-        dbg!(df.clone().count().await?);
-        df.show().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_load_vacuumed_table() -> TestResult {
         let ending_timestamp = NaiveDateTime::from_str("2024-01-06T15:44:59.570")?;
         let ctx = SessionContext::new();
@@ -1663,6 +1641,46 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_dv_cdf() -> TestResult {
+        let tp = "...";
+        // let tp = "...";
+        let ctx = SessionContext::new();
+
+        let table_path = Path::new(tp);
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let starting = Instant::now();
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+        let batches = collect(table, ctx.task_ctx()).await?;
+        let mine_total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        let first_run = starting.elapsed();
+        let fs = Arc::new(LocalFileSystem::new());
+        let engine = DefaultEngine::builder(fs.clone()).build();
+
+        let table_url = delta_kernel::try_parse_uri(tp)?;
+        let starting = Instant::now();
+        let cdc = TableChanges::try_new(table_url, &engine, 0, None)?
+            .into_scan_builder()
+            .build()?;
+
+        let batches: Vec<RecordBatch> = cdc
+            .execute(Arc::new(engine))?
+            .map(EngineDataArrowExt::try_into_record_batch)
+            .try_collect()?;
+        let kernel_total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        println!(
+            "Mine took: {:?}, Kernel Took: {:?}\nMy Count: {mine_total}, Kernel: {kernel_total}",
+            first_run,
+            starting.elapsed()
+        );
         Ok(())
     }
 }
