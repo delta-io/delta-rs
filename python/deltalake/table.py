@@ -132,6 +132,11 @@ class Metadata:
         """Return the DeltaTable properties."""
         return self._metadata.configuration
 
+    @property
+    def format_options(self) -> dict[str, str]:
+        """Return the `format.options` map (e.g. Parquet writer options like CDC)."""
+        return self._metadata.format_options
+
     def __str__(self) -> str:
         return (
             f"Metadata(id: {self._metadata.id}, name: {self._metadata.name}, "

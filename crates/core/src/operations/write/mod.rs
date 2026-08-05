@@ -40,7 +40,10 @@ use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
-use parquet::file::properties::WriterProperties;
+use parquet::file::properties::{
+    CdcOptions, DEFAULT_CDC_MAX_CHUNK_SIZE, DEFAULT_CDC_MIN_CHUNK_SIZE, DEFAULT_CDC_NORM_LEVEL,
+    WriterProperties,
+};
 use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use url::Url;
@@ -60,7 +63,7 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
-use crate::kernel::{Action, EagerSnapshot, StructType};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, StructType};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 
@@ -160,7 +163,51 @@ pub struct WriteBuilder {
     description: Option<String>,
     /// Configurations of the delta table, only used when table doesn't exist
     configuration: HashMap<String, Option<String>>,
+    /// Format options stored on `Metadata.format.options` (e.g. CDC settings)
+    format_options: HashMap<String, String>,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
+}
+
+/// Build [`WriterProperties`] from a table's `Metadata.format.options`, or `None` when
+/// content-defined chunking is not enabled.
+///
+/// For existing tables the stored format options are read from the snapshot; for new tables
+/// the write-time `format_options` map is consulted instead.
+fn writer_properties_from_format_options(
+    snapshot_format_options: &HashMap<String, String>,
+    format_options: &HashMap<String, String>,
+) -> Option<WriterProperties> {
+    let get = |key: &str| -> Option<&str> {
+        snapshot_format_options
+            .get(key)
+            .or_else(|| format_options.get(key))
+            .map(|s| s.as_str())
+    };
+
+    if !get("contentDefinedChunking.enabled")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let cdc = CdcOptions {
+        min_chunk_size: get("contentDefinedChunking.minChunkSize")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_CDC_MIN_CHUNK_SIZE),
+        max_chunk_size: get("contentDefinedChunking.maxChunkSize")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_CDC_MAX_CHUNK_SIZE),
+        norm_level: get("contentDefinedChunking.normLevel")
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(DEFAULT_CDC_NORM_LEVEL),
+    };
+
+    Some(
+        WriterProperties::builder()
+            .set_content_defined_chunking(Some(cdc))
+            .build(),
+    )
 }
 
 #[derive(Default, Debug, Serialize, Deserialize)]
@@ -208,6 +255,7 @@ impl WriteBuilder {
             name: None,
             description: None,
             configuration: Default::default(),
+            format_options: Default::default(),
             custom_execute_handler: None,
         }
     }
@@ -298,6 +346,21 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Set the `format.options` map stored on the table's `Metadata`.
+    ///
+    /// Format options are passed to the parquet writer when files are produced (e.g. enabling
+    /// content-defined chunking via `contentDefinedChunking.enabled = "true"`).
+    pub fn with_format_options(
+        mut self,
+        options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.format_options = options
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
         self
     }
 
@@ -441,7 +504,8 @@ impl WriteBuilder {
                 let mut builder = CreateBuilder::new()
                     .with_log_store(self.log_store.clone())
                     .with_columns(schema.fields().cloned())
-                    .with_configuration(self.configuration.clone());
+                    .with_configuration(self.configuration.clone())
+                    .with_format_options(self.format_options.clone());
                 if let Some(partition_columns) = self.partition_columns.as_ref() {
                     builder = builder.with_partition_columns(partition_columns.clone())
                 }
@@ -503,6 +567,15 @@ impl std::future::IntoFuture for WriteBuilder {
                 update_datafusion_session(&session, &this.log_store, Some(operation_id))?;
                 session.ensure_log_store_registered(this.log_store.as_ref())?;
 
+                let writer_properties = this.writer_properties.clone().or_else(|| {
+                    let snapshot_format_options = this
+                        .snapshot
+                        .as_ref()
+                        .and_then(|s| s.metadata().format_options().ok())
+                        .unwrap_or_default();
+                    writer_properties_from_format_options(&snapshot_format_options, &this.format_options)
+                });
+
                 let prepared_write = plan::prepare_write(plan::WritePreparationInput {
                     snapshot: this.snapshot.as_ref(),
                     session: &session,
@@ -514,7 +587,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                     target_file_size: this.target_file_size,
                     write_batch_size: this.write_batch_size,
-                    writer_properties: this.writer_properties.clone(),
+                    writer_properties,
                     configuration: &this.configuration,
                 })?;
 
@@ -646,6 +719,35 @@ impl std::future::IntoFuture for WriteBuilder {
 mod tests {
     use super::*;
     use crate::TableProperty;
+
+    #[test]
+    fn writer_properties_from_format_options_disabled_by_default() {
+        assert!(writer_properties_from_format_options(&HashMap::new(), &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn writer_properties_from_format_options_uses_snapshot_over_write_time() {
+        let snapshot = HashMap::from([
+            (
+                "contentDefinedChunking.enabled".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "contentDefinedChunking.minChunkSize".to_string(),
+                "2048".to_string(),
+            ),
+        ]);
+        // Write-time value is ignored when the snapshot already sets the key.
+        let write_time = HashMap::from([(
+            "contentDefinedChunking.minChunkSize".to_string(),
+            "1024".to_string(),
+        )]);
+
+        let props = writer_properties_from_format_options(&snapshot, &write_time).unwrap();
+        let cdc = props.content_defined_chunking().unwrap();
+        assert_eq!(cdc.min_chunk_size, 2048);
+        assert_eq!(cdc.max_chunk_size, DEFAULT_CDC_MAX_CHUNK_SIZE);
+    }
     use crate::ensure_table_uri;
     use crate::kernel::CommitInfo;
     use crate::logstore::get_actions;
@@ -3865,5 +3967,70 @@ mod tests {
         let batches = get_data(&table).await;
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 2);
+    }
+
+    /// `format_options` with CDC enabled must genuinely reach the real parquet writer -- not just
+    /// get parsed and discarded. Writing enough pseudo-random payload data with a small
+    /// max_chunk_size should split a single column into many unevenly sized data pages
+    /// (content-defined boundaries), unlike fixed-size page chunking.
+    #[tokio::test]
+    async fn test_content_defined_chunking_produces_uneven_data_pages() {
+        use arrow_array::{RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+        use object_store::ObjectStoreExt;
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use std::sync::Arc;
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "payload",
+            DataType::Utf8,
+            false,
+        )]));
+
+        // A repeated filler template would produce artificially uniform pages regardless of CDC;
+        // a plain ascending range gives each row distinct, non-repeating bytes instead.
+        let payloads: Vec<String> = (0..2000).map(|i| i.to_string()).collect();
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(StringArray::from(payloads))]).unwrap();
+
+        let table = crate::DeltaTable::new_in_memory()
+            .write(vec![batch])
+            .with_format_options([
+                ("contentDefinedChunking.enabled", "true"),
+                ("contentDefinedChunking.minChunkSize", "256"),
+                ("contentDefinedChunking.maxChunkSize", "1024"),
+            ])
+            .await
+            .unwrap();
+
+        let files: Vec<_> = table.snapshot().unwrap().log_data().iter().collect();
+        assert_eq!(files.len(), 1, "expected exactly one data file");
+        let path = object_store::path::Path::from(files[0].path().as_ref());
+        let bytes = table
+            .object_store()
+            .get(&path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        let row_group = reader.get_row_group(0).unwrap();
+        let mut page_reader = row_group.get_column_page_reader(0).unwrap();
+        let mut page_sizes = Vec::new();
+        while let Some(page) = page_reader.get_next_page().unwrap() {
+            page_sizes.push(page.buffer().len());
+        }
+
+        assert!(
+            page_sizes.len() >= 10,
+            "expected content-defined chunking to split this column into at least 10 pages, got {}",
+            page_sizes.len()
+        );
+        assert!(
+            page_sizes.iter().min() != page_sizes.iter().max(),
+            "content-defined chunking should produce unevenly sized pages, got uniform sizes: {page_sizes:?}"
+        );
     }
 }
