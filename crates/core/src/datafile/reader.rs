@@ -24,10 +24,7 @@ use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 
-use super::{
-    BatchFuture, DataFileReader, DeltaDataReader, ReadOptions, RecordBatchFutureStream,
-    results_to_future_stream,
-};
+use super::{BatchStream, DataFileReader, DeltaDataReader, ReadOptions, results_to_stream};
 
 fn not_yet_implemented(what: &str) -> DeltaTableError {
     DeltaTableError::Generic(format!(
@@ -65,11 +62,7 @@ impl ParquetFileReader {
 
     /// Read a data file, optionally passing its known size so the parquet reader
     /// can skip the extra `HEAD` request it would otherwise make to discover it.
-    async fn read_file_sized(
-        &self,
-        path: Path,
-        size: Option<u64>,
-    ) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read_file_sized(&self, path: Path, size: Option<u64>) -> DeltaResult<BatchStream> {
         let mut reader = ParquetObjectReader::new(self.store.clone(), path);
         if let Some(size) = size {
             reader = reader.with_file_size(size);
@@ -77,13 +70,13 @@ impl ParquetFileReader {
         let stream = ParquetRecordBatchStreamBuilder::new(reader)
             .await?
             .build()?;
-        Ok(results_to_future_stream(stream))
+        Ok(results_to_stream(stream))
     }
 }
 
 #[async_trait::async_trait]
 impl DataFileReader for ParquetFileReader {
-    async fn read_file(&self, path: Path) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read_file(&self, path: Path) -> DeltaResult<BatchStream> {
         self.read_file_sized(path, None).await
     }
 }
@@ -158,7 +151,7 @@ impl ParquetTableReader {
 
 #[async_trait::async_trait]
 impl DeltaDataReader for ParquetTableReader {
-    async fn read(&self, options: ReadOptions) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read(&self, options: ReadOptions) -> DeltaResult<BatchStream> {
         // Projection / limit pushdown is a follow-up; reject rather than silently
         // ignore so callers don't get more data than they asked for.
         if options.projection.is_some() || options.limit.is_some() {
@@ -185,23 +178,16 @@ impl DeltaDataReader for ParquetTableReader {
     }
 }
 
-/// Open one data file, turning an open error into a single failing batch future
+/// Open one data file, turning an open error into a single failing batch item
 /// so it surfaces while draining rather than being silently dropped.
-async fn open_file_stream(
-    reader: ParquetFileReader,
-    path: Path,
-    size: u64,
-) -> RecordBatchFutureStream {
+async fn open_file_stream(reader: ParquetFileReader, path: Path, size: u64) -> BatchStream {
     // size 0 means "unknown" (see try_new): let the reader HEAD for it.
     match reader
         .read_file_sized(path, (size > 0).then_some(size))
         .await
     {
         Ok(file_stream) => file_stream,
-        Err(err) => {
-            let failing: BatchFuture = Box::pin(async move { Err(err) });
-            futures::stream::once(std::future::ready(failing)).boxed()
-        }
+        Err(err) => futures::stream::once(std::future::ready(Err(err))).boxed(),
     }
 }
 
@@ -215,7 +201,7 @@ pub struct KernelDataFileReader;
 
 #[async_trait::async_trait]
 impl DataFileReader for KernelDataFileReader {
-    async fn read_file(&self, _path: Path) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read_file(&self, _path: Path) -> DeltaResult<BatchStream> {
         Err(not_yet_implemented("KernelDataFileReader"))
     }
 }
@@ -229,7 +215,7 @@ pub struct KernelDataReader;
 
 #[async_trait::async_trait]
 impl DeltaDataReader for KernelDataReader {
-    async fn read(&self, _options: ReadOptions) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read(&self, _options: ReadOptions) -> DeltaResult<BatchStream> {
         Err(not_yet_implemented("KernelDataReader"))
     }
 }
@@ -263,7 +249,7 @@ mod tests {
 
         let reader = ParquetTableReader::try_new(&table).await.unwrap();
         let stream = reader.read(ReadOptions::default()).await.unwrap();
-        let batches: Vec<_> = stream.buffered(4).try_collect().await.unwrap();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
 
         assert!(!batches.is_empty(), "expected at least one batch");
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -345,7 +331,7 @@ mod tests {
 
         let reader = ParquetFileReader::new(store);
         let stream = reader.read_file(path).await.unwrap();
-        let batches: Vec<_> = stream.buffered(2).try_collect().await.unwrap();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
 
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, expected_rows);

@@ -13,24 +13,19 @@ use datafusion::physical_plan::{
 use futures::stream::{StreamExt as _, select_all};
 
 use super::writer::DeltaWriter;
-use super::{
-    BatchFuture, DeltaDataReader, DeltaDataWriter, ReadOptions, RecordBatchFutureStream,
-    results_to_future_stream,
-};
+use super::{BatchStream, DeltaDataReader, DeltaDataWriter, ReadOptions, results_to_stream};
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
-/// Adapt several DataFusion partition streams into one basic
-/// [`RecordBatchFutureStream`], polling all of them concurrently.
-fn sendable_streams_to_future_stream(
-    streams: Vec<SendableRecordBatchStream>,
-) -> RecordBatchFutureStream {
+/// Adapt several DataFusion partition streams into one basic [`BatchStream`],
+/// polling all of them concurrently.
+fn sendable_streams_to_stream(streams: Vec<SendableRecordBatchStream>) -> BatchStream {
     // `select_all` panics on an empty iterator; an empty input is just an empty stream.
     if streams.is_empty() {
-        return futures::stream::empty::<BatchFuture>().boxed();
+        return futures::stream::empty().boxed();
     }
-    results_to_future_stream(select_all(streams))
+    results_to_stream(select_all(streams))
 }
 
 /// Run `provider.scan(..)` and coalesce its output partitions into one stream.
@@ -83,8 +78,7 @@ impl DeltaDataWriterExt for DeltaWriter {
         plan: Arc<dyn ExecutionPlan>,
     ) -> DeltaResult<Vec<Add>> {
         let streams = execute_stream_partitioned(plan, session.task_ctx())?;
-        self.write_all(sendable_streams_to_future_stream(streams))
-            .await
+        self.write_all(sendable_streams_to_stream(streams)).await
     }
 }
 
@@ -93,6 +87,14 @@ impl DeltaDataWriterExt for DeltaWriter {
 pub trait DeltaDataReaderExt: DeltaDataReader {
     /// Scan the table through the DataFusion `DeltaScanNext` provider, returning
     /// a coalesced single-partition stream.
+    ///
+    /// `session` must have the table's object store registered — for
+    /// [`DataFusionDataReader`], the session passed to
+    /// [`try_new`](DataFusionDataReader::try_new) (which registers it) or one
+    /// sharing that session's `RuntimeEnv`. A reader built via
+    /// [`new`](DataFusionDataReader::new) registers nothing, and scanning with
+    /// an unrelated session fails at execution with an
+    /// "object store not registered" error.
     async fn scan(
         &self,
         session: &dyn Session,
@@ -159,9 +161,9 @@ impl DeltaDataReaderExt for DataFusionDataReader {
 
 #[async_trait::async_trait]
 impl DeltaDataReader for DataFusionDataReader {
-    async fn read(&self, options: ReadOptions) -> DeltaResult<RecordBatchFutureStream> {
+    async fn read(&self, options: ReadOptions) -> DeltaResult<BatchStream> {
         let stream = self.scan(self.session.as_ref(), options.into()).await?;
-        Ok(results_to_future_stream(stream))
+        Ok(results_to_stream(stream))
     }
 }
 
@@ -179,9 +181,9 @@ mod tests {
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
 
     #[tokio::test]
-    async fn test_sendable_streams_to_future_stream_empty_is_empty() {
+    async fn test_sendable_streams_to_stream_empty_is_empty() {
         // Empty input must not panic in `select_all`; it yields an empty stream.
-        let mut stream = sendable_streams_to_future_stream(vec![]);
+        let mut stream = sendable_streams_to_stream(vec![]);
         assert!(stream.next().await.is_none());
     }
 
@@ -218,7 +220,7 @@ mod tests {
             .unwrap();
 
         let stream = reader.read(ReadOptions::default()).await.unwrap();
-        let batches: Vec<_> = stream.buffered(4).try_collect().await.unwrap();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
 
         let total: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total, rows);

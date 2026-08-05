@@ -1,4 +1,5 @@
 use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::Schema;
@@ -488,21 +489,67 @@ fn is_writer_task_closed_error(err: &DeltaTableError) -> bool {
     matches!(err, DeltaTableError::Generic(msg) if msg == WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG)
 }
 
+/// Synthetic error the writer task returns when it aborted because the write was
+/// cancelled (a worker failed, or the whole `write_streams` future was dropped).
+/// Recognized so the original failure is surfaced instead of this symptom.
+const WRITE_CANCELLED_MSG: &str = "write cancelled before completion";
+
+fn is_write_cancelled_error(err: &DeltaTableError) -> bool {
+    matches!(err, DeltaTableError::Generic(msg) if msg == WRITE_CANCELLED_MSG)
+}
+
+/// Sets the shared cancellation flag when dropped while armed. Held by the
+/// `write_streams` future so that dropping it (e.g. a sibling partition's
+/// failure aborting this task) poisons the detached writer task, which then
+/// aborts its uploads at channel EOF instead of finalizing orphan files.
+struct CancelOnDrop {
+    flag: Arc<AtomicBool>,
+    armed: bool,
+}
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        if self.armed {
+            self.flag.store(true, AtomicOrdering::Release);
+        }
+    }
+}
+
 /// Drain one or more streams through a single [`DeltaWriter`].
 ///
 /// One worker task is spawned per input stream (so the per-stream scan/compute in
 /// `next()` parallelizes across runtime threads); all workers feed the writer task
 /// over a bounded channel (capacity `writer_batch_concurrency()`), overlapping
 /// scan/compute with parquet encode+upload under backpressure. On any stream or
-/// writer error the remaining workers are aborted and the underlying error surfaced.
+/// writer error the remaining workers are aborted, the writer aborts its uploads,
+/// and the underlying error is surfaced.
 pub(crate) async fn write_streams(
     streams: Vec<SendableRecordBatchStream>,
     object_store: ObjectStoreRef,
     config: WriterConfig,
 ) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
-    let worker_count = streams.len();
-    let (tx, rx) = mpsc::channel::<RecordBatch>(writer_batch_concurrency());
+    write_streams_with_capacity(streams, object_store, config, writer_batch_concurrency()).await
+}
 
+/// [`write_streams`] with an explicit producer→writer channel capacity, so a
+/// caller running many single-stream drains concurrently (the partitioned write
+/// path) can split one global batch budget across them instead of multiplying it.
+pub(crate) async fn write_streams_with_capacity(
+    streams: Vec<SendableRecordBatchStream>,
+    object_store: ObjectStoreRef,
+    config: WriterConfig,
+    channel_capacity: usize,
+) -> DeltaResult<(Vec<Add>, WriteStreamMetrics)> {
+    let worker_count = streams.len();
+    let (tx, rx) = mpsc::channel::<RecordBatch>(channel_capacity.max(1));
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let mut cancel_guard = CancelOnDrop {
+        flag: cancelled.clone(),
+        armed: true,
+    };
+
+    let writer_cancelled = cancelled.clone();
     let mut writer_handle = tokio::task::spawn(async move {
         let mut writer = DeltaWriter::new(object_store, config);
         // Drain the channel through the shared timed-write loop
@@ -522,6 +569,14 @@ pub(crate) async fn write_streams(
                 return Err(e);
             }
         };
+        // Channel EOF also happens when the producers were torn down by a
+        // cancellation (worker failure, or this drain's future being dropped by
+        // an aborted sibling task). Abort the partial data instead of
+        // finalizing orphan files for a write that already failed.
+        if writer_cancelled.load(AtomicOrdering::Acquire) {
+            let _ = writer.abort().await;
+            return Err(DeltaTableError::Generic(WRITE_CANCELLED_MSG.to_string()));
+        }
         let adds = writer.close().await?;
         Ok::<(Vec<Add>, u64, u64), DeltaTableError>((
             adds,
@@ -577,6 +632,9 @@ pub(crate) async fn write_streams(
                         {
                             worker_error = Some(err);
                         }
+                        // Poison the writer before tearing the producers down, so
+                        // it aborts at channel EOF instead of closing partial data.
+                        cancelled.store(true, AtomicOrdering::Release);
                         worker_set.abort_all();
                     }
                     Err(join_err) if join_err.is_cancelled() => {
@@ -585,6 +643,7 @@ pub(crate) async fn write_streams(
                             worker_error = Some(DeltaTableError::Generic(format!(
                                 "worker task unexpectedly cancelled while driving partition: {join_err}"
                             )));
+                            cancelled.store(true, AtomicOrdering::Release);
                         }
                     }
                     Err(join_err) => {
@@ -593,6 +652,7 @@ pub(crate) async fn write_streams(
                                 "worker join error when driving partition: {join_err}"
                             )));
                         }
+                        cancelled.store(true, AtomicOrdering::Release);
                         worker_set.abort_all();
                     }
                 }
@@ -620,11 +680,21 @@ pub(crate) async fn write_streams(
         }
     }
 
+    // The writer task has finished — there is nothing left for the drop guard to
+    // poison, and disarming it keeps an already-successful close from being
+    // misread as cancelled by a later drain in this task.
+    cancel_guard.armed = false;
+
     let writer_result = writer_result.ok_or_else(|| {
         DeltaTableError::Generic("writer task did not produce a result".to_string())
     })?;
     let (adds, write_time_ms, rows_written) = match writer_result {
         Ok(values) => values,
+        // The synthetic cancellation error means a worker failure triggered the
+        // abort; surface the original failure instead of the symptom.
+        Err(err) if is_write_cancelled_error(&err) && worker_error.is_some() => {
+            return Err(worker_error.expect("checked is_some"));
+        }
         Err(err) => return Err(err),
     };
 
@@ -719,6 +789,12 @@ async fn write_data_plan(
     let partition_streams = execute_stream_partitioned(plan, session.task_ctx())?;
     let scan_start = std::time::Instant::now();
 
+    // Split the global in-flight batch budget across the concurrent per-partition
+    // drains, so total buffering stays bounded by `writer_batch_concurrency()`
+    // regardless of the partition count.
+    let per_partition_capacity =
+        (writer_batch_concurrency() / partition_streams.len().max(1)).max(1);
+
     let mut join_set = JoinSet::new();
     for stream in partition_streams {
         let store = object_store.clone();
@@ -727,7 +803,9 @@ async fn write_data_plan(
             // Each partition drains through the same producer/consumer writer as
             // the unpartitioned path, so scan and parquet encode+upload overlap
             // within the partition (and across partitions via the JoinSet).
-            let (adds, metrics) = write_streams(vec![stream], store, config).await?;
+            let (adds, metrics) =
+                write_streams_with_capacity(vec![stream], store, config, per_partition_capacity)
+                    .await?;
             Ok::<(Vec<Add>, u64), DeltaTableError>((adds, metrics.write_time_ms))
         });
     }

@@ -19,7 +19,7 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use crate::datafile::{DataFileWriter, DeltaDataWriter, RecordBatchFutureStream};
+use crate::datafile::{BatchStream, DataFileWriter, DeltaDataWriter};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
@@ -103,9 +103,26 @@ async fn upload_parquet_file(
         Err(e) => {
             // A failed completion leaves multipart parts behind that vacuum
             // cannot see; abort them (best-effort) before surfacing the error.
+            //
+            // `BufWriter::abort` panics (by design) once shutdown has begun, and
+            // a `finish` that failed at the complete stage is exactly that state
+            // — the upload is no longer reachable to abort. Catch the panic so
+            // that case degrades to a leaked-parts warning instead of taking
+            // down the write task.
+            use futures::FutureExt as _;
             let mut buf_writer = arrow_writer.into_inner().into_inner();
-            if let Err(abort_err) = buf_writer.abort().await {
-                warn!("failed to abort multipart upload after a failed finish: {abort_err}");
+            let abort = std::panic::AssertUnwindSafe(buf_writer.abort()).catch_unwind();
+            match abort.await {
+                Ok(Ok(())) => {}
+                Ok(Err(abort_err)) => {
+                    warn!("failed to abort multipart upload after a failed finish: {abort_err}");
+                }
+                Err(_) => {
+                    warn!(
+                        "multipart upload failed during completion; its parts cannot be aborted \
+                         and are left for the object store's lifecycle cleanup"
+                    );
+                }
             }
             return Err(e.into());
         }
@@ -471,19 +488,11 @@ where
 
 #[async_trait::async_trait]
 impl DeltaDataWriter for DeltaWriter {
-    async fn write_all(
-        mut self: Box<Self>,
-        batches: RecordBatchFutureStream,
-    ) -> DeltaResult<Vec<Add>> {
-        // Resolve up to `writer_batch_concurrency()` batch futures ahead and write
-        // them in input-stream order (`buffered`, not `buffer_unordered`), so this
-        // adds no reordering of its own — the file order follows the input (which a
-        // caller that merges partition streams may itself interleave). Today's
-        // callers wrap already-materialized batches in ready futures (so this is
-        // just a bounded drain, metrics unused), but the bound is honored for any
-        // future streaming caller.
-        let buffered = batches.buffered(writer_batch_concurrency().max(1));
-        if let Err(e) = write_batches_timed(&mut self, buffered).await {
+    async fn write_all(mut self: Box<Self>, batches: BatchStream) -> DeltaResult<Vec<Add>> {
+        // Batches are written in input-stream order, so the file order follows
+        // the input (which a caller that merges partition streams may itself
+        // interleave).
+        if let Err(e) = write_batches_timed(&mut self, batches).await {
             // Abort rather than drop: dropping leaks the open multipart uploads.
             let _ = (*self).abort().await;
             return Err(e);
@@ -573,7 +582,19 @@ impl LazyArrowWriter {
                     config.file_schema.clone(),
                     Some(config.writer_properties.clone()),
                 )?;
-                arrow_writer.write(batch).await?;
+                // A large first batch can complete row groups and start a multipart
+                // upload before this call returns. On failure, `self` is still
+                // `Initialized` — unreachable by the outer abort paths — so the
+                // upload must be aborted here before surfacing the error.
+                if let Err(e) = arrow_writer.write(batch).await {
+                    let mut buf_writer = arrow_writer.into_inner().into_inner();
+                    if let Err(abort_err) = buf_writer.abort().await {
+                        warn!(
+                            "failed to abort multipart upload after a failed first write: {abort_err}"
+                        );
+                    }
+                    return Err(e.into());
+                }
                 *self = LazyArrowWriter::Writing(path.clone(), arrow_writer);
             }
             LazyArrowWriter::Writing(_, arrow_writer) => {
@@ -824,6 +845,10 @@ impl DataFileWriter for PartitionWriter {
     async fn close(self: Box<Self>) -> DeltaResult<Vec<Add>> {
         PartitionWriter::close(*self).await
     }
+
+    async fn abort(self: Box<Self>) -> DeltaResult<()> {
+        PartitionWriter::abort(*self).await
+    }
 }
 
 #[cfg(test)]
@@ -919,6 +944,59 @@ mod tests {
             writer_properties.created_by(),
             format!("delta-rs version {}", crate_version())
         );
+    }
+
+    #[tokio::test]
+    async fn test_failed_first_write_cleans_up_without_panicking() {
+        use crate::test_utils::failing_store::FailingMultipartStore;
+        use arrow::array::Int64Array;
+        use std::sync::atomic::Ordering;
+
+        // Fail the multipart *creation*, so the failure surfaces inside the very
+        // first `write` call — while the lazy writer is still in its
+        // `Initialized` state, whose error path (unlike the `Writing` one) is
+        // handled inline rather than by the outer abort machinery.
+        let store = Arc::new(FailingMultipartStore::default());
+        store.fail_multipart_create.store(true, Ordering::Release);
+
+        // Two int64 columns × 1M rows ≈ 16MB encoded (uncompressed, no
+        // dictionary): the first `write` call completes a full row group
+        // (default cap 1M rows) and flushes it, forcing a multipart upload.
+        let rows = 1024 * 1024;
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let values = || Arc::new(Int64Array::from_iter_values(0..rows as i64));
+        let batch = RecordBatch::try_new(schema, vec![values(), values()]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            Some(props),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(
+            store,
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap();
+
+        let result = writer.write(&batch).await;
+        assert!(result.is_err(), "injected multipart failure must surface");
+        // The first-write error path must leave the writer cleanly abortable —
+        // no leaked upload, no panic.
+        writer.abort().await.unwrap();
     }
 
     #[test]

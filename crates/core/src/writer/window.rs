@@ -240,6 +240,12 @@ impl WriteWindow {
     /// On a seal error the window is aborted (nothing is left committable).
     pub(crate) async fn drain(&mut self) -> DeltaResult<Vec<Add>> {
         self.stage().await?;
+        // The drained `Add`s leave the window's custody (committing them — and any
+        // metadata for a widened schema — is the caller's responsibility on this
+        // low-level path), so the schema they were written under becomes the new
+        // baseline: a later abort must not revert below it, and a later
+        // `flush_and_commit` of Default-mode batches must not re-evolve metadata.
+        self.baseline = self.schema.clone();
         self.count = 0;
         Ok(std::mem::take(&mut self.sealed))
     }
@@ -437,6 +443,87 @@ mod tests {
         assert!(!w.schema_evolved());
         assert_eq!(w.schema(), &schema_one());
         assert!(w.drain().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn sink_io_failure_discards_window() {
+        use crate::test_utils::failing_store::FailingMultipartStore;
+        use std::sync::atomic::Ordering;
+
+        let store = Arc::new(FailingMultipartStore::default());
+        let started = store.multipart_started.clone();
+        let aborted = store.multipart_aborted.clone();
+        let factory = SinkFactory {
+            storage: store,
+            partition_columns: vec![],
+            writer_properties: WriterProperties::builder()
+                .set_dictionary_enabled(false)
+                .build(),
+            target_file_size: None,
+            num_indexed_cols: DataSkippingNumIndexedCols::AllColumns,
+            stats_columns: None,
+        };
+        let mut w = WriteWindow::new(factory, schema_one());
+
+        // A small write succeeds and stays buffered in the open sink.
+        w.write(&batch_one(), None).await.unwrap();
+        assert_eq!(w.count(), 1);
+
+        // ~8MB pushes the sink into a multipart upload whose parts the store
+        // rejects. The failure surfaces when the window seals (all-or-nothing):
+        // the whole window aborts and everything buffered since the last flush
+        // is discarded — including the small batch that was accepted above.
+        let rows = 2 * 1024 * 1024;
+        let big = RecordBatch::try_new(
+            schema_one(),
+            vec![Arc::new(Int32Array::from_iter_values(0..rows))],
+        )
+        .unwrap();
+        let staged_big = w.write(&big, None).await;
+        let sealed = match staged_big {
+            // Error already surfaced during the write: the window is aborted.
+            Err(_) => Err(()),
+            // Write buffered without observing the failure yet: it must
+            // surface at seal time, aborting the window.
+            Ok(()) => w.drain().await.map(|_| ()).map_err(|_| ()),
+        };
+        assert!(sealed.is_err(), "injected IO failure must surface");
+        assert!(
+            started.load(Ordering::Acquire),
+            "test must actually reach a multipart upload"
+        );
+        // Whether the upload could be aborted depends on where the failure
+        // surfaced: a completion-stage failure leaves the upload unreachable
+        // (`BufWriter::abort` would panic there), which must degrade to a
+        // leaked-parts warning — never a panic. Either way the window itself
+        // must be fully discarded (all-or-nothing).
+        let _ = aborted.load(Ordering::Acquire);
+        assert_eq!(w.count(), 0);
+        assert!(
+            w.drain().await.unwrap().is_empty(),
+            "nothing committable after an aborted window"
+        );
+    }
+
+    #[tokio::test]
+    async fn drain_advances_schema_baseline() {
+        // `flush()` hands the Adds (and any widened schema) to the caller, so
+        // the baseline must advance: a later abort must not revert below the
+        // drained schema, and no spurious metadata evolution may linger.
+        let mut w = window(schema_one());
+        w.write(&batch_two(), Some(schema_two())).await.unwrap();
+        assert!(w.schema_evolved());
+
+        let adds = w.drain().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        assert!(!w.schema_evolved(), "baseline advanced by drain");
+
+        w.abort();
+        assert_eq!(
+            w.schema(),
+            &schema_two(),
+            "abort must not revert below the drained schema"
+        );
     }
 
     #[tokio::test]

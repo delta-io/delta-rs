@@ -35,6 +35,13 @@ use crate::table::config::DEFAULT_NUM_INDEX_COLS;
 use crate::writer::utils::{arrow_schema_without_partitions, record_batch_without_partitions};
 
 /// Writes messages to a delta lake table.
+///
+/// Batches are streamed to storage as they are written, and a flush window
+/// commits all-or-nothing: if any write returns an error — including a
+/// transient IO error from the object store — every batch buffered since the
+/// last flush is discarded along with the failing one, and the caller must
+/// re-write all of them. (Validation errors caught before the batch reaches
+/// storage fail only that call and leave the window untouched.)
 pub struct RecordBatchWriter {
     /// All mutable per-flush-window state (open sink, sealed rotations, current
     /// and committed schema, batch count). See [`WriteWindow`] for the invariant
@@ -277,8 +284,10 @@ impl RecordBatchWriter {
     /// With [`WriteMode::MergeSchema`] new columns widen the writer's schema
     /// (sealing the files written so far) and the merged schema is returned; a
     /// widening write on a partitioned table is rejected as unsupported.
-    /// Committing the evolved metadata is the caller's responsibility on this
-    /// low-level path.
+    /// A later [`flush_and_commit`](super::DeltaWriter::flush_and_commit) commits
+    /// the evolved metadata along with the data; on the [`flush`](super::DeltaWriter::flush)
+    /// + manual-commit path, committing the evolved metadata is the caller's
+    /// responsibility.
     ///
     /// Validation errors fail only this call and leave the flush window untouched.
     pub async fn write_partition(
@@ -1588,7 +1597,7 @@ mod tests {
             use crate::datafile::reader::ParquetTableReader;
             use crate::datafile::{DeltaDataReader, ReadOptions};
             use arrow_array::Array;
-            use futures::stream::{StreamExt as _, TryStreamExt as _};
+            use futures::stream::TryStreamExt as _;
 
             let table_dir = tempfile::tempdir().unwrap();
             let mut table = create_initialized_table(table_dir.path().to_str().unwrap(), &[]).await;
@@ -1634,7 +1643,6 @@ mod tests {
                 .read(ReadOptions::default())
                 .await
                 .unwrap()
-                .buffered(4)
                 .try_collect()
                 .await
                 .unwrap();

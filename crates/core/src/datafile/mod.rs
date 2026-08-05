@@ -6,11 +6,10 @@
 //! * **Dataset tier** ([`DeltaDataWriter`], [`DeltaDataReader`]) — composes the
 //!   file tier across a table. Impl: [`writer::DeltaWriter`].
 //!
-//! Both tiers operate on a DataFusion-free stream of [`BatchFuture`]s. The
-//! DataFusion-capable surface lives in the gated [`datafusion_ext`] module.
+//! Both tiers operate on a DataFusion-free fallible stream of [`RecordBatch`]es.
+//! The DataFusion-capable surface lives in the gated [`datafusion_ext`] module.
 
 use arrow_array::RecordBatch;
-use futures::future::BoxFuture;
 use futures::stream::{BoxStream, Stream, StreamExt as _};
 
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -25,25 +24,20 @@ pub mod datafusion_ext;
 
 pub use properties::ReaderProperties;
 
-/// A future resolving to a single [`RecordBatch`] — the unit of late materialization.
-pub type BatchFuture = BoxFuture<'static, DeltaResult<RecordBatch>>;
+/// A fallible stream of [`RecordBatch`]es — the common currency of both tiers.
+/// Producers that parallelize (concurrent file opens, partitioned scans) do so
+/// upstream and merge into this stream.
+pub type BatchStream = BoxStream<'static, DeltaResult<RecordBatch>>;
 
-/// A stream of [`BatchFuture`]s; draining it with bounded concurrency
-/// (e.g. [`futures::StreamExt::buffered`]) yields parallel reads/writes.
-pub type RecordBatchFutureStream = BoxStream<'static, BatchFuture>;
-
-/// Adapt a fallible `RecordBatch` stream into a [`RecordBatchFutureStream`]:
-/// each item becomes a ready [`BatchFuture`] with its error mapped into
-/// [`DeltaTableError`]. Shared by the parquet file reader ([`reader`]) and the
-/// DataFusion stream adapters ([`datafusion_ext`]).
-pub(crate) fn results_to_future_stream<S, E>(stream: S) -> RecordBatchFutureStream
+/// Adapt a fallible `RecordBatch` stream into a [`BatchStream`], mapping its
+/// error into [`DeltaTableError`]. Shared by the parquet file reader
+/// ([`reader`]) and the DataFusion stream adapters ([`datafusion_ext`]).
+pub(crate) fn results_to_stream<S, E>(stream: S) -> BatchStream
 where
     S: Stream<Item = Result<RecordBatch, E>> + Send + 'static,
     E: Into<DeltaTableError> + Send + 'static,
 {
-    stream
-        .map(|res| -> BatchFuture { Box::pin(async move { res.map_err(Into::into) }) })
-        .boxed()
+    stream.map(|res| res.map_err(Into::into)).boxed()
 }
 
 /// File tier: writes a single Delta data file (or size-split set for one
@@ -58,6 +52,12 @@ pub trait DataFileWriter: Send {
     /// Finish writing and return the uncommitted [`Add`] actions for the files
     /// that were produced.
     async fn close(self: Box<Self>) -> DeltaResult<Vec<Add>>;
+
+    /// Abandon the writer after an error, aborting its in-progress multipart
+    /// uploads. Dropping the writer instead leaks upload parts vacuum cannot
+    /// see, and `close`-ing it finalizes files for partially-written data;
+    /// error-path callers should use this.
+    async fn abort(self: Box<Self>) -> DeltaResult<()>;
 }
 
 /// File tier: reads a single parquet data file (the per-file decryption seam,
@@ -65,10 +65,7 @@ pub trait DataFileWriter: Send {
 #[async_trait::async_trait]
 pub trait DataFileReader: Send + Sync {
     /// Read the parquet data file at `path` into a stream of record batches.
-    async fn read_file(
-        &self,
-        path: object_store::path::Path,
-    ) -> DeltaResult<RecordBatchFutureStream>;
+    async fn read_file(&self, path: object_store::path::Path) -> DeltaResult<BatchStream>;
 }
 
 /// Options for a basic (DataFusion-free) read. Richer predicate/projection
@@ -101,9 +98,9 @@ impl ReadOptions {
 /// (callers on the basic path validate themselves).
 #[async_trait::async_trait]
 pub trait DeltaDataWriter: Send {
-    /// Drain the batch-future stream into data files, returning the uncommitted
+    /// Drain the batch stream into data files, returning the uncommitted
     /// [`Add`] actions (still to be committed via a transaction).
-    async fn write_all(self: Box<Self>, batches: RecordBatchFutureStream) -> DeltaResult<Vec<Add>>;
+    async fn write_all(self: Box<Self>, batches: BatchStream) -> DeltaResult<Vec<Add>>;
 }
 
 /// Dataset tier: a DataFusion-free reader that composes the file tier
@@ -111,8 +108,8 @@ pub trait DeltaDataWriter: Send {
 /// vectors, partition values, and column-mapping transforms.
 #[async_trait::async_trait]
 pub trait DeltaDataReader: Send + Sync {
-    /// Read the selected data as a stream of batch futures.
-    async fn read(&self, options: ReadOptions) -> DeltaResult<RecordBatchFutureStream>;
+    /// Read the selected data as a batch stream.
+    async fn read(&self, options: ReadOptions) -> DeltaResult<BatchStream>;
 }
 
 #[cfg(test)]

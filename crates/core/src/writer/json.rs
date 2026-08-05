@@ -22,6 +22,14 @@ use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::TablePropertiesExt as _;
 
 /// Writes messages to a delta lake table.
+///
+/// Batches are streamed to storage as they are written, and a flush window
+/// commits all-or-nothing: if any write returns an error — including a
+/// transient IO error from the object store — every batch buffered since the
+/// last flush is discarded along with the failing one, and the caller must
+/// re-write all of them. (Validation errors caught before the data reaches
+/// storage fail only that call and leave the window untouched. A write with
+/// malformed JSON records rejects the whole call and writes nothing.)
 pub struct JsonWriter {
     /// All mutable per-flush-window state. The schema is fixed at construction
     /// (from the provided schema ref, or the table's schema). `JsonWriter` never
