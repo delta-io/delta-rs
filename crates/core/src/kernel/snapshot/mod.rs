@@ -89,6 +89,48 @@ pub(crate) struct ActiveAddOptions {
     pub(crate) stats: AddStatsPolicy,
 }
 
+/// Identifies the snapshot that owns materialized file state.
+#[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+struct SnapshotIdentity {
+    table_root: Url,
+    version: Version,
+    checkpoint_version: Option<Version>,
+    protocol: Protocol,
+    metadata: Metadata,
+}
+
+impl SnapshotIdentity {
+    fn is_for(&self, snapshot: &Snapshot) -> bool {
+        &self.table_root == snapshot.inner.table_root()
+            && self.version == snapshot.version()
+            && self.checkpoint_version == snapshot.checkpoint_version()
+            && &self.protocol == snapshot.protocol()
+            && &self.metadata == snapshot.metadata()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SnapshotMaterializationMode {
+    Lazy,
+    Eager,
+}
+
+impl SnapshotMaterializationMode {
+    fn from_require_files(require_files: bool) -> Self {
+        if require_files {
+            Self::Eager
+        } else {
+            Self::Lazy
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaterializedFilesPolicy {
+    FullTablePreserveRaw,
+    FullTableWithoutStats,
+}
+
 /// Borrowed protocol, metadata, and table configuration for metadata planners.
 pub(crate) struct SnapshotMetadataRef<'a> {
     /// Table protocol at this snapshot version.
@@ -378,20 +420,44 @@ impl Snapshot {
         &self.config
     }
 
+    fn materialization_mode(&self) -> SnapshotMaterializationMode {
+        SnapshotMaterializationMode::from_require_files(self.config.require_files)
+    }
+
+    fn identity(&self) -> SnapshotIdentity {
+        SnapshotIdentity {
+            table_root: self.inner.table_root().clone(),
+            version: self.version(),
+            checkpoint_version: self.checkpoint_version(),
+            protocol: self.protocol().clone(),
+            metadata: self.metadata().clone(),
+        }
+    }
+
+    fn materialized_files_policy(&self) -> MaterializedFilesPolicy {
+        if self.config.skip_stats {
+            MaterializedFilesPolicy::FullTableWithoutStats
+        } else {
+            MaterializedFilesPolicy::FullTablePreserveRaw
+        }
+    }
+
     pub(crate) fn materialized_files(&self) -> Option<&Arc<MaterializedFiles>> {
-        self.materialized_files.as_ref()
+        self.materialized_files
+            .as_ref()
+            .filter(|materialized_files| materialized_files.is_cache_for(self))
     }
 
     #[cfg(test)]
     pub(crate) fn has_materialized_files_for_test(&self) -> bool {
-        self.materialized_files.is_some()
+        self.materialized_files().is_some()
     }
 
     pub(crate) async fn ensure_materialized_files(
         self: Arc<Self>,
         log_store: &dyn LogStore,
     ) -> DeltaResult<Arc<Self>> {
-        if self.materialized_files.is_some() {
+        if self.materialized_files().is_some() {
             return Ok(self);
         }
 
@@ -401,8 +467,7 @@ impl Snapshot {
 
     pub(crate) fn try_log_data(&self) -> DeltaResult<LogDataHandler<'_>> {
         let materialized_files = self
-            .materialized_files
-            .as_ref()
+            .materialized_files()
             .ok_or_else(|| DeltaTableError::NotInitializedWithFiles("log_data".to_string()))?;
         Ok(LogDataHandler::new(
             &materialized_files.batches,
@@ -851,7 +916,7 @@ impl Snapshot {
         engine: Arc<dyn Engine>,
         materialized_seed: Option<&Arc<MaterializedFiles>>,
     ) -> DeltaResult<Arc<Self>> {
-        if materialized_seed.is_none() && self.materialized_files.is_some() {
+        if materialized_seed.is_none() && self.materialized_files().is_some() {
             return Ok(self);
         }
 
@@ -875,7 +940,7 @@ impl Snapshot {
                     .await?
             }
         };
-        let materialized_files = Arc::new(MaterializedFiles::full(self.version(), batches));
+        let materialized_files = Arc::new(MaterializedFiles::full(self.as_ref(), batches));
         Ok(Arc::new(
             self.with_materialized_files(Some(materialized_files)),
         ))
@@ -1078,14 +1143,15 @@ struct FileMaterializationOptions {
 }
 
 /// Scope for materialized file replay data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MaterializedFilesScope {
     FullTable,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MaterializedFiles {
-    pub(crate) version: Version,
+    identity: SnapshotIdentity,
+    policy: MaterializedFilesPolicy,
     pub(crate) scope: MaterializedFilesScope,
     pub(crate) existing_predicate: Option<PredicateRef>,
     pub(crate) batches: Arc<[RecordBatch]>,
@@ -1143,19 +1209,25 @@ impl Iterator for SharedRecordBatchIter {
 }
 
 impl MaterializedFiles {
-    fn full(version: Version, batches: Vec<RecordBatch>) -> Self {
+    fn full(snapshot: &Snapshot, batches: Vec<RecordBatch>) -> Self {
+        let identity = snapshot.identity();
         Self {
-            version,
+            identity,
+            policy: snapshot.materialized_files_policy(),
             scope: MaterializedFilesScope::FullTable,
             existing_predicate: None,
             batches: batches.into(),
         }
     }
 
+    fn is_cache_for(&self, snapshot: &Snapshot) -> bool {
+        self.policy == snapshot.materialized_files_policy() && self.identity.is_for(snapshot)
+    }
+
     fn full_table_seed(&self) -> Option<MaterializedFilesSeed> {
         match self.scope {
             MaterializedFilesScope::FullTable => Some(MaterializedFilesSeed {
-                version: self.version,
+                version: self.identity.version,
                 existing_predicate: self.existing_predicate.clone(),
                 batches: self.batches.clone(),
             }),
@@ -1238,15 +1310,19 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         snapshot: Arc<Snapshot>,
     ) -> DeltaResult<Self> {
-        let snapshot = match snapshot.load_config().require_files {
-            true => snapshot.ensure_materialized_files(log_store).await?,
-            false => snapshot,
+        let snapshot = match snapshot.materialization_mode() {
+            SnapshotMaterializationMode::Eager => {
+                snapshot.ensure_materialized_files(log_store).await?
+            }
+            SnapshotMaterializationMode::Lazy => snapshot,
         };
         Ok(Self { snapshot })
     }
 
     pub(crate) async fn with_files(self, log_store: &dyn LogStore) -> DeltaResult<Self> {
-        if self.snapshot.materialized_files().is_some() && self.snapshot.config.require_files {
+        if self.snapshot.materialized_files().is_some()
+            && self.snapshot.materialization_mode() == SnapshotMaterializationMode::Eager
+        {
             return Ok(self);
         }
         let mut config = self.snapshot.config.clone();
@@ -1472,6 +1548,7 @@ mod tests {
         kernel::transaction::CommitData,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, DataType, PrimitiveType, StructField, StructType},
+        operations::create::CreateBuilder,
         protocol::{DeltaOperation, SaveMode},
         test_utils::{
             TestResult, TestTables, assert_batches_sorted_eq, make_test_add,
@@ -1507,7 +1584,6 @@ mod tests {
 
             let engine = log_store.engine(None);
             let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
-
             Ok((
                 Self {
                     inner: snapshot,
@@ -1546,6 +1622,19 @@ mod tests {
 
         append_test_add(&mut table, "part-00000.snappy.parquet").await?;
         append_test_add(&mut table, "part-00001.snappy.parquet").await?;
+        Ok((table_dir, table))
+    }
+
+    async fn local_test_table() -> DeltaResult<(TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table = CreateBuilder::new()
+            .with_location(table_dir.path().to_string_lossy())
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .await?;
         Ok((table_dir, table))
     }
 
@@ -1668,6 +1757,33 @@ mod tests {
             .collect())
     }
 
+    async fn active_add_paths(
+        snapshot: &Snapshot,
+        log_store: &dyn LogStore,
+    ) -> DeltaResult<Vec<String>> {
+        let mut paths = Vec::new();
+        for batch in snapshot
+            .active_add_batches(
+                log_store,
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .await?
+        {
+            for idx in 0..batch.num_rows() {
+                paths.push(
+                    LogicalFileView::new(batch.clone(), idx)
+                        .path_raw()
+                        .to_string(),
+                );
+            }
+        }
+        paths.sort();
+        Ok(paths)
+    }
+
     async fn checkpoint_file_paths(
         log_store: &dyn LogStore,
         version: Version,
@@ -1689,10 +1805,7 @@ mod tests {
 
     fn legacy_eager_snapshot_payload(snapshot: &EagerSnapshot) -> serde_json::Value {
         let mut snapshot_value = serde_json::to_value(snapshot.snapshot()).unwrap();
-        let snapshot_fields = snapshot_value
-            .as_array_mut()
-            .expect("snapshot serde should use a sequence");
-        snapshot_fields.pop();
+        snapshot_wire_fields_mut(&mut snapshot_value).pop();
 
         let materialized_files = snapshot
             .snapshot
@@ -1714,6 +1827,46 @@ mod tests {
         };
 
         json!([snapshot_value, bytes])
+    }
+
+    fn snapshot_wire_fields_mut(value: &mut serde_json::Value) -> &mut Vec<serde_json::Value> {
+        value
+            .as_array_mut()
+            .expect("snapshot wire must be a sequence")
+    }
+
+    fn snapshot_materialized_files_wire_mut(
+        value: &mut serde_json::Value,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        snapshot_wire_fields_mut(value)[10]
+            .as_object_mut()
+            .expect("materialized file cache wire must be an object")
+    }
+
+    fn snapshot_config_wire_mut(
+        value: &mut serde_json::Value,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        snapshot_wire_fields_mut(value)[9]
+            .as_object_mut()
+            .expect("snapshot config wire must be an object")
+    }
+
+    fn set_materialized_files_wire_table_root(
+        materialized_files: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        let identity = materialized_files["identity"]
+            .as_object_mut()
+            .expect("snapshot identity wire must be an object");
+        identity.insert("table_root".to_string(), json!("memory:///other/"));
+    }
+
+    fn eager_snapshot_materialized_files_wire_mut(
+        value: &mut serde_json::Value,
+    ) -> &mut serde_json::Map<String, serde_json::Value> {
+        let snapshot = snapshot_wire_fields_mut(value)
+            .first_mut()
+            .expect("eager snapshot wire is empty");
+        snapshot_materialized_files_wire_mut(snapshot)
     }
 
     #[tokio::test]
@@ -1871,6 +2024,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn lazy_and_materialized_snapshots_return_same_active_files() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let lazy_config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let lazy = Snapshot::try_new(&log_store, lazy_config, None).await?;
+        let materialized = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+            .ensure_materialized_files(&log_store)
+            .await?;
+
+        let lazy_paths = active_add_paths(&lazy, &log_store).await?;
+        let materialized_paths = active_add_paths(materialized.as_ref(), &log_store).await?;
+
+        assert_eq!(lazy_paths.len(), 5);
+        assert_eq!(lazy_paths, materialized_paths);
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lazy_snapshot_roundtrip_preserves_loading_policy_after_materialization() -> TestResult
+    {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
+            .ensure_materialized_files(&log_store)
+            .await?;
+
+        assert!(snapshot.has_materialized_files_for_test());
+        assert!(!snapshot.load_config().require_files);
+
+        let bytes = serde_json::to_vec(snapshot.as_ref())?;
+        let actual: Snapshot = serde_json::from_slice(&bytes)?;
+
+        assert!(actual.has_materialized_files_for_test());
+        assert!(!actual.load_config().require_files);
+
+        let eager = EagerSnapshot {
+            snapshot: Arc::new(actual),
+        }
+        .with_files(&log_store)
+        .await?;
+
+        assert!(eager.snapshot().load_config().require_files);
+        assert!(eager.snapshot().has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_filters_and_rebuilds_same_version_wrong_table_cache() -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let target = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let expected = active_add_paths(&target, log_store.as_ref()).await?;
+
+        let mut mismatched_cache = MaterializedFiles::full(&target, vec![]);
+        mismatched_cache.identity.table_root = Url::parse("memory:///other/")?;
+        let cached = Arc::new(target.with_materialized_files(Some(Arc::new(mismatched_cache))));
+
+        assert_eq!(
+            active_add_paths(cached.as_ref(), log_store.as_ref()).await?,
+            expected
+        );
+        assert!(matches!(
+            cached.try_log_data(),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
+        assert!(!cached.has_materialized_files_for_test());
+
+        let serialized = serde_json::to_value(cached.as_ref())?;
+        assert!(serialized[10].is_null());
+
+        let eager = EagerSnapshot::try_new_with_snapshot(log_store.as_ref(), cached).await?;
+        let repaired = eager.snapshot();
+        let materialized_files = repaired
+            .materialized_files()
+            .expect("eager materialization did not rebuild the cache");
+        assert_eq!(materialized_files.identity, repaired.identity());
+        assert_eq!(
+            active_add_paths(repaired, log_store.as_ref()).await?,
+            expected
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn snapshot_capability_active_tombstones_delegates_to_snapshot_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
@@ -2010,7 +2255,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_eager_snapshot_log_data_is_non_panicking_without_files() -> TestResult {
+    async fn eager_without_files_returns_empty_log_data_and_replays_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let config = DeltaTableConfig {
             require_files: false,
@@ -2020,6 +2265,13 @@ mod tests {
         let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
 
         assert_eq!(snapshot.log_data().num_files(), 0);
+        assert_eq!(
+            active_add_paths(snapshot.snapshot(), &log_store)
+                .await?
+                .len(),
+            5
+        );
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
 
         Ok(())
     }
@@ -2046,6 +2298,9 @@ mod tests {
             .ensure_materialized_files(&log_store)
             .await?;
 
+        let value = serde_json::to_value(snapshot.as_ref())?;
+        assert_eq!(value[10]["policy"], json!("FullTablePreserveRaw"));
+
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let actual: Snapshot = serde_json::from_slice(&bytes)?;
 
@@ -2053,6 +2308,14 @@ mod tests {
         assert_eq!(
             actual.try_log_data()?.num_files(),
             snapshot.try_log_data()?.num_files()
+        );
+        let materialized_files = actual
+            .materialized_files()
+            .expect("snapshot round trip lost materialized files");
+        assert_eq!(materialized_files.identity, actual.identity());
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTablePreserveRaw
         );
 
         Ok(())
@@ -2082,6 +2345,356 @@ mod tests {
 
         assert!(actual.materialized_files().is_some());
         assert_eq!(actual.try_log_data()?.num_files(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_eager_snapshot_deserializes_pre_identity_fixture() -> TestResult {
+        let actual: EagerSnapshot = serde_json::from_str(include_str!(
+            "../../../tests/serde/eager_snapshot_pre_identity.json"
+        ))?;
+        let materialized_files = actual
+            .snapshot()
+            .materialized_files()
+            .expect("pre-identity fixture did not restore materialized files");
+
+        assert_eq!(actual.version(), 1);
+        assert_eq!(materialized_files.identity, actual.snapshot().identity());
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTablePreserveRaw
+        );
+        assert_eq!(materialized_files.scope, MaterializedFilesScope::FullTable);
+        assert_eq!(actual.try_log_data()?.num_files(), 1);
+        assert_eq!(
+            actual
+                .try_log_data()?
+                .iter()
+                .map(|file| file.path_raw().to_string())
+                .collect_vec(),
+            vec!["legacy-fixture.parquet"]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_cache_on_stats_policy_mismatch() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        for source_skip_stats in [false, true] {
+            let config = DeltaTableConfig {
+                skip_stats: source_skip_stats,
+                ..Default::default()
+            };
+            let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
+                .ensure_materialized_files(&log_store)
+                .await?;
+            let expected = active_add_paths(snapshot.as_ref(), &log_store).await?;
+            let mut value = serde_json::to_value(snapshot.as_ref())?;
+            snapshot_config_wire_mut(&mut value).insert(
+                "skipStats".to_string(),
+                serde_json::Value::Bool(!source_skip_stats),
+            );
+
+            let actual: Snapshot = serde_json::from_value(value)?;
+
+            assert!(actual.materialized_files().is_none());
+            assert_eq!(active_add_paths(&actual, &log_store).await?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_preserves_cache_without_stats() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
+            .ensure_materialized_files(&log_store)
+            .await?;
+
+        let value = serde_json::to_value(snapshot.as_ref())?;
+        assert_eq!(value[10]["policy"], json!("FullTableWithoutStats"));
+
+        let bytes = serde_json::to_vec(snapshot.as_ref())?;
+        let actual: Snapshot = serde_json::from_slice(&bytes)?;
+        let materialized_files = actual
+            .materialized_files()
+            .expect("snapshot round trip lost the cache without stats");
+
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTableWithoutStats
+        );
+        assert!(
+            actual
+                .try_log_data()?
+                .iter()
+                .all(|file| file.stats().is_none())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_same_version_wrong_table_cache_before_batch_decode()
+    -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+        let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
+        let mut value = serde_json::to_value(snapshot.as_ref())?;
+        let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
+        set_materialized_files_wire_table_root(materialized_files);
+        materialized_files.insert("batches".to_string(), json!([255]));
+
+        let actual: Snapshot = serde_json::from_value(value)?;
+
+        assert!(actual.materialized_files().is_none());
+        assert!(matches!(
+            actual.try_log_data(),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
+        assert_eq!(
+            active_add_paths(&actual, log_store.as_ref()).await?,
+            expected
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_mixed_identity_and_policy_foreign_cache() -> TestResult {
+        let (_owner_dir, mut owner_table) = local_test_table().await?;
+        let (_foreign_dir, mut foreign_table) = local_test_table().await?;
+        append_test_add(&mut owner_table, "owner-only.snappy.parquet").await?;
+        append_test_add(&mut foreign_table, "foreign-only.snappy.parquet").await?;
+
+        let owner_log_store = owner_table.log_store();
+        let foreign_log_store = foreign_table.log_store();
+        let owner =
+            Arc::new(Snapshot::try_new(owner_log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(owner_log_store.as_ref())
+                .await?;
+        let foreign = Arc::new(
+            Snapshot::try_new(foreign_log_store.as_ref(), Default::default(), None).await?,
+        )
+        .ensure_materialized_files(foreign_log_store.as_ref())
+        .await?;
+
+        assert_eq!(owner.version(), foreign.version());
+        assert_ne!(owner.identity().table_root, foreign.identity().table_root);
+        let expected = active_add_paths(owner.as_ref(), owner_log_store.as_ref()).await?;
+        let foreign_paths = active_add_paths(foreign.as_ref(), foreign_log_store.as_ref()).await?;
+        assert_ne!(expected, foreign_paths);
+
+        let mut owner_value = serde_json::to_value(owner.as_ref())?;
+        let foreign_value = serde_json::to_value(foreign.as_ref())?;
+        owner_value[10] = foreign_value[10].clone();
+        snapshot_materialized_files_wire_mut(&mut owner_value).remove("identity");
+
+        let actual: Snapshot = serde_json::from_value(owner_value)?;
+
+        assert!(actual.materialized_files().is_none());
+        assert!(matches!(
+            actual.try_log_data(),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
+        assert_eq!(
+            active_add_paths(&actual, owner_log_store.as_ref()).await?,
+            expected
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_accepts_trusted_pre_identity_cache() -> TestResult {
+        let (_owner_dir, mut owner_table) = local_test_table().await?;
+        let (_foreign_dir, mut foreign_table) = local_test_table().await?;
+        append_test_add(&mut owner_table, "owner-only.snappy.parquet").await?;
+        append_test_add(&mut foreign_table, "trusted-legacy.snappy.parquet").await?;
+
+        let owner_log_store = owner_table.log_store();
+        let foreign_log_store = foreign_table.log_store();
+        let owner =
+            Arc::new(Snapshot::try_new(owner_log_store.as_ref(), Default::default(), None).await?)
+                .ensure_materialized_files(owner_log_store.as_ref())
+                .await?;
+        let foreign = Arc::new(
+            Snapshot::try_new(foreign_log_store.as_ref(), Default::default(), None).await?,
+        )
+        .ensure_materialized_files(foreign_log_store.as_ref())
+        .await?;
+
+        assert_eq!(owner.version(), foreign.version());
+        assert_ne!(owner.identity().table_root, foreign.identity().table_root);
+        let owner_paths = active_add_paths(owner.as_ref(), owner_log_store.as_ref()).await?;
+        let trusted_legacy_paths =
+            active_add_paths(foreign.as_ref(), foreign_log_store.as_ref()).await?;
+        assert_ne!(owner_paths, trusted_legacy_paths);
+
+        // Pre-identity payloads have neither identity nor policy. Serde payloads are trusted
+        // persistence input, so this exact historical shape is accepted for compatibility.
+        let mut owner_value = serde_json::to_value(owner.as_ref())?;
+        let foreign_value = serde_json::to_value(foreign.as_ref())?;
+        owner_value[10] = foreign_value[10].clone();
+        let materialized_files = snapshot_materialized_files_wire_mut(&mut owner_value);
+        materialized_files.remove("identity");
+        materialized_files.remove("policy");
+
+        let actual: Snapshot = serde_json::from_value(owner_value)?;
+        let materialized_files = actual
+            .materialized_files()
+            .expect("trusted pre-identity cache was not restored");
+        let mut actual_paths = actual
+            .try_log_data()?
+            .iter()
+            .map(|file| file.path_raw().to_string())
+            .collect_vec();
+        actual_paths.sort();
+
+        assert_eq!(materialized_files.identity, actual.identity());
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTablePreserveRaw
+        );
+        assert_eq!(actual_paths, trusted_legacy_paths);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_cache_on_snapshot_identity_mismatch() -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+        let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
+
+        for field in ["checkpoint_version", "protocol", "metadata"] {
+            let mut value = serde_json::to_value(snapshot.as_ref())?;
+            let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
+            let identity = materialized_files["identity"]
+                .as_object_mut()
+                .expect("snapshot identity wire must be an object");
+
+            match field {
+                "checkpoint_version" => {
+                    identity.insert(field.to_string(), json!(999));
+                }
+                "protocol" => {
+                    let protocol = identity[field]
+                        .as_object_mut()
+                        .expect("protocol wire must be an object");
+                    let min_reader_version = protocol["minReaderVersion"]
+                        .as_i64()
+                        .expect("minimum reader version must be an integer");
+                    protocol.insert(
+                        "minReaderVersion".to_string(),
+                        json!(min_reader_version + 1),
+                    );
+                }
+                "metadata" => {
+                    identity[field]
+                        .as_object_mut()
+                        .expect("metadata wire must be an object")
+                        .insert("id".to_string(), json!("foreign-table-id"));
+                }
+                _ => unreachable!(),
+            }
+            materialized_files.insert("batches".to_string(), json!([255]));
+
+            let actual: Snapshot = serde_json::from_value(value)?;
+
+            assert!(actual.materialized_files().is_none(), "field: {field}");
+            assert_eq!(
+                active_add_paths(&actual, log_store.as_ref()).await?,
+                expected,
+                "field: {field}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_rejects_malformed_batches() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+            .ensure_materialized_files(&log_store)
+            .await?;
+        let mut value = serde_json::to_value(snapshot.as_ref())?;
+        snapshot_materialized_files_wire_mut(&mut value)
+            .insert("batches".to_string(), json!([255]));
+
+        let error = serde_json::from_value::<Snapshot>(value)
+            .expect_err("snapshot accepted malformed IPC with valid cache metadata");
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to read ipc record batch")
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_unknown_policy_or_scope_before_batch_decode() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+            .ensure_materialized_files(&log_store)
+            .await?;
+        let expected = active_add_paths(snapshot.as_ref(), &log_store).await?;
+        for (field, future_value) in [
+            ("policy", json!("FutureFullTablePolicy")),
+            ("scope", json!("FutureScope")),
+        ] {
+            let mut value = serde_json::to_value(snapshot.as_ref())?;
+            let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
+            materialized_files.insert(field.to_string(), future_value);
+            materialized_files.insert("batches".to_string(), json!([255]));
+
+            let actual: Snapshot = serde_json::from_value(value)?;
+
+            assert!(actual.materialized_files().is_none());
+            assert_eq!(active_add_paths(&actual, &log_store).await?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_wire_drops_cache_on_version_mismatch() -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot =
+            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
+                .ensure_materialized_files(log_store.as_ref())
+                .await?;
+        let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
+        let mut value = serde_json::to_value(snapshot.as_ref())?;
+        let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
+        materialized_files.insert("version".to_string(), serde_json::to_value(11)?);
+
+        let actual: Snapshot = serde_json::from_value(value)?;
+
+        assert!(actual.materialized_files().is_none());
+        assert!(matches!(
+            actual.try_log_data(),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
+        assert_eq!(
+            active_add_paths(&actual, log_store.as_ref()).await?,
+            expected
+        );
 
         Ok(())
     }
@@ -2148,6 +2761,78 @@ mod tests {
         let actual: EagerSnapshot = serde_json::from_value(value)?;
         assert_eq!(actual.version(), snapshot.version());
         assert_eq!(actual.metadata().id(), snapshot.metadata().id());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_serde_rejects_invalid_materialized_cache() -> TestResult {
+        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
+        let snapshot =
+            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let value = serde_json::to_value(&snapshot)?;
+        let mut wrong_table = value.clone();
+        set_materialized_files_wire_table_root(eager_snapshot_materialized_files_wire_mut(
+            &mut wrong_table,
+        ));
+        let mut identityless = value;
+        eager_snapshot_materialized_files_wire_mut(&mut identityless).remove("identity");
+
+        for invalid_value in [wrong_table, identityless] {
+            let error = serde_json::from_value::<EagerSnapshot>(invalid_value)
+                .expect_err("eager snapshot accepted an incompatible materialized cache");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot deserialize eager snapshot without valid materialized files")
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_deserializes_legacy_lazy_payload_without_cache() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
+        let mut snapshot_value = serde_json::to_value(snapshot.snapshot())?;
+        snapshot_value
+            .as_array_mut()
+            .expect("snapshot wire must be a sequence")
+            .pop();
+        let legacy = json!([snapshot_value, Vec::<u8>::new()]);
+
+        let actual: EagerSnapshot = serde_json::from_value(legacy)?;
+
+        assert!(!actual.snapshot().has_materialized_files_for_test());
+        assert_eq!(actual.try_log_data()?.num_files(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_eager_snapshot_deserializes_legacy_empty_table_with_empty_cache() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .await?;
+        let snapshot =
+            EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let legacy = legacy_eager_snapshot_payload(&snapshot);
+
+        let actual: EagerSnapshot = serde_json::from_value(legacy)?;
+
+        assert!(actual.snapshot().has_materialized_files_for_test());
+        assert_eq!(actual.try_log_data()?.num_files(), 0);
 
         Ok(())
     }
@@ -2394,16 +3079,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_materialized_files_full_table_seed_shares_batches() {
+    #[tokio::test]
+    async fn test_materialized_files_full_table_seed_shares_batches() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
         let batch = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
-        let materialized_files = MaterializedFiles::full(7, vec![batch]);
+        let materialized_files = MaterializedFiles::full(&snapshot, vec![batch]);
 
         let seed = materialized_files
             .full_table_seed()
             .expect("full-table materialized state should be reusable");
 
-        assert_eq!(seed.version, materialized_files.version);
+        assert_eq!(seed.version, materialized_files.identity.version);
         assert_eq!(
             seed.existing_predicate,
             materialized_files.existing_predicate
@@ -2413,6 +3100,8 @@ mod tests {
             seed.into_iter().collect::<Vec<_>>(),
             materialized_files.batches.as_ref()
         );
+
+        Ok(())
     }
 
     #[tokio::test]

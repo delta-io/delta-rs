@@ -146,16 +146,20 @@ impl CdfLoadBuilder {
         self
     }
 
+    #[inline]
+    fn timestamp_in_range(action: &Action, ts: DateTime<Utc>) -> bool {
+        matches!(action, Action::CommitInfo(CommitInfo { in_commit_timestamp: Some(t), .. }) if ts.timestamp_millis() <= *t)
+            || matches!(action, Action::CommitInfo(CommitInfo { timestamp: Some(t), .. }) if ts.timestamp_millis() <= *t)
+    }
+
     async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
         let ts = self.starting_timestamp.unwrap_or(DateTime::UNIX_EPOCH);
         for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
                 && let Ok(actions) = get_actions(v, &bytes)
-                && actions.iter().any(|action| {
-                    matches!(action, Action::CommitInfo(CommitInfo {
-                            timestamp: Some(t), ..
-                        }) if ts.timestamp_millis() < *t)
-                })
+                && actions
+                    .iter()
+                    .any(|action| Self::timestamp_in_range(action, ts))
             {
                 return Ok(v);
             }
@@ -273,14 +277,26 @@ impl CdfLoadBuilder {
                 let version_commit = version_actions
                     .iter()
                     .find(|a| matches!(a, Action::CommitInfo(_)));
-                if let Some(Action::CommitInfo(CommitInfo {
-                    timestamp: Some(t), ..
-                })) = version_commit
-                    && (starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis())
-                {
-                    log::debug!("Version: {version} skipped, due to commit timestamp");
-                    continue;
+
+                match version_commit {
+                    Some(Action::CommitInfo(CommitInfo {
+                        in_commit_timestamp: Some(t),
+                        ..
+                    })) if starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis() =>
+                    {
+                        log::debug!("Version: {version} skipped, due to in commit timestamp");
+                        continue;
+                    }
+                    Some(Action::CommitInfo(CommitInfo {
+                        timestamp: Some(t), ..
+                    })) if starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis() =>
+                    {
+                        log::debug!("Version: {version} skipped, due to commit timestamp");
+                        continue;
+                    }
+                    _ => {}
                 }
             }
 
@@ -305,7 +321,7 @@ impl CdfLoadBuilder {
                         };
                     }
                     Action::CommitInfo(ci) => {
-                        ts = ci.timestamp.unwrap_or(0);
+                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0);
                     }
                     _ => {}
                 }
@@ -567,8 +583,6 @@ impl CdfLoadBuilder {
                 .build(),
         );
 
-        // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
-        // being for development. I plan to parallelize the reads once the base idea is correct.
         let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
         // We project the union in the order of the input_schema + cdc cols at the end
@@ -633,8 +647,7 @@ pub(crate) mod tests {
     async fn cdf_partition_predicate_prunes_file_groups() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
 
         let builder = table.scan_cdf().with_starting_version(0);
@@ -677,8 +690,7 @@ pub(crate) mod tests {
     async fn cdf_partition_predicate_keeps_matching_rows() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
 
         let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
@@ -707,8 +719,7 @@ pub(crate) mod tests {
     /// a CDF table provider so partition pruning can be exercised through SQL.
     async fn register_cdf_table(ctx: &SessionContext) -> TestResult {
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
         let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
         ctx.register_table("cdf", Arc::new(provider))?;
@@ -733,8 +744,7 @@ pub(crate) mod tests {
         );
         std::fs::write(log_path, updated_log)?;
 
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
         Ok((temp_dir, table))
     }
@@ -781,13 +791,7 @@ pub(crate) mod tests {
     /// Build the physical plan for `query` against the registered `cdf` table and
     /// return the distinct partitions remaining in its file groups.
     async fn pruned_partitions(ctx: &SessionContext, query: &str) -> DeltaResult<Vec<String>> {
-        let plan = ctx
-            .sql(query)
-            .await
-            .unwrap()
-            .create_physical_plan()
-            .await
-            .unwrap();
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
         Ok(partitions_in_plan(&plan))
     }
 
@@ -1059,8 +1063,7 @@ pub(crate) mod tests {
     async fn cdf_non_partition_predicate_does_not_prune() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri).await?;
 
         let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
@@ -1101,11 +1104,41 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_respect_ict() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdc_ict_table");
+        let starting_timestamp = NaiveDateTime::from_str("2026-07-11T16:36:53.881")?;
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            // .with_starting_version(0)
+            .with_starting_timestamp(starting_timestamp.and_utc())
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table, ctx.task_ctx()).await?;
+        assert_batches_sorted_eq! {
+                            [
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+            "| name  | age | birthyear | _change_type     | _commit_version | _commit_timestamp       |",
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+            "| Dan   | 14  | 1995      | delete           | 2               | 2026-07-12T16:36:52.175 |",
+            "| Dave  | 22  | 1995      | delete           | 2               | 2026-07-12T16:36:52.175 |",
+            "| Kate  | 36  | 1995      | update_preimage  | 3               | 2026-07-12T16:36:53.881 |",
+            "| Kate  | 37  | 1995      | update_postimage | 3               | 2026-07-12T16:36:53.881 |",
+            "| Steve | 40  | 1986      | update_preimage  | 3               | 2026-07-12T16:36:53.881 |",
+            "| Steve | 41  | 1986      | update_postimage | 3               | 2026-07-12T16:36:53.881 |",
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_load_local() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1150,18 +1183,16 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_local_datetime() -> TestResult {
         let ctx = SessionContext::new();
-        let starting_timestamp = NaiveDateTime::from_str("2023-12-22T17:10:21.675").unwrap();
+        let starting_timestamp = NaiveDateTime::from_str("2023-12-22T17:10:21.675")?;
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build(&ctx.state(), None)
-            .await
-            .unwrap();
+            .await?;
 
         let batches = collect(table, ctx.task_ctx()).await?;
 
@@ -1197,8 +1228,7 @@ pub(crate) mod tests {
     async fn test_load_local_non_partitioned() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1247,8 +1277,7 @@ pub(crate) mod tests {
     async fn test_load_bad_version_range() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1270,8 +1299,7 @@ pub(crate) mod tests {
     async fn test_load_version_out_of_range() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1292,8 +1320,7 @@ pub(crate) mod tests {
     async fn test_load_version_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1311,11 +1338,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_timestamp_out_of_range() -> TestResult {
-        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675")?;
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1335,10 +1361,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
-        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675")?;
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1358,8 +1383,7 @@ pub(crate) mod tests {
     async fn test_load_non_cdf() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/simple_table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1381,8 +1405,7 @@ pub(crate) mod tests {
         let ending_timestamp = NaiveDateTime::from_str("2024-01-06T15:44:59.570")?;
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -1426,8 +1449,7 @@ pub(crate) mod tests {
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(table.version(), Some(0));
 
         let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
@@ -1443,8 +1465,7 @@ pub(crate) mod tests {
                     Some("no"),
                 ])),
             ],
-        )
-        .unwrap();
+        )?;
 
         let second_batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -1453,8 +1474,7 @@ pub(crate) mod tests {
                 Arc::new(Int32Array::from(vec![Some(10)])),
                 Arc::new(StringArray::from(vec![Some("yes")])),
             ],
-        )
-        .unwrap();
+        )?;
 
         let table = table
             .write(vec![batch])
@@ -1465,8 +1485,7 @@ pub(crate) mod tests {
         let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();

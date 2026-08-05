@@ -155,7 +155,7 @@ fn build_kernel_scan(
 }
 
 fn with_kernel_stats_output(
-    mut builder: KernelScanBuilder,
+    builder: KernelScanBuilder,
     materialization: &FileStatsMaterialization,
 ) -> KernelScanBuilder {
     // Modernize to use kernel's StatsOptions API
