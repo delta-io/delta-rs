@@ -29,8 +29,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-from deltalake import DeltaTable, write_deltalake
 
+from deltalake import DeltaTable, write_deltalake
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -129,9 +129,7 @@ def _sample_events(n: int, base: datetime, start: int = 0) -> pd.DataFrame:
             "user_id": [f"u{i % 3}" for i in range(n)],
             "event_type": ["view" if i % 2 else "click" for i in range(n)],
             "value": [float((i % 5) + 1) for i in range(n)],
-            "event_time": [
-                (base + timedelta(minutes=i)).isoformat() for i in range(n)
-            ],
+            "event_time": [(base + timedelta(minutes=i)).isoformat() for i in range(n)],
         }
     )
 
@@ -158,7 +156,12 @@ def main() -> None:
 
         print("Raw event count:", len(DeltaTable(raw_path).to_pandas()))
         print("Rollup:")
-        print(DeltaTable(rollup_path).to_pandas().sort_values(["user_id", "day"]).to_string(index=False))
+        print(
+            DeltaTable(rollup_path)
+            .to_pandas()
+            .sort_values(["user_id", "day"])
+            .to_string(index=False)
+        )
         print("MERGE_STREAMING_AGGREGATION_DONE")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
