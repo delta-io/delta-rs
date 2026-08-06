@@ -92,8 +92,18 @@ impl ScalarExt for Scalar {
                 ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string()
             }
             Self::Date(days) => {
-                let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();
-                date.format("%Y-%m-%d").to_string()
+                // `days` is read verbatim from a DATE-typed partition value or
+                // min/max stat in the transaction log / checkpoint parquet, with
+                // no range validation against the Delta protocol. A corrupted or
+                // maliciously crafted table can set this to any i32, including
+                // values whose implied timestamp falls outside the range chrono's
+                // `DateTime` can represent (roughly +/-262,000 years). Fall back to
+                // a raw numeric representation instead of panicking so that a
+                // single bad DATE value can't crash the process.
+                match DateTime::from_timestamp(*days as i64 * 24 * 3600, 0) {
+                    Some(date) => date.format("%Y-%m-%d").to_string(),
+                    None => format!("invalid-date(days={days})"),
+                }
             }
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => decimal.bits().to_string(),
@@ -349,8 +359,12 @@ impl ScalarExt for Scalar {
                 Value::String(ts.format("%Y-%m-%d %H:%M:%S%.6f").to_string())
             }
             Self::Date(days) => {
-                let date = DateTime::from_timestamp(*days as i64 * 24 * 3600, 0).unwrap();
-                Value::String(date.format("%Y-%m-%d").to_string())
+                // Same out-of-range hazard as `serialize()` above: `days` comes
+                // straight from the transaction log with no range validation.
+                match DateTime::from_timestamp(*days as i64 * 24 * 3600, 0) {
+                    Some(date) => Value::String(date.format("%Y-%m-%d").to_string()),
+                    None => Value::String(format!("invalid-date(days={days})")),
+                }
             }
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => Value::String(decimal.bits().to_string()),
@@ -510,6 +524,26 @@ mod tests {
         let days = 19358; // 2023-01-01
         let scalar = Scalar::Date(days);
         assert_eq!(scalar.serialize(), "2023-01-01");
+    }
+
+    #[test]
+    fn test_scalar_serialize_date_out_of_range_does_not_panic() {
+        // `Scalar::Date` wraps an i32 "days since epoch" value that is read directly
+        // from a DATE-typed partition value or min/max stat in the transaction log /
+        // checkpoint parquet, with no range validation. A corrupted or maliciously
+        // crafted table can set this to any i32, including values whose implied
+        // timestamp (days * 86400 seconds) falls outside the range chrono's
+        // `DateTime` can represent. Previously this caused `serialize()` to panic
+        // via an `Option::unwrap()` on `DateTime::from_timestamp`'s `None` result,
+        // which is a remotely triggerable DoS for any code path that formats a
+        // DATE partition value from an untrusted/corrupted table (e.g. computing
+        // the hive partition path, or add-action stats/partition value display).
+        for days in [i32::MAX, i32::MIN, i32::MAX / 2, i32::MIN / 2] {
+            let scalar = Scalar::Date(days);
+            // Must not panic; exact formatting for absurd out-of-range dates is not
+            // load-bearing, only that we degrade gracefully instead of crashing.
+            let _ = scalar.serialize();
+        }
     }
 
     #[test]
@@ -762,6 +796,16 @@ mod tests {
             json_val,
             serde_json::Value::String("2023-01-01".to_string())
         );
+    }
+
+    #[test]
+    fn test_scalar_to_json_date_out_of_range_does_not_panic() {
+        // Same hazard as `test_scalar_serialize_date_out_of_range_does_not_panic`,
+        // but for the `to_json()` path, which had an identical unchecked unwrap.
+        for days in [i32::MAX, i32::MIN, i32::MAX / 2, i32::MIN / 2] {
+            let scalar = Scalar::Date(days);
+            let _ = scalar.to_json();
+        }
     }
 
     #[test]
