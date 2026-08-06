@@ -23,11 +23,11 @@
 
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, Utc};
 use futures::future::{BoxFuture, ready};
-use futures::{StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use object_store::{Error, ObjectStore, path::Path};
 use serde::Serialize;
 use tracing::*;
@@ -43,6 +43,19 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableConfig};
+
+const DEFAULT_VACUUM_LIST_CONCURRENCY: usize = 256;
+
+fn vacuum_list_concurrency() -> usize {
+    static LIST_CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *LIST_CONCURRENCY.get_or_init(|| {
+        std::env::var("DELTARS_VACUUM_LIST_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|&value| value > 0)
+            .unwrap_or(DEFAULT_VACUUM_LIST_CONCURRENCY)
+    })
+}
 
 /// Errors that can occur during vacuum
 #[derive(thiserror::Error, Debug)]
@@ -336,61 +349,100 @@ impl VacuumBuilder {
         if self.mode == VacuumMode::Full {
             let object_store = self.log_store.object_store(None);
 
-            let list_span = info_span!("list_files", operation = "vacuum");
-            let mut all_files = list_span.in_scope(|| object_store.list(None));
+            if should_try_parallel_vacuum(partition_columns) {
+                let valid_files = Arc::new(valid_files);
+                let keep_files = Arc::new(keep_files);
+                let tombstone_path_sets = Arc::new(tombstone_path_sets);
+                let partition_columns: Arc<Vec<String>> = Arc::new(partition_columns.to_vec());
+                let retention_millis = retention_period.num_milliseconds();
+                // Stop before the last partition column so leaf LIST targets are
+                // prefix paths of depth n-1 (e.g. date=…/), not the final fan-out
+                // (e.g. date=…/part=…/).
+                let partition_depth = partition_columns.len() - 1;
 
-            while let Some(obj_meta) = all_files.next().await {
-                // TODO should we allow NotFound here in case we have a temporary commit file in the list
-                let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-                if tombstone_path_sets
-                    .expired_tombstone_paths
-                    .contains(&obj_meta.location)
-                {
-                    debug!(
-                        "The file {:?} is already queued as an expired tombstone",
-                        &obj_meta.location,
-                    );
-                    continue;
+                let parallel_span =
+                    info_span!("list_files_parallel", operation = "vacuum", partition_depth,);
+                async {
+                    // Walk n-1 delimiter levels. Leaf list(prefix) then covers
+                    // the last partition column in bulk under each prefix.
+                    // Objects found at intermediate levels are considered immediately.
+                    let (leaf_prefixes, intermediate_orphans, intermediate_scanned) =
+                        expand_partition_prefixes(
+                            object_store.as_ref(),
+                            partition_depth,
+                            &valid_files,
+                            &keep_files,
+                            &partition_columns,
+                            &tombstone_path_sets,
+                            now_millis,
+                            retention_millis,
+                        )
+                        .await?;
+
+                    file_count += intermediate_scanned;
+                    for (path, size) in intermediate_orphans {
+                        files_to_delete.push(path);
+                        file_sizes.push(size);
+                    }
+
+                    let listed: Vec<(Vec<(Path, i64)>, usize)> = stream::iter(leaf_prefixes)
+                        .map(|prefix| {
+                            let store = object_store.clone();
+                            let valid_files = Arc::clone(&valid_files);
+                            let keep_files = Arc::clone(&keep_files);
+                            let tombstone_path_sets = Arc::clone(&tombstone_path_sets);
+                            let partition_columns = Arc::clone(&partition_columns);
+                            async move {
+                                list_orphans_under_prefix(
+                                    store.as_ref(),
+                                    Some(&prefix),
+                                    &valid_files,
+                                    &keep_files,
+                                    &partition_columns,
+                                    &tombstone_path_sets,
+                                    now_millis,
+                                    retention_millis,
+                                )
+                                .await
+                            }
+                        })
+                        .buffer_unordered(vacuum_list_concurrency())
+                        .try_collect()
+                        .await?;
+
+                    for (orphans, scanned) in listed {
+                        file_count += scanned;
+                        for (path, size) in orphans {
+                            files_to_delete.push(path);
+                            file_sizes.push(size);
+                        }
+                    }
+
+                    Ok::<_, VacuumError>(())
                 }
+                .instrument(parallel_span)
+                .await?;
+            } else {
+                let list_span = info_span!("list_files", operation = "vacuum");
+                let mut all_files = list_span.in_scope(|| object_store.list(None));
 
-                if !ok_to_delete(
-                    &obj_meta.location,
-                    &valid_files,
-                    &keep_files,
-                    partition_columns,
-                )? {
-                    continue;
+                while let Some(obj_meta) = all_files.next().await {
+                    // TODO should we allow NotFound here in case we have a temporary commit file in the list
+                    let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
+                    if let Some((path, size)) = consider_orphan_for_deletion(
+                        &obj_meta,
+                        &valid_files,
+                        &keep_files,
+                        partition_columns,
+                        &tombstone_path_sets,
+                        now_millis,
+                        retention_period.num_milliseconds(),
+                    )? {
+                        files_to_delete.push(path);
+                        file_sizes.push(size);
+                        file_count += 1;
+                    }
                 }
-
-                if tombstone_path_sets
-                    .all_tombstone_paths
-                    .contains(&obj_meta.location)
-                {
-                    debug!(
-                        "The file {:?} has a recent tombstone, keeping it until tombstone retention expires",
-                        &obj_meta.location,
-                    );
-                    continue;
-                }
-
-                // At this point the path is untracked by the Delta log, so full mode falls back
-                // to physical object age to protect recent concurrent-writer output.
-                let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
-                if file_age_millis < retention_period.num_milliseconds() {
-                    debug!(
-                        "The file {:?} is an untracked recent file, protecting it from vacuum",
-                        &obj_meta.location,
-                    );
-                    continue;
-                }
-
-                debug!(
-                    "The file {:?} is an untracked stale orphan and will be vacuumed in full mode",
-                    &obj_meta.location
-                );
-                files_to_delete.push(obj_meta.location);
-                file_sizes.push(obj_meta.size as i64);
-                file_count += 1;
             }
         }
         info!(
@@ -605,6 +657,203 @@ fn ok_to_delete(
     )
 }
 
+/// Decide whether a listed object is an orphan eligible for full-mode vacuum.
+///
+/// Returns `Some((path, size))` when the object should be deleted, or `None`
+/// when it is still referenced, kept, hidden, recently tombstoned, or too new.
+fn consider_orphan_for_deletion(
+    obj_meta: &object_store::ObjectMeta,
+    valid_files: &HashSet<Path>,
+    keep_files: &HashSet<String>,
+    partition_columns: &[String],
+    tombstone_path_sets: &TombstonePathSets,
+    now_millis: i64,
+    retention_millis: i64,
+) -> Result<Option<(Path, i64)>, DeltaTableError> {
+    if tombstone_path_sets
+        .expired_tombstone_paths
+        .contains(&obj_meta.location)
+    {
+        debug!(
+            "The file {:?} is already queued as an expired tombstone",
+            &obj_meta.location,
+        );
+        return Ok(None);
+    }
+
+    if !ok_to_delete(
+        &obj_meta.location,
+        valid_files,
+        keep_files,
+        partition_columns,
+    )? {
+        return Ok(None);
+    }
+
+    if tombstone_path_sets
+        .all_tombstone_paths
+        .contains(&obj_meta.location)
+    {
+        debug!(
+            "The file {:?} has a recent tombstone, keeping it until tombstone retention expires",
+            &obj_meta.location,
+        );
+        return Ok(None);
+    }
+
+    // At this point the path is untracked by the Delta log, so full mode falls back
+    // to physical object age to protect recent concurrent-writer output.
+    let file_age_millis = now_millis - obj_meta.last_modified.timestamp_millis();
+    if file_age_millis < retention_millis {
+        debug!(
+            "The file {:?} is an untracked recent file, protecting it from vacuum",
+            &obj_meta.location,
+        );
+        return Ok(None);
+    }
+
+    debug!(
+        "The file {:?} is an untracked stale orphan and will be vacuumed in full mode",
+        &obj_meta.location
+    );
+    Ok(Some((obj_meta.location.clone(), obj_meta.size as i64)))
+}
+
+/// Root prefixes that should not be expanded during full-mode partition walks.
+fn is_skippable_root_prefix(path: &Path) -> bool {
+    let path_name = path.to_string();
+    path_name == "_delta_log" || path_name.starts_with("_delta_log/") || path_name.starts_with('.')
+}
+
+/// Walk `partition_depth` delimiter levels and collect leaf partition prefixes.
+///
+/// Objects found at intermediate levels are evaluated immediately. Returns
+/// `(leaf_prefixes, intermediate_orphans, intermediate_files_scanned)`.
+async fn expand_partition_prefixes(
+    store: &dyn ObjectStore,
+    partition_depth: usize,
+    valid_files: &HashSet<Path>,
+    keep_files: &HashSet<String>,
+    partition_columns: &[String],
+    tombstone_path_sets: &TombstonePathSets,
+    now_millis: i64,
+    retention_millis: i64,
+) -> Result<(Vec<Path>, Vec<(Path, i64)>, usize), DeltaTableError> {
+    let mut orphans = Vec::new();
+    let mut scanned = 0usize;
+    let mut to_expand: Vec<Option<Path>> = vec![None];
+
+    for level in 0..partition_depth {
+        let listings = stream::iter(to_expand)
+            .map(|prefix| {
+                let prefix_label = prefix
+                    .as_ref()
+                    .map(|p| p.as_ref())
+                    .unwrap_or("")
+                    .to_string();
+                async move {
+                    let listing = async {
+                        store
+                            .list_with_delimiter(prefix.as_ref())
+                            .await
+                            .map_err(DeltaTableError::from)
+                    }
+                    .instrument(info_span!(
+                        "list_with_delimiter",
+                        operation = "vacuum",
+                        level,
+                        prefix = prefix_label,
+                    ))
+                    .await?;
+
+                    Ok::<_, DeltaTableError>(listing)
+                }
+            })
+            .buffer_unordered(vacuum_list_concurrency())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut next_frontier = Vec::new();
+        for listing in listings {
+            // Collect orphans at this level if any objects are found
+            // although there should be none
+            for obj_meta in listing.objects {
+                scanned += 1;
+                if let Some(entry) = consider_orphan_for_deletion(
+                    &obj_meta,
+                    valid_files,
+                    keep_files,
+                    partition_columns,
+                    tombstone_path_sets,
+                    now_millis,
+                    retention_millis,
+                )? {
+                    orphans.push(entry);
+                }
+            }
+
+            for child in listing.common_prefixes {
+                if level == 0 && is_skippable_root_prefix(&child) {
+                    continue;
+                }
+                next_frontier.push(Some(child));
+            }
+        }
+
+        to_expand = next_frontier;
+    }
+
+    let leaf_prefixes = to_expand.into_iter().flatten().collect();
+    Ok((leaf_prefixes, orphans, scanned))
+}
+
+/// Recursively list `prefix` and return orphans eligible for full-mode vacuum.
+///
+/// Returns `(orphans, files_scanned)`.
+async fn list_orphans_under_prefix(
+    store: &dyn ObjectStore,
+    prefix: Option<&Path>,
+    valid_files: &HashSet<Path>,
+    keep_files: &HashSet<String>,
+    partition_columns: &[String],
+    tombstone_path_sets: &TombstonePathSets,
+    now_millis: i64,
+    retention_millis: i64,
+) -> Result<(Vec<(Path, i64)>, usize), DeltaTableError> {
+    let prefix_label = prefix.map(|p| p.as_ref()).unwrap_or("");
+    async {
+        let mut files = store.list(prefix);
+        let mut orphans = Vec::new();
+        let mut scanned = 0usize;
+
+        while let Some(obj_meta) = files.next().await {
+            // TODO should we allow NotFound here in case we have a temporary commit file in the list
+            let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
+            scanned += 1;
+            if let Some(entry) = consider_orphan_for_deletion(
+                &obj_meta,
+                valid_files,
+                keep_files,
+                partition_columns,
+                tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )? {
+                orphans.push(entry);
+            }
+        }
+
+        Ok((orphans, scanned))
+    }
+    .instrument(info_span!(
+        "list_files",
+        operation = "vacuum",
+        mode = "parallel",
+        prefix = prefix_label,
+    ))
+    .await
+}
+
 async fn collect_full_mode_tombstones(
     snapshot: &EagerSnapshot,
     tombstone_retention_timestamp: i64,
@@ -651,6 +900,12 @@ async fn get_stale_files(
 
 fn is_tombstone_expired(tombstone: &TombstoneView, tombstone_retention_timestamp: i64) -> bool {
     tombstone.deletion_timestamp().unwrap_or(0) < tombstone_retention_timestamp
+}
+
+fn should_try_parallel_vacuum(partition_columns: &[String]) -> bool {
+    // Single-level partitions: flat list(None) is cheaper than expand-to-leaves
+    // when cardinality is high and leaves are tiny. Multi-level: expand to n-1.
+    partition_columns.len() > 1
 }
 
 #[cfg(test)]
