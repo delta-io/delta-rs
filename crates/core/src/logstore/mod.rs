@@ -687,9 +687,22 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
             if location.as_ref().is_empty() || location.as_ref() == "/" {
                 root.as_ref().to_string()
             } else {
-                root.join(location.as_ref())
-                    .expect("Somehow failed to join on a Url!")
-                    .to_string()
+                match root.join(location.as_ref()) {
+                    // `Url::join` applies WHATWG dot-segment normalization to
+                    // percent-encoded "." / ".." segments (e.g. "%2e%2e"), even though
+                    // `object_store::path::Path` treats them as opaque, non-special path
+                    // segments. `location` comes from an `add.path` / `remove.path` value
+                    // read verbatim from the transaction log or a checkpoint parquet file,
+                    // so a corrupted or maliciously crafted table could otherwise make this
+                    // resolve outside the table's own storage prefix. Only trust the joined
+                    // result when it is still rooted under `root`.
+                    Ok(joined) if joined.as_str().starts_with(root.as_str()) => joined.to_string(),
+                    _ => format!(
+                        "{}/{}",
+                        root.as_str().trim_end_matches('/'),
+                        location.as_ref()
+                    ),
+                }
             }
         }
     }
@@ -964,6 +977,39 @@ pub(crate) mod tests {
     fn split_unc_url_rejects_local_file_url() {
         let location = Url::parse("file:///path/to/table/").unwrap();
         assert!(split_unc_url(&location).is_none());
+    }
+
+    #[test]
+    fn to_uri_percent_encoded_dot_segments_do_not_escape_table_root() {
+        // `Path::parse` rejects a literal ".." segment outright, but does NOT
+        // reject the percent-encoded form "%2e%2e" -- it treats it as an opaque,
+        // valid path segment (this is correct per object_store's own contract,
+        // since object store keys are opaque strings). That opaque Path is exactly
+        // what `object_store_path()` produces from an `add.path` / `remove.path`
+        // string taken verbatim from the Delta transaction log or a checkpoint
+        // parquet file.
+        //
+        // `Url::join` DOES apply WHATWG dot-segment normalization to percent-encoded
+        // "." / ".." segments (case-insensitively, including "%2e" variants) per the
+        // URL Standard. Before this fix, `to_uri()` fed `location` straight into
+        // `Url::join`, so a corrupted or maliciously crafted `add.path` could make
+        // `to_uri()` produce a URI pointing outside the table's own storage prefix,
+        // anywhere else in the same bucket/account.
+        let table_root = Url::parse("s3://victim-bucket/tenant-a/orders_table/").unwrap();
+
+        let benign = Path::parse("part-00000-abc.snappy.parquet").unwrap();
+        let benign_uri = to_uri(&table_root, &benign);
+        assert!(benign_uri.starts_with("s3://victim-bucket/tenant-a/orders_table/"));
+
+        let evil_add_path =
+            "%2e%2e/%2e%2e/tenant-b/orders_table/_delta_log/00000000000000000000.json";
+        let evil_path = Path::parse(evil_add_path).expect("percent-encoded dots parse as opaque");
+        let evil_uri = to_uri(&table_root, &evil_path);
+
+        assert!(
+            evil_uri.starts_with("s3://victim-bucket/tenant-a/orders_table/"),
+            "path traversal: URI escaped the table root: {evil_uri}"
+        );
     }
 
     #[test]
