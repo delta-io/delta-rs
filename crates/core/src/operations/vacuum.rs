@@ -1436,4 +1436,558 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_should_try_parallel_vacuum() {
+        assert!(!should_try_parallel_vacuum(&[]));
+        assert!(!should_try_parallel_vacuum(&["modified".to_string()]));
+        assert!(should_try_parallel_vacuum(&[
+            "modified".to_string(),
+            "id".to_string()
+        ]));
+        assert!(should_try_parallel_vacuum(&[
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string()
+        ]));
+    }
+
+    #[test]
+    fn test_is_skippable_root_prefix() {
+        assert!(is_skippable_root_prefix(&object_store::path::Path::from(
+            "_delta_log"
+        )));
+        assert!(is_skippable_root_prefix(&object_store::path::Path::from(
+            "_delta_log/00000000000000000000.json"
+        )));
+        assert!(is_skippable_root_prefix(&object_store::path::Path::from(
+            ".hidden"
+        )));
+        assert!(!is_skippable_root_prefix(&object_store::path::Path::from(
+            "modified=2021-02-01"
+        )));
+        assert!(!is_skippable_root_prefix(&object_store::path::Path::from(
+            "regular_folder"
+        )));
+    }
+
+    #[test]
+    fn test_tombstone_path_sets_record() {
+        let mut sets = TombstonePathSets::default();
+        let expired_path = object_store::path::Path::from("expired.parquet");
+        let recent_path = object_store::path::Path::from("recent.parquet");
+
+        sets.record(expired_path.clone(), true);
+        sets.record(recent_path.clone(), false);
+
+        assert!(sets.expired_tombstone_paths.contains(&expired_path));
+        assert!(!sets.expired_tombstone_paths.contains(&recent_path));
+        assert!(sets.all_tombstone_paths.contains(&expired_path));
+        assert!(sets.all_tombstone_paths.contains(&recent_path));
+    }
+
+    /// The `DELTARS_VACUUM_LIST_CONCURRENCY` env var is only read once, on the
+    /// first call, because the value is cached in a process-wide `OnceLock`.
+    /// Since no other test sets this env var, every call in this test binary
+    /// (regardless of ordering) is guaranteed to resolve to the built-in
+    /// default, which is what this test asserts.
+    #[test]
+    fn test_vacuum_list_concurrency_default() {
+        assert!(std::env::var("DELTARS_VACUUM_LIST_CONCURRENCY").is_err());
+        assert_eq!(vacuum_list_concurrency(), DEFAULT_VACUUM_LIST_CONCURRENCY);
+        // Calling it again must return the same cached value.
+        assert_eq!(vacuum_list_concurrency(), vacuum_list_concurrency());
+    }
+
+    fn make_object_meta(
+        path: &str,
+        last_modified_millis: i64,
+        size: u64,
+    ) -> object_store::ObjectMeta {
+        object_store::ObjectMeta {
+            location: object_store::path::Path::from(path),
+            last_modified: chrono::DateTime::from_timestamp_millis(last_modified_millis).unwrap(),
+            size,
+            e_tag: None,
+            version: None,
+        }
+    }
+
+    /// Directly exercises every branch of `consider_orphan_for_deletion` with
+    /// hand-crafted inputs, independent of any full vacuum run.
+    #[test]
+    fn test_consider_orphan_for_deletion_branches() {
+        let partition_columns = vec!["modified".to_string()];
+        let now_millis: i64 = 1_000_000;
+        let retention_millis: i64 = 1_000;
+
+        let valid_files: HashSet<object_store::path::Path> =
+            [object_store::path::Path::from("valid.parquet")]
+                .into_iter()
+                .collect();
+        let keep_files: HashSet<String> = ["kept.parquet".to_string()].into_iter().collect();
+
+        let mut tombstone_path_sets = TombstonePathSets::default();
+        tombstone_path_sets.record(
+            object_store::path::Path::from("expired-tombstone.parquet"),
+            true,
+        );
+        tombstone_path_sets.record(
+            object_store::path::Path::from("recent-tombstone.parquet"),
+            false,
+        );
+
+        // 1. Already queued as an expired tombstone -> None, regardless of age.
+        let meta = make_object_meta("expired-tombstone.parquet", now_millis, 10);
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 2. Still tracked as a valid file -> not ok to delete -> None.
+        let meta = make_object_meta("valid.parquet", 0, 10);
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 3. Associated with a version being kept -> not ok to delete -> None.
+        let meta = make_object_meta("kept.parquet", 0, 10);
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 4. Hidden directory entry (not a partition column, not _delta_index /
+        //    _change_data) -> not ok to delete -> None.
+        let meta = make_object_meta("_staging/file.parquet", 0, 10);
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 5. Has a recent (non-expired) tombstone -> keep until it expires -> None.
+        let meta = make_object_meta("recent-tombstone.parquet", 0, 10);
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 6. Untracked but too recent (age < retention) -> protected -> None.
+        let meta = make_object_meta(
+            "recent-orphan.parquet",
+            now_millis - retention_millis + 1,
+            10,
+        );
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            None
+        );
+
+        // 7. Untracked and stale -> eligible for deletion -> Some((path, size)).
+        let meta = make_object_meta(
+            "stale-orphan.parquet",
+            now_millis - retention_millis - 1,
+            42,
+        );
+        assert_eq!(
+            consider_orphan_for_deletion(
+                &meta,
+                &valid_files,
+                &keep_files,
+                &partition_columns,
+                &tombstone_path_sets,
+                now_millis,
+                retention_millis,
+            )
+            .unwrap(),
+            Some((object_store::path::Path::from("stale-orphan.parquet"), 42))
+        );
+    }
+
+    /// Directly exercises `expand_partition_prefixes` at depth 1: root-level
+    /// orphans are collected immediately, `_delta_log` is skipped, and the
+    /// remaining top-level partition directories are returned as leaf prefixes.
+    #[tokio::test]
+    async fn test_expand_partition_prefixes_root_orphans_and_skips() -> DeltaResult<()> {
+        let store = InMemory::new();
+        store
+            .put(
+                &object_store::path::Path::from("orphan-root.parquet"),
+                PutPayload::from_static(b"root orphan"),
+            )
+            .await?;
+        store
+            .put(
+                &object_store::path::Path::from("_delta_log/00000000000000000000.json"),
+                PutPayload::from_static(b"{}"),
+            )
+            .await?;
+        store
+            .put(
+                &object_store::path::Path::from("a=1/file.parquet"),
+                PutPayload::from_static(b"a1"),
+            )
+            .await?;
+        store
+            .put(
+                &object_store::path::Path::from("a=2/file.parquet"),
+                PutPayload::from_static(b"a2"),
+            )
+            .await?;
+
+        let valid_files = HashSet::new();
+        let keep_files = HashSet::new();
+        let partition_columns = vec!["a".to_string(), "b".to_string()];
+        let tombstone_path_sets = TombstonePathSets::default();
+
+        let (mut leaf_prefixes, orphans, scanned) = expand_partition_prefixes(
+            &store,
+            1,
+            &valid_files,
+            &keep_files,
+            &partition_columns,
+            &tombstone_path_sets,
+            i64::MAX / 2,
+            0,
+        )
+        .await?;
+
+        leaf_prefixes.sort();
+        assert_eq!(
+            leaf_prefixes,
+            vec![
+                object_store::path::Path::from("a=1"),
+                object_store::path::Path::from("a=2"),
+            ]
+        );
+        assert_eq!(
+            orphans,
+            vec![(object_store::path::Path::from("orphan-root.parquet"), 11)]
+        );
+        // Only the root-level object is scanned by this function; nested
+        // objects under "a=1/" and "a=2/" are left for the leaf listing step.
+        assert_eq!(scanned, 1);
+
+        Ok(())
+    }
+
+    /// Directly exercises `expand_partition_prefixes` recursing across two
+    /// delimiter levels (depth 2), including an orphan found at the
+    /// intermediate ("a=1/") level.
+    #[tokio::test]
+    async fn test_expand_partition_prefixes_recurses_multiple_levels() -> DeltaResult<()> {
+        let store = InMemory::new();
+        store
+            .put(
+                &object_store::path::Path::from("a=1/orphan-mid.parquet"),
+                PutPayload::from_static(b"mid orphan"),
+            )
+            .await?;
+        store
+            .put(
+                &object_store::path::Path::from("a=1/b=1/file.parquet"),
+                PutPayload::from_static(b"leaf"),
+            )
+            .await?;
+        store
+            .put(
+                &object_store::path::Path::from("a=2/b=1/file.parquet"),
+                PutPayload::from_static(b"leaf"),
+            )
+            .await?;
+
+        let valid_files = HashSet::new();
+        let keep_files = HashSet::new();
+        let partition_columns = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let tombstone_path_sets = TombstonePathSets::default();
+
+        let (mut leaf_prefixes, orphans, _scanned) = expand_partition_prefixes(
+            &store,
+            2,
+            &valid_files,
+            &keep_files,
+            &partition_columns,
+            &tombstone_path_sets,
+            i64::MAX / 2,
+            0,
+        )
+        .await?;
+
+        leaf_prefixes.sort();
+        assert_eq!(
+            leaf_prefixes,
+            vec![
+                object_store::path::Path::from("a=1/b=1"),
+                object_store::path::Path::from("a=2/b=1"),
+            ]
+        );
+        assert_eq!(
+            orphans,
+            vec![(object_store::path::Path::from("a=1/orphan-mid.parquet"), 10)]
+        );
+
+        Ok(())
+    }
+
+    /// Directly exercises `list_orphans_under_prefix`, verifying that valid,
+    /// kept, and tombstoned files are excluded while untracked files --
+    /// including one nested under a `_`-prefixed subdirectory, which
+    /// `is_hidden_directory` does not special-case for non-root locations --
+    /// are returned as orphans.
+    #[tokio::test]
+    async fn test_list_orphans_under_prefix_orphan_detection() -> DeltaResult<()> {
+        let store = InMemory::new();
+        for (path, contents) in [
+            ("leaf/valid.parquet", "valid"),
+            ("leaf/kept.parquet", "kept"),
+            ("leaf/_hidden/file.parquet", "hidden"),
+            ("leaf/expired-tombstone.parquet", "expired"),
+            ("leaf/recent-tombstone.parquet", "recent"),
+            ("leaf/orphan.parquet", "orphan!"),
+        ] {
+            store
+                .put(
+                    &object_store::path::Path::from(path),
+                    PutPayload::from_bytes(bytes::Bytes::from_static(contents.as_bytes())),
+                )
+                .await?;
+        }
+
+        let valid_files: HashSet<object_store::path::Path> =
+            [object_store::path::Path::from("leaf/valid.parquet")]
+                .into_iter()
+                .collect();
+        let keep_files: HashSet<String> = ["leaf/kept.parquet".to_string()].into_iter().collect();
+        let partition_columns = vec!["modified".to_string()];
+
+        let mut tombstone_path_sets = TombstonePathSets::default();
+        tombstone_path_sets.record(
+            object_store::path::Path::from("leaf/expired-tombstone.parquet"),
+            true,
+        );
+        tombstone_path_sets.record(
+            object_store::path::Path::from("leaf/recent-tombstone.parquet"),
+            false,
+        );
+
+        // retention_millis = 0 so the untracked orphan is always considered stale.
+        let (orphans, scanned) = list_orphans_under_prefix(
+            &store,
+            Some(&object_store::path::Path::from("leaf")),
+            &valid_files,
+            &keep_files,
+            &partition_columns,
+            &tombstone_path_sets,
+            i64::MAX / 2,
+            0,
+        )
+        .await?;
+
+        assert_eq!(scanned, 6);
+        let mut orphans = orphans;
+        orphans.sort();
+        assert_eq!(
+            orphans,
+            vec![
+                (
+                    object_store::path::Path::from("leaf/_hidden/file.parquet"),
+                    6
+                ),
+                (object_store::path::Path::from("leaf/orphan.parquet"), 7),
+            ]
+        );
+
+        Ok(())
+    }
+
+    /// Directly exercises `list_orphans_under_prefix` protecting an untracked
+    /// file that is younger than the retention period.
+    #[tokio::test]
+    async fn test_list_orphans_under_prefix_protects_recent_files() -> DeltaResult<()> {
+        let store = InMemory::new();
+        store
+            .put(
+                &object_store::path::Path::from("leaf/recent-orphan.parquet"),
+                PutPayload::from_static(b"recent"),
+            )
+            .await?;
+
+        let valid_files = HashSet::new();
+        let keep_files = HashSet::new();
+        let partition_columns = vec!["modified".to_string()];
+        let tombstone_path_sets = TombstonePathSets::default();
+
+        let now_millis = Utc::now().timestamp_millis();
+        // Retention far larger than any possible elapsed time since the put above.
+        let retention_millis = 24 * 60 * 60 * 1000;
+
+        let (orphans, scanned) = list_orphans_under_prefix(
+            &store,
+            Some(&object_store::path::Path::from("leaf")),
+            &valid_files,
+            &keep_files,
+            &partition_columns,
+            &tombstone_path_sets,
+            now_millis,
+            retention_millis,
+        )
+        .await?;
+
+        assert_eq!(scanned, 1);
+        assert!(
+            orphans.is_empty(),
+            "recent untracked file should be protected: {orphans:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Exercises the hierarchical parallel-listing path used for multi-level
+    /// partitioned tables (`should_try_parallel_vacuum` / `expand_partition_prefixes`
+    /// / `list_orphans_under_prefix`), covering orphans found at the table root
+    /// (intermediate level), directly under the first partition level, and nested
+    /// under the leaf partition directory.
+    #[tokio::test]
+    async fn test_vacuum_full_parallel_multi_level_partitions() -> DeltaResult<()> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let table_path = temp_dir.path().to_str().unwrap();
+        let partition_cols = vec!["modified".to_string(), "id".to_string()];
+        let mut table = create_initialized_table(table_path, &partition_cols).await;
+
+        let current_time = SystemTime::now();
+        let current_time_millis =
+            current_time.duration_since(UNIX_EPOCH).unwrap().as_millis() as i64;
+        let stale_time = current_time - StdDuration::from_secs(10);
+        let recent_time = current_time - StdDuration::from_secs(1);
+
+        let mut writer = JsonWriter::for_table(&table)?;
+        writer
+            .write(vec![
+                json!({"id": "A", "value": 1, "modified": "2021-02-01"}),
+            ])
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+
+        let valid_paths: Vec<String> = table
+            .snapshot()?
+            .log_data()
+            .into_iter()
+            .map(|add| add.object_store_path().to_string())
+            .collect();
+        assert_eq!(valid_paths.len(), 1);
+
+        // Orphan directly at the table root: exercises the "intermediate orphan"
+        // branch inside expand_partition_prefixes.
+        let root_orphan = "orphan-root.parquet";
+        std::fs::write(temp_dir.path().join(root_orphan), b"root orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(root_orphan), stale_time);
+
+        // Orphan directly under the first (non-final) partition level: exercises
+        // list_orphans_under_prefix recursing under a leaf prefix.
+        let modified_prefix = "modified=2021-02-01";
+        let mid_orphan = format!("{modified_prefix}/orphan-mid.parquet");
+        std::fs::write(temp_dir.path().join(&mid_orphan), b"mid orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(&mid_orphan), stale_time);
+
+        // Orphan nested under the leaf (final) partition directory.
+        let deep_dir = format!("{modified_prefix}/id=A");
+        let deep_orphan = format!("{deep_dir}/orphan-deep.parquet");
+        std::fs::write(temp_dir.path().join(&deep_orphan), b"deep orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(&deep_orphan), stale_time);
+
+        // Recent orphan that must be protected because it is younger than the
+        // retention period.
+        let recent_orphan = format!("{deep_dir}/orphan-recent.parquet");
+        std::fs::write(temp_dir.path().join(&recent_orphan), b"recent orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(&recent_orphan), recent_time);
+
+        let (_table, result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::seconds(5))
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .with_clock(Arc::new(MockClock::new(current_time_millis)))
+                .await?;
+
+        for expected in [
+            root_orphan.to_string(),
+            mid_orphan.clone(),
+            deep_orphan.clone(),
+        ] {
+            assert!(
+                result.files_deleted.contains(&expected),
+                "expected {expected} to be vacuumed: {:?}",
+                result.files_deleted
+            );
+        }
+        assert!(
+            !result.files_deleted.contains(&recent_orphan),
+            "recent orphan should be protected: {:?}",
+            result.files_deleted
+        );
+        for valid in &valid_paths {
+            assert!(
+                !result.files_deleted.contains(valid),
+                "valid tracked file should never be vacuumed: {valid}"
+            );
+        }
+
+        Ok(())
+    }
 }
