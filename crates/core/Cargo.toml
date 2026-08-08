@@ -107,7 +107,7 @@ parquet = { workspace = true, features = ["variant_experimental"] }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
-serial_test = "3"
+serial_test = "4"
 tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"

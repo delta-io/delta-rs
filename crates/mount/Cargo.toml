@@ -26,7 +26,7 @@ url = { workspace = true }
 
 [dev-dependencies]
 chrono = { workspace = true }
-serial_test = "3"
+serial_test = "4"
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
 rand = "0.10"
