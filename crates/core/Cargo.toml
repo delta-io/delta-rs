@@ -94,7 +94,7 @@ tracing = { workspace = true }
 rand = "0.10"
 sqlparser = { version = "0.61.0" }
 humantime = { version = "2.1.0", optional = true }
-validator = { version = "0.19", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 
 [dev-dependencies]
 arrow = { workspace = true, features = ["prettyprint"]}
