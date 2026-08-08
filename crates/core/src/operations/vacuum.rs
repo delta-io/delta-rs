@@ -23,11 +23,13 @@
 
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use chrono::{Duration, Utc};
+use futures::channel::mpsc;
 use futures::future::{BoxFuture, ready};
-use futures::{StreamExt, TryStreamExt, stream};
+use futures::{SinkExt, Stream, StreamExt, TryStreamExt, stream};
 use object_store::{Error, ObjectStore, path::Path};
 use serde::Serialize;
 use tracing::*;
@@ -44,9 +46,12 @@ use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaTable, DeltaTableConfig};
 
-const DEFAULT_VACUUM_LIST_CONCURRENCY: usize = 256;
+const DEFAULT_VACUUM_LIST_CONCURRENCY: usize = 10;
 
-fn vacuum_list_concurrency() -> usize {
+/// Default scan concurrency from env (`DELTARS_VACUUM_LIST_CONCURRENCY`) or built-in default.
+///
+/// Cached process-wide. Prefer [`VacuumBuilder::with_scan_concurrency`] for per-operation control.
+fn default_vacuum_list_concurrency() -> usize {
     static LIST_CONCURRENCY: OnceLock<usize> = OnceLock::new();
     *LIST_CONCURRENCY.get_or_init(|| {
         std::env::var("DELTARS_VACUUM_LIST_CONCURRENCY")
@@ -55,6 +60,12 @@ fn vacuum_list_concurrency() -> usize {
             .filter(|&value| value > 0)
             .unwrap_or(DEFAULT_VACUUM_LIST_CONCURRENCY)
     })
+}
+
+fn resolve_scan_concurrency(override_value: Option<usize>) -> usize {
+    override_value
+        .filter(|&value| value > 0)
+        .unwrap_or_else(default_vacuum_list_concurrency)
 }
 
 /// Errors that can occur during vacuum
@@ -121,6 +132,10 @@ pub struct VacuumBuilder {
     dry_run: bool,
     /// Mode of vacuum that should be run
     mode: VacuumMode,
+    /// Max concurrent object-store LIST operations during full-mode scan.
+    ///
+    /// `None` uses [`default_vacuum_list_concurrency`] (env or built-in default).
+    scan_concurrency: Option<usize>,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
@@ -178,6 +193,7 @@ impl VacuumBuilder {
             keep_versions: None,
             dry_run: false,
             mode: VacuumMode::Lite,
+            scan_concurrency: None,
             clock: None,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
@@ -187,6 +203,23 @@ impl VacuumBuilder {
     /// Override the default retention period for which files are deleted.
     pub fn with_retention_period(mut self, retention_period: Duration) -> Self {
         self.retention_period = Some(retention_period);
+        self
+    }
+
+    /// Set the maximum number of concurrent object-store LIST operations used
+    /// during full-mode vacuum scanning (partition prefix expansion and leaf
+    /// orphan listing).
+    ///
+    /// Higher values can speed up scans on high-latency object stores but may
+    /// trigger throttling (e.g. HTTP 429/503). LIST retries/backoff are handled
+    /// by the underlying object store's [`object_store::RetryConfig`], not by
+    /// vacuum itself—if a LIST ultimately fails, the vacuum operation fails.
+    ///
+    /// When unset, concurrency is taken from the `DELTARS_VACUUM_LIST_CONCURRENCY`
+    /// environment variable if set to a positive integer, otherwise defaults to 10.
+    /// Values of `0` are ignored and fall back to that default resolution.
+    pub fn with_scan_concurrency(mut self, concurrency: usize) -> Self {
+        self.scan_concurrency = Some(concurrency);
         self
     }
 
@@ -355,68 +388,85 @@ impl VacuumBuilder {
                 let tombstone_path_sets = Arc::new(tombstone_path_sets);
                 let partition_columns: Arc<Vec<String>> = Arc::new(partition_columns.to_vec());
                 let retention_millis = retention_period.num_milliseconds();
+                let scan_concurrency = resolve_scan_concurrency(self.scan_concurrency);
                 // Stop before the last partition column so leaf LIST targets are
                 // prefix paths of depth n-1 (e.g. date=…/), not the final fan-out
                 // (e.g. date=…/part=…/).
                 let partition_depth = partition_columns.len() - 1;
 
-                let parallel_span =
-                    info_span!("list_files_parallel", operation = "vacuum", partition_depth,);
+                let parallel_span = info_span!(
+                    "list_files_parallel",
+                    operation = "vacuum",
+                    partition_depth,
+                    scan_concurrency,
+                );
                 async {
-                    // Walk n-1 delimiter levels. Leaf list(prefix) then covers
-                    // the last partition column in bulk under each prefix.
-                    // Objects found at intermediate levels are considered immediately.
-                    let (leaf_prefixes, intermediate_orphans, intermediate_scanned) =
-                        expand_partition_prefixes(
-                            object_store.as_ref(),
-                            partition_depth,
-                            &valid_files,
-                            &keep_files,
-                            &partition_columns,
-                            &tombstone_path_sets,
-                            now_millis,
-                            retention_millis,
-                        )
-                        .await?;
+                    // Walk n-1 delimiter levels, streaming leaf prefixes as they
+                    // are discovered so leaf LIST can start before the full
+                    // prefix set is materialised. Intermediate-level objects are
+                    // reported via callback.
+                    let expand_scanned = Arc::new(AtomicUsize::new(0));
+                    let leaf_scanned = Arc::new(AtomicUsize::new(0));
 
-                    file_count += intermediate_scanned;
-                    for (path, size) in intermediate_orphans {
+                    // Expand runs in a spawned task; buffer intermediate orphans
+                    // until the leaf pipeline finishes (usually few/none).
+                    let intermediate_orphans =
+                        Arc::new(std::sync::Mutex::new(Vec::<(Path, i64)>::new()));
+                    let intermediate_orphans_cb = Arc::clone(&intermediate_orphans);
+
+                    expand_partition_prefixes(
+                        object_store.clone(),
+                        partition_depth,
+                        Arc::clone(&valid_files),
+                        Arc::clone(&keep_files),
+                        Arc::clone(&partition_columns),
+                        Arc::clone(&tombstone_path_sets),
+                        now_millis,
+                        retention_millis,
+                        Arc::clone(&expand_scanned),
+                        scan_concurrency,
+                        move |path, size| {
+                            intermediate_orphans_cb.lock().unwrap().push((path, size));
+                        },
+                    )
+                    .map(|prefix_res| {
+                        let store = object_store.clone();
+                        let valid_files = Arc::clone(&valid_files);
+                        let keep_files = Arc::clone(&keep_files);
+                        let tombstone_path_sets = Arc::clone(&tombstone_path_sets);
+                        let partition_columns = Arc::clone(&partition_columns);
+                        let scanned = Arc::clone(&leaf_scanned);
+                        async move {
+                            let prefix = prefix_res?;
+                            Ok::<_, DeltaTableError>(list_orphans_under_prefix(
+                                store,
+                                prefix,
+                                valid_files,
+                                keep_files,
+                                partition_columns,
+                                tombstone_path_sets,
+                                now_millis,
+                                retention_millis,
+                                scanned,
+                            ))
+                        }
+                    })
+                    .buffer_unordered(scan_concurrency)
+                    .try_flatten()
+                    .try_for_each(|(path, size)| {
+                        files_to_delete.push(path);
+                        file_sizes.push(size);
+                        ready(Ok::<_, DeltaTableError>(()))
+                    })
+                    .await?;
+
+                    for (path, size) in intermediate_orphans.lock().unwrap().drain(..) {
                         files_to_delete.push(path);
                         file_sizes.push(size);
                     }
 
-                    let listed: Vec<(Vec<(Path, i64)>, usize)> = stream::iter(leaf_prefixes)
-                        .map(|prefix| {
-                            let store = object_store.clone();
-                            let valid_files = Arc::clone(&valid_files);
-                            let keep_files = Arc::clone(&keep_files);
-                            let tombstone_path_sets = Arc::clone(&tombstone_path_sets);
-                            let partition_columns = Arc::clone(&partition_columns);
-                            async move {
-                                list_orphans_under_prefix(
-                                    store.as_ref(),
-                                    Some(&prefix),
-                                    &valid_files,
-                                    &keep_files,
-                                    &partition_columns,
-                                    &tombstone_path_sets,
-                                    now_millis,
-                                    retention_millis,
-                                )
-                                .await
-                            }
-                        })
-                        .buffer_unordered(vacuum_list_concurrency())
-                        .try_collect()
-                        .await?;
-
-                    for (orphans, scanned) in listed {
-                        file_count += scanned;
-                        for (path, size) in orphans {
-                            files_to_delete.push(path);
-                            file_sizes.push(size);
-                        }
-                    }
+                    file_count += expand_scanned.load(Ordering::Relaxed);
+                    file_count += leaf_scanned.load(Ordering::Relaxed);
 
                     Ok::<_, VacuumError>(())
                 }
@@ -725,133 +775,152 @@ fn is_skippable_root_prefix(path: &Path) -> bool {
     path_name == "_delta_log" || path_name.starts_with("_delta_log/") || path_name.starts_with('.')
 }
 
-/// Walk `partition_depth` delimiter levels and collect leaf partition prefixes.
+/// Walk `partition_depth` delimiter levels and stream leaf partition prefixes.
 ///
-/// Objects found at intermediate levels are evaluated immediately. Returns
-/// `(leaf_prefixes, intermediate_orphans, intermediate_files_scanned)`.
-async fn expand_partition_prefixes(
-    store: &dyn ObjectStore,
+/// Non-final levels still keep an in-memory prefix frontier (required for BFS).
+/// Delimiter results are folded as they complete (no per-level `Vec<ListResult>`).
+/// At the final level each child prefix is yielded immediately.
+/// Intermediate-level orphans are reported via `on_intermediate_orphan`.
+/// Every listed object increments `scanned`.
+fn expand_partition_prefixes(
+    store: Arc<dyn ObjectStore>,
     partition_depth: usize,
-    valid_files: &HashSet<Path>,
-    keep_files: &HashSet<String>,
-    partition_columns: &[String],
-    tombstone_path_sets: &TombstonePathSets,
+    valid_files: Arc<HashSet<Path>>,
+    keep_files: Arc<HashSet<String>>,
+    partition_columns: Arc<Vec<String>>,
+    tombstone_path_sets: Arc<TombstonePathSets>,
     now_millis: i64,
     retention_millis: i64,
-) -> Result<(Vec<Path>, Vec<(Path, i64)>, usize), DeltaTableError> {
-    let mut orphans = Vec::new();
-    let mut scanned = 0usize;
-    let mut to_expand: Vec<Option<Path>> = vec![None];
+    scanned: Arc<AtomicUsize>,
+    scan_concurrency: usize,
+    mut on_intermediate_orphan: impl FnMut(Path, i64) + Send + 'static,
+) -> impl Stream<Item = Result<Path, DeltaTableError>> {
+    let (mut tx, rx) = mpsc::channel(scan_concurrency.saturating_mul(4).max(16));
 
-    for level in 0..partition_depth {
-        let listings = stream::iter(to_expand)
-            .map(|prefix| {
-                let prefix_label = prefix
-                    .as_ref()
-                    .map(|p| p.as_ref())
-                    .unwrap_or("")
-                    .to_string();
-                async move {
-                    let listing = async {
+    tokio::spawn(async move {
+        let mut frontier: Vec<Option<Path>> = vec![None];
+
+        for level in 0..partition_depth {
+            let is_final_level = level + 1 == partition_depth;
+            let current = std::mem::take(&mut frontier);
+            let mut next_frontier = Vec::new();
+
+            let mut listings = stream::iter(current)
+                .map(|prefix| {
+                    let store = store.clone();
+                    let prefix_label = prefix
+                        .as_ref()
+                        .map(|p| p.as_ref())
+                        .unwrap_or("")
+                        .to_string();
+                    async move {
                         store
                             .list_with_delimiter(prefix.as_ref())
+                            .instrument(info_span!(
+                                "list_with_delimiter",
+                                operation = "vacuum",
+                                level,
+                                prefix = prefix_label,
+                            ))
                             .await
                             .map_err(DeltaTableError::from)
                     }
-                    .instrument(info_span!(
-                        "list_with_delimiter",
-                        operation = "vacuum",
-                        level,
-                        prefix = prefix_label,
-                    ))
-                    .await?;
+                })
+                .buffer_unordered(scan_concurrency);
 
-                    Ok::<_, DeltaTableError>(listing)
-                }
-            })
-            .buffer_unordered(vacuum_list_concurrency())
-            .try_collect::<Vec<_>>()
-            .await?;
+            loop {
+                match listings.try_next().await {
+                    Ok(Some(listing)) => {
+                        for obj_meta in listing.objects {
+                            scanned.fetch_add(1, Ordering::Relaxed);
+                            match consider_orphan_for_deletion(
+                                &obj_meta,
+                                valid_files.as_ref(),
+                                keep_files.as_ref(),
+                                partition_columns.as_ref(),
+                                tombstone_path_sets.as_ref(),
+                                now_millis,
+                                retention_millis,
+                            ) {
+                                Ok(Some((path, size))) => on_intermediate_orphan(path, size),
+                                Ok(None) => {}
+                                Err(e) => {
+                                    let _ = tx.send(Err(e)).await;
+                                    return;
+                                }
+                            }
+                        }
 
-        let mut next_frontier = Vec::new();
-        for listing in listings {
-            // Collect orphans at this level if any objects are found
-            // although there should be none
-            for obj_meta in listing.objects {
-                scanned += 1;
-                if let Some(entry) = consider_orphan_for_deletion(
-                    &obj_meta,
-                    valid_files,
-                    keep_files,
-                    partition_columns,
-                    tombstone_path_sets,
-                    now_millis,
-                    retention_millis,
-                )? {
-                    orphans.push(entry);
+                        for child in listing.common_prefixes {
+                            if level == 0 && is_skippable_root_prefix(&child) {
+                                continue;
+                            }
+                            if is_final_level {
+                                if tx.send(Ok(child)).await.is_err() {
+                                    return; // consumer dropped
+                                }
+                            } else {
+                                next_frontier.push(Some(child));
+                            }
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        let _ = tx.send(Err(e)).await;
+                        return;
+                    }
                 }
             }
 
-            for child in listing.common_prefixes {
-                if level == 0 && is_skippable_root_prefix(&child) {
-                    continue;
-                }
-                next_frontier.push(Some(child));
-            }
+            frontier = next_frontier;
         }
+    });
 
-        to_expand = next_frontier;
-    }
-
-    let leaf_prefixes = to_expand.into_iter().flatten().collect();
-    Ok((leaf_prefixes, orphans, scanned))
+    rx
 }
 
-/// Recursively list `prefix` and return orphans eligible for full-mode vacuum.
+/// List `prefix` and yield orphans eligible for full-mode vacuum.
 ///
-/// Returns `(orphans, files_scanned)`.
-async fn list_orphans_under_prefix(
-    store: &dyn ObjectStore,
-    prefix: Option<&Path>,
-    valid_files: &HashSet<Path>,
-    keep_files: &HashSet<String>,
-    partition_columns: &[String],
-    tombstone_path_sets: &TombstonePathSets,
+/// Each successfully listed object increments `scanned` (objects observed,
+/// not just orphans). Only objects that pass `consider_orphan_for_deletion`
+/// are yielded. Inputs are owned/`Arc` so the stream is `'static` and can be
+/// driven from concurrent `buffer_unordered` tasks.
+fn list_orphans_under_prefix(
+    store: Arc<dyn ObjectStore>,
+    prefix: Path,
+    valid_files: Arc<HashSet<Path>>,
+    keep_files: Arc<HashSet<String>>,
+    partition_columns: Arc<Vec<String>>,
+    tombstone_path_sets: Arc<TombstonePathSets>,
     now_millis: i64,
     retention_millis: i64,
-) -> Result<(Vec<(Path, i64)>, usize), DeltaTableError> {
-    let prefix_label = prefix.map(|p| p.as_ref()).unwrap_or("");
-    async {
-        let mut files = store.list(prefix);
-        let mut orphans = Vec::new();
-        let mut scanned = 0usize;
-
-        while let Some(obj_meta) = files.next().await {
-            // TODO should we allow NotFound here in case we have a temporary commit file in the list
-            let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-            scanned += 1;
-            if let Some(entry) = consider_orphan_for_deletion(
-                &obj_meta,
-                valid_files,
-                keep_files,
-                partition_columns,
-                tombstone_path_sets,
-                now_millis,
-                retention_millis,
-            )? {
-                orphans.push(entry);
-            }
-        }
-
-        Ok((orphans, scanned))
-    }
-    .instrument(info_span!(
+    scanned: Arc<AtomicUsize>,
+) -> impl Stream<Item = Result<(Path, i64), DeltaTableError>> {
+    let span = info_span!(
         "list_files",
         operation = "vacuum",
         mode = "parallel",
-        prefix = prefix_label,
-    ))
-    .await
+        prefix = prefix.to_string(),
+    );
+    store
+        .list(Some(&prefix))
+        .map_err(DeltaTableError::from)
+        .try_filter_map(move |obj_meta| {
+            let _guard = span.enter();
+            // Count every listed object for progress diagnostics.
+            scanned.fetch_add(1, Ordering::Relaxed);
+            // TODO should we allow NotFound here in case we have a temporary commit file in the list
+            let result = consider_orphan_for_deletion(
+                &obj_meta,
+                valid_files.as_ref(),
+                keep_files.as_ref(),
+                partition_columns.as_ref(),
+                tombstone_path_sets.as_ref(),
+                now_millis,
+                retention_millis,
+            );
+            ready(result)
+        })
 }
 
 async fn collect_full_mode_tombstones(
@@ -921,6 +990,7 @@ mod tests {
     use crate::writer::{DeltaWriter, JsonWriter};
     use crate::{ensure_table_uri, open_table};
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{
         fs::{FileTimes, OpenOptions},
         io::Read,
@@ -1492,11 +1562,65 @@ mod tests {
     /// (regardless of ordering) is guaranteed to resolve to the built-in
     /// default, which is what this test asserts.
     #[test]
-    fn test_vacuum_list_concurrency_default() {
+    fn test_default_vacuum_list_concurrency() {
         assert!(std::env::var("DELTARS_VACUUM_LIST_CONCURRENCY").is_err());
-        assert_eq!(vacuum_list_concurrency(), DEFAULT_VACUUM_LIST_CONCURRENCY);
+        assert_eq!(
+            default_vacuum_list_concurrency(),
+            DEFAULT_VACUUM_LIST_CONCURRENCY
+        );
         // Calling it again must return the same cached value.
-        assert_eq!(vacuum_list_concurrency(), vacuum_list_concurrency());
+        assert_eq!(
+            default_vacuum_list_concurrency(),
+            default_vacuum_list_concurrency()
+        );
+    }
+
+    #[test]
+    fn test_resolve_scan_concurrency() {
+        // Explicit positive overrides win.
+        assert_eq!(resolve_scan_concurrency(Some(1)), 1);
+        assert_eq!(resolve_scan_concurrency(Some(7)), 7);
+        assert_eq!(resolve_scan_concurrency(Some(1000)), 1000);
+
+        // None and zero fall back to the process default.
+        assert_eq!(
+            resolve_scan_concurrency(None),
+            default_vacuum_list_concurrency()
+        );
+        assert_eq!(
+            resolve_scan_concurrency(Some(0)),
+            default_vacuum_list_concurrency()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_with_scan_concurrency_builder() -> DeltaResult<()> {
+        let table_path = std::path::Path::new("../test/tests/data/simple_commit");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await?;
+
+        let builder =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()));
+        assert_eq!(builder.scan_concurrency, None);
+        assert_eq!(
+            resolve_scan_concurrency(builder.scan_concurrency),
+            default_vacuum_list_concurrency()
+        );
+
+        let builder = builder.with_scan_concurrency(25);
+        assert_eq!(builder.scan_concurrency, Some(25));
+        assert_eq!(resolve_scan_concurrency(builder.scan_concurrency), 25);
+
+        // Zero is stored but ignored at resolve time.
+        let builder = builder.with_scan_concurrency(0);
+        assert_eq!(builder.scan_concurrency, Some(0));
+        assert_eq!(
+            resolve_scan_concurrency(builder.scan_concurrency),
+            default_vacuum_list_concurrency()
+        );
+
+        Ok(())
     }
 
     fn make_object_meta(
@@ -1695,16 +1819,24 @@ mod tests {
         let partition_columns = vec!["a".to_string(), "b".to_string()];
         let tombstone_path_sets = TombstonePathSets::default();
 
-        let (mut leaf_prefixes, orphans, scanned) = expand_partition_prefixes(
-            &store,
+        let scanned = Arc::new(AtomicUsize::new(0));
+        let orphans = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let orphans_cb = Arc::clone(&orphans);
+
+        let mut leaf_prefixes = expand_partition_prefixes(
+            Arc::new(store),
             1,
-            &valid_files,
-            &keep_files,
-            &partition_columns,
-            &tombstone_path_sets,
+            Arc::new(valid_files),
+            Arc::new(keep_files),
+            Arc::new(partition_columns),
+            Arc::new(tombstone_path_sets),
             i64::MAX / 2,
             0,
+            Arc::clone(&scanned),
+            DEFAULT_VACUUM_LIST_CONCURRENCY,
+            move |path, size| orphans_cb.lock().unwrap().push((path, size)),
         )
+        .try_collect::<Vec<_>>()
         .await?;
 
         leaf_prefixes.sort();
@@ -1716,12 +1848,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            orphans,
+            orphans.lock().unwrap().clone(),
             vec![(object_store::path::Path::from("orphan-root.parquet"), 11)]
         );
         // Only the root-level object is scanned by this function; nested
         // objects under "a=1/" and "a=2/" are left for the leaf listing step.
-        assert_eq!(scanned, 1);
+        assert_eq!(scanned.load(Ordering::Relaxed), 1);
 
         Ok(())
     }
@@ -1756,16 +1888,24 @@ mod tests {
         let partition_columns = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let tombstone_path_sets = TombstonePathSets::default();
 
-        let (mut leaf_prefixes, orphans, _scanned) = expand_partition_prefixes(
-            &store,
+        let scanned = Arc::new(AtomicUsize::new(0));
+        let orphans = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let orphans_cb = Arc::clone(&orphans);
+
+        let mut leaf_prefixes = expand_partition_prefixes(
+            Arc::new(store),
             2,
-            &valid_files,
-            &keep_files,
-            &partition_columns,
-            &tombstone_path_sets,
+            Arc::new(valid_files),
+            Arc::new(keep_files),
+            Arc::new(partition_columns),
+            Arc::new(tombstone_path_sets),
             i64::MAX / 2,
             0,
+            Arc::clone(&scanned),
+            DEFAULT_VACUUM_LIST_CONCURRENCY,
+            move |path, size| orphans_cb.lock().unwrap().push((path, size)),
         )
+        .try_collect::<Vec<_>>()
         .await?;
 
         leaf_prefixes.sort();
@@ -1777,7 +1917,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            orphans,
+            orphans.lock().unwrap().clone(),
             vec![(object_store::path::Path::from("a=1/orphan-mid.parquet"), 10)]
         );
 
@@ -1826,20 +1966,22 @@ mod tests {
         );
 
         // retention_millis = 0 so the untracked orphan is always considered stale.
-        let (orphans, scanned) = list_orphans_under_prefix(
-            &store,
-            Some(&object_store::path::Path::from("leaf")),
-            &valid_files,
-            &keep_files,
-            &partition_columns,
-            &tombstone_path_sets,
+        let scanned = Arc::new(AtomicUsize::new(0));
+        let mut orphans = list_orphans_under_prefix(
+            Arc::new(store),
+            object_store::path::Path::from("leaf"),
+            Arc::new(valid_files),
+            Arc::new(keep_files),
+            Arc::new(partition_columns),
+            Arc::new(tombstone_path_sets),
             i64::MAX / 2,
             0,
+            Arc::clone(&scanned),
         )
+        .try_collect::<Vec<_>>()
         .await?;
 
-        assert_eq!(scanned, 6);
-        let mut orphans = orphans;
+        assert_eq!(scanned.load(Ordering::Relaxed), 6);
         orphans.sort();
         assert_eq!(
             orphans,
@@ -1876,19 +2018,22 @@ mod tests {
         // Retention far larger than any possible elapsed time since the put above.
         let retention_millis = 24 * 60 * 60 * 1000;
 
-        let (orphans, scanned) = list_orphans_under_prefix(
-            &store,
-            Some(&object_store::path::Path::from("leaf")),
-            &valid_files,
-            &keep_files,
-            &partition_columns,
-            &tombstone_path_sets,
+        let scanned = Arc::new(AtomicUsize::new(0));
+        let orphans = list_orphans_under_prefix(
+            Arc::new(store),
+            object_store::path::Path::from("leaf"),
+            Arc::new(valid_files),
+            Arc::new(keep_files),
+            Arc::new(partition_columns),
+            Arc::new(tombstone_path_sets),
             now_millis,
             retention_millis,
+            Arc::clone(&scanned),
         )
+        .try_collect::<Vec<_>>()
         .await?;
 
-        assert_eq!(scanned, 1);
+        assert_eq!(scanned.load(Ordering::Relaxed), 1);
         assert!(
             orphans.is_empty(),
             "recent untracked file should be protected: {orphans:?}"
