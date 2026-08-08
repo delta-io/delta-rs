@@ -687,16 +687,28 @@ pub fn to_uri(root: &Url, location: &Path) -> String {
             if location.as_ref().is_empty() || location.as_ref() == "/" {
                 root.as_ref().to_string()
             } else {
+                // Comparing against a bare root string is not enough: without a
+                // trailing slash, a sibling table like "tenant-a-evil" also
+                // passes `starts_with("tenant-a")`. Force the boundary here
+                // instead of relying on root always being normalized upstream.
+                let root_str = root.as_str();
+                let root_prefix = if root_str.ends_with('/') {
+                    root_str.to_string()
+                } else {
+                    format!("{root_str}/")
+                };
                 match root.join(location.as_ref()) {
-                    // `Url::join` applies WHATWG dot-segment normalization to
-                    // percent-encoded "." / ".." segments (e.g. "%2e%2e"), even though
-                    // `object_store::path::Path` treats them as opaque, non-special path
-                    // segments. `location` comes from an `add.path` / `remove.path` value
-                    // read verbatim from the transaction log or a checkpoint parquet file,
-                    // so a corrupted or maliciously crafted table could otherwise make this
-                    // resolve outside the table's own storage prefix. Only trust the joined
-                    // result when it is still rooted under `root`.
-                    Ok(joined) if joined.as_str().starts_with(root.as_str()) => joined.to_string(),
+                    // Url::join normalizes percent-encoded ".." even though
+                    // object_store::path::Path treats it as an ordinary
+                    // segment, so a bad add.path can otherwise walk outside
+                    // the table root. Only trust the result if it's still
+                    // under root.
+                    Ok(joined)
+                        if joined.as_str() == root_str
+                            || joined.as_str().starts_with(&root_prefix) =>
+                    {
+                        joined.to_string()
+                    }
                     _ => format!(
                         "{}/{}",
                         root.as_str().trim_end_matches('/'),
@@ -1009,6 +1021,23 @@ pub(crate) mod tests {
         assert!(
             evil_uri.starts_with("s3://victim-bucket/tenant-a/orders_table/"),
             "path traversal: URI escaped the table root: {evil_uri}"
+        );
+    }
+
+    #[test]
+    fn to_uri_rejects_sibling_prefix_bypass_when_root_lacks_trailing_slash() {
+        // root is usually normalized to end in "/", but LogStoreConfig's
+        // Deserialize impl parses it with a raw Url::parse and skips that.
+        // Without the trailing slash, a percent-encoded ".." can land in a
+        // sibling table whose name shares the same prefix.
+        let table_root = Url::parse("s3://bucket/tenant-a").unwrap();
+        let evil_path =
+            Path::parse("%2e%2e/tenant-a-evil/orders_table/_delta_log/00000000000000000000.json")
+                .unwrap();
+        let evil_uri = to_uri(&table_root, &evil_path);
+        assert!(
+            !evil_uri.starts_with("s3://bucket/tenant-a-evil"),
+            "sibling-prefix bypass: URI escaped into a sibling table: {evil_uri}"
         );
     }
 
