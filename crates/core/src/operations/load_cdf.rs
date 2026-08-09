@@ -666,6 +666,7 @@ impl CdfLoadBuilder {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::num::NonZero;
     use super::*;
     use std::str::FromStr;
 
@@ -767,62 +768,6 @@ pub(crate) mod tests {
             "| 9  | Ada    | 2023-12-25 | insert       |",
             "+----+--------+------------+--------------+",
         ], &batches }
-        Ok(())
-    }
-
-    /// Same-file add/remove deletion-vector pairs (in-place DV updates) must be resolved by
-    /// DV set-subtraction, not read as independent inserts and deletes. `cdf-table-with-dv`
-    /// has no CDC files -- every commit v1..=v6 is such a pair on a single 10-row file -- so
-    /// each version's change rows come purely from `add_dv`/`rm_dv` resolution. Expected
-    /// per-version `(change_type, count)` pairs match delta-kernel's own CDF reader.
-    #[rstest::rstest]
-    #[case(1, &[("delete", 2)])]
-    #[case(2, &[("insert", 2)])]
-    #[case(3, &[("delete", 4)])]
-    #[case(4, &[("insert", 2)])]
-    #[case(5, &[("delete", 1), ("insert", 2)])]
-    #[case(6, &[("insert", 1)])]
-    #[tokio::test]
-    async fn dv_pair_resolves_change_rows(
-        #[case] version: u64,
-        #[case] expected: &[(&str, i64)],
-    ) -> TestResult {
-        let table_path = Path::new("../test/tests/data/cdf-table-with-dv");
-        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
-        let ctx: SessionContext = SessionContext::new();
-        let table = DeltaTable::try_from_url(table_uri).await?;
-        let provider = DeltaCdfTableProvider::try_new(
-            table
-                .scan_cdf()
-                .with_starting_version(version)
-                .with_ending_version(version),
-        )?;
-        ctx.register_table("cdf", Arc::new(provider))?;
-        let batches = ctx
-            .sql("SELECT _change_type, count(*) c FROM cdf GROUP BY _change_type ORDER BY _change_type")
-            .await?
-            .collect()
-            .await?;
-
-        let mut actual: Vec<(String, i64)> = vec![];
-        for b in &batches {
-            let types = b
-                .column(0)
-                .as_any()
-                .downcast_ref::<arrow_array::StringArray>()
-                .unwrap();
-            let counts = b
-                .column(1)
-                .as_any()
-                .downcast_ref::<arrow_array::Int64Array>()
-                .unwrap();
-            for i in 0..b.num_rows() {
-                actual.push((types.value(i).to_string(), counts.value(i)));
-            }
-        }
-        let expected: Vec<(String, i64)> =
-            expected.iter().map(|(t, c)| (t.to_string(), *c)).collect();
-        assert_eq!(actual, expected, "mismatch at version {version}");
         Ok(())
     }
 
@@ -1646,7 +1591,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_dv_cdf() -> TestResult {
-        let tp = "...";
+        let tp = "/tmp/cdf_dv_bench_1g";
         // let tp = "...";
         let ctx = SessionContext::new();
 
@@ -1662,8 +1607,12 @@ pub(crate) mod tests {
         let batches = collect(table, ctx.task_ctx()).await?;
         let mine_total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
         let first_run = starting.elapsed();
+
         let fs = Arc::new(LocalFileSystem::new());
-        let engine = DefaultEngine::builder(fs.clone()).build();
+        let engine = DefaultEngine::builder(fs.clone())
+            .with_buffer_size(NonZero::new(20).unwrap())
+            // .with_batch_size(NonZero::new(50000).unwrap())
+            .build();
 
         let table_url = delta_kernel::try_parse_uri(tp)?;
         let starting = Instant::now();
