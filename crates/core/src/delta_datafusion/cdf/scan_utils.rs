@@ -17,11 +17,13 @@ use delta_kernel::Engine;
 use delta_kernel::actions::deletion_vector::{DeletionVectorDescriptor, DeletionVectorStorageType};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectStore};
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions, RowSelection};
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
+};
 use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::file::metadata::ParquetMetaData;
 use serde_json::Value;
-use tracing::{log, warn};
+use tracing::log;
 use url::Url;
 
 pub fn map_action_to_scalar<F: FileAction>(
@@ -174,57 +176,68 @@ pub async fn extend_groups_with_pairs(
             .map(|part| map_action_to_scalar(&pair.add, part, schema.clone()))
             .collect::<DeltaResult<Vec<ScalarValue>>>()?;
 
-        if !deletes.is_empty() {
-            let access_plan = access_plan_for_selection(
-                deletes,
-                &pair.add.path,
-                pair.add.size as u64,
-                &table_root,
-                Arc::clone(&root_object_store),
-                Arc::clone(&parquet_metadata_cache),
-            )
-            .await?;
-
-            let mut part_values = vec![
-                ScalarValue::Utf8(Some("delete".to_string())),
-                ScalarValue::UInt64(Some(pair.version)),
-                ScalarValue::TimestampMillisecond(Some(pair.timestamp), None),
-            ];
-            part_values.extend_from_slice(&table_partition_values);
-            // part_values.extend(table_partition_values.clone());
-
-            let part_file = PartitionedFile::new(&pair.add.path, pair.add.size as u64)
-                .with_partition_values(part_values.clone())
-                .with_extension(access_plan);
-            remove_groups
-                .entry(part_values)
-                .or_default()
-                .push(part_file);
-        }
-        if !inserts.is_empty() {
-            let access_plan = access_plan_for_selection(
-                inserts,
-                &pair.add.path,
-                pair.add.size as u64,
-                &table_root,
-                Arc::clone(&root_object_store),
-                Arc::clone(&parquet_metadata_cache),
-            )
-            .await?;
-
-            let mut part_values = vec![
-                ScalarValue::Utf8(Some("insert".to_string())),
-                ScalarValue::UInt64(Some(pair.version)),
-                ScalarValue::TimestampMillisecond(Some(pair.timestamp), None),
-            ];
-            part_values.extend_from_slice(&table_partition_values);
-
-            let part_file = PartitionedFile::new(pair.add.path, pair.add.size as u64)
-                .with_partition_values(part_values.clone())
-                .with_extension(access_plan);
-            add_groups.entry(part_values).or_default().push(part_file);
-        }
+        // Newly-deleted rows are `delete`s (remove groups), restored rows are `insert`s (add
+        // groups). Both read the same physical add-side file, each with its own row selection.
+        push_pair_selection(
+            deletes,
+            "delete",
+            remove_groups,
+            &pair,
+            &table_partition_values,
+            &table_root,
+            &root_object_store,
+            &parquet_metadata_cache,
+        )
+        .await?;
+        push_pair_selection(
+            inserts,
+            "insert",
+            add_groups,
+            &pair,
+            &table_partition_values,
+            &table_root,
+            &root_object_store,
+            &parquet_metadata_cache,
+        )
+        .await?;
     }
+    Ok(())
+}
+
+async fn push_pair_selection(
+    selection: roaring::RoaringTreemap,
+    change_type: &str,
+    groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
+    pair: &ResolvedPair,
+    table_partition_values: &[ScalarValue],
+    table_root: &Url,
+    root_object_store: &Arc<dyn ObjectStore>,
+    parquet_metadata_cache: &Arc<DashMap<String, Arc<ParquetMetaData>>>,
+) -> DeltaResult<()> {
+    if selection.is_empty() {
+        return Ok(());
+    }
+    let access_plan = access_plan_for_selection(
+        selection,
+        &pair.add.path,
+        pair.add.size as u64,
+        table_root,
+        Arc::clone(root_object_store),
+        Arc::clone(parquet_metadata_cache),
+    )
+    .await?;
+
+    let mut part_values = vec![
+        ScalarValue::Utf8(Some(change_type.to_string())),
+        ScalarValue::UInt64(Some(pair.version)),
+        ScalarValue::TimestampMillisecond(Some(pair.timestamp), None),
+    ];
+    part_values.extend_from_slice(table_partition_values);
+
+    let part_file = PartitionedFile::new(&pair.add.path, pair.add.size as u64)
+        .with_partition_values(part_values.clone())
+        .with_extension(access_plan);
+    groups.entry(part_values).or_default().push(part_file);
     Ok(())
 }
 
@@ -374,30 +387,43 @@ impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescript
     }
 }
 
-#[inline]
-fn treemap_to_bools_with(treemap: roaring::RoaringTreemap, set_bit: bool) -> Vec<bool> {
-    #[inline]
-    fn combine(high_bits: u32, low_bits: u32) -> usize {
-        ((u64::from(high_bits) << 32) | u64::from(low_bits)) as usize
-    }
+fn row_group_access(
+    marked: &mut std::iter::Peekable<impl Iterator<Item = u64>>,
+    rg_start: u64,
+    num_rows: usize,
+    keep_marked: bool,
+) -> RowGroupAccess {
+    let rg_end = rg_start + num_rows as u64;
 
-    match treemap.max() {
-        Some(max) => {
-            let mut result = vec![!set_bit; max as usize + 1];
-            let bitmaps = treemap.bitmaps();
-            for (index, bitmap) in bitmaps {
-                for bit in bitmap.iter() {
-                    let vec_index = combine(index, bit);
-                    result[vec_index] = set_bit;
-                }
-            }
-            result
-        }
-        None => {
-            // empty set, return empty vec
-            vec![]
-        }
+    if marked.peek().is_none_or(|&idx| idx >= rg_end) {
+        return if keep_marked {
+            RowGroupAccess::Skip
+        } else {
+            RowGroupAccess::Scan
+        };
     }
+    let run = |count: u64, read: bool| {
+        let count = count as usize;
+        if read {
+            RowSelector::select(count)
+        } else {
+            RowSelector::skip(count)
+        }
+    };
+
+    let mut selectors: Vec<RowSelector> = Vec::new();
+    let mut cursor = rg_start;
+    while let Some(&idx) = marked.peek() {
+        if idx >= rg_end {
+            break;
+        }
+        selectors.push(run(idx - cursor, !keep_marked)); // gap before the marked row
+        selectors.push(run(1, keep_marked)); // the marked row
+        cursor = idx + 1;
+        marked.next();
+    }
+    selectors.push(run(rg_end - cursor, !keep_marked)); // tail after the last marked row
+    RowGroupAccess::Selection(RowSelection::from(selectors))
 }
 
 #[inline]
@@ -462,44 +488,23 @@ pub(crate) fn resolve_dv_pair(
     Ok((deletes, inserts))
 }
 
-#[inline]
-fn access_plan_from_selection(
-    selection: Vec<bool>,
+fn access_plan_from_treemap(
+    treemap: &roaring::RoaringTreemap,
     parquet_metadata: &ParquetMetaData,
-    file_path: &Path,
+    keep_marked: bool,
 ) -> ParquetAccessPlan {
     let mut access_plan = ParquetAccessPlan::new_all(parquet_metadata.num_row_groups());
-    let mut offset = 0usize;
+    let mut marked = treemap.iter().peekable();
+    let mut rg_start = 0;
     for (rg_idx, rg) in parquet_metadata.row_groups().iter().enumerate() {
         let num_rows = rg.num_rows() as usize;
-        if let Some(slice) = selection.get(offset..(offset + num_rows)) {
-            let keep = BooleanArray::from(slice.to_vec());
-            if keep.true_count() == 0 {
-                access_plan.skip(rg_idx);
-            } else if keep.false_count() == 0 {
-                access_plan.scan(rg_idx);
-            } else {
-                let selection = RowSelection::from_filters(&[keep]);
-                access_plan.set(rg_idx, RowGroupAccess::Selection(selection));
-            }
-            offset += num_rows;
-        } else {
-            warn!(
-                "Row group indexes were out of bounds: {offset} to {} for {file_path}",
-                offset + num_rows
-            );
-        }
+        access_plan.set(
+            rg_idx,
+            row_group_access(&mut marked, rg_start, num_rows, keep_marked),
+        );
+        rg_start += num_rows as u64;
     }
     access_plan
-}
-
-#[inline]
-fn total_rows(parquet_metadata: &ParquetMetaData) -> usize {
-    parquet_metadata
-        .row_groups()
-        .iter()
-        .map(|rg| rg.num_rows() as usize)
-        .sum()
 }
 
 pub(crate) async fn access_plan_for_selection(
@@ -510,7 +515,8 @@ pub(crate) async fn access_plan_for_selection(
     root_object_store: Arc<DynObjectStore>,
     parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
 ) -> DeltaResult<ParquetAccessPlan> {
-    let tp = table_root_url.path().strip_prefix('/').unwrap();
+    let path = table_root_url.path();
+    let tp = path.strip_prefix('/').unwrap_or(path);
     let file_path = Path::parse(format!("{tp}{file_path_str}"))?;
     let parquet_metadata = get_metadata_from_cache(
         parquet_metadata_cache,
@@ -519,12 +525,10 @@ pub(crate) async fn access_plan_for_selection(
         file_size,
     )
     .await?;
-    let mut sel = treemap_to_bools_with(selection, true);
-    sel.resize(total_rows(&parquet_metadata), false);
-    Ok(access_plan_from_selection(
-        sel,
+    Ok(access_plan_from_treemap(
+        &selection,
         &parquet_metadata,
-        &file_path,
+        true,
     ))
 }
 
@@ -536,13 +540,11 @@ async fn create_file_scan_plan<F: FileAction>(
     parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
 ) -> DeltaResult<Option<ParquetAccessPlan>> {
     if let Some(dv) = file_action.deletion_vector() {
-        let tp = table_root_url.path().strip_prefix('/').unwrap();
+        let path = table_root_url.path();
+        let tp = path.strip_prefix('/').unwrap_or(path);
         let dv_path = format!("{}{}", tp, file_action.path());
         let file_path = Path::parse(dv_path)?;
-
-        let raw_tree_map = read_dv_treemap(Some(dv), &engine, &table_root_url)?;
-        let mut tree_map = treemap_to_bools_with(raw_tree_map, false);
-
+        let tree_map = read_dv_treemap(Some(dv), &engine, &table_root_url)?;
         let parquet_metadata = get_metadata_from_cache(
             parquet_metadata_cache,
             root_object_store,
@@ -550,11 +552,10 @@ async fn create_file_scan_plan<F: FileAction>(
             file_action.size()? as u64,
         )
         .await?;
-        tree_map.resize(total_rows(&parquet_metadata), true);
-        return Ok(Some(access_plan_from_selection(
-            tree_map,
+        return Ok(Some(access_plan_from_treemap(
+            &tree_map,
             &parquet_metadata,
-            &file_path,
+            false,
         )));
     }
     Ok(None)
