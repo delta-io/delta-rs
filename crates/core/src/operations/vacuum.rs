@@ -136,6 +136,9 @@ pub struct VacuumBuilder {
     ///
     /// `None` uses [`default_vacuum_list_concurrency`] (env or built-in default).
     scan_concurrency: Option<usize>,
+    /// When true, force the flat `list(None)` full-mode scan even for multi-level
+    /// partitioned tables (disables the default parallel prefix-expansion path).
+    disable_parallel_scan: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
@@ -194,6 +197,7 @@ impl VacuumBuilder {
             dry_run: false,
             mode: VacuumMode::Lite,
             scan_concurrency: None,
+            disable_parallel_scan: false,
             clock: None,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
@@ -220,6 +224,17 @@ impl VacuumBuilder {
     /// Values of `0` are ignored and fall back to that default resolution.
     pub fn with_scan_concurrency(mut self, concurrency: usize) -> Self {
         self.scan_concurrency = Some(concurrency);
+        self
+    }
+
+    /// Disable the parallel multi-level partition scan used by full-mode vacuum.
+    ///
+    /// By default, tables with more than one partition column use hierarchical
+    /// prefix expansion and concurrent leaf LIST calls. Calling this forces the
+    /// flat `list(None)` scan path instead (useful for comparison, debugging, or
+    /// working around store rate limits).
+    pub fn disable_parallel_scan(mut self) -> Self {
+        self.disable_parallel_scan = true;
         self
     }
 
@@ -382,7 +397,7 @@ impl VacuumBuilder {
         if self.mode == VacuumMode::Full {
             let object_store = self.log_store.object_store(None);
 
-            if should_try_parallel_vacuum(partition_columns) {
+            if !self.disable_parallel_scan && should_try_parallel_vacuum(partition_columns) {
                 let valid_files = Arc::new(valid_files);
                 let keep_files = Arc::new(keep_files);
                 let tombstone_path_sets = Arc::new(tombstone_path_sets);
@@ -1623,6 +1638,33 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_disable_parallel_scan_builder() -> DeltaResult<()> {
+        let table_path = std::path::Path::new("../test/tests/data/simple_commit");
+        let table_uri =
+            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table = open_table(table_uri).await?;
+
+        let multi_level = ["date".to_string(), "group".to_string()];
+        assert!(should_try_parallel_vacuum(&multi_level));
+
+        let builder =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()));
+        // Parallel scan is enabled by default for multi-level tables.
+        assert!(!builder.disable_parallel_scan);
+        let use_parallel =
+            !builder.disable_parallel_scan && should_try_parallel_vacuum(&multi_level);
+        assert!(use_parallel);
+
+        let builder = builder.disable_parallel_scan();
+        assert!(builder.disable_parallel_scan);
+        let use_parallel =
+            !builder.disable_parallel_scan && should_try_parallel_vacuum(&multi_level);
+        assert!(!use_parallel);
+
+        Ok(())
+    }
+
     fn make_object_meta(
         path: &str,
         last_modified_millis: i64,
@@ -2042,13 +2084,18 @@ mod tests {
         Ok(())
     }
 
-    /// Exercises the hierarchical parallel-listing path used for multi-level
-    /// partitioned tables (`should_try_parallel_vacuum` / `expand_partition_prefixes`
-    /// / `list_orphans_under_prefix`), covering orphans found at the table root
-    /// (intermediate level), directly under the first partition level, and nested
-    /// under the leaf partition directory.
-    #[tokio::test]
-    async fn test_vacuum_full_parallel_multi_level_partitions() -> DeltaResult<()> {
+    /// Shared multi-level full-vacuum fixture: 2 partition columns, tracked data
+    /// file, stale orphans at root/mid/leaf, and one recent protected orphan.
+    async fn multi_level_full_vacuum_fixture() -> DeltaResult<(
+        tempfile::TempDir,
+        crate::DeltaTable,
+        i64,
+        Vec<String>,
+        String,
+        String,
+        String,
+        String,
+    )> {
         let temp_dir = tempfile::tempdir().unwrap();
         let table_path = temp_dir.path().to_str().unwrap();
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
@@ -2076,30 +2123,87 @@ mod tests {
             .collect();
         assert_eq!(valid_paths.len(), 1);
 
-        // Orphan directly at the table root: exercises the "intermediate orphan"
-        // branch inside expand_partition_prefixes.
-        let root_orphan = "orphan-root.parquet";
-        std::fs::write(temp_dir.path().join(root_orphan), b"root orphan").unwrap();
-        set_last_modified(&temp_dir.path().join(root_orphan), stale_time);
+        let root_orphan = "orphan-root.parquet".to_string();
+        std::fs::write(temp_dir.path().join(&root_orphan), b"root orphan").unwrap();
+        set_last_modified(&temp_dir.path().join(&root_orphan), stale_time);
 
-        // Orphan directly under the first (non-final) partition level: exercises
-        // list_orphans_under_prefix recursing under a leaf prefix.
         let modified_prefix = "modified=2021-02-01";
         let mid_orphan = format!("{modified_prefix}/orphan-mid.parquet");
         std::fs::write(temp_dir.path().join(&mid_orphan), b"mid orphan").unwrap();
         set_last_modified(&temp_dir.path().join(&mid_orphan), stale_time);
 
-        // Orphan nested under the leaf (final) partition directory.
         let deep_dir = format!("{modified_prefix}/id=A");
         let deep_orphan = format!("{deep_dir}/orphan-deep.parquet");
         std::fs::write(temp_dir.path().join(&deep_orphan), b"deep orphan").unwrap();
         set_last_modified(&temp_dir.path().join(&deep_orphan), stale_time);
 
-        // Recent orphan that must be protected because it is younger than the
-        // retention period.
         let recent_orphan = format!("{deep_dir}/orphan-recent.parquet");
         std::fs::write(temp_dir.path().join(&recent_orphan), b"recent orphan").unwrap();
         set_last_modified(&temp_dir.path().join(&recent_orphan), recent_time);
+
+        Ok((
+            temp_dir,
+            table,
+            current_time_millis,
+            valid_paths,
+            root_orphan,
+            mid_orphan,
+            deep_orphan,
+            recent_orphan,
+        ))
+    }
+
+    fn assert_multi_level_vacuum_result(
+        result: &VacuumMetrics,
+        root_orphan: &str,
+        mid_orphan: &str,
+        deep_orphan: &str,
+        recent_orphan: &str,
+        valid_paths: &[String],
+    ) {
+        for expected in [root_orphan, mid_orphan, deep_orphan] {
+            assert!(
+                result.files_deleted.contains(&expected.to_string()),
+                "expected {expected} to be vacuumed: {:?}",
+                result.files_deleted
+            );
+        }
+        assert!(
+            !result.files_deleted.contains(&recent_orphan.to_string()),
+            "recent orphan should be protected: {:?}",
+            result.files_deleted
+        );
+        for valid in valid_paths {
+            assert!(
+                !result.files_deleted.contains(valid),
+                "valid tracked file should never be vacuumed: {valid}"
+            );
+        }
+    }
+
+    /// Exercises the hierarchical parallel-listing path used for multi-level
+    /// partitioned tables (`should_try_parallel_vacuum` / `expand_partition_prefixes`
+    /// / `list_orphans_under_prefix`), covering orphans found at the table root
+    /// (intermediate level), directly under the first partition level, and nested
+    /// under the leaf partition directory.
+    #[tokio::test]
+    async fn test_vacuum_full_parallel_multi_level_partitions() -> DeltaResult<()> {
+        let (
+            _temp_dir,
+            table,
+            current_time_millis,
+            valid_paths,
+            root_orphan,
+            mid_orphan,
+            deep_orphan,
+            recent_orphan,
+        ) = multi_level_full_vacuum_fixture().await?;
+
+        assert!(!should_try_parallel_vacuum(&[]));
+        assert!(should_try_parallel_vacuum(&[
+            "modified".to_string(),
+            "id".to_string()
+        ]));
 
         let (_table, result) =
             VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
@@ -2110,29 +2214,99 @@ mod tests {
                 .with_clock(Arc::new(MockClock::new(current_time_millis)))
                 .await?;
 
-        for expected in [
-            root_orphan.to_string(),
-            mid_orphan.clone(),
-            deep_orphan.clone(),
-        ] {
-            assert!(
-                result.files_deleted.contains(&expected),
-                "expected {expected} to be vacuumed: {:?}",
-                result.files_deleted
-            );
-        }
-        assert!(
-            !result.files_deleted.contains(&recent_orphan),
-            "recent orphan should be protected: {:?}",
-            result.files_deleted
+        assert_multi_level_vacuum_result(
+            &result,
+            &root_orphan,
+            &mid_orphan,
+            &deep_orphan,
+            &recent_orphan,
+            &valid_paths,
         );
-        for valid in &valid_paths {
-            assert!(
-                !result.files_deleted.contains(valid),
-                "valid tracked file should never be vacuumed: {valid}"
-            );
-        }
+        Ok(())
+    }
 
+    /// Same multi-level fixture as the parallel test, but with
+    /// [`VacuumBuilder::disable_parallel_scan`] forcing the flat `list(None)`
+    /// path. Results must match the parallel path.
+    #[tokio::test]
+    async fn test_vacuum_full_flat_scan_with_disable_parallel_scan() -> DeltaResult<()> {
+        let (
+            _temp_dir,
+            table,
+            current_time_millis,
+            valid_paths,
+            root_orphan,
+            mid_orphan,
+            deep_orphan,
+            recent_orphan,
+        ) = multi_level_full_vacuum_fixture().await?;
+
+        let builder =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::seconds(5))
+                .with_dry_run(true)
+                .with_mode(VacuumMode::Full)
+                .with_enforce_retention_duration(false)
+                .disable_parallel_scan()
+                .with_clock(Arc::new(MockClock::new(current_time_millis)));
+        assert!(builder.disable_parallel_scan);
+
+        let (_table, result) = builder.await?;
+
+        assert_multi_level_vacuum_result(
+            &result,
+            &root_orphan,
+            &mid_orphan,
+            &deep_orphan,
+            &recent_orphan,
+            &valid_paths,
+        );
+        Ok(())
+    }
+
+    /// Parallel and flat full-mode scans on the same multi-level table must
+    /// select the same delete set.
+    #[tokio::test]
+    async fn test_vacuum_full_parallel_and_flat_agree() -> DeltaResult<()> {
+        let (
+            _temp_dir,
+            table,
+            current_time_millis,
+            _valid_paths,
+            _root_orphan,
+            _mid_orphan,
+            _deep_orphan,
+            _recent_orphan,
+        ) = multi_level_full_vacuum_fixture().await?;
+
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(current_time_millis));
+        let snapshot = table.snapshot()?.snapshot.clone();
+
+        let (_t1, parallel) = VacuumBuilder::new(table.log_store(), Some(snapshot.clone()))
+            .with_retention_period(Duration::seconds(5))
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .with_clock(Arc::clone(&clock))
+            .await?;
+
+        let (_t2, flat) = VacuumBuilder::new(table.log_store(), Some(snapshot))
+            .with_retention_period(Duration::seconds(5))
+            .with_dry_run(true)
+            .with_mode(VacuumMode::Full)
+            .with_enforce_retention_duration(false)
+            .disable_parallel_scan()
+            .with_clock(clock)
+            .await?;
+
+        let mut parallel_files = parallel.files_deleted;
+        let mut flat_files = flat.files_deleted;
+        parallel_files.sort();
+        flat_files.sort();
+        assert_eq!(
+            parallel_files, flat_files,
+            "parallel and flat full scans must agree on delete set"
+        );
         Ok(())
     }
 }
