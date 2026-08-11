@@ -1415,7 +1415,7 @@ mod test {
         use super::super::parse_sql_predicate_to_kernel;
         use super::*;
         use crate::kernel::schema::partitions::{
-            FilterValue, dnf_to_kernel_predicate, literal_to_kernel_predicate,
+            FilterOp, FilterValue, dnf_to_kernel_predicate, literal_to_kernel_predicate,
         };
 
         fn test_schema() -> StructType {
@@ -1454,12 +1454,12 @@ mod test {
             let from_dnf = dnf_to_kernel_predicate(
                 &[
                     vec![
-                        ("year", "=", FilterValue::Scalar("2020")),
-                        ("month", "=", FilterValue::Scalar("2")),
+                        ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                        ("month", FilterOp::Eq, FilterValue::Scalar("2")),
                     ],
                     vec![
-                        ("year", "=", FilterValue::Scalar("2021")),
-                        ("month", "=", FilterValue::Scalar("12")),
+                        ("year", FilterOp::Eq, FilterValue::Scalar("2021")),
+                        ("month", FilterOp::Eq, FilterValue::Scalar("12")),
                     ],
                 ],
                 &schema,
@@ -1478,7 +1478,7 @@ mod test {
                 parse_sql_predicate_to_kernel("year IN (2020, 2021)", &schema, &session.state())
                     .unwrap();
             let from_literal = literal_to_kernel_predicate(
-                &("year", "in", FilterValue::Set(vec!["2020", "2021"])),
+                &("year", FilterOp::In, FilterValue::Set(vec!["2020", "2021"])),
                 &schema,
             )
             .unwrap();

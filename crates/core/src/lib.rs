@@ -20,10 +20,11 @@
 //! async {
 //!   let table_url = Url::from_directory_path("/abs/test/tests/data/simple_table").unwrap();
 //!   let table = deltalake_core::open_table_with_version(table_url, 0).await.unwrap();
-//!   let filter = [deltalake_core::PartitionFilter {
-//!       key: "month".to_string(),
-//!       value: deltalake_core::PartitionValue::Equal("12".to_string()),
-//!   }];
+//!   let filter = [(
+//!       "month",
+//!       deltalake_core::FilterOp::Eq,
+//!       deltalake_core::FilterValue::Scalar("12"),
+//!   )];
 //!   let files = table.get_files_by_partitions(&filter).await.unwrap();
 //! };
 //! ```
@@ -432,14 +433,16 @@ mod tests {
         let table = crate::open_table(table_url).await.unwrap();
 
         let filters = vec![
-            crate::PartitionFilter {
-                key: "month".to_string(),
-                value: crate::PartitionValue::Equal("2".to_string()),
-            },
-            crate::PartitionFilter {
-                key: "year".to_string(),
-                value: crate::PartitionValue::Equal("2020".to_string()),
-            },
+            (
+                "month",
+                crate::FilterOp::Eq,
+                crate::FilterValue::Scalar("2"),
+            ),
+            (
+                "year",
+                crate::FilterOp::Eq,
+                crate::FilterValue::Scalar("2020"),
+            ),
         ];
 
         assert_eq!(
@@ -461,10 +464,11 @@ mod tests {
             ]
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "month".to_string(),
-            value: crate::PartitionValue::NotEqual("2".to_string()),
-        }];
+        let filters = vec![(
+            "month",
+            crate::FilterOp::Ne,
+            crate::FilterValue::Scalar("2"),
+        )];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![
@@ -483,10 +487,11 @@ mod tests {
             ]
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "month".to_string(),
-            value: crate::PartitionValue::In(vec!["2".to_string(), "12".to_string()]),
-        }];
+        let filters = vec![(
+            "month",
+            crate::FilterOp::In,
+            crate::FilterValue::Set(vec!["2", "12"]),
+        )];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![
@@ -505,10 +510,11 @@ mod tests {
             ]
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "month".to_string(),
-            value: crate::PartitionValue::NotIn(vec!["2".to_string(), "12".to_string()]),
-        }];
+        let filters = vec![(
+            "month",
+            crate::FilterOp::NotIn,
+            crate::FilterValue::Set(vec!["2", "12"]),
+        )];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![
@@ -530,10 +536,7 @@ mod tests {
         let table_url = url::Url::from_directory_path(table_path).unwrap();
         let table = crate::open_table(table_url).await.unwrap();
 
-        let filters = vec![crate::PartitionFilter {
-            key: "k".to_string(),
-            value: crate::PartitionValue::Equal("A".to_string()),
-        }];
+        let filters = vec![("k", crate::FilterOp::Eq, crate::FilterValue::Scalar("A"))];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![Path::from(
@@ -541,10 +544,7 @@ mod tests {
             )]
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "k".to_string(),
-            value: crate::PartitionValue::Equal("".to_string()),
-        }];
+        let filters = vec![("k", crate::FilterOp::Eq, crate::FilterValue::Scalar(""))];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![Path::from(
@@ -571,10 +571,7 @@ mod tests {
             ]
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "x".to_string(),
-            value: crate::PartitionValue::Equal("A/A".to_string()),
-        }];
+        let filters = vec![("x", crate::FilterOp::Eq, crate::FilterValue::Scalar("A/A"))];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap(),
             vec![Path::parse(
@@ -594,19 +591,13 @@ mod tests {
         let table_url = url::Url::from_directory_path(table_path).unwrap();
         let table = crate::open_table(table_url).await.unwrap();
 
-        let filters = vec![crate::PartitionFilter {
-            key: "x".to_string(),
-            value: crate::PartitionValue::LessThanOrEqual("9".to_string()),
-        }];
+        let filters = vec![("x", crate::FilterOp::Le, crate::FilterValue::Scalar("9"))];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap().len(),
             1
         );
 
-        let filters = vec![crate::PartitionFilter {
-            key: "y".to_string(),
-            value: crate::PartitionValue::LessThan("10.0".to_string()),
-        }];
+        let filters = vec![("y", crate::FilterOp::Lt, crate::FilterValue::Scalar("10.0"))];
         assert_eq!(
             table.get_files_by_partitions(&filters).await.unwrap().len(),
             1
