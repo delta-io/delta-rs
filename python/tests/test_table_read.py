@@ -722,6 +722,9 @@ def test_file_uris_dnf_filters():
         (2020, 1, 1), (2020, 2, 3), (2020, 2, 5), (2021, 12, 4), (2021, 12, 20)
     )
 
+    # tuple filters via the new parameter match the deprecated positional form
+    assert dt.file_uris(file_pruning_predicate=dnf) == dt.file_uris(dnf)
+
 
 def test_file_uris_predicate_equals_dnf():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
@@ -731,8 +734,10 @@ def test_file_uris_predicate_equals_dnf():
         [("year", "=", "2021"), ("month", "=", "12")],
     ]
     predicate = "(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)"
-    assert set(dt.file_uris(predicate=predicate)) == set(dt.file_uris(dnf))
-    assert set(dt.file_uris(predicate=predicate)) == _partitioned_table_uris(
+    assert set(dt.file_uris(file_pruning_predicate=predicate)) == set(dt.file_uris(dnf))
+    assert set(
+        dt.file_uris(file_pruning_predicate=predicate)
+    ) == _partitioned_table_uris(
         (2020, 2, 3), (2020, 2, 5), (2021, 12, 4), (2021, 12, 20)
     )
 
@@ -746,14 +751,14 @@ def test_file_uris_predicate_operators():
         ("day IN (3, 20)", [("day", "in", ["3", "20"])]),
         ("day NOT IN (3, 20)", [("day", "not in", ["3", "20"])]),
     ]:
-        assert set(dt.file_uris(predicate=predicate)) == set(dt.file_uris(filters)), (
-            predicate
-        )
+        assert set(dt.file_uris(file_pruning_predicate=predicate)) == set(
+            dt.file_uris(filters)
+        ), predicate
 
-    assert set(dt.file_uris(predicate="month BETWEEN 2 AND 4")) == set(
+    assert set(dt.file_uris(file_pruning_predicate="month BETWEEN 2 AND 4")) == set(
         dt.file_uris([("month", ">=", "2"), ("month", "<=", "4")])
     )
-    assert set(dt.file_uris(predicate="NOT (year = 2020)")) == set(
+    assert set(dt.file_uris(file_pruning_predicate="NOT (year = 2020)")) == set(
         dt.file_uris([("year", "!=", "2020")])
     )
 
@@ -761,8 +766,8 @@ def test_file_uris_predicate_operators():
 def test_file_uris_filter_errors():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
 
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        dt.file_uris([("year", "=", "2020")], predicate="year = 2020")
+    with pytest.raises(ValueError, match="deprecated"):
+        dt.file_uris([("year", "=", "2020")], file_pruning_predicate="year = 2020")
 
     with pytest.raises(ValueError, match="empty conjunction"):
         dt.file_uris([[("year", "=", "2020")], []])
@@ -771,10 +776,10 @@ def test_file_uris_filter_errors():
         dt.file_uris([("year", "=", "2020"), [("month", "=", "2")]])
 
     with pytest.raises(Exception, match="nope"):
-        dt.file_uris(predicate="nope = 1")
+        dt.file_uris(file_pruning_predicate="nope = 1")
 
     with pytest.raises(Exception, match="file skipping"):
-        dt.file_uris(predicate="year LIKE '20%'")
+        dt.file_uris(file_pruning_predicate="year LIKE '20%'")
 
 
 def test_partitions_predicate():
@@ -785,14 +790,14 @@ def test_partitions_predicate():
         {"day": "20", "month": "12", "year": "2021"},
         {"day": "4", "month": "12", "year": "2021"},
     ]
-    actual = dt.partitions(predicate="year >= 2021")
+    actual = dt.partitions(file_pruning_predicate="year >= 2021")
     assert len(actual) == len(expected)
     for partition in expected:
         assert partition in actual
 
     dnf = [[("year", "=", "2020")], [("month", "=", "12")]]
     by_dnf = dt.partitions(dnf)
-    by_predicate = dt.partitions(predicate="year = 2020 OR month = 12")
+    by_predicate = dt.partitions(file_pruning_predicate="year = 2020 OR month = 12")
     assert len(by_dnf) == len(by_predicate) == 5
     for partition in by_dnf:
         assert partition in by_predicate
@@ -808,8 +813,8 @@ def test_data_column_predicate_superset(tmp_path: Path):
 
     all_files = set(dt.file_uris())
     assert len(all_files) == 2
-    low_files = set(dt.file_uris(predicate="value <= 10"))
-    high_files = set(dt.file_uris(predicate="value >= 100"))
+    low_files = set(dt.file_uris(file_pruning_predicate="value <= 10"))
+    high_files = set(dt.file_uris(file_pruning_predicate="value >= 100"))
     assert len(low_files) == len(high_files) == 1
     assert low_files | high_files == all_files
 
@@ -817,13 +822,13 @@ def test_data_column_predicate_superset(tmp_path: Path):
     assert set(dt.file_uris([("value", ">=", 100)])) == high_files
 
     # a predicate straddling both files' ranges retains both
-    assert set(dt.file_uris(predicate="value > 5")) == all_files
+    assert set(dt.file_uris(file_pruning_predicate="value > 5")) == all_files
 
     # stats can only prove absence: no row equals 7, but the file whose
     # min/max range covers 7 is still returned
-    assert set(dt.file_uris(predicate="value = 7")) == low_files
+    assert set(dt.file_uris(file_pruning_predicate="value = 7")) == low_files
     # ...while a value outside every range prunes everything
-    assert dt.file_uris(predicate="value > 1000") == []
+    assert dt.file_uris(file_pruning_predicate="value > 1000") == []
 
 
 @pytest.mark.pandas
@@ -836,11 +841,13 @@ def test_to_pandas_predicate_with_filters_exact(tmp_path: Path):
     dt = DeltaTable(tmp_path)
 
     # predicate alone prunes files, so whole surviving files come back
-    superset = dt.to_pandas(predicate="value >= 150")
+    superset = dt.to_pandas(file_pruning_predicate="value >= 150")
     assert sorted(superset["value"]) == [100, 200, 300]
 
     # pairing it with a row filter gives exact rows
-    exact = dt.to_pandas(predicate="value >= 150", filters=[("value", ">=", 150)])
+    exact = dt.to_pandas(
+        file_pruning_predicate="value >= 150", filters=[("value", ">=", 150)]
+    )
     assert sorted(exact["value"]) == [200, 300]
 
 
@@ -848,13 +855,13 @@ def test_to_pandas_predicate_with_filters_exact(tmp_path: Path):
 def test_dataset_predicate_prunes_fragments():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
 
-    dataset = dt.to_pyarrow_dataset(predicate="year = 2021")
+    dataset = dt.to_pyarrow_dataset(file_pruning_predicate="year = 2021")
     assert len(dataset.files) == 3
     assert dataset.to_table().num_rows == 4
 
-    with pytest.raises(ValueError, match="mutually exclusive"):
+    with pytest.raises(ValueError, match="deprecated"):
         dt.to_pyarrow_dataset(
-            partitions=[("year", "=", "2021")], predicate="year = 2021"
+            partitions=[("year", "=", "2021")], file_pruning_predicate="year = 2021"
         )
 
 
@@ -868,7 +875,7 @@ def test_predicate_no_stats_table(tmp_path: Path):
     dt = DeltaTable(tmp_path)
 
     # without stats nothing can be proven absent, so every file is retained
-    assert len(dt.file_uris(predicate="value >= 100")) == 2
+    assert len(dt.file_uris(file_pruning_predicate="value >= 100")) == 2
 
 
 def test_predicate_column_mapped_table():
@@ -877,16 +884,19 @@ def test_predicate_column_mapped_table():
     dt = DeltaTable("../crates/test/tests/data/table_with_column_mapping")
 
     assert len(dt.file_uris()) == 2
-    by_predicate = dt.file_uris(predicate="\"Company Very Short\" = 'BME'")
+    by_predicate = dt.file_uris(file_pruning_predicate="\"Company Very Short\" = 'BME'")
     by_filters = dt.file_uris([("Company Very Short", "=", "BME")])
     assert len(by_predicate) == 1
     assert by_predicate == by_filters
 
     # stats-based skipping resolves the mapping too: only the BME file's
     # min/max range covers this value
-    assert dt.file_uris(predicate="\"Super Name\" = 'Timothy Lamb'") == by_predicate
+    assert (
+        dt.file_uris(file_pruning_predicate="\"Super Name\" = 'Timothy Lamb'")
+        == by_predicate
+    )
 
-    assert dt.partitions(predicate="\"Company Very Short\" = 'BME'") == [
+    assert dt.partitions(file_pruning_predicate="\"Company Very Short\" = 'BME'") == [
         {"Company Very Short": "BME"}
     ]
 

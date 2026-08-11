@@ -81,8 +81,8 @@ transaction log before any data is read.
 ```python
 dt = DeltaTable("tmp/a_table")
 
-dt.file_uris(predicate="age < 20")  # only the file that may contain age < 20
-dt.to_pandas(predicate="age < 20", filters=[("age", "<", 20)])
+dt.file_uris(file_pruning_predicate="age < 20")  # only the file that may contain age < 20
+dt.to_pandas(file_pruning_predicate="age < 20", filters=[("age", "<", 20)])
 ```
 
 On non-partition columns like `age` the pruning is conservative: a file is
