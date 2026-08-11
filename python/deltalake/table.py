@@ -456,7 +456,11 @@ class DeltaTable:
         file that may contain a matching row is returned, files that provably
         contain none are dropped, and files without statistics for a referenced
         column are always retained. Filter the rows after reading when you need
-        exact results.
+        exact results. How much a data-column filter actually prunes depends on
+        the data layout: min/max statistics only rule out files when similar
+        values are colocated, so tables partitioned or z-ordered on the
+        referenced column prune well, while uniformly distributed values may
+        prune nothing.
 
         Args:
             partition_filters: Deprecated. Pass tuple filters to `file_pruning_predicate` instead.
