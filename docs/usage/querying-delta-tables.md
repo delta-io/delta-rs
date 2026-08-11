@@ -67,7 +67,11 @@ column, not just partition columns:
   in the transaction log: files that provably contain no matching row are
   dropped, every file that *may* contain one is kept, and files without
   statistics for a referenced column are always kept. The result is a
-  complete superset of the matching files.
+  complete superset of the matching files. How much gets pruned depends on the
+  data layout: statistics only rule out files when similar values are
+  colocated, for example by partitioning or z-ordering on the column. See
+  [Delta Lake File Skipping](../how-delta-lake-works/delta-lake-file-skipping.md)
+  for how to lay out tables so predicates prune well.
 
 As the name says, the predicate prunes files, not rows. Pair it with an
 equivalent `filters=` expression when you need exact rows from a
