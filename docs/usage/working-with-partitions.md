@@ -45,7 +45,7 @@ In this example we restrict our query to the `country="US"` partition.
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
-pdf = dt.to_pandas(partitions=[("country", "=", "US")])
+pdf = dt.to_pandas(file_pruning_predicate=[("country", "=", "US")])
 print(pdf)
 ```
 
@@ -60,8 +60,8 @@ combine partitions with OR, pass a list of lists (an OR across the inner AND
 groups) or a SQL `predicate` string:
 
 ```python
-pdf = dt.to_pandas(partitions=[[("country", "=", "US")], [("country", "=", "CA")]])
-pdf = dt.to_pandas(predicate="country = 'US' OR country = 'CA'")
+pdf = dt.to_pandas(file_pruning_predicate=[[("country", "=", "US")], [("country", "=", "CA")]])
+pdf = dt.to_pandas(file_pruning_predicate="country = 'US' OR country = 'CA'")
 ```
 
 The same filters work on [DeltaTable.file_uris()](../api/delta_table/index.md#deltalake.DeltaTable.file_uris)
@@ -71,7 +71,7 @@ and may reference non-partition columns as well -- see
 for the pruning semantics.
 
 ```python
-dt.partitions(predicate="country IN ('US', 'CA')")
+dt.partitions(file_pruning_predicate="country IN ('US', 'CA')")
 ```
 
 ### Partition Columns in Table Metadata

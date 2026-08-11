@@ -76,15 +76,21 @@ FilterConjunctionType = list[FilterLiteralType]
 FilterDNFType = list[FilterConjunctionType]
 FilterType = Union[FilterConjunctionType, FilterDNFType]
 PartitionFilterType = list[tuple[str, str, Union[str, list[str]]]]
+FilePruningPredicateType = Union[str, FilterType]
 
 
-def _require_exclusive_filter(
-    filters_name: str, filters: FilterType | None, predicate: str | None
-) -> None:
-    if filters is not None and predicate is not None:
+def _merge_deprecated_filters(
+    deprecated_name: str,
+    deprecated_value: FilterType | None,
+    file_pruning_predicate: FilePruningPredicateType | None,
+) -> FilePruningPredicateType | None:
+    if deprecated_value is None:
+        return file_pruning_predicate
+    if file_pruning_predicate is not None:
         raise ValueError(
-            f"`{filters_name}` and `predicate` are mutually exclusive; pass only one"
+            f"`{deprecated_name}` is deprecated; pass only `file_pruning_predicate`"
         )
+    return deprecated_value
 
 
 def _encode_filter_conjunction(
@@ -367,7 +373,7 @@ class DeltaTable:
         self,
         partition_filters: FilterType | None = None,
         *,
-        predicate: str | None = None,
+        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> list[dict[str, str]]:
         """
         Returns the partitions as a list of dicts.
@@ -376,19 +382,21 @@ class DeltaTable:
           `[{'month': '1', 'year': '2020', 'day': '1'}, ...]`
 
         Args:
-            partition_filters: Tuple filters with the syntax described in `file_uris`,
-                defaults to `None` (no filtering). Mutually exclusive with `predicate`.
-            predicate: A SQL predicate string with the syntax described in `file_uris`.
+            partition_filters: Deprecated. Pass tuple filters to `file_pruning_predicate` instead.
+            file_pruning_predicate: A SQL predicate string or tuple filters; syntax and
+                pruning semantics are described in `file_uris`.
 
         When a filter references a non-partition column, the result contains the
         partitions of every file that may hold matching rows, following the pruning
         semantics described in `file_uris`.
         """
-        _require_exclusive_filter("partition_filters", partition_filters, predicate)
+        file_pruning_predicate = _merge_deprecated_filters(
+            "partition_filters", partition_filters, file_pruning_predicate
+        )
 
         partitions: list[dict[str, str]] = []
         for partition in self._table.get_active_partitions(
-            self._stringify_partition_values(partition_filters), predicate
+            self._encode_file_pruning_predicate(file_pruning_predicate)
         ):
             if not partition:
                 continue
@@ -399,7 +407,7 @@ class DeltaTable:
         self,
         partition_filters: FilterType | None = None,
         *,
-        predicate: str | None = None,
+        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> list[str]:
         """
         Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
@@ -407,18 +415,26 @@ class DeltaTable:
         Local files will be just plain absolute paths, without a scheme. (That is,
         no 'file://' prefix.)
 
-        Files can be selected with tuple filters (`partition_filters`) or with a SQL
-        predicate string (`predicate`); the two parameters are mutually exclusive.
+        Files are selected with `file_pruning_predicate`, which takes either a SQL
+        predicate string or tuple filters.
+
+        **SQL predicates.** Any boolean SQL expression built from column comparisons
+        (`=`, `!=`, `<`, `<=`, `>`, `>=`), `IS [NOT] NULL`, `[NOT] IN`,
+        `[NOT] BETWEEN`, `NOT`, `AND` and `OR`:
+
+        ```python
+        dt.file_uris(file_pruning_predicate="year = 2021 AND (month = 1 OR day > 15)")
+        ```
 
         **Tuple filters.** Each filter is a `(column, op, value)` tuple. A flat list
         is a conjunction (AND) of its filters. A list of such lists is interpreted in
         disjunctive normal form: an OR across the inner AND groups.
 
         ```python
-        dt.file_uris([("year", "=", "2021"), ("month", "=", "12")])
+        dt.file_uris(file_pruning_predicate=[("year", "=", "2021"), ("month", "=", "12")])
         # year = 2021 AND month = 12
 
-        dt.file_uris([
+        dt.file_uris(file_pruning_predicate=[
             [("year", "=", "2021")],
             [("year", "=", "2020"), ("month", ">=", "10")],
         ])
@@ -431,34 +447,29 @@ class DeltaTable:
         datetime); each is encoded to its partition string form and parsed against
         the column's type. Comparisons follow that type: on a string column,
         `("month", ">=", 12)` compares lexicographically, so `"4" >= "12"`. Use
-        the empty string `''` to match a null partition value, or a `predicate`
+        the empty string `''` to match a null partition value, or a SQL predicate
         with `IS NULL`.
 
-        **SQL predicates.** Any boolean SQL expression built from column comparisons
-        (`=`, `!=`, `<`, `<=`, `>`, `>=`), `IS [NOT] NULL`, `[NOT] IN`,
-        `[NOT] BETWEEN`, `NOT`, `AND` and `OR`:
-
-        ```python
-        dt.file_uris(predicate="year = 2021 AND (month = 1 OR day > 15)")
-        ```
-
-        **Pruning semantics.** Filters on partition columns select files exactly.
-        Filters on other columns are evaluated against per-file min/max statistics
-        and select a superset: every file that may contain a matching row is
-        returned, files that provably contain none are dropped, and files without
-        statistics for a referenced column are always retained. Filter the rows
-        after reading when you need exact results.
+        **Pruning semantics.** The predicate prunes files, not rows. Filters on
+        partition columns select files exactly. Filters on other columns are
+        evaluated against per-file min/max statistics and select a superset: every
+        file that may contain a matching row is returned, files that provably
+        contain none are dropped, and files without statistics for a referenced
+        column are always retained. Filter the rows after reading when you need
+        exact results.
 
         Args:
-            partition_filters: tuple filters as described above
-            predicate: a SQL predicate string as described above
+            partition_filters: Deprecated. Pass tuple filters to `file_pruning_predicate` instead.
+            file_pruning_predicate: a SQL predicate string or tuple filters as described above
 
         Returns:
             list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
         """
-        _require_exclusive_filter("partition_filters", partition_filters, predicate)
+        file_pruning_predicate = _merge_deprecated_filters(
+            "partition_filters", partition_filters, file_pruning_predicate
+        )
         return self._table.file_uris(
-            self._stringify_partition_values(partition_filters), predicate
+            self._encode_file_pruning_predicate(file_pruning_predicate)
         )
 
     def load_as_version(self, version: int | str | datetime) -> None:
@@ -1006,14 +1017,13 @@ class DeltaTable:
         parquet_read_options: ParquetReadOptions | None = None,
         schema: pyarrow.Schema | None = None,
         as_large_types: bool = False,
-        predicate: str | None = None,
+        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pyarrow.dataset.Dataset":
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
         Args:
-            partitions: Tuple filters selecting the files to include; see the `file_uris`
-                docstring for the syntax and pruning semantics. Mutually exclusive with `predicate`
+            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
             schema: The schema to use for the dataset. If None, the schema of the DeltaTable will be used. This can be used to force reading of Parquet/Arrow datatypes
@@ -1022,8 +1032,9 @@ class DeltaTable:
             as_large_types: get schema with all variable size types (list, binary, string) as large variants (with int64 indices).
                 This is for compatibility with systems like Polars that only support the large versions of Arrow types.
                 If `schema` is passed it takes precedence over this option.
-            predicate: A SQL predicate string selecting the files to include; see the
-                `file_uris` docstring for the syntax and pruning semantics
+            file_pruning_predicate: A SQL predicate string or tuple filters selecting the
+                files to include; see the `file_uris` docstring for the syntax and
+                pruning semantics
 
          More info on [pyarrow dataset ParquetReadOptions](https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html).
 
@@ -1046,7 +1057,9 @@ class DeltaTable:
         Returns:
             the PyArrow dataset in PyArrow
         """
-        _require_exclusive_filter("partitions", partitions, predicate)
+        file_pruning_predicate = _merge_deprecated_filters(
+            "partitions", partitions, file_pruning_predicate
+        )
         try:
             from pyarrow.dataset import (
                 FileSystemDataset,
@@ -1125,8 +1138,6 @@ class DeltaTable:
                 self.schema().to_arrow(as_large_types=as_large_types)
             )
 
-        encoded_partitions = self._stringify_partition_values(partitions)
-
         fragments = [
             format.make_fragment(
                 file,
@@ -1134,7 +1145,7 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                schema, encoded_partitions, predicate
+                schema, self._encode_file_pruning_predicate(file_pruning_predicate)
             )
         ]
 
@@ -1155,27 +1166,29 @@ class DeltaTable:
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
-        `partitions` and `predicate` select which *files* are read, pruning at the
+        `file_pruning_predicate` selects which *files* are read, pruning at the
         file level before any data is scanned; see the `file_uris` docstring for
-        their syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A predicate on a non-partition column selects a superset of files, so pair
-        it with an equivalent `filters` expression when you need exact rows:
+        its syntax and pruning semantics. `filters` filters *rows* while scanning.
+        A pruning predicate on a non-partition column selects a superset of files,
+        so pair it with an equivalent `filters` expression when you need exact rows:
 
         ```python
-        dt.to_pyarrow_table(predicate="value >= 100", filters=[("value", ">=", 100)])
+        dt.to_pyarrow_table(
+            file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)]
+        )
         ```
 
         Args:
-            partitions: Tuple filters selecting the files to read; mutually exclusive with `predicate`
+            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
-            predicate: A SQL predicate string selecting the files to read
+            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
@@ -1187,7 +1200,9 @@ class DeltaTable:
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
-            partitions=partitions, filesystem=filesystem, predicate=predicate
+            partitions=partitions,
+            filesystem=filesystem,
+            file_pruning_predicate=file_pruning_predicate,
         ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
@@ -1197,35 +1212,35 @@ class DeltaTable:
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
-        `partitions` and `predicate` select which *files* are read, pruning at the
+        `file_pruning_predicate` selects which *files* are read, pruning at the
         file level before any data is scanned; see the `file_uris` docstring for
-        their syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A predicate on a non-partition column selects a superset of files, so pair
-        it with an equivalent `filters` expression when you need exact rows:
+        its syntax and pruning semantics. `filters` filters *rows* while scanning.
+        A pruning predicate on a non-partition column selects a superset of files,
+        so pair it with an equivalent `filters` expression when you need exact rows:
 
         ```python
-        dt.to_pandas(predicate="value >= 100", filters=[("value", ">=", 100)])
+        dt.to_pandas(file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)])
         ```
 
         Args:
-            partitions: Tuple filters selecting the files to read; mutually exclusive with `predicate`
+            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
-            predicate: A SQL predicate string selecting the files to read
+            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         return self.to_pyarrow_table(
             partitions=partitions,
             columns=columns,
             filesystem=filesystem,
             filters=filters,
-            predicate=predicate,
+            file_pruning_predicate=file_pruning_predicate,
         ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:
@@ -1253,6 +1268,14 @@ class DeltaTable:
         the `delta.logRetentionDuration` value, 30 days by default.
         """
         self._table.cleanup_metadata()
+
+    def _encode_file_pruning_predicate(
+        self, predicate: FilePruningPredicateType | None
+    ) -> str | list[PartitionFilterType] | None:
+        """Pass SQL strings through; normalize and encode tuple filters."""
+        if predicate is None or isinstance(predicate, str):
+            return predicate
+        return self._stringify_partition_values(predicate)
 
     def _stringify_partition_values(
         self, partition_filters: FilterType | None

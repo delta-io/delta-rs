@@ -110,13 +110,11 @@ class RawDeltaTable:
     def load_with_datetime(self, ds: str) -> None: ...
     def files(
         self,
-        partition_filters: PartitionFilterDNFType | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: str | PartitionFilterDNFType | None = None,
     ) -> list[str]: ...
     def file_uris(
         self,
-        partition_filters: PartitionFilterDNFType | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: str | PartitionFilterDNFType | None = None,
     ) -> list[str]: ...
     def generate(self) -> None: ...
     def vacuum(
@@ -218,8 +216,7 @@ class RawDeltaTable:
     def dataset_partitions(
         self,
         schema: ArrowSchemaExportable,
-        partition_filters: PartitionFilterDNFType | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: str | PartitionFilterDNFType | None = None,
     ) -> list[Any]: ...
     def create_checkpoint(self) -> None: ...
     def compact_logs(self, starting_version: int, ending_version: int) -> None: ...
@@ -265,8 +262,7 @@ class RawDeltaTable:
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
         self,
-        partitions_filters: PartitionFilterDNFType | None = None,
-        predicate: str | None = None,
+        file_pruning_predicate: str | PartitionFilterDNFType | None = None,
     ) -> Any: ...
     def create_write_transaction(
         self,

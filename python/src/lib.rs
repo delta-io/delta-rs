@@ -126,6 +126,14 @@ enum PartitionFilterValue {
 /// normal form; a lone conjunction arrives as a single-element list.
 type PyFilterConjunction = Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>;
 
+/// The file pruning predicate of the listing APIs: a SQL string, or tuple
+/// filters in disjunctive normal form.
+#[derive(FromPyObject)]
+enum PyFilePruningPredicate {
+    Sql(String),
+    Dnf(Vec<PyFilterConjunction>),
+}
+
 #[pyclass(module = "deltalake._internal", frozen)]
 struct RawDeltaTable {
     /// The internal reference to the table is guarded by a Mutex to allow for re-using the same
@@ -301,29 +309,23 @@ impl RawDeltaTable {
         })
     }
 
-    /// Resolve the mutually exclusive tuple-filter and SQL-predicate parameters
-    /// of the file listing APIs into one kernel predicate.
+    /// Resolve the file pruning predicate of the listing APIs into a kernel
+    /// predicate.
     fn resolve_files_predicate(
         &self,
-        partition_filters: Option<Vec<PyFilterConjunction>>,
-        predicate: Option<String>,
+        predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Option<PredicateRef>> {
-        let partition_filters = partition_filters.filter(|filters| !filters.is_empty());
-        let resolved = match (partition_filters, predicate) {
-            (Some(_), Some(_)) => {
-                return Err(PyValueError::new_err(
-                    "partition_filters and predicate are mutually exclusive; pass only one",
-                ));
-            }
-            (None, None) => return Ok(None),
-            (Some(filters), None) => {
+        let resolved = match predicate {
+            None => return Ok(None),
+            Some(PyFilePruningPredicate::Dnf(filters)) if filters.is_empty() => return Ok(None),
+            Some(PyFilePruningPredicate::Dnf(filters)) => {
                 kernel_dnf_predicate(&filters, self.snapshot_schema()?.as_ref())
                     .map_err(PythonError::from)?
             }
-            (None, Some(predicate)) => {
+            Some(PyFilePruningPredicate::Sql(sql)) => {
                 let session = SessionContext::new();
                 parse_sql_predicate_to_kernel(
-                    &predicate,
+                    &sql,
                     self.snapshot_schema()?.as_ref(),
                     &session.state(),
                 )
@@ -605,17 +607,16 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (partition_filters=None, predicate=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     pub fn files(
         &self,
         py: Python,
-        partition_filters: Option<Vec<PyFilterConjunction>>,
-        predicate: Option<String>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
-        let filter = self.resolve_files_predicate(partition_filters, predicate)?;
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         py.detach(|| {
             if let Some(filter) = filter {
                 self.with_table(|t| {
@@ -641,17 +642,16 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (partition_filters=None, predicate=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     pub fn file_uris(
         &self,
-        partition_filters: Option<Vec<PyFilterConjunction>>,
-        predicate: Option<String>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
         if !self.with_table(|t| Ok(t.config.require_files))? {
             return Err(DeltaError::new_err("Table is initiated without files."));
         }
 
-        let filter = self.resolve_files_predicate(partition_filters, predicate)?;
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         if let Some(filter) = filter {
             self.with_table(|t| {
                 rt().block_on(async {
@@ -1431,19 +1431,16 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (schema, partition_filters=None, predicate=None))]
+    #[pyo3(signature = (schema, file_pruning_predicate=None))]
     pub fn dataset_partitions<'py>(
         &self,
         py: Python<'py>,
         schema: PyArrowSchema,
-        partition_filters: Option<Vec<PyFilterConjunction>>,
-        predicate: Option<String>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
-        let path_set = if partition_filters.is_some() || predicate.is_some() {
+        let path_set = if file_pruning_predicate.is_some() {
             Some(HashSet::<_>::from_iter(
-                self.files(py, partition_filters, predicate)?
-                    .iter()
-                    .cloned(),
+                self.files(py, file_pruning_predicate)?.iter().cloned(),
             ))
         } else {
             None
@@ -1491,11 +1488,10 @@ impl RawDeltaTable {
             .collect()
     }
 
-    #[pyo3(signature = (partitions_filters=None, predicate=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     fn get_active_partitions<'py>(
         &self,
-        partitions_filters: Option<Vec<PyFilterConjunction>>,
-        predicate: Option<String>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let schema = self.with_table(|t| {
@@ -1520,7 +1516,7 @@ impl RawDeltaTable {
             .map(|col| col.as_str())
             .collect();
 
-        if let Some(filters) = &partitions_filters {
+        if let Some(PyFilePruningPredicate::Dnf(filters)) = &file_pruning_predicate {
             let unknown_columns: Vec<&PyBackedStr> = filters
                 .iter()
                 .flatten()
@@ -1537,7 +1533,7 @@ impl RawDeltaTable {
             }
         }
 
-        let filter = self.resolve_files_predicate(partitions_filters, predicate)?;
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
         let partition_column_keys: Vec<(&str, String)> = partition_columns
