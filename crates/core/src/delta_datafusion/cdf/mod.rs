@@ -40,11 +40,6 @@ pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
         ),
     ]
 });
-
-/// A same-file add/remove pair from a single commit -- an in-place deletion-vector update.
-/// The `add` action's DV is the file's deletion set AFTER the commit; `rm_dv` is the set
-/// BEFORE. Both DVs describe the same physical file (`add.path`), which is what gets read.
-/// See [`resolve_dv_pair`] for how these become `insert`/`delete` change rows.
 #[derive(Debug)]
 pub(crate) struct ResolvedPair {
     pub version: Version,
@@ -55,9 +50,9 @@ pub(crate) struct ResolvedPair {
 
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {
-    version: Version,
-    timestamp: i64,
-    actions: Vec<F>,
+    pub version: Version,
+    pub timestamp: i64,
+    pub actions: Vec<F>,
 }
 
 impl<F: FileAction> CdcDataSpec<F> {

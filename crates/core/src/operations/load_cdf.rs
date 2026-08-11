@@ -10,7 +10,18 @@
 //! let provider = DeltaCdfTableProvider::try_new(builder)?;
 //! let df = ctx.read_table(provider).await?;
 
-use arrow_schema::{ArrowError, Field, Schema};
+use crate::DeltaTableError;
+use crate::delta_datafusion::{
+    DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
+};
+use crate::errors::{ColumnMappingOperation, DeltaResult};
+use crate::kernel::transaction::PROTOCOL;
+use crate::kernel::{
+    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
+};
+use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
+use crate::{delta_datafusion::cdf::*, kernel::Remove};
+use arrow_schema::{ArrowError, Field, Schema, SchemaRef};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use datafusion::catalog::Session;
@@ -25,6 +36,7 @@ use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
+use datafusion_datasource::PartitionedFile;
 use delta_kernel::table_features::ColumnMappingMode;
 use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
@@ -32,17 +44,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::log;
 
-use crate::DeltaTableError;
-use crate::delta_datafusion::{
-    DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
-};
-use crate::errors::{ColumnMappingOperation, DeltaResult};
-use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{
-    Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
-};
-use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
-use crate::{delta_datafusion::cdf::*, kernel::Remove};
+type ScalarPartitionMap = HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>;
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -474,6 +476,63 @@ impl CdfLoadBuilder {
         }))
     }
 
+    #[inline]
+    fn create_data_source(
+        &self,
+        source: ParquetSource,
+        groups: ScalarPartitionMap,
+    ) -> Arc<DataSourceExec> {
+        DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(source))
+                .with_file_groups(groups.into_values().map(FileGroup::from).collect())
+                .build(),
+        )
+    }
+
+    async fn create_partition_values<F: FileAction>(
+        &self,
+        schema: SchemaRef,
+        specs: Vec<CdcDataSpec<F>>,
+        table_partition_cols: &[String],
+        action_type: Option<ScalarValue>,
+    ) -> DeltaResult<ScalarPartitionMap> {
+        let mut file_groups: ScalarPartitionMap = HashMap::new();
+
+        for spec in specs {
+            let spec_partition_values = create_spec_partition_values(&spec, action_type.as_ref());
+
+            for action in spec.actions {
+                let partition_values = table_partition_cols
+                    .iter()
+                    .map(|part| map_action_to_scalar(&action, part, schema.clone()))
+                    .collect::<DeltaResult<Vec<ScalarValue>>>()?;
+
+                let mut new_part_values = spec_partition_values.clone();
+                new_part_values.extend(partition_values);
+                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
+                    .with_partition_values(new_part_values.clone());
+
+                if action.has_deletion_vector()
+                    && let Some(access_plan) = create_file_scan_plan(
+                        Arc::clone(&self.log_store.engine(None)),
+                        action,
+                        self.log_store.table_root_url(),
+                        self.log_store.root_object_store(None),
+                        Arc::clone(&self.parquet_metadata_cache),
+                    )
+                    .await?
+                {
+                    part_file = part_file.with_extension(access_plan);
+                }
+                file_groups
+                    .entry(new_part_values)
+                    .or_default()
+                    .push(part_file);
+            }
+        }
+        Ok(file_groups)
+    }
+
     /// Executes the scan
     pub async fn build(
         &self,
@@ -528,39 +587,28 @@ impl CdfLoadBuilder {
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
         let engine = self.log_store.engine(None);
         let root_obj_store = self.log_store.root_object_store(None);
-        let cdc_file_groups = create_partition_values(
-            schema.clone(),
-            cdc,
-            partition_values,
-            None,
-            Arc::clone(&engine),
-            Arc::clone(&root_obj_store),
-            self.log_store.table_root_url(),
-            Arc::clone(&self.parquet_metadata_cache),
-        )
-        .await?;
-        let mut add_file_groups = create_partition_values(
-            schema.clone(),
-            add,
-            partition_values,
-            Self::get_add_action_type(),
-            Arc::clone(&engine),
-            Arc::clone(&root_obj_store),
-            self.log_store.table_root_url(),
-            Arc::clone(&self.parquet_metadata_cache),
-        )
-        .await?;
-        let mut remove_file_groups = create_partition_values(
-            schema.clone(),
-            remove,
-            partition_values,
-            Self::get_remove_action_type(),
-            Arc::clone(&engine),
-            Arc::clone(&root_obj_store),
-            self.log_store.table_root_url(),
-            Arc::clone(&self.parquet_metadata_cache),
-        )
-        .await?;
+
+        let cdc_file_groups = self
+            .create_partition_values(schema.clone(), cdc, partition_values, None)
+            .await?;
+
+        let mut add_file_groups = self
+            .create_partition_values(
+                schema.clone(),
+                add,
+                partition_values,
+                Self::get_add_action_type(),
+            )
+            .await?;
+
+        let mut remove_file_groups = self
+            .create_partition_values(
+                schema.clone(),
+                remove,
+                partition_values,
+                Self::get_remove_action_type(),
+            )
+            .await?;
 
         extend_groups_with_pairs(
             schema.clone(),
@@ -610,28 +658,9 @@ impl CdfLoadBuilder {
             remove_source = remove_source.with_predicate(Arc::clone(filters));
         }
 
-        let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(cdc_source))
-                .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(add_source))
-                .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(remove_source))
-                .with_file_groups(
-                    remove_file_groups
-                        .into_values()
-                        .map(FileGroup::from)
-                        .collect(),
-                )
-                .build(),
-        );
+        let cdc_scan = self.create_data_source(cdc_source, cdc_file_groups);
+        let add_scan = self.create_data_source(add_source, add_file_groups);
+        let remove_scan = self.create_data_source(remove_source, remove_file_groups);
 
         let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
@@ -666,7 +695,6 @@ impl CdfLoadBuilder {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::num::NonZero;
     use super::*;
     use std::str::FromStr;
 
@@ -683,12 +711,7 @@ pub(crate) mod tests {
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaTable, TableProperty};
-    use delta_kernel::engine::arrow_data::EngineDataArrowExt;
-    use delta_kernel::table_changes::TableChanges;
-    use delta_kernel_default_engine::DefaultEngine;
-    use object_store::local::LocalFileSystem;
     use std::path::Path;
-    use std::time::Instant;
     use url::Url;
 
     /// Regression test for partition pruning in `load_cdf`.
@@ -1590,46 +1613,50 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_load_dv_cdf() -> TestResult {
-        let tp = "/tmp/cdf_dv_bench_1g";
-        // let tp = "...";
+    async fn test_reading_cdf_with_dv() -> TestResult {
         let ctx = SessionContext::new();
-
-        let table_path = Path::new(tp);
+        let table_path = Path::new("../test/tests/data/cdf-table-with-cdc-and-dvs");
         let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
-        let starting = Instant::now();
-        let table = DeltaTable::try_from_url(table_uri)
+        let table = DeltaTable::try_from_url(table_uri.clone())
             .await?
             .scan_cdf()
-            .with_starting_version(0)
+            .with_starting_version(15)
             .build(&ctx.state(), None)
             .await?;
-        let batches = collect(table, ctx.task_ctx()).await?;
-        let mine_total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        let first_run = starting.elapsed();
 
-        let fs = Arc::new(LocalFileSystem::new());
-        let engine = DefaultEngine::builder(fs.clone())
-            .with_buffer_size(NonZero::new(20).unwrap())
-            // .with_batch_size(NonZero::new(50000).unwrap())
-            .build();
+        let batches = collect(table.clone(), ctx.task_ctx()).await?;
 
-        let table_url = delta_kernel::try_parse_uri(tp)?;
-        let starting = Instant::now();
-        let cdc = TableChanges::try_new(table_url, &engine, 0, None)?
-            .into_scan_builder()
-            .build()?;
-
-        let batches: Vec<RecordBatch> = cdc
-            .execute(Arc::new(engine))?
-            .map(EngineDataArrowExt::try_into_record_batch)
-            .try_collect()?;
-        let kernel_total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        println!(
-            "Mine took: {:?}, Kernel Took: {:?}\nMy Count: {mine_total}, Kernel: {kernel_total}",
-            first_run,
-            starting.elapsed()
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| id | comment            | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| 0  | new                | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | after-large-delete | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 10 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 |                    | delete           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 11 |                    | update_postimage | 20              | 2024-12-13T06:08:49.795 |",
+                "| 11 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 | merge1-insert      | update_preimage  | 20              | 2024-12-13T06:08:49.795 |",
+                "| 12 | merge2-insert      | insert           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 2  |                    | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 2  | update2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 3  | update1            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 4  | insert1-delete2    | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 5  | insert2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 6  | insert3            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 7  | insert3            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 8  | insert4            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 8  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | update_preimage  | 18              | 2024-12-13T06:08:46.555 |",
+                "| 9  | merge1-update      | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 9  | merge1-update      | update_postimage | 18              | 2024-12-13T06:08:46.555 |",
+                "+----+--------------------+------------------+-----------------+-------------------------+"
+            ],
+            &batches
         );
+
         Ok(())
     }
 }
