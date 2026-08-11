@@ -852,22 +852,24 @@ def test_data_column_predicate_superset(tmp_path: Path):
 
 @pytest.mark.pandas
 @pytest.mark.pyarrow
-def test_to_pandas_predicate_with_filters_exact(tmp_path: Path):
+def test_to_pandas_filters_prune_and_filter_exactly(tmp_path: Path):
     import pyarrow as pa
 
     write_deltalake(tmp_path, pa.table({"value": [1, 5, 10]}))
     write_deltalake(tmp_path, pa.table({"value": [100, 200, 300]}), mode="append")
     dt = DeltaTable(tmp_path)
 
-    # predicate alone prunes files, so whole surviving files come back
-    superset = dt.to_pandas(file_pruning_predicate="value >= 150")
-    assert sorted(superset["value"]) == [100, 200, 300]
-
-    # pairing it with a row filter gives exact rows
-    exact = dt.to_pandas(
-        file_pruning_predicate="value >= 150", filters=[("value", ">=", 150)]
-    )
+    # filters prune files through fragment stats and then filter rows exactly
+    exact = dt.to_pandas(filters=[("value", ">=", 150)])
     assert sorted(exact["value"]) == [200, 300]
+
+    # file pruning alone returns whole surviving files: go through the dataset
+    superset = (
+        dt.to_pyarrow_dataset(file_pruning_predicate="value >= 150")
+        .to_table()
+        .to_pandas()
+    )
+    assert sorted(superset["value"]) == [100, 200, 300]
 
 
 @pytest.mark.pyarrow

@@ -23,31 +23,31 @@ value: string
 year: string
 month: string
 day: string
->>> dt.to_pandas(file_pruning_predicate=[("year", "=", "2021")], columns=["value"])
+>>> dt.to_pandas(filters=[("year", "=", "2021")], columns=["value"])
       value
 0     6
 1     7
 2     5
 3     4
->>> dt.to_pyarrow_table(file_pruning_predicate="year = 2021", columns=["value"])
+>>> dt.to_pyarrow_table(filters=[("year", "=", "2021")], columns=["value"])
 pyarrow.Table
 value: string
 ```
 
 ## Selecting files with a pruning predicate
 
-`file_pruning_predicate` selects which files are read, before any data is
-scanned. It takes either a SQL string or tuple filters. A flat list of tuples
-is a conjunction (AND); a list of such lists is an OR across the inner AND
-groups:
+`file_pruning_predicate` selects which files a table's log lists, before any
+data is read. It takes either a SQL string or tuple filters. A flat list of
+tuples is a conjunction (AND); a list of such lists is an OR across the inner
+AND groups:
 
 ``` python
 >>> # SQL string
->>> dt.to_pandas(file_pruning_predicate="(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)")
+>>> dt.file_uris(file_pruning_predicate="(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)")
 >>> # flat list of tuples: a single conjunction, year = 2020 AND month = 2
->>> dt.to_pandas(file_pruning_predicate=[("year", "=", "2020"), ("month", "=", "2")])
+>>> dt.file_uris(file_pruning_predicate=[("year", "=", "2020"), ("month", "=", "2")])
 >>> # list of lists: OR across the inner AND groups
->>> dt.to_pandas(
+>>> dt.file_uris(
 ...     file_pruning_predicate=[
 ...         [("year", "=", "2020"), ("month", "=", "2")],
 ...         [("year", "=", "2021"), ("month", "=", "12")],
@@ -55,11 +55,10 @@ groups:
 ... )
 ```
 
-The parameter is accepted everywhere files are selected: `to_pandas`,
-`to_pyarrow_table`, `to_pyarrow_dataset`, `file_uris`, and `partitions`.
-The older `partitions` and `partition_filters` parameters on these methods
-still work but are deprecated in its favor. The predicate may reference any
-column, not just partition columns:
+The parameter is accepted on `file_uris`, `partitions`, and
+`to_pyarrow_dataset`. The older `partitions` and `partition_filters`
+parameters on these methods still work but are deprecated in its favor. The
+predicate may reference any column, not just partition columns:
 
 - **Partition columns** prune exactly: every returned file matches the
   predicate, and only matching files are returned.
@@ -73,12 +72,13 @@ column, not just partition columns:
   [Delta Lake File Skipping](../how-delta-lake-works/delta-lake-file-skipping.md)
   for how to lay out tables so predicates prune well.
 
-As the name says, the predicate prunes files, not rows. Pair it with an
-equivalent `filters=` expression when you need exact rows from a
-non-partition column:
+As the name says, the predicate prunes files, not rows. On `to_pandas` and
+`to_pyarrow_table` there is no pruning parameter for that reason: `filters`
+already prunes files the same way through the dataset fragments and then
+filters the surviving rows exactly, so it is strictly more precise there:
 
 ``` python
->>> dt.to_pandas(file_pruning_predicate="value >= '5'", filters=[("value", ">=", "5")])
+>>> dt.to_pandas(filters=[("value", ">=", "5")])
 ```
 
 The full syntax for both forms is documented on

@@ -1213,29 +1213,22 @@ class DeltaTable:
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
-        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
-
-        ```python
-        dt.to_pyarrow_table(
-            file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)]
-        )
-        ```
+        `filters` both prunes files and filters rows: each file's partition
+        values and min/max statistics are attached to its dataset fragment, so
+        files that cannot contain matching rows are never read, and the
+        surviving rows are filtered exactly. For file pruning without reading
+        data, or to hand a pruned file list to another engine, use
+        `file_uris` or `to_pyarrow_dataset` with `file_pruning_predicate`.
 
         Args:
-            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
+            partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
-            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
@@ -1249,7 +1242,6 @@ class DeltaTable:
         return self.to_pyarrow_dataset(
             partitions=partitions,
             filesystem=filesystem,
-            file_pruning_predicate=file_pruning_predicate,
         ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
@@ -1259,35 +1251,29 @@ class DeltaTable:
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
-        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
-
-        ```python
-        dt.to_pandas(file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)])
-        ```
+        `filters` both prunes files and filters rows: each file's partition
+        values and min/max statistics are attached to its dataset fragment, so
+        files that cannot contain matching rows are never read, and the
+        surviving rows are filtered exactly. For file pruning without reading
+        data, or to hand a pruned file list to another engine, use
+        `file_uris` or `to_pyarrow_dataset` with `file_pruning_predicate`.
 
         Args:
-            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
+            partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
-            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         return self.to_pyarrow_table(
             partitions=partitions,
             columns=columns,
             filesystem=filesystem,
             filters=filters,
-            file_pruning_predicate=file_pruning_predicate,
         ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:
