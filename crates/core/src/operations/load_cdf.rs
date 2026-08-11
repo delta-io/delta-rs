@@ -1620,7 +1620,7 @@ pub(crate) mod tests {
         let table = DeltaTable::try_from_url(table_uri.clone())
             .await?
             .scan_cdf()
-            .with_starting_version(15)
+            .with_starting_version(0)
             .build(&ctx.state(), None)
             .await?;
 
@@ -1633,6 +1633,10 @@ pub(crate) mod tests {
                 "+----+--------------------+------------------+-----------------+-------------------------+",
                 "| 0  | new                | insert           | 25              | 2024-12-13T06:09:03.075 |",
                 "| 1  | after-large-delete | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | initial            | insert           | 0               | 2024-12-13T06:07:53.501 |",
+                "| 1  | initial            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 1  | update1            | delete           | 10              | 2024-12-13T06:08:26.693 |",
+                "| 1  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
                 "| 10 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
                 "| 11 |                    | delete           | 22              | 2024-12-13T06:08:57.892 |",
                 "| 11 |                    | update_postimage | 20              | 2024-12-13T06:08:49.795 |",
@@ -1640,19 +1644,37 @@ pub(crate) mod tests {
                 "| 11 | merge1-insert      | update_preimage  | 20              | 2024-12-13T06:08:49.795 |",
                 "| 12 | merge2-insert      | insert           | 22              | 2024-12-13T06:08:57.892 |",
                 "| 2  |                    | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 2  | insert1            | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 2  | insert1            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_preimage  | 12              | 2024-12-13T06:08:30.100 |",
                 "| 2  | update2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 2  | update2            | update_postimage | 12              | 2024-12-13T06:08:30.100 |",
+                "| 3  | insert1-delete1    | delete           | 2               | 2024-12-13T06:08:07.275 |",
+                "| 3  | insert1-delete1    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 3  | insert1-delete1    | insert           | 4               | 2024-12-13T06:08:10.377 |",
+                "| 3  | insert1-delete1    | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
                 "| 3  | update1            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 3  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
                 "| 4  | insert1-delete2    | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 4  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 4  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 4  | insert1-delete2    | insert           | 7               | 2024-12-13T06:08:17.886 |",
+                "| 5  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 5  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
                 "| 5  | insert2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 5  | insert2            | insert           | 8               | 2024-12-13T06:08:20.269 |",
                 "| 6  | insert3            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 6  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
                 "| 7  | insert3            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 7  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
                 "| 8  | insert4            | delete           | 16              | 2024-12-13T06:08:37.690 |",
                 "| 8  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
                 "| 9  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
                 "| 9  | insert4            | update_preimage  | 18              | 2024-12-13T06:08:46.555 |",
                 "| 9  | merge1-update      | delete           | 24              | 2024-12-13T06:09:00.735 |",
                 "| 9  | merge1-update      | update_postimage | 18              | 2024-12-13T06:08:46.555 |",
-                "+----+--------------------+------------------+-----------------+-------------------------+"
+                "+----+--------------------+------------------+-----------------+-------------------------+",
             ],
             &batches
         );
