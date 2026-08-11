@@ -763,6 +763,25 @@ def test_file_uris_predicate_operators():
     )
 
 
+def test_legacy_filter_params_warn():
+    dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
+
+    with pytest.warns(DeprecationWarning, match="partition_filters"):
+        legacy = dt.file_uris([("year", "=", "2021")])
+    assert legacy == dt.file_uris(file_pruning_predicate=[("year", "=", "2021")])
+
+    with pytest.warns(DeprecationWarning, match="partition_filters"):
+        dt.partitions(partition_filters=[("year", "=", "2021")])
+
+
+@pytest.mark.pyarrow
+def test_legacy_dataset_partitions_param_warns():
+    dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
+
+    with pytest.warns(DeprecationWarning, match="partitions"):
+        dt.to_pyarrow_dataset(partitions=[("year", "=", "2021")])
+
+
 def test_file_uris_filter_errors():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
 
