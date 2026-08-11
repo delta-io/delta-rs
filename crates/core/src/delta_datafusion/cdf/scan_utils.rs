@@ -105,53 +105,6 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
-pub async fn create_partition_values<F: FileAction>(
-    schema: SchemaRef,
-    specs: Vec<CdcDataSpec<F>>,
-    table_partition_cols: &[String],
-    action_type: Option<ScalarValue>,
-    engine: Arc<dyn Engine>,
-    root_object_store: Arc<dyn ObjectStore>,
-    table_root: Url,
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
-) -> DeltaResult<HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>> {
-    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-
-    for spec in specs {
-        let spec_partition_values = create_spec_partition_values(&spec, action_type.as_ref());
-
-        for action in spec.actions {
-            let partition_values = table_partition_cols
-                .iter()
-                .map(|part| map_action_to_scalar(&action, part, schema.clone()))
-                .collect::<DeltaResult<Vec<ScalarValue>>>()?;
-
-            let mut new_part_values = spec_partition_values.clone();
-            new_part_values.extend(partition_values);
-            let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
-                .with_partition_values(new_part_values.clone());
-
-            if action.has_deletion_vector()
-                && let Some(access_plan) = create_file_scan_plan(
-                    Arc::clone(&engine),
-                    action,
-                    table_root.clone(),
-                    Arc::clone(&root_object_store),
-                    Arc::clone(&parquet_metadata_cache),
-                )
-                .await?
-            {
-                part_file = part_file.with_extension(access_plan);
-            }
-            file_groups
-                .entry(new_part_values)
-                .or_default()
-                .push(part_file);
-        }
-    }
-    Ok(file_groups)
-}
-
 pub async fn extend_groups_with_pairs(
     schema: SchemaRef,
     pairs: Vec<ResolvedPair>,
@@ -176,8 +129,6 @@ pub async fn extend_groups_with_pairs(
             .map(|part| map_action_to_scalar(&pair.add, part, schema.clone()))
             .collect::<DeltaResult<Vec<ScalarValue>>>()?;
 
-        // Newly-deleted rows are `delete`s (remove groups), restored rows are `insert`s (add
-        // groups). Both read the same physical add-side file, each with its own row selection.
         push_pair_selection(
             deletes,
             "delete",
@@ -475,7 +426,7 @@ fn read_dv_treemap(
 }
 
 #[inline]
-pub(crate) fn resolve_dv_pair(
+fn resolve_dv_pair(
     add_dv: Option<crate::kernel::DeletionVectorDescriptor>,
     rm_dv: Option<crate::kernel::DeletionVectorDescriptor>,
     engine: &Arc<dyn Engine>,
@@ -507,7 +458,7 @@ fn access_plan_from_treemap(
     access_plan
 }
 
-pub(crate) async fn access_plan_for_selection(
+async fn access_plan_for_selection(
     selection: roaring::RoaringTreemap,
     file_path_str: &str,
     file_size: u64,
@@ -532,7 +483,7 @@ pub(crate) async fn access_plan_for_selection(
     ))
 }
 
-async fn create_file_scan_plan<F: FileAction>(
+pub async fn create_file_scan_plan<F: FileAction>(
     engine: Arc<dyn Engine>,
     file_action: F,
     table_root_url: Url,
@@ -565,14 +516,8 @@ async fn create_file_scan_plan<F: FileAction>(
 mod tests {
     use super::*;
     use crate::kernel::{Add, Remove};
-    use arrow_select::concat::concat_batches;
     use datafusion::logical_expr::{col, lit};
     use datafusion::prelude::SessionContext;
-    use delta_kernel::engine::arrow_data::EngineDataArrowExt;
-    use delta_kernel::table_changes::TableChanges;
-    use delta_kernel_default_engine::DefaultEngine;
-    use itertools::Itertools;
-    use object_store::local::LocalFileSystem;
     use std::collections::HashMap;
 
     /// A constant `false` pruning predicate over an empty schema.
@@ -824,30 +769,5 @@ mod tests {
             kept.is_empty(),
             "constant `false` must prune even a Remove without partition metadata: {kept:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn dv_scan_plan_creation() -> DeltaResult<()> {
-        let ctx = SessionContext::new();
-        let fs = Arc::new(LocalFileSystem::new());
-        let engine = DefaultEngine::builder(fs.clone()).build();
-
-        let table_url = delta_kernel::try_parse_uri(
-            "C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table\\",
-        )?;
-        let cdc = TableChanges::try_new(table_url, &engine, 6, None)?
-            .into_scan_builder()
-            .build()?;
-
-        let batches: Vec<RecordBatch> = cdc
-            .execute(Arc::new(engine))?
-            .map(EngineDataArrowExt::try_into_record_batch)
-            .try_collect()?;
-        let total = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        dbg!(total);
-        let all_batches = concat_batches(&batches[0].schema().clone(), &batches);
-        ctx.register_batch("kernel", all_batches?)?;
-        ctx.sql("select row_number() over (partition by birthyear) as row_num, name, age, birthyear from kernel order by birthyear, name").await?.show().await?;
-        Ok(())
     }
 }
