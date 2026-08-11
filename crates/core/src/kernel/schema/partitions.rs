@@ -228,6 +228,9 @@ pub fn literal_to_kernel_predicate(
 
     let col = Expression::column([field.name()]);
     Ok(match (*op, value) {
+        // NOTE: In SQL NULL is not equal to anything, including itself. However when specifying partition filters
+        // we have allowed to equality against null. So here we have to handle null values explicitly by using
+        // is_null and is_not_null methods directly.
         ("=", FilterValue::Scalar(raw)) => {
             let scalar = dt.parse_scalar(raw)?;
             if scalar.is_null() {
