@@ -90,6 +90,12 @@ def _merge_deprecated_filters(
         raise ValueError(
             f"`{deprecated_name}` is deprecated; pass only `file_pruning_predicate`"
         )
+    warnings.warn(
+        f"`{deprecated_name}` is deprecated; pass the filters to "
+        "`file_pruning_predicate` instead",
+        DeprecationWarning,
+        stacklevel=3,
+    )
     return deprecated_value
 
 
