@@ -42,7 +42,11 @@ is a conjunction (AND); a list of such lists is an OR across the inner AND
 groups:
 
 ``` python
+>>> # SQL string
 >>> dt.to_pandas(file_pruning_predicate="(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)")
+>>> # flat list of tuples: a single conjunction, year = 2020 AND month = 2
+>>> dt.to_pandas(file_pruning_predicate=[("year", "=", "2020"), ("month", "=", "2")])
+>>> # list of lists: OR across the inner AND groups
 >>> dt.to_pandas(
 ...     file_pruning_predicate=[
 ...         [("year", "=", "2020"), ("month", "=", "2")],
