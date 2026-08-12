@@ -538,7 +538,8 @@ async fn execute(
     }
 
     let maybe_scan_plan =
-        scan_files_where_matches(session, &snapshot, log_store.clone(), predicate).await?;
+        scan_files_where_matches(session, snapshot.snapshot(), log_store.clone(), predicate)
+            .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
@@ -670,7 +671,7 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::collect;
 
-    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+    let Some(mem_table) = add_actions_partition_mem_table(snapshot.snapshot())? else {
         return Ok(std::collections::HashSet::new());
     };
 

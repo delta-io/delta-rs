@@ -59,7 +59,7 @@ pub async fn find_files(
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFilesResult> {
     prepare_session(session, &log_store)?;
-    super::find_files(snapshot, log_store, session, predicate)
+    super::find_files(snapshot.snapshot(), log_store, session, predicate)
         .await
         .map(Into::into)
 }
@@ -71,7 +71,7 @@ pub async fn find_files_scan(
     predicate: Expr,
 ) -> DeltaResult<Vec<Add>> {
     prepare_session(session, &log_store)?;
-    super::find_files_scan(snapshot, log_store, session, predicate).await
+    super::find_files_scan(snapshot.snapshot(), log_store, session, predicate).await
 }
 
 pub async fn scan_files_where_matches(
@@ -81,11 +81,11 @@ pub async fn scan_files_where_matches(
     predicate: Expr,
 ) -> DataFusionResult<Option<MatchedFilesScan>> {
     prepare_session(session, &log_store)?;
-    super::scan_files_where_matches(session, snapshot, log_store, predicate)
+    super::scan_files_where_matches(session, snapshot.snapshot(), log_store, predicate)
         .await
         .map(|scan| scan.map(MatchedFilesScan))
 }
 
 pub fn add_actions_partition_mem_table(snapshot: &EagerSnapshot) -> DeltaResult<Option<MemTable>> {
-    super::add_actions_partition_mem_table(snapshot)
+    super::add_actions_partition_mem_table(snapshot.snapshot())
 }

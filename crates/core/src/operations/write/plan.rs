@@ -455,8 +455,13 @@ pub(super) async fn plan_overwrite_rewrite(
                 dropped_pruning_term_count: analysis.dropped_pruning_term_count,
             };
 
-            let Some(files_scan) =
-                scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?
+            let Some(files_scan) = scan_files_where_matches(
+                session,
+                snapshot.snapshot(),
+                log_store.clone(),
+                predicate,
+            )
+            .await?
             else {
                 return Ok(MatchedFilesRewritePlan {
                     kind: RewriteKind::NoMatch,
