@@ -451,9 +451,10 @@ impl VacuumBuilder {
                         let tombstone_path_sets = Arc::clone(&tombstone_path_sets);
                         let partition_columns = Arc::clone(&partition_columns);
                         let scanned = Arc::clone(&leaf_scanned);
-                        async move {
-                            let prefix = prefix_res?;
-                            Ok::<_, DeltaTableError>(list_orphans_under_prefix(
+                        // Lazy leaf-list stream per prefix. LIST runs on poll;
+                        // concurrency comes from try_flatten_unordered below.
+                        prefix_res.map(|prefix| {
+                            list_orphans_under_prefix(
                                 store,
                                 prefix,
                                 valid_files,
@@ -463,11 +464,10 @@ impl VacuumBuilder {
                                 now_millis,
                                 retention_millis,
                                 scanned,
-                            ))
-                        }
+                            )
+                        })
                     })
-                    .buffer_unordered(scan_concurrency)
-                    .try_flatten()
+                    .try_flatten_unordered(scan_concurrency)
                     .try_for_each(|(path, size)| {
                         files_to_delete.push(path);
                         file_sizes.push(size);
