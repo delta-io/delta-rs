@@ -229,7 +229,7 @@ pub async fn run_vacuum_full_dry_run(
         builder = builder.with_scan_concurrency(n);
     }
     if mode == VacuumScanMode::Flat {
-        builder = builder.disable_parallel_scan();
+        builder = builder.parallel_scan(false);
     }
 
     builder.await
