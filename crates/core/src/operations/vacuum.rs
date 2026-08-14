@@ -85,6 +85,10 @@ enum VacuumError {
     /// Error returned
     #[error(transparent)]
     DeltaTable(#[from] DeltaTableError),
+
+    /// Failed while collecting orphaned files during the full-mode scan.
+    #[error("Failed to scan for orphaned files: {0}")]
+    OrphanScanError(String),
 }
 
 impl From<VacuumError> for DeltaTableError {
@@ -136,9 +140,10 @@ pub struct VacuumBuilder {
     ///
     /// `None` uses [`default_vacuum_list_concurrency`] (env or built-in default).
     scan_concurrency: Option<usize>,
-    /// When true, force the flat `list(None)` full-mode scan even for multi-level
-    /// partitioned tables (disables the default parallel prefix-expansion path).
-    disable_parallel_scan: bool,
+    /// By default, true. If true, it will scan the files parallelizing
+    /// through prefix-expansion path, otherwise, if false it will use
+    /// flat `list(None)` full-mode scan.
+    parallel_scan: bool,
     /// Override the source of time
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
@@ -197,7 +202,7 @@ impl VacuumBuilder {
             dry_run: false,
             mode: VacuumMode::Lite,
             scan_concurrency: None,
-            disable_parallel_scan: false,
+            parallel_scan: true,
             clock: None,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
@@ -227,14 +232,13 @@ impl VacuumBuilder {
         self
     }
 
-    /// Disable the parallel multi-level partition scan used by full-mode vacuum.
+    /// Flag to enable/disable the parallel multi-level partition scan used by full-mode vacuum.
     ///
     /// By default, tables with more than one partition column use hierarchical
-    /// prefix expansion and concurrent leaf LIST calls. Calling this forces the
-    /// flat `list(None)` scan path instead (useful for comparison, debugging, or
-    /// working around store rate limits).
-    pub fn disable_parallel_scan(mut self) -> Self {
-        self.disable_parallel_scan = true;
+    /// prefix expansion and concurrent leaf LIST calls. Calling this with `false` forces the
+    /// flat `list(None)` scan path instead.
+    pub fn parallel_scan(mut self, parallel_scan: bool) -> Self {
+        self.parallel_scan = parallel_scan;
         self
     }
 
@@ -397,7 +401,7 @@ impl VacuumBuilder {
         if self.mode == VacuumMode::Full {
             let object_store = self.log_store.object_store(None);
 
-            if !self.disable_parallel_scan && should_try_parallel_vacuum(partition_columns) {
+            if self.parallel_scan && should_try_parallel_vacuum(partition_columns) {
                 let valid_files = Arc::new(valid_files);
                 let keep_files = Arc::new(keep_files);
                 let tombstone_path_sets = Arc::new(tombstone_path_sets);
@@ -441,7 +445,13 @@ impl VacuumBuilder {
                         Arc::clone(&expand_scanned),
                         scan_concurrency,
                         move |path, size| {
-                            intermediate_orphans_cb.lock().unwrap().push((path, size));
+                            intermediate_orphans_cb
+                                .lock()
+                                .map_err(|_| {
+                                    VacuumError::OrphanScanError("Failed to lock mutex".to_string())
+                                })?
+                                .push((path, size));
+                            Ok(())
                         },
                     )
                     .map(|prefix_res| {
@@ -475,7 +485,11 @@ impl VacuumBuilder {
                     })
                     .await?;
 
-                    for (path, size) in intermediate_orphans.lock().unwrap().drain(..) {
+                    let mut intermediate = intermediate_orphans.lock().map_err(|_| {
+                        VacuumError::OrphanScanError("Failed to lock mutex".to_string())
+                    })?;
+
+                    for (path, size) in intermediate.drain(..) {
                         files_to_delete.push(path);
                         file_sizes.push(size);
                     }
@@ -697,7 +711,7 @@ impl TombstonePathSets {
 /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
 /// indexes and these must be deleted when the data they are tied to is deleted.
 fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool, DeltaTableError> {
-    let path_name = path.to_string();
+    let path_name = path.as_ref();
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
@@ -786,7 +800,7 @@ fn consider_orphan_for_deletion(
 
 /// Root prefixes that should not be expanded during full-mode partition walks.
 fn is_skippable_root_prefix(path: &Path) -> bool {
-    let path_name = path.to_string();
+    let path_name = path.as_ref();
     path_name == "_delta_log" || path_name.starts_with("_delta_log/") || path_name.starts_with('.')
 }
 
@@ -808,7 +822,7 @@ fn expand_partition_prefixes(
     retention_millis: i64,
     scanned: Arc<AtomicUsize>,
     scan_concurrency: usize,
-    mut on_intermediate_orphan: impl FnMut(Path, i64) + Send + 'static,
+    mut on_intermediate_orphan: impl FnMut(Path, i64) -> Result<(), DeltaTableError> + Send + 'static,
 ) -> impl Stream<Item = Result<Path, DeltaTableError>> {
     let (mut tx, rx) = mpsc::channel(scan_concurrency.saturating_mul(4).max(16));
 
@@ -857,7 +871,12 @@ fn expand_partition_prefixes(
                                 now_millis,
                                 retention_millis,
                             ) {
-                                Ok(Some((path, size))) => on_intermediate_orphan(path, size),
+                                Ok(Some((path, size))) => {
+                                    if let Err(e) = on_intermediate_orphan(path, size) {
+                                        let _ = tx.send(Err(e)).await;
+                                        return;
+                                    }
+                                }
                                 Ok(None) => {}
                                 Err(e) => {
                                     let _ = tx.send(Err(e)).await;
@@ -1639,7 +1658,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disable_parallel_scan_builder() -> DeltaResult<()> {
+    async fn test_parallel_scan_builder() -> DeltaResult<()> {
         let table_path = std::path::Path::new("../test/tests/data/simple_commit");
         let table_uri =
             Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
@@ -1651,15 +1670,13 @@ mod tests {
         let builder =
             VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()));
         // Parallel scan is enabled by default for multi-level tables.
-        assert!(!builder.disable_parallel_scan);
-        let use_parallel =
-            !builder.disable_parallel_scan && should_try_parallel_vacuum(&multi_level);
+        assert!(builder.parallel_scan);
+        let use_parallel = builder.parallel_scan && should_try_parallel_vacuum(&multi_level);
         assert!(use_parallel);
 
-        let builder = builder.disable_parallel_scan();
-        assert!(builder.disable_parallel_scan);
-        let use_parallel =
-            !builder.disable_parallel_scan && should_try_parallel_vacuum(&multi_level);
+        let builder = builder.parallel_scan(false);
+        assert!(!builder.parallel_scan);
+        let use_parallel = builder.parallel_scan && should_try_parallel_vacuum(&multi_level);
         assert!(!use_parallel);
 
         Ok(())
@@ -1876,7 +1893,10 @@ mod tests {
             0,
             Arc::clone(&scanned),
             DEFAULT_VACUUM_LIST_CONCURRENCY,
-            move |path, size| orphans_cb.lock().unwrap().push((path, size)),
+            move |path, size| {
+                orphans_cb.lock().unwrap().push((path, size));
+                Ok(())
+            },
         )
         .try_collect::<Vec<_>>()
         .await?;
@@ -1945,7 +1965,10 @@ mod tests {
             0,
             Arc::clone(&scanned),
             DEFAULT_VACUUM_LIST_CONCURRENCY,
-            move |path, size| orphans_cb.lock().unwrap().push((path, size)),
+            move |path, size| {
+                orphans_cb.lock().unwrap().push((path, size));
+                Ok(())
+            },
         )
         .try_collect::<Vec<_>>()
         .await?;
@@ -2226,7 +2249,7 @@ mod tests {
     }
 
     /// Same multi-level fixture as the parallel test, but with
-    /// [`VacuumBuilder::disable_parallel_scan`] forcing the flat `list(None)`
+    /// [`VacuumBuilder::parallel_scan`] forcing the flat `list(None)`
     /// path. Results must match the parallel path.
     #[tokio::test]
     async fn test_vacuum_full_flat_scan_with_disable_parallel_scan() -> DeltaResult<()> {
@@ -2247,9 +2270,9 @@ mod tests {
                 .with_dry_run(true)
                 .with_mode(VacuumMode::Full)
                 .with_enforce_retention_duration(false)
-                .disable_parallel_scan()
+                .parallel_scan(false)
                 .with_clock(Arc::new(MockClock::new(current_time_millis)));
-        assert!(builder.disable_parallel_scan);
+        assert!(!builder.parallel_scan);
 
         let (_table, result) = builder.await?;
 
@@ -2295,7 +2318,7 @@ mod tests {
             .with_dry_run(true)
             .with_mode(VacuumMode::Full)
             .with_enforce_retention_duration(false)
-            .disable_parallel_scan()
+            .parallel_scan(false)
             .with_clock(clock)
             .await?;
 
