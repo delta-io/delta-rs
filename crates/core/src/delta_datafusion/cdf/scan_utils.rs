@@ -7,21 +7,20 @@ use crate::kernel::StorageType;
 use crate::{DeltaResult, DeltaTableError};
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use dashmap::DashMap;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::physical_plan::parquet::{ParquetAccessPlan, RowGroupAccess};
+use datafusion::datasource::physical_plan::ParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, ParquetAccessPlan, RowGroupAccess,
+};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use delta_kernel::Engine;
 use delta_kernel::actions::deletion_vector::{DeletionVectorDescriptor, DeletionVectorStorageType};
 use object_store::path::Path;
-use object_store::{DynObjectStore, ObjectStore};
-use parquet::arrow::arrow_reader::{
-    ArrowReaderMetadata, ArrowReaderOptions, RowSelection, RowSelector,
-};
-use parquet::arrow::async_reader::ParquetObjectReader;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use serde_json::Value;
 use tracing::log;
 use url::Url;
@@ -112,9 +111,9 @@ pub async fn extend_groups_with_pairs(
     add_groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
     remove_groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
     engine: Arc<dyn Engine>,
-    root_object_store: Arc<dyn ObjectStore>,
     table_root: Url,
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
 ) -> DeltaResult<()> {
     for mut pair in pairs {
         let (deletes, inserts) = resolve_dv_pair(
@@ -135,9 +134,8 @@ pub async fn extend_groups_with_pairs(
             remove_groups,
             &pair,
             &table_partition_values,
-            &table_root,
-            &root_object_store,
-            &parquet_metadata_cache,
+            Arc::clone(&cache),
+            &metrics,
         )
         .await?;
         push_pair_selection(
@@ -146,9 +144,8 @@ pub async fn extend_groups_with_pairs(
             add_groups,
             &pair,
             &table_partition_values,
-            &table_root,
-            &root_object_store,
-            &parquet_metadata_cache,
+            Arc::clone(&cache),
+            &metrics,
         )
         .await?;
     }
@@ -161,9 +158,8 @@ async fn push_pair_selection(
     groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
     pair: &ResolvedPair,
     table_partition_values: &[ScalarValue],
-    table_root: &Url,
-    root_object_store: &Arc<dyn ObjectStore>,
-    parquet_metadata_cache: &Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
 ) -> DeltaResult<()> {
     if selection.is_empty() {
         return Ok(());
@@ -172,9 +168,8 @@ async fn push_pair_selection(
         selection,
         &pair.add.path,
         pair.add.size as u64,
-        table_root,
-        Arc::clone(root_object_store),
-        Arc::clone(parquet_metadata_cache),
+        Arc::clone(&cache),
+        metrics,
     )
     .await?;
 
@@ -353,64 +348,44 @@ fn row_group_access(
             RowGroupAccess::Scan
         };
     }
-    let run = |count: u64, read: bool| {
-        let count = count as usize;
-        if read {
-            RowSelector::select(count)
-        } else {
-            RowSelector::skip(count)
-        }
-    };
 
-    let mut selectors: Vec<RowSelector> = Vec::new();
+    let mut selectors = Vec::new();
     let mut cursor = rg_start;
     while let Some(&idx) = marked.peek() {
         if idx >= rg_end {
             break;
         }
-        selectors.push(run(idx - cursor, !keep_marked)); // gap before the marked row
-        selectors.push(run(1, keep_marked)); // the marked row
+        selectors.push(RowSelector {
+            row_count: (idx - cursor) as usize,
+            skip: keep_marked,
+        });
+        selectors.push(RowSelector {
+            row_count: 1,
+            skip: !keep_marked,
+        });
         cursor = idx + 1;
         marked.next();
     }
-    selectors.push(run(rg_end - cursor, !keep_marked)); // tail after the last marked row
+    selectors.push(RowSelector {
+        row_count: (rg_end - cursor) as usize,
+        skip: keep_marked,
+    });
     RowGroupAccess::Selection(RowSelection::from(selectors))
 }
 
-#[inline]
 async fn read_parquet_metadata(
-    engine_objectstore: Arc<DynObjectStore>,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
     file_path: Path,
     file_size: u64,
 ) -> DeltaResult<Arc<ParquetMetaData>> {
-    let mut object_reader = ParquetObjectReader::new(engine_objectstore, file_path);
-    if file_size > 0 {
-        object_reader = object_reader.with_file_size(file_size);
-    }
-    let arrow_opts = ArrowReaderOptions::new();
-    let arrow_metadata_reader =
-        ArrowReaderMetadata::load_async(&mut object_reader, arrow_opts).await?;
-    Ok(Arc::clone(arrow_metadata_reader.metadata()))
+    let arrow_reader = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
+    Ok(cache
+        .create_reader(0, PartitionedFile::new(file_path, file_size), None, metrics)?
+        .get_metadata(Some(&arrow_reader))
+        .await?)
 }
 
-#[inline]
-async fn get_metadata_from_cache(
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
-    engine_objectstore: Arc<DynObjectStore>,
-    file_path: &Path,
-    file_size: u64,
-) -> DeltaResult<Arc<ParquetMetaData>> {
-    if let Some(pmd) = parquet_metadata_cache.get(file_path.as_ref()) {
-        Ok(Arc::clone(pmd.value()))
-    } else {
-        let new_pmd =
-            read_parquet_metadata(engine_objectstore, file_path.clone(), file_size).await?;
-        parquet_metadata_cache.insert(file_path.to_string(), Arc::clone(&new_pmd));
-        Ok(new_pmd)
-    }
-}
-
-#[inline]
 fn read_dv_treemap(
     dv: Option<crate::kernel::DeletionVectorDescriptor>,
     engine: &Arc<dyn Engine>,
@@ -425,7 +400,6 @@ fn read_dv_treemap(
     }
 }
 
-#[inline]
 fn resolve_dv_pair(
     add_dv: Option<crate::kernel::DeletionVectorDescriptor>,
     rm_dv: Option<crate::kernel::DeletionVectorDescriptor>,
@@ -462,20 +436,11 @@ async fn access_plan_for_selection(
     selection: roaring::RoaringTreemap,
     file_path_str: &str,
     file_size: u64,
-    table_root_url: &Url,
-    root_object_store: Arc<DynObjectStore>,
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
 ) -> DeltaResult<ParquetAccessPlan> {
-    let path = table_root_url.path();
-    let tp = path.strip_prefix('/').unwrap_or(path);
-    let file_path = Path::parse(format!("{tp}{file_path_str}"))?;
-    let parquet_metadata = get_metadata_from_cache(
-        parquet_metadata_cache,
-        root_object_store,
-        &file_path,
-        file_size,
-    )
-    .await?;
+    let file_path = Path::parse(file_path_str)?;
+    let parquet_metadata = read_parquet_metadata(cache, metrics, file_path, file_size).await?;
     Ok(access_plan_from_treemap(
         &selection,
         &parquet_metadata,
@@ -487,27 +452,20 @@ pub async fn create_file_scan_plan<F: FileAction>(
     engine: Arc<dyn Engine>,
     file_action: F,
     table_root_url: Url,
-    root_object_store: Arc<DynObjectStore>,
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
 ) -> DeltaResult<Option<ParquetAccessPlan>> {
     if let Some(dv) = file_action.deletion_vector() {
-        let path = table_root_url.path();
-        let tp = path.strip_prefix('/').unwrap_or(path);
-        let dv_path = format!("{}{}", tp, file_action.path());
-        let file_path = Path::parse(dv_path)?;
         let tree_map = read_dv_treemap(Some(dv), &engine, &table_root_url)?;
-        let parquet_metadata = get_metadata_from_cache(
-            parquet_metadata_cache,
-            root_object_store,
-            &file_path,
+        return Ok(access_plan_for_selection(
+            tree_map,
+            &file_action.path(),
             file_action.size()? as u64,
+            cache,
+            metrics,
         )
-        .await?;
-        return Ok(Some(access_plan_from_treemap(
-            &tree_map,
-            &parquet_metadata,
-            false,
-        )));
+        .await
+        .ok());
     }
     Ok(None)
 }

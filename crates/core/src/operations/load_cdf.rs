@@ -23,28 +23,30 @@ use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
 use arrow_schema::{ArrowError, Field, Schema, SchemaRef};
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
 use datafusion::catalog::Session;
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
+use datafusion::execution::cache::DefaultFilesMetadataCache;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
+use datafusion::physical_expr_common::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion_datasource::PartitionedFile;
 use delta_kernel::table_features::ColumnMappingMode;
-use parquet::file::metadata::ParquetMetaData;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::SystemTime;
 use tracing::log;
 
 type ScalarPartitionMap = HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>;
+const METADATA_CACHE_SIZE: usize = 1024 * 1024;
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -63,14 +65,12 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
-    /// Datafusion session state relevant for executing the input plan
-    session: Option<Arc<dyn Session>>,
     /// Optional logical predicate used ONLY to prune files by their partition
     /// values. This is never applied as a row-level filter, so any non-partition
     /// conjuncts are ignored here and row-level correctness must be enforced by a
     /// separate `FilterExec` wrapped around the resulting plan.
     filter: Option<Expr>,
-    parquet_metadata_cache: Arc<DashMap<String, Arc<ParquetMetaData>>>,
+    parquet_metadata_cache: Arc<CachedParquetFileReaderFactory>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -90,6 +90,10 @@ impl std::fmt::Debug for CdfLoadBuilder {
 impl CdfLoadBuilder {
     /// Create a new [`CdfLoadBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let parquet_metadata_cache = Arc::new(CachedParquetFileReaderFactory::new(
+            log_store.object_store(None),
+            Arc::new(DefaultFilesMetadataCache::new(METADATA_CACHE_SIZE)),
+        ));
         Self {
             snapshot,
             log_store,
@@ -98,9 +102,8 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
-            session: None,
             filter: None,
-            parquet_metadata_cache: Arc::new(DashMap::new()),
+            parquet_metadata_cache,
         }
     }
 
@@ -131,12 +134,6 @@ impl CdfLoadBuilder {
     /// Enable ending version or timestamp exceeding the last commit
     pub fn with_allow_out_of_range(mut self) -> Self {
         self.allow_out_of_range = true;
-        self
-    }
-
-    /// The Datafusion session state to use
-    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
-        self.session = Some(session);
         self
     }
 
@@ -447,7 +444,7 @@ impl CdfLoadBuilder {
     fn try_build_partition_pruning_predicate(
         &self,
         session: &dyn Session,
-        schema: &arrow_schema::SchemaRef,
+        schema: &SchemaRef,
         partition_columns: &[String],
         filter: Expr,
     ) -> DeltaResult<Option<PartitionPruningPredicate>> {
@@ -465,7 +462,7 @@ impl CdfLoadBuilder {
             .iter()
             .map(|name| schema.field_with_name(name).cloned())
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        let partition_schema: arrow_schema::SchemaRef = Arc::new(Schema::new(partition_fields));
+        let partition_schema: SchemaRef = Arc::new(Schema::new(partition_fields));
         let df_schema: DFSchema = partition_schema.as_ref().clone().try_into()?;
         let predicate = session.create_physical_expr(partition_predicate, &df_schema)?;
 
@@ -489,12 +486,13 @@ impl CdfLoadBuilder {
         )
     }
 
-    async fn create_partition_values<F: FileAction>(
+    async fn create_file_groups<F: FileAction>(
         &self,
         schema: SchemaRef,
         specs: Vec<CdcDataSpec<F>>,
         table_partition_cols: &[String],
         action_type: Option<ScalarValue>,
+        metrics: &ExecutionPlanMetricsSet,
     ) -> DeltaResult<ScalarPartitionMap> {
         let mut file_groups: ScalarPartitionMap = HashMap::new();
 
@@ -512,15 +510,14 @@ impl CdfLoadBuilder {
                 let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
                     .with_partition_values(new_part_values.clone());
 
-                if action.has_deletion_vector()
-                    && let Some(access_plan) = create_file_scan_plan(
-                        Arc::clone(&self.log_store.engine(None)),
-                        action,
-                        self.log_store.table_root_url(),
-                        self.log_store.root_object_store(None),
-                        Arc::clone(&self.parquet_metadata_cache),
-                    )
-                    .await?
+                if let Some(access_plan) = create_file_scan_plan(
+                    Arc::clone(&self.log_store.engine(None)),
+                    action,
+                    self.log_store.table_root_url(),
+                    Arc::clone(&self.parquet_metadata_cache),
+                    metrics,
+                )
+                .await?
                 {
                     part_file = part_file.with_extension(access_plan);
                 }
@@ -533,11 +530,21 @@ impl CdfLoadBuilder {
         Ok(file_groups)
     }
 
-    /// Executes the scan
+    /// Executes the scan with no metric set
     pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
+    ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        self.build_with_metrics(session, filters, None).await
+    }
+
+    /// Executes the scan with a metric set to report
+    pub async fn build_with_metrics(
+        &self,
+        session: &dyn Session,
+        filters: Option<&Arc<dyn PhysicalExpr>>,
+        metrics: Option<ExecutionPlanMetricsSet>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
@@ -584,45 +591,6 @@ impl CdfLoadBuilder {
         cdc_partition_cols.extend_from_slice(&this_partition_values);
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
-        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let engine = self.log_store.engine(None);
-        let root_obj_store = self.log_store.root_object_store(None);
-
-        let cdc_file_groups = self
-            .create_partition_values(schema.clone(), cdc, partition_values, None)
-            .await?;
-
-        let mut add_file_groups = self
-            .create_partition_values(
-                schema.clone(),
-                add,
-                partition_values,
-                Self::get_add_action_type(),
-            )
-            .await?;
-
-        let mut remove_file_groups = self
-            .create_partition_values(
-                schema.clone(),
-                remove,
-                partition_values,
-                Self::get_remove_action_type(),
-            )
-            .await?;
-
-        extend_groups_with_pairs(
-            schema.clone(),
-            pairs,
-            partition_values,
-            &mut add_file_groups,
-            &mut remove_file_groups,
-            Arc::clone(&engine),
-            Arc::clone(&root_obj_store),
-            self.log_store.table_root_url(),
-            Arc::clone(&self.parquet_metadata_cache),
-        )
-        .await?;
-
         let cdc_partition_fields: Vec<Arc<Field>> =
             cdc_partition_cols.into_iter().map(Arc::new).collect();
         let add_remove_partition_fields: Vec<Arc<Field>> = add_remove_partition_cols
@@ -639,18 +607,61 @@ impl CdfLoadBuilder {
             Arc::clone(&add_remove_file_schema),
             add_remove_partition_fields,
         );
-
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
         let mut add_source = ParquetSource::new(add_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
-        let mut remove_source =
-            ParquetSource::new(remove_table_schema).with_table_parquet_options(parquet_options);
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        let mut remove_source = ParquetSource::new(remove_table_schema)
+            .with_table_parquet_options(parquet_options)
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+
+        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
+        let engine = self.log_store.engine(None);
+        let metrics = metrics.unwrap_or_default();
+
+        let cdc_file_groups = self
+            .create_file_groups(schema.clone(), cdc, partition_values, None, &metrics)
+            .await?;
+
+        let mut add_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                add,
+                partition_values,
+                Self::get_add_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        let mut remove_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                remove,
+                partition_values,
+                Self::get_remove_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        extend_groups_with_pairs(
+            schema.clone(),
+            pairs,
+            partition_values,
+            &mut add_file_groups,
+            &mut remove_file_groups,
+            Arc::clone(&engine),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+            &metrics,
+        )
+        .await?;
 
         if let Some(filters) = filters {
             cdc_source = cdc_source.with_predicate(Arc::clone(filters));
@@ -661,7 +672,6 @@ impl CdfLoadBuilder {
         let cdc_scan = self.create_data_source(cdc_source, cdc_file_groups);
         let add_scan = self.create_data_source(add_source, add_file_groups);
         let remove_scan = self.create_data_source(remove_source, remove_file_groups);
-
         let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
         // We project the union in the order of the input_schema + cdc cols at the end
