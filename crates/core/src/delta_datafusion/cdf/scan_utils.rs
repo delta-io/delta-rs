@@ -3,13 +3,10 @@ use std::sync::Arc;
 
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use chrono::TimeZone;
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
-use object_store::ObjectMeta;
-use object_store::path::Path;
 use serde_json::Value;
 use tracing::log;
 
@@ -116,25 +113,13 @@ pub fn create_partition_values<F: FileAction>(
 
             let mut new_part_values = spec_partition_values.clone();
             new_part_values.extend(partition_values);
+            let part_file = PartitionedFile::new(action.path(), action.size()? as u64)
+                .with_partition_values(new_part_values.clone());
 
-            let part = PartitionedFile {
-                object_meta: ObjectMeta {
-                    location: Path::parse(action.path().as_str())?,
-                    size: action.size()? as u64,
-                    e_tag: None,
-                    last_modified: chrono::Utc.timestamp_nanos(0),
-                    version: None,
-                },
-                partition_values: new_part_values.clone(),
-                range: None,
-                statistics: None,
-                ordering: None,
-                extensions: Default::default(),
-                metadata_size_hint: None,
-                table_reference: None,
-            };
-
-            file_groups.entry(new_part_values).or_default().push(part);
+            file_groups
+                .entry(new_part_values)
+                .or_default()
+                .push(part_file);
         }
     }
     Ok(file_groups)
