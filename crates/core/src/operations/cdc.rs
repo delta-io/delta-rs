@@ -13,7 +13,7 @@ use datafusion::prelude::*;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 
-/// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
+/// The CDCTracker is useful for hooking reads/writes in a manner necessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
     pre_dataframe: LogicalPlan,
