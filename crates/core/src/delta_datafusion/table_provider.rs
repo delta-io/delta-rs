@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::TableProvider;
-use datafusion::common::tree_node::TreeNode;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchemaRef, Result, Statistics};
 use datafusion::config::ConfigOptions;
 use datafusion::error::DataFusionError;
@@ -665,6 +665,17 @@ impl ExecutionPlan for DeltaScan {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.parquet_scan.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

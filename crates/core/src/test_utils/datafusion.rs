@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session as DataFusionSession;
+use datafusion::catalog::CatalogProviderList;
+use datafusion::catalog::{EmptyCatalogProviderList, Session as DataFusionSession};
 use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
 use datafusion::config::TableOptions;
 use datafusion::error::Result as DataFusionResult;
@@ -78,6 +79,10 @@ impl WrapperSession {
 
 #[async_trait]
 impl DataFusionSession for WrapperSession {
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Arc::new(EmptyCatalogProviderList)
+    }
+
     fn session_id(&self) -> &str {
         DataFusionSession::session_id(&self.inner)
     }
