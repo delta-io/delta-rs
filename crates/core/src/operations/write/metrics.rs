@@ -2,11 +2,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::common::Result as DataFusionResult;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion::physical_plan::{ExecutionPlan, metrics::MetricBuilder};
 use datafusion::{
-    execution::SessionState,
+    catalog::Session,
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
+    prelude::Expr,
 };
 
 use crate::delta_datafusion::{logical::MetricObserver, physical::MetricObserverExec};
@@ -31,7 +33,8 @@ impl ExtensionPlanner for WriteMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && metric_observer.id.eq(SOURCE_COUNT_ID)

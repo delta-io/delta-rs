@@ -4,10 +4,12 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::Statistics;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::error::DataFusionError;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, ExecutionPlan, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
 
@@ -120,6 +122,17 @@ impl ExecutionPlan for MetricObserverExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.parent.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

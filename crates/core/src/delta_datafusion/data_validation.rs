@@ -16,9 +16,8 @@ use datafusion::common::{
 };
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::{
-    RecordBatchStream, SendableRecordBatchStream, SessionState, TaskContext,
-};
+use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     ColumnarValue, ExprSchemable as _, LogicalPlan, Operator, UserDefinedLogicalNode,
@@ -216,8 +215,9 @@ impl ExtensionPlanner for DataValidationExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>, DataFusionError> {
         if let Some(node) = node.as_any().downcast_ref::<DataValidation>() {
             if physical_inputs.len() != 1 {
                 return plan_err!(
@@ -534,6 +534,17 @@ impl ExecutionPlan for DataValidationExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

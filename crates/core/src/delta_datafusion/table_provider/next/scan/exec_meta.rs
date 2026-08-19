@@ -16,6 +16,7 @@ use arrow_schema::{FieldRef, Fields, Schema};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{HashMap, internal_datafusion_err, stats::Precision};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
@@ -308,6 +309,17 @@ impl ExecutionPlan for DeltaScanMetaExec {
         // since the default methods determines this based on existence of columns in child
         // schemas. In the case of column mapping all columns will have a different name.
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // DeltaScanMetaExec has no children execution plans to traverse
+        // Just continue the recursion
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

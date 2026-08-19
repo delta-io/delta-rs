@@ -16,6 +16,7 @@ use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
@@ -456,6 +457,17 @@ impl ExecutionPlan for DeltaScanExec {
                 &self.children(),
             )),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Apply expressions to the input execution plan
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

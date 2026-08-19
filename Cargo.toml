@@ -19,35 +19,35 @@ repository = "https://github.com/delta-io/delta.rs"
 #delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
 #delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
 delta_kernel = { package = "buoyant_kernel", version = "0.25.0,<0.25.100", features = [
-    "arrow-58",
+    "arrow-59",
     "internal-api",
 ] }
 #delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  path = "../delta-kernel-rs/default-engine", features = ["arrow-58", "rustls"], default-features = false }
 #delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = ["arrow-58", "rustls"], default-features = false }
-delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.25.0,<0.25.100", features = ["arrow-58", "rustls"], default-features = false }
+delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.25.0,<0.25.100", features = ["arrow-59", "rustls"], default-features = false }
 
 
 # arrow
-arrow = { version = "58" }
-arrow-arith = { version = "58" }
-arrow-array = { version = "58", features = ["chrono-tz"] }
-arrow-buffer = { version = "58" }
-arrow-cast = { version = "58" }
-arrow-ipc = { version = "58" }
-arrow-json = { version = "58" }
-arrow-ord = { version = "58" }
-arrow-row = { version = "58" }
-arrow-schema = { version = "58" }
-arrow-select = { version = "58" }
+arrow = { version = "59" }
+arrow-arith = { version = "59" }
+arrow-array = { version = "59", features = ["chrono-tz"] }
+arrow-buffer = { version = "59" }
+arrow-cast = { version = "59" }
+arrow-ipc = { version = "59" }
+arrow-json = { version = "59" }
+arrow-ord = { version = "59" }
+arrow-row = { version = "59" }
+arrow-schema = { version = "59" }
+arrow-select = { version = "59" }
 object_store = { version = "0.13.2" }
-parquet = { version = "58" }
+parquet = { version = "59" }
 
 # datafusion 54
-datafusion = { version = "54.1.0" }
-datafusion-datasource = { version = "54.1.0" }
-datafusion-physical-expr-adapter = { version = "54.1.0" }
-datafusion-ffi = { version = "54.1.0" }
-datafusion-proto = { version = "54.1.0" }
+datafusion = { version = "55" }
+datafusion-datasource = { version = "55" }
+datafusion-physical-expr-adapter = { version = "55" }
+datafusion-ffi = { version = "55" }
+datafusion-proto = { version = "55" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
