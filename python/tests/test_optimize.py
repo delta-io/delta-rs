@@ -499,6 +499,66 @@ def test_optimize_schema_evolved_3185(tmp_path):
     assert last_action["operation"] == "OPTIMIZE"
 
 
+@pytest.mark.pyarrow
+def test_optimize_nested_field_named_like_partition_column(tmp_path: pathlib.Path):
+    """A nested field sharing a partition column's name must not break OPTIMIZE.
+
+    Partition columns are always top level, so a name match inside a struct is a false
+    positive. Dictionary-encoding the nested field made the Parquet read schema disagree
+    with the file, failing compaction with "Incorrect datatype. Expected string, got
+    Dictionary(UInt16, Utf8)".
+    """
+    import pyarrow as pa
+
+    schema = pa.schema(
+        [
+            pa.field("date", pa.string()),
+            pa.field("someOtherField", pa.string()),
+            pa.field("properties", pa.struct([pa.field("date", pa.string())])),
+        ]
+    )
+
+    first_write = pa.Table.from_pylist(
+        [
+            {
+                "date": "2026-08-18",
+                "someOtherField": "abc123",
+                "properties": {"date": "2026-08-18"},
+            }
+        ],
+        schema=schema,
+    )
+    second_write = pa.Table.from_pylist(
+        [
+            {
+                "date": "2026-08-18",
+                "someOtherField": "abc456",
+                "properties": {"date": "2026-08-18"},
+            }
+        ],
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, first_write, partition_by=["date"], mode="append")
+    write_deltalake(tmp_path, second_write, partition_by=["date"], mode="append")
+
+    dt = DeltaTable(tmp_path)
+    metrics = dt.optimize.compact()
+
+    assert metrics["numFilesAdded"] == 1
+    assert metrics["numFilesRemoved"] == 2
+
+    assert dt.version() == 2
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+
+    # The nested field keeps its type and its values through the rewrite.
+    table = dt.to_pyarrow_table()
+    assert table.schema.field("properties").type.field(0).type == pa.string()
+    assert table.num_rows == 2
+    assert table.column("properties").to_pylist() == [{"date": "2026-08-18"}] * 2
+
+
 def test_compact_with_spill_parameters(
     tmp_path: pathlib.Path,
     sample_table: Table,
