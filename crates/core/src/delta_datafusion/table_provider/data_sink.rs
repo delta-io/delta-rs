@@ -17,10 +17,11 @@ use uuid::Uuid;
 
 use crate::{
     cast_record_batch,
+    datafile::writer::WriterConfig,
     delta_datafusion::{ColumnMappingState, DataFusionMixins as _},
     kernel::{Action, EagerSnapshot, transaction::CommitBuilder},
     logstore::LogStoreRef,
-    operations::write::{WriterStatsConfig, execution::write_streams, writer::WriterConfig},
+    operations::write::{WriterStatsConfig, execution::write_streams},
     protocol::{DeltaOperation, SaveMode},
     table::config::TablePropertiesExt as _,
 };
