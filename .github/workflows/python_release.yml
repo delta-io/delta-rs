@@ -67,6 +67,30 @@ jobs:
           command: publish
           args: --skip-existing --no-sdist -m python/Cargo.toml  --profile python-release
 
+  release-pypi-sdist:
+    needs: validate-release-tag
+    name: PyPI source distribution (sdist)
+    runs-on: ubuntu-24.04
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      # This is the sole sdist publisher. All wheel jobs use --no-sdist.
+      # See: https://github.com/delta-io/delta-rs/issues/4645
+      - name: Build sdist
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
+        with:
+          command: sdist
+          args: -m python/Cargo.toml
+      - name: Upload sdist to PyPI
+        # <https://github.com/PyO3/maturin-action/releases/tag/v1.50.1>
+        uses: messense/maturin-action@04ac600d27cdf7a9a280dadf7147097c42b757ad
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          command: upload
+          args: --skip-existing target/wheels/*.tar.gz
+
   release-pypi-manylinux-x86-64:
     needs: validate-release-tag
     name: PyPI release on Linux (x86_64-manylinux-2_17)
@@ -153,6 +177,7 @@ jobs:
     needs:
       [
         validate-release-tag,
+        release-pypi-sdist,
         release-pypi-manylinux-x86-64,
         release-pypi-manylinux-228-aarch64,
         release-pypi-musl-x86-64,
