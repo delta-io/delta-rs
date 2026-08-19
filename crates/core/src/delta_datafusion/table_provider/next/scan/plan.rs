@@ -431,7 +431,7 @@ impl DeltaScanConfig {
             DataType::Struct(fields) => {
                 let new_fields = fields
                     .iter()
-                    .map(|f| self.map_field(f.clone(), partition_cols))
+                    .map(|f| self.map_field(f.clone(), &[]))
                     .collect();
                 field
                     .as_ref()
@@ -443,21 +443,21 @@ impl DeltaScanConfig {
                 .as_ref()
                 .clone()
                 .with_data_type(DataType::List(
-                    self.map_field(inner.clone(), partition_cols),
+                    self.map_field(inner.clone(), &[]),
                 ))
                 .into(),
             DataType::LargeList(inner) => field
                 .as_ref()
                 .clone()
                 .with_data_type(DataType::LargeList(
-                    self.map_field(inner.clone(), partition_cols),
+                    self.map_field(inner.clone(), &[]),
                 ))
                 .into(),
             DataType::ListView(inner) => field
                 .as_ref()
                 .clone()
                 .with_data_type(DataType::ListView(
-                    self.map_field(inner.clone(), partition_cols),
+                    self.map_field(inner.clone(), &[]),
                 ))
                 .into(),
             _ => field,
