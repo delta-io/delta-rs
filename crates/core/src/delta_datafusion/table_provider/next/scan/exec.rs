@@ -27,6 +27,7 @@ use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
@@ -398,10 +399,21 @@ impl ExecutionPlan for DeltaScanExec {
         Some(Arc::new(new_plan))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = self.input.partition_statistics(partition)?;
-        self.map_statistics(Arc::unwrap_or_clone(stats))
-            .map(Arc::new)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // We remap the child's column statistics onto the logical output schema in
+        // `map_statistics`, so we need the child's statistics resolved.
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats.first().ok_or_else(|| {
+            internal_datafusion_err!("DeltaScanExec expects statistics for exactly one child")
+        })?;
+        self.map_statistics(Statistics::clone(stats)).map(Arc::new)
     }
 
     fn gather_filters_for_pushdown(
@@ -809,6 +821,7 @@ mod tests {
             PhysicalExpr, collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
             repartition::RepartitionExec,
+            statistics::StatisticsContext,
         },
         prelude::{col, lit},
         scalar::ScalarValue,
@@ -1478,7 +1491,8 @@ mod tests {
         // for scans without prodicates, we gather only top level statistic
         // and omit collecting column level statistics
         let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics =
+            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(3240));
         for col_stat in statistics.column_statistics.iter() {
@@ -1497,7 +1511,8 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics =
+            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, field) in statistics
             .column_statistics
             .iter()
@@ -1537,7 +1552,8 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics =
+            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics.len(),
             provider.schema().fields().len()
@@ -1569,7 +1585,8 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics =
+            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, _field) in statistics
             .column_statistics
             .iter()
