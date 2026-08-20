@@ -1491,8 +1491,7 @@ mod tests {
         // for scans without prodicates, we gather only top level statistic
         // and omit collecting column level statistics
         let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let statistics =
-            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(3240));
         for col_stat in statistics.column_statistics.iter() {
@@ -1511,8 +1510,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics =
-            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, field) in statistics
             .column_statistics
             .iter()
@@ -1552,8 +1550,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics =
-            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics.len(),
             provider.schema().fields().len()
@@ -1585,8 +1582,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics =
-            StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, _field) in statistics
             .column_statistics
             .iter()
