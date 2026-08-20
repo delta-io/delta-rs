@@ -18,6 +18,7 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, col};
 use datafusion::physical_plan::metrics::Label;
+use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanVisitor, visit_execution_plan};
 use datafusion::prelude::SessionConfig;
 use datafusion_proto::bytes::{
@@ -685,7 +686,9 @@ mod local {
         let scan = provider
             .scan(&ctx.state(), None, &[col("value").is_not_null()], None)
             .await?;
-        let statistics = scan.partition_statistics(None).unwrap();
+        let statistics = StatisticsContext::new()
+            .compute(scan.as_ref(), &StatisticsArgs::new())
+            .unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Inexact(4));
 
@@ -724,7 +727,9 @@ mod local {
         let table = open_fs_path("../test/tests/data/delta-0.2.0");
         let provider = table.table_provider().await.unwrap();
         let scan = provider.scan(&ctx.state(), None, &[], None).await?;
-        let statistics = scan.partition_statistics(None).unwrap();
+        let statistics = StatisticsContext::new()
+            .compute(scan.as_ref(), &StatisticsArgs::new())
+            .unwrap();
 
         assert_eq!(statistics.num_rows, Precision::Absent);
 
@@ -2784,7 +2789,7 @@ mod insert_into_tests {
 
         let provider = final_table.table_provider().await?;
         let scan = provider.scan(&ctx.state(), None, &[], None).await?;
-        if let Ok(stats) = scan.partition_statistics(None)
+        if let Ok(stats) = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())
             && let Precision::Exact(num_rows) = stats.num_rows
         {
             assert_eq!(
