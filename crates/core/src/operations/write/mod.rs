@@ -576,6 +576,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     exact_validation,
                     contains_cdc,
                     insert_marker_column,
+                    this.schema_mode == Some(SchemaMode::Merge),
                 )
                 .await?;
 
@@ -1248,6 +1249,101 @@ mod tests {
 
         let write_metrics: WriteMetrics = get_write_metrics(&table).await;
         assert_common_write_metrics(write_metrics);
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_relaxes_nullability_with_null_batch() {
+        // <https://github.com/delta-io/delta-rs/issues/3688>
+        // Writing nullable data into a non-nullable column under SchemaMode::Merge
+        // should relax the column to nullable and accept the null values.
+        use arrow_array::{ArrayRef, RecordBatch};
+        let non_null = RecordBatch::try_from_iter_with_nullable(vec![(
+            "id",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            false,
+        )])
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![non_null])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert!(
+            !table
+                .snapshot()
+                .unwrap()
+                .schema()
+                .field("id")
+                .unwrap()
+                .is_nullable(),
+            "id should start non-nullable"
+        );
+
+        let null_batch = RecordBatch::try_from_iter_with_nullable(vec![(
+            "id",
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(3)])) as ArrayRef,
+            true,
+        )])
+        .unwrap();
+        let table = table
+            .write(vec![null_batch])
+            .with_schema_mode(SchemaMode::Merge)
+            .with_save_mode(SaveMode::Append)
+            .await
+            .expect("merge write of nullable data should succeed");
+
+        assert!(
+            table
+                .snapshot()
+                .unwrap()
+                .schema()
+                .field("id")
+                .unwrap()
+                .is_nullable(),
+            "id should be relaxed to nullable after the merge write"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_schema_relaxes_nullability_with_empty_batch() {
+        // <https://github.com/delta-io/delta-rs/issues/3688>
+        // A nullability-only schema change (even with no rows) under
+        // SchemaMode::Merge must be committed to the table metadata.
+        use arrow_array::{ArrayRef, RecordBatch};
+        let non_null = RecordBatch::try_from_iter_with_nullable(vec![(
+            "id",
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            false,
+        )])
+        .unwrap();
+        let table = DeltaTable::new_in_memory()
+            .write(vec![non_null])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+
+        let empty = RecordBatch::new_empty(Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            true,
+        )])));
+        let table = table
+            .write(vec![empty])
+            .with_schema_mode(SchemaMode::Merge)
+            .with_save_mode(SaveMode::Append)
+            .await
+            .expect("empty merge write should succeed");
+
+        assert!(
+            table
+                .snapshot()
+                .unwrap()
+                .schema()
+                .field("id")
+                .unwrap()
+                .is_nullable(),
+            "id should be relaxed to nullable after the empty merge write"
+        );
     }
 
     #[tokio::test]

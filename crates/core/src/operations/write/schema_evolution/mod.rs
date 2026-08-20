@@ -1,6 +1,32 @@
 use arrow_cast::can_cast_types;
 use arrow_schema::{ArrowError, DataType, Fields};
 
+/// Returns `true` if any field in `from_fields` is nullable while the
+/// correspondingly-named field in `to_fields` is non-nullable (i.e. a
+/// nullability relaxation), recursing into struct fields.
+///
+/// Fields that are not present in `to_fields` are ignored here; those are new
+/// columns handled by the regular schema-merge path. This is used to detect
+/// that a `SchemaMode::Merge` write must relax a column from non-nullable to
+/// nullable, which [`try_cast_schema`] alone cannot detect because it only
+/// considers data-type castability.
+pub(crate) fn has_nullability_relaxation(from_fields: &Fields, to_fields: &Fields) -> bool {
+    from_fields.iter().any(|f| {
+        let Some((_, target_field)) = to_fields.find(f.name()) else {
+            return false;
+        };
+        if f.is_nullable() && !target_field.is_nullable() {
+            return true;
+        }
+        if let (DataType::Struct(from_nested), DataType::Struct(to_nested)) =
+            (f.data_type(), target_field.data_type())
+        {
+            return has_nullability_relaxation(from_nested, to_nested);
+        }
+        false
+    })
+}
+
 pub(crate) fn try_cast_schema(from_fields: &Fields, to_fields: &Fields) -> Result<(), ArrowError> {
     if from_fields.len() != to_fields.len() {
         return Err(ArrowError::SchemaError(format!(

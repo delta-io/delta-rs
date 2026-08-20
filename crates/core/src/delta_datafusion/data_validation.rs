@@ -259,29 +259,38 @@ pub(crate) fn validation_predicates(
     session: &dyn Session,
     source_schema: &DFSchema,
     table_configuration: &TableConfiguration,
+    relax_nullability: bool,
 ) -> Result<Vec<Expr>> {
     // find all columns that are non-nullable in the table schema but nullable
     // in the source schema and add IS NOT NULL checks for them.
-    let table_schema: Schema = table_configuration
-        .logical_schema()
-        .as_ref()
-        .try_into_arrow()?;
-    let non_nullable_table: HashSet<_> = collect_non_nullable_fields(&table_schema)
-        .into_iter()
-        .collect();
-    let non_nullable_source: HashSet<_> = collect_non_nullable_fields(source_schema.as_arrow())
-        .into_iter()
-        .collect();
-    let mut validations: Vec<_> = non_nullable_table
-        .difference(&non_nullable_source)
-        .map(|col| {
-            to_datafusion_expr(
-                &Expression::Column(col.clone()),
-                &delta_kernel::schema::DataType::BOOLEAN,
-            )
-        })
-        .map_ok(|e| e.is_not_null())
-        .try_collect()?;
+    //
+    // Under a schema-merge write (`relax_nullability`), these are exactly the
+    // columns being relaxed from non-nullable to nullable, so the NOT NULL
+    // constraint must not be enforced for them.
+    let mut validations: Vec<Expr> = if relax_nullability {
+        Vec::new()
+    } else {
+        let table_schema: Schema = table_configuration
+            .logical_schema()
+            .as_ref()
+            .try_into_arrow()?;
+        let non_nullable_table: HashSet<_> = collect_non_nullable_fields(&table_schema)
+            .into_iter()
+            .collect();
+        let non_nullable_source: HashSet<_> = collect_non_nullable_fields(source_schema.as_arrow())
+            .into_iter()
+            .collect();
+        non_nullable_table
+            .difference(&non_nullable_source)
+            .map(|col| {
+                to_datafusion_expr(
+                    &Expression::Column(col.clone()),
+                    &delta_kernel::schema::DataType::BOOLEAN,
+                )
+            })
+            .map_ok(|e| e.is_not_null())
+            .try_collect()?
+    };
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration

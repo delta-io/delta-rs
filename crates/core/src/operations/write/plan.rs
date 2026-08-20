@@ -25,7 +25,7 @@ use uuid::Uuid;
 use super::configs::WriterStatsConfig;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
-use super::schema_evolution::try_cast_schema;
+use super::schema_evolution::{has_nullability_relaxation, try_cast_schema};
 use super::{SchemaMode, WriteError};
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
@@ -340,14 +340,26 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
             } else {
                 return Err(schema_err.into());
             }
-        } else if mode == SaveMode::Overwrite && schema_mode == Some(SchemaMode::Overwrite) {
-            new_schema = None;
         } else {
-            new_schema = Some(merge_arrow_schema(
-                table_schema.clone(),
-                source_schema.clone(),
-                schema_drift,
-            )?);
+            // The data types are castable, but a nullable source field can still
+            // relax a non-nullable table column. `try_cast_schema` ignores
+            // nullability, so detect that here: under `SchemaMode::Merge` it is a
+            // schema change that must be committed to the table metadata.
+            if schema_mode == Some(SchemaMode::Merge)
+                && has_nullability_relaxation(source_schema.fields(), table_schema.fields())
+            {
+                schema_drift = true;
+            }
+
+            if mode == SaveMode::Overwrite && schema_mode == Some(SchemaMode::Overwrite) {
+                new_schema = None;
+            } else {
+                new_schema = Some(merge_arrow_schema(
+                    table_schema.clone(),
+                    source_schema.clone(),
+                    schema_drift,
+                )?);
+            }
         }
     }
 
