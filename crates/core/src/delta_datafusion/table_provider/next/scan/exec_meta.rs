@@ -27,7 +27,7 @@ use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdo
 use datafusion::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
@@ -515,6 +515,7 @@ mod tests {
         common::stats::Precision,
         physical_plan::collect_partitioned,
         physical_plan::displayable,
+        physical_plan::statistics::StatisticsContext,
         prelude::{col, lit},
     };
     use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
