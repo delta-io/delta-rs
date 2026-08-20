@@ -33,7 +33,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow_schema::{DataType, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
