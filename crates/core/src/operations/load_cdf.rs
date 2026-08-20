@@ -1691,25 +1691,4 @@ pub(crate) mod tests {
 
         Ok(())
     }
-
-    use datafusion::prelude::*;
-
-    #[tokio::test]
-    async fn test_reading_partitioned_cdf_with_dv() -> TestResult {
-        let ctx = SessionContext::new();
-        let table_path = Path::new("C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table");
-        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
-        let table = DeltaTable::try_from_url(table_uri.clone())
-            .await?
-            .scan_cdf()
-            .with_starting_version(0)
-            // .with_partition_pruning_filter(col("birthyear").eq(lit(2021)))
-            .build(&ctx.state(), None)
-            .await?;
-
-        let batches = collect(table.clone(), ctx.task_ctx()).await?;
-        let count = batches.iter().map(|b| b.num_rows()).sum::<usize>();
-        println!("count: {count}");
-        Ok(())
-    }
 }
