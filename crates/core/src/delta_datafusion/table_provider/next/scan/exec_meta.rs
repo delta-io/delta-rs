@@ -27,6 +27,7 @@ use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdo
 use datafusion::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
+use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
 };
@@ -291,9 +292,15 @@ impl ExecutionPlan for DeltaScanMetaExec {
         None
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+    fn statistics_from_inputs(
+        &self,
+        _input_stats: &[Arc<Statistics>],
+        args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        // Metadata-only scans synthesize statistics from the Delta log, so the default
+        // `child_stats_requests` (skip every child) is correct here.
         Ok(Arc::new(Statistics {
-            num_rows: Precision::Exact(self.exact_num_rows(partition)?),
+            num_rows: Precision::Exact(self.exact_num_rows(args.partition())?),
             total_byte_size: Precision::Absent,
             column_statistics: Statistics::unknown_column(self.schema().as_ref()),
         }))
@@ -700,7 +707,9 @@ mod tests {
             "expected metadata-only scan\n{diagnostics}"
         );
         assert_eq!(
-            scan.partition_statistics(None)?.num_rows,
+            StatisticsContext::new()
+                .compute(scan.as_ref(), &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(expected_row_count),
             "metadata-only scan reported the wrong row count\n{diagnostics}"
         );
@@ -1169,15 +1178,27 @@ mod tests {
             .expect("expected repartitioned DeltaScanMetaExec");
         assert_eq!(repartitioned.input.len(), 2);
         assert_eq!(
-            repartitioned.partition_statistics(Some(0))?.num_rows,
+            StatisticsContext::new()
+                .compute(
+                    repartitioned,
+                    &StatisticsArgs::new().with_partition(Some(0))
+                )?
+                .num_rows,
             Precision::Exact(12)
         );
         assert_eq!(
-            repartitioned.partition_statistics(Some(1))?.num_rows,
+            StatisticsContext::new()
+                .compute(
+                    repartitioned,
+                    &StatisticsArgs::new().with_partition(Some(1))
+                )?
+                .num_rows,
             Precision::Exact(8)
         );
         assert_eq!(
-            repartitioned.partition_statistics(None)?.num_rows,
+            StatisticsContext::new()
+                .compute(repartitioned, &StatisticsArgs::new())?
+                .num_rows,
             Precision::Exact(20)
         );
 
