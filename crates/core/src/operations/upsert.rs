@@ -21,6 +21,8 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, col, lit};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::prelude::{DataFrame, SessionContext};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -395,6 +397,16 @@ impl UpsertBuilder {
         Ok(source_subset)
     }
 
+    /// Collapse the rewrite plan to a single output partition before handing it to the
+    /// shared write path.
+    fn coalesce_for_write(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+        if plan.output_partitioning().partition_count() > 1 {
+            Arc::new(CoalescePartitionsExec::new(plan))
+        } else {
+            plan
+        }
+    }
+
     /// Execute upsert when there are no conflicts - simple append
     async fn execute_simple_append(
         &self,
@@ -402,7 +414,8 @@ impl UpsertBuilder {
         operation_id: Uuid,
     ) -> DeltaResult<(Vec<Action>, UpsertMetrics)> {
         let logical_plan = self.source.clone().into_unoptimized_plan();
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let physical_plan =
+            Self::coalesce_for_write(state.create_physical_plan(&logical_plan).await?);
 
         // Get partition columns for writing
         let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns().to_vec();
@@ -463,7 +476,8 @@ impl UpsertBuilder {
 
         // Write the combined data
         let logical_plan = result_df.into_unoptimized_plan();
-        let physical_plan = state.create_physical_plan(&logical_plan).await?;
+        let physical_plan =
+            Self::coalesce_for_write(state.create_physical_plan(&logical_plan).await?);
 
         // Get partition columns for writing
         let partition_columns: Vec<String> = self.snapshot.metadata().partition_columns().to_vec();
