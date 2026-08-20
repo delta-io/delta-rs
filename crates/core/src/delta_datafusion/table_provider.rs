@@ -12,6 +12,7 @@ use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
 };
@@ -654,8 +655,20 @@ impl ExecutionPlan for DeltaScan {
         Some(self.metrics.clone_inner())
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.parquet_scan.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        input_stats.first().map(Arc::clone).ok_or_else(|| {
+            DataFusionError::Internal(
+                "DeltaScan expects statistics for exactly one child".to_string(),
+            )
+        })
     }
 
     fn gather_filters_for_pushdown(

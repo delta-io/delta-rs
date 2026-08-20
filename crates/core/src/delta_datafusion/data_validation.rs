@@ -27,6 +27,7 @@ use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
 };
@@ -486,8 +487,20 @@ impl ExecutionPlan for DataValidationExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        input_stats.first().map(Arc::clone).ok_or_else(|| {
+            DataFusionError::Internal(
+                "DataValidationExec expects statistics for exactly one child".to_string(),
+            )
+        })
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
