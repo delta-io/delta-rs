@@ -40,6 +40,11 @@ pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
         ),
     ]
 });
+
+/// Sometimes when a data file is updated after a delete commit the data file is not re-written, but
+/// the deletion vector is updated. This manifests itself in the commit log as the data file being
+/// removed (with a DV) and then added back with a new DV. In this case, the difference of the two
+/// bitmaps is what is both deleted from this file and rows that haven't been touched.
 #[derive(Debug)]
 pub(crate) struct ResolvedPair {
     pub version: Version,

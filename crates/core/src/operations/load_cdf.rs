@@ -194,10 +194,10 @@ impl CdfLoadBuilder {
             self.calculate_earliest_version(snapshot).await?
         };
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = Vec::with_capacity(1024);
-        let mut add_files: Vec<CdcDataSpec<Add>> = Vec::with_capacity(1024);
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::with_capacity(1024);
-        let mut resolved_pairs: Vec<ResolvedPair> = Vec::with_capacity(1024);
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = Vec::new();
+        let mut add_files: Vec<CdcDataSpec<Add>> = Vec::new();
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::new();
+        let mut resolved_pairs: Vec<ResolvedPair> = Vec::new();
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
@@ -275,9 +275,9 @@ impl CdfLoadBuilder {
             let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?)?;
 
             let mut ts = 0;
-            let mut cdc_actions = Vec::with_capacity(1024);
-            let mut add_actions = Vec::with_capacity(1024);
-            let mut remove_actions = Vec::with_capacity(1024);
+            let mut cdc_actions = Vec::new();
+            let mut add_actions = Vec::new();
+            let mut remove_actions = Vec::new();
             if self.starting_timestamp.is_some() || self.ending_timestamp.is_some() {
                 // TODO: fallback on other actions for timestamps because CommitInfo action is optional
                 // theoretically.
@@ -1689,6 +1689,27 @@ pub(crate) mod tests {
             &batches
         );
 
+        Ok(())
+    }
+
+    use datafusion::prelude::*;
+
+    #[tokio::test]
+    async fn test_reading_partitioned_cdf_with_dv() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("C:\\Users\\shcar\\IdeaProjects\\spark-tests\\cdc_dv_table");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri.clone())
+            .await?
+            .scan_cdf()
+            .with_starting_version(0)
+            // .with_partition_pruning_filter(col("birthyear").eq(lit(2021)))
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table.clone(), ctx.task_ctx()).await?;
+        let count = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        println!("count: {count}");
         Ok(())
     }
 }

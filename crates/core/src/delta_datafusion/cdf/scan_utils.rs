@@ -125,7 +125,7 @@ pub async fn extend_groups_with_pairs(
 
         let table_partition_values = table_partition_cols
             .iter()
-            .map(|part| map_action_to_scalar(&pair.add, part, schema.clone()))
+            .map(|part| map_action_to_scalar(&pair.add, part, Arc::clone(&schema)))
             .collect::<DeltaResult<Vec<ScalarValue>>>()?;
 
         push_pair_selection(
@@ -333,28 +333,23 @@ impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescript
     }
 }
 
+/// Parquet access plans can take row selectors as part of their construction. We take a treemap and
+/// given the indexes create row selectors for the marked rows.
+/// This requires:
+/// 1. Marking the rows up until the index as kept or omitted depending on the action
+/// 2. Marking the row itself for the opposite
+/// 3. Marking the tail end rows up until the row group end as kept or omitted depending on the action
+/// This then builds the final access plan for the individual row group.
 fn row_group_access(
-    marked: &mut std::iter::Peekable<impl Iterator<Item = u64>>,
+    marked: &roaring::RoaringTreemap,
     rg_start: u64,
     num_rows: usize,
     keep_marked: bool,
 ) -> RowGroupAccess {
     let rg_end = rg_start + num_rows as u64;
-
-    if marked.peek().is_none_or(|&idx| idx >= rg_end) {
-        return if keep_marked {
-            RowGroupAccess::Skip
-        } else {
-            RowGroupAccess::Scan
-        };
-    }
-
     let mut selectors = Vec::new();
     let mut cursor = rg_start;
-    while let Some(&idx) = marked.peek() {
-        if idx >= rg_end {
-            break;
-        }
+    for idx in marked.iter() {
         selectors.push(RowSelector {
             row_count: (idx - cursor) as usize,
             skip: keep_marked,
@@ -364,7 +359,6 @@ fn row_group_access(
             skip: !keep_marked,
         });
         cursor = idx + 1;
-        marked.next();
     }
     selectors.push(RowSelector {
         row_count: (rg_end - cursor) as usize,
@@ -419,13 +413,12 @@ fn access_plan_from_treemap(
     keep_marked: bool,
 ) -> ParquetAccessPlan {
     let mut access_plan = ParquetAccessPlan::new_all(parquet_metadata.num_row_groups());
-    let mut marked = treemap.iter().peekable();
     let mut rg_start = 0;
     for (rg_idx, rg) in parquet_metadata.row_groups().iter().enumerate() {
         let num_rows = rg.num_rows() as usize;
         access_plan.set(
             rg_idx,
-            row_group_access(&mut marked, rg_start, num_rows, keep_marked),
+            row_group_access(treemap, rg_start, num_rows, keep_marked),
         );
         rg_start += num_rows as u64;
     }
@@ -448,6 +441,8 @@ async fn access_plan_for_selection(
     ))
 }
 
+/// This function is a side effect of having 2 separate types of data at points in the scan
+/// process, but this exists for any actions that aren't paired up add/remove actions.
 pub async fn create_file_scan_plan<F: FileAction>(
     engine: Arc<dyn Engine>,
     file_action: F,
@@ -457,15 +452,16 @@ pub async fn create_file_scan_plan<F: FileAction>(
 ) -> DeltaResult<Option<ParquetAccessPlan>> {
     if let Some(dv) = file_action.deletion_vector() {
         let tree_map = read_dv_treemap(Some(dv), &engine, &table_root_url)?;
-        return Ok(access_plan_for_selection(
-            tree_map,
-            &file_action.path(),
-            file_action.size()? as u64,
-            cache,
-            metrics,
-        )
-        .await
-        .ok());
+        return Ok(Some(
+            access_plan_for_selection(
+                tree_map,
+                &file_action.path(),
+                file_action.size()? as u64,
+                cache,
+                metrics,
+            )
+            .await?,
+        ));
     }
     Ok(None)
 }
