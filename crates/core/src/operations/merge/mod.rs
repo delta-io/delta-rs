@@ -1547,13 +1547,17 @@ async fn execute(
                 "__delta_rs_update_expanded",
                 when(
                     col(CDC_COLUMN_NAME).eq(lit("update")),
+                    // `new_list` takes the *element* type, not the list type. DataFusion 54
+                    // ignored this argument for non-empty values; 55 casts the values to it
+                    // (apache/datafusion `ScalarValue::new_list`), so passing a list type here
+                    // yields List(List(Utf8)) and unnest leaves a list behind.
                     lit(ScalarValue::List(ScalarValue::new_list(
                         &[
                             ScalarValue::Utf8(Some("update_preimage".into())),
                             ScalarValue::Utf8(Some("update_postimage".into())),
                         ],
-                        &DataType::List(Field::new("element", DataType::Utf8, false).into()),
-                        true,
+                        &DataType::Utf8,
+                        false,
                     ))),
                 )
                 .end()?,
