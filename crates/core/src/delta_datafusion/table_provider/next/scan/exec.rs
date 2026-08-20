@@ -1403,10 +1403,17 @@ mod tests {
         assert!(batches[0].schema().column_with_name("filename").is_some());
 
         // Verify each group has a valid parquet filename
-        let filename_col = batches[0]
-            .column_by_name("filename")
-            .unwrap()
-            .as_string_view();
+        //
+        // DataFusion 55 changed `reverse()`'s signature from
+        // `Signature::uniform(1, vec![Utf8View, Utf8, LargeUtf8])` to
+        // `Signature::coercible(Native(logical_string()))` (apache/datafusion#23930).
+        // The old uniform signature widened our dictionary-encoded `file_id` column to
+        // `Utf8View` (first entry in the list); the new coercible signature preserves the
+        // origin string type instead, so this expression now yields `Utf8` rather than
+        // `Utf8View`. Normalize before asserting so the test is encoding-agnostic.
+        let filename_raw = batches[0].column_by_name("filename").unwrap();
+        let filename_flat = arrow::compute::cast(filename_raw, &DataType::Utf8View)?;
+        let filename_col = filename_flat.as_string_view();
 
         for i in 0..filename_col.len() {
             let filename = filename_col.value(i);
