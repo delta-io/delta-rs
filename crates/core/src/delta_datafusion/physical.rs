@@ -8,6 +8,7 @@ use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::error::DataFusionError;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, ExecutionPlan, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream,
 };
@@ -106,11 +107,20 @@ impl ExecutionPlan for MetricObserverExec {
         }))
     }
 
-    fn partition_statistics(
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
         &self,
-        partition: Option<usize>,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
     ) -> datafusion::common::Result<Arc<Statistics>> {
-        self.parent.partition_statistics(partition)
+        input_stats.first().map(Arc::clone).ok_or_else(|| {
+            DataFusionError::Internal(
+                "MetricObserverExec expects statistics for exactly one child".to_string(),
+            )
+        })
     }
 
     fn with_new_children(
