@@ -19,6 +19,7 @@ use std::{
 use arrow::array::{Array, ArrayRef, RecordBatch, builder::UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use dashmap::DashSet;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::physical_expr::{Distribution, PhysicalExpr};
@@ -116,6 +117,17 @@ impl ExecutionPlan for MergeBarrierExec {
             self.survivors.clone(),
             self.file_column.clone(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

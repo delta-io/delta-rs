@@ -48,7 +48,7 @@ use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 
@@ -461,6 +461,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &TaskContext,
+        _converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
@@ -472,6 +473,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         &self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
+        _converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<(), DataFusionError> {
         let delta_scan = node
             .downcast_ref::<DeltaScan>()
@@ -540,11 +542,15 @@ impl TableProviderFactory for DeltaTableFactory {
         ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let location = cmd
+            .locations
+            .get(0)
+            .expect("The command should have at least one location!");
         let table = if cmd.options.is_empty() {
-            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            let table_url = ensure_table_uri(&location)?;
             open_table(table_url).await?
         } else {
-            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            let table_url = ensure_table_uri(&location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         let table_uri = table.log_store().root_url().clone();

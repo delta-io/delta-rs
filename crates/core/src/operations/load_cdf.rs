@@ -31,7 +31,7 @@ use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
 use datafusion::datasource::table_schema::TableSchema;
-use datafusion::execution::cache::DefaultFilesMetadataCache;
+use datafusion::execution::cache::default_cache::DefaultCache;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::{PhysicalExpr, expressions};
 use datafusion::physical_expr_common::metrics::ExecutionPlanMetricsSet;
@@ -92,7 +92,7 @@ impl CdfLoadBuilder {
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         let parquet_metadata_cache = Arc::new(CachedParquetFileReaderFactory::new(
             log_store.object_store(None),
-            Arc::new(DefaultFilesMetadataCache::new(METADATA_CACHE_SIZE)),
+            Arc::new(DefaultCache::new(METADATA_CACHE_SIZE)),
         ));
         Self {
             snapshot,

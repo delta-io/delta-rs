@@ -16,6 +16,7 @@ use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
@@ -26,6 +27,7 @@ use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
@@ -397,10 +399,21 @@ impl ExecutionPlan for DeltaScanExec {
         Some(Arc::new(new_plan))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let stats = self.input.partition_statistics(partition)?;
-        self.map_statistics(Arc::unwrap_or_clone(stats))
-            .map(Arc::new)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // We remap the child's column statistics onto the logical output schema in
+        // `map_statistics`, so we need the child's statistics resolved.
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats.first().ok_or_else(|| {
+            internal_datafusion_err!("DeltaScanExec expects statistics for exactly one child")
+        })?;
+        self.map_statistics(Statistics::clone(stats)).map(Arc::new)
     }
 
     fn gather_filters_for_pushdown(
@@ -456,6 +469,17 @@ impl ExecutionPlan for DeltaScanExec {
                 &self.children(),
             )),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Apply expressions to the input execution plan
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -797,6 +821,7 @@ mod tests {
             PhysicalExpr, collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
             repartition::RepartitionExec,
+            statistics::StatisticsContext,
         },
         prelude::{col, lit},
         scalar::ScalarValue,
@@ -1391,10 +1416,17 @@ mod tests {
         assert!(batches[0].schema().column_with_name("filename").is_some());
 
         // Verify each group has a valid parquet filename
-        let filename_col = batches[0]
-            .column_by_name("filename")
-            .unwrap()
-            .as_string_view();
+        //
+        // DataFusion 55 changed `reverse()`'s signature from
+        // `Signature::uniform(1, vec![Utf8View, Utf8, LargeUtf8])` to
+        // `Signature::coercible(Native(logical_string()))` (apache/datafusion#23930).
+        // The old uniform signature widened our dictionary-encoded `file_id` column to
+        // `Utf8View` (first entry in the list); the new coercible signature preserves the
+        // origin string type instead, so this expression now yields `Utf8` rather than
+        // `Utf8View`. Normalize before asserting so the test is encoding-agnostic.
+        let filename_raw = batches[0].column_by_name("filename").unwrap();
+        let filename_flat = arrow::compute::cast(filename_raw, &DataType::Utf8View)?;
+        let filename_col = filename_flat.as_string_view();
 
         for i in 0..filename_col.len() {
             let filename = filename_col.value(i);
@@ -1459,7 +1491,7 @@ mod tests {
         // for scans without prodicates, we gather only top level statistic
         // and omit collecting column level statistics
         let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(3240));
         for col_stat in statistics.column_statistics.iter() {
@@ -1478,7 +1510,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, field) in statistics
             .column_statistics
             .iter()
@@ -1518,7 +1550,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics.len(),
             provider.schema().fields().len()
@@ -1550,7 +1582,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, _field) in statistics
             .column_statistics
             .iter()

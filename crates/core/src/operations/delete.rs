@@ -44,7 +44,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
 use datafusion::optimizer::simplify_expressions::simplify_predicates;
@@ -393,7 +393,8 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && (metric_observer.id.eq(SOURCE_COUNT_ID) || metric_observer.id.eq(RESCUED_COUNT_ID))
