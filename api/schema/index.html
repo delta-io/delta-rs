@@ -1641,13 +1641,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.MapType.type" class="md-nav__link">
-    type
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.value_contains_null" class="md-nav__link">
     value_contains_null
   </a>
@@ -2843,13 +2836,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#deltalake.schema.MapType.type" class="md-nav__link">
-    type
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#deltalake.schema.MapType.value_contains_null" class="md-nav__link">
     value_contains_null
   </a>
@@ -2999,13 +2985,13 @@
   
       <p>A Delta Lake schema</p>
 <p>Create using a list of <a class="autorefs autorefs-internal" href="#deltalake.Field">deltalake.Field</a>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;string&quot;</span><span class="p">)])</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;string&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)])</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">"x"</span><span class="p">,</span> <span class="s2">"integer"</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">"y"</span><span class="p">,</span> <span class="s2">"string"</span><span class="p">)])</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">"integer"</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">"string"</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)])</span>
 </span></code></pre></div>
 <p>Or create from a <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema">pyarrow.Schema</a>:</p>
 <div class="language-py highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">arro3.core</span><span class="w"> </span><span class="kn">import</span> <span class="n">DateType</span><span class="p">,</span> <span class="n">Schema</span> <span class="k">as</span> <span class="n">ArrowSchema</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">Schema</span><span class="o">.</span><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">ArrowSchema</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="n">DateType</span><span class="o">.</span><span class="n">int32</span><span class="p">(),</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="n">DateType</span><span class="o">.</span><span class="n">string</span><span class="p">()}))</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;string&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)])</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">Schema</span><span class="o">.</span><span class="n">from_pyarrow</span><span class="p">(</span><span class="n">ArrowSchema</span><span class="p">({</span><span class="s2">"x"</span><span class="p">:</span> <span class="n">DateType</span><span class="o">.</span><span class="n">int32</span><span class="p">(),</span> <span class="s2">"y"</span><span class="p">:</span> <span class="n">DateType</span><span class="o">.</span><span class="n">string</span><span class="p">()}))</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">"integer"</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="n">y</span><span class="p">,</span> <span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">"string"</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">True</span><span class="p">)])</span>
 </span></code></pre></div>
 
 
@@ -3028,12 +3014,13 @@
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">invariants</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;invariants&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Schema&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">invariants</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'invariants'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.Schema'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The list of invariants on the table. Each invarint is a tuple of strings. The first string is the
+field path and the second is the SQL of the invariant.</p>
   </div>
 
 </div>
@@ -3174,12 +3161,12 @@
 <details class="example" open>
   <summary>Example</summary>
   <p>A schema has the same JSON format as a StructType.
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="s1">&#39;&#39;&#39;{</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="s1">    &quot;type&quot;: &quot;struct&quot;,</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s1">    &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: </span><span class="si">{}</span><span class="s1">}]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span><span class="s1">'''{</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="s1">    "type": "struct",</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="s1">    "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": </span><span class="si">{}</span><span class="s1">}]</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="s1">    }</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">)&#39;&#39;&#39;</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Returns Schema([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="s1">)'''</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="c1"># Returns Schema([Field(x, PrimitiveType("integer"), nullable=True)])</span>
 </span></code></pre></div></p>
 </details>
   </div>
@@ -3314,8 +3301,8 @@ This is for compatibility with systems like Polars that only support the large v
 <details class="example" open>
   <summary>Example</summary>
   <p>A schema has the same JSON format as a StructType.
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">"x"</span><span class="p">,</span> <span class="s2">"integer"</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'</span>
 </span></code></pre></div></p>
 </details>
   </div>
@@ -3368,12 +3355,12 @@ This is for compatibility with systems like Polars that only support the large v
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;metadata&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'metadata'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.Field'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The metadata of the field</p>
   </div>
 
 </div>
@@ -3387,12 +3374,12 @@ This is for compatibility with systems like Polars that only support the large v
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;name&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'name'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.Field'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The name of the field</p>
   </div>
 
 </div>
@@ -3406,12 +3393,12 @@ This is for compatibility with systems like Polars that only support the large v
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;nullable&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">nullable</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'nullable'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.Field'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>Whether there may be null values in the field</p>
   </div>
 
 </div>
@@ -3425,12 +3412,18 @@ This is for compatibility with systems like Polars that only support the large v
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.Field&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.Field'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The type of the field, of type:
+Union[
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a>
+]</p>
   </div>
 
 </div>
@@ -3594,14 +3587,14 @@ This is for compatibility with systems like Polars that only support the large v
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Field.from_json(&#39;&#39;&#39;{
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        &quot;name&quot;: &quot;col&quot;,
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        &quot;type&quot;: &quot;integer&quot;,
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        &quot;nullable&quot;: true,
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        &quot;metadata&quot;: {}
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    }&#39;&#39;&#39;
+  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Field.from_json('''{
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        "name": "col",
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        "type": "integer",
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>        "nullable": true,
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>        "metadata": {}
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    }'''
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>)
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a># Returns Field(col, PrimitiveType(&quot;integer&quot;), nullable=True)
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a># Returns Field(col, PrimitiveType("integer"), nullable=True)
 </span></code></pre></div>
 </details>
   </div>
@@ -3705,8 +3698,8 @@ Note: This currently doesn't preserve field metadata.</p>
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;col&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;name&quot;:&quot;col&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}&#39;</span>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Field</span><span class="p">(</span><span class="s2">"col"</span><span class="p">,</span> <span class="s2">"integer"</span><span class="p">)</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns '{"name":"col","type":"integer","nullable":true,"metadata":{}}'</span>
 </span></code></pre></div>
 </details>
   </div>
@@ -3760,12 +3753,12 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.PrimitiveType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.PrimitiveType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The inner type</p>
   </div>
 
 </div>
@@ -4003,12 +3996,12 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'contains_null'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.ArrayType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>Whether the arrays may contain null values</p>
   </div>
 
 </div>
@@ -4022,12 +4015,18 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;element_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">element_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'element_type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.ArrayType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The type of the element, of type:
+Union[
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a>
+]</p>
   </div>
 
 </div>
@@ -4041,12 +4040,12 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;array&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.ArrayType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">'array'</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.ArrayType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The string "array"</p>
   </div>
 
 </div>
@@ -4213,13 +4212,13 @@ Note: This currently doesn't preserve field metadata.</p>
   <p>The JSON representation for an array type is an object with <code>type</code> (set to
 <code>"array"</code>), <code>elementType</code>, and <code>containsNull</code>.
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ArrayType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;array&quot;,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;elementType&quot;: &quot;integer&quot;,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        &quot;containsNull&quot;: false</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">'''{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        "type": "array",</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        "elementType": "integer",</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        "containsNull": false</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">    }'''</span>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Returns ArrayType(PrimitiveType(&quot;integer&quot;), contains_null=False)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Returns ArrayType(PrimitiveType("integer"), contains_null=False)</span>
 </span></code></pre></div></p>
 </details>
   </div>
@@ -4322,31 +4321,18 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;key_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">key_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'key_type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.MapType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
-  </div>
-
-</div>
-
-<div class="doc doc-object doc-attribute">
-
-
-
-<h4 id="deltalake.schema.MapType.type" class="doc doc-heading">
-          <span class="doc doc-object-name doc-attribute-name">type</span>
-
-
-</h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;map&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
-</span></code></pre></div>
-
-  <div class="doc doc-contents ">
-  
-      
+      <p>The type of the keys, of type:
+Union[
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a>
+]</p>
   </div>
 
 </div>
@@ -4360,12 +4346,12 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_contains_null&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_contains_null</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'value_contains_null'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.MapType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>Whether the values in a map may be null</p>
   </div>
 
 </div>
@@ -4379,12 +4365,18 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;value_type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.MapType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">value_type</span><span class="p">:</span> <span class="n">DataType</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'value_type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.MapType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The type of the values, of type:
+Union[
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.PrimitiveType">PrimitiveType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.ArrayType">ArrayType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.MapType">MapType</a>,
+    <a class="autorefs autorefs-internal" href="#deltalake.schema.StructType">StructType</a>
+]</p>
   </div>
 
 </div>
@@ -4551,14 +4543,14 @@ Note: This currently doesn't preserve field metadata.</p>
   <p>The JSON representation for a map type is an object with <code>type</code> (set to <code>map</code>),
 <code>keyType</code>, <code>valueType</code>, and <code>valueContainsNull</code>:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">MapType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;map&quot;,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;keyType&quot;: &quot;integer&quot;,</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        &quot;valueType&quot;: &quot;string&quot;,</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">        &quot;valueContainsNull&quot;: true</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">'''{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        "type": "map",</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        "keyType": "integer",</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">        "valueType": "string",</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="sd">        "valueContainsNull": true</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="sd">    }'''</span>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="p">)</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># Returns MapType(PrimitiveType(&quot;integer&quot;), PrimitiveType(&quot;string&quot;), value_contains_null=True)</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># Returns MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)</span>
 </span></code></pre></div>
 </details>
   </div>
@@ -4685,12 +4677,12 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">fields</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Field</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;fields&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">fields</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Field</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'fields'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.StructType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
-      
+      <p>The fields within the struct</p>
   </div>
 
 </div>
@@ -4704,7 +4696,7 @@ Note: This currently doesn't preserve field metadata.</p>
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;struct&#39;</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">&#39;type&#39;</span> <span class="n">of</span> <span class="s1">&#39;deltalake._internal.StructType&#39;</span> <span class="n">objects</span><span class="o">&gt;</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nb">type</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">'struct'</span><span class="p">]</span> <span class="o">=</span> <span class="o">&lt;</span><span class="n">attribute</span> <span class="s1">'type'</span> <span class="n">of</span> <span class="s1">'deltalake._internal.StructType'</span> <span class="n">objects</span><span class="o">&gt;</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4874,12 +4866,12 @@ Note: This currently doesn't preserve field metadata.</p>
 <details class="example" open>
   <summary>Example</summary>
   <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="o">.</span><span class="n">from_json</span><span class="p">(</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">&#39;&#39;&#39;{</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        &quot;type&quot;: &quot;struct&quot;,</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        &quot;fields&quot;: [{&quot;name&quot;: &quot;x&quot;, &quot;type&quot;: &quot;integer&quot;, &quot;nullable&quot;: true, &quot;metadata&quot;: {}}]</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    }&#39;&#39;&#39;</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="sd">'''{</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="sd">        "type": "struct",</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="sd">        "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="sd">    }'''</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="p">)</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Returns StructType([Field(x, PrimitiveType(&quot;integer&quot;), nullable=True)])</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># Returns StructType([Field(x, PrimitiveType("integer"), nullable=True)])</span>
 </span></code></pre></div>
 </details>
   </div>
@@ -4958,8 +4950,8 @@ Note: This currently doesn't preserve field metadata.</p>
 
 <details class="example" open>
   <summary>Example</summary>
-  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns &#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;x&quot;,&quot;type&quot;:&quot;integer&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;</span>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">"x"</span><span class="p">,</span> <span class="s2">"integer"</span><span class="p">)])</span><span class="o">.</span><span class="n">to_json</span><span class="p">()</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># Returns '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'</span>
 </span></code></pre></div>
 </details>
   </div>
