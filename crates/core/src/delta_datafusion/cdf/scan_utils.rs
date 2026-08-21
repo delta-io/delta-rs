@@ -1,19 +1,29 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::delta_datafusion::cdf::{CHANGE_TYPE_COL, CdcDataSpec, FileAction, ResolvedPair};
+use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use crate::kernel::StorageType;
+use crate::{DeltaResult, DeltaTableError};
 use arrow_array::{Array, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::physical_plan::ParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::{
+    CachedParquetFileReaderFactory, ParquetAccessPlan, RowGroupAccess,
+};
 use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use delta_kernel::Engine;
+use delta_kernel::actions::deletion_vector::{DeletionVectorDescriptor, DeletionVectorStorageType};
+use object_store::path::Path;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, RowSelection, RowSelector};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
 use serde_json::Value;
 use tracing::log;
-
-use crate::DeltaResult;
-use crate::delta_datafusion::cdf::CHANGE_TYPE_COL;
-use crate::delta_datafusion::cdf::{CdcDataSpec, FileAction};
-use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use url::Url;
 
 pub fn map_action_to_scalar<F: FileAction>(
     action: &F,
@@ -94,35 +104,87 @@ pub fn create_spec_partition_values<F: FileAction>(
     spec_partition_values
 }
 
-pub fn create_partition_values<F: FileAction>(
+pub async fn extend_groups_with_pairs(
     schema: SchemaRef,
-    specs: Vec<CdcDataSpec<F>>,
+    pairs: Vec<ResolvedPair>,
     table_partition_cols: &[String],
-    action_type: Option<ScalarValue>,
-) -> DeltaResult<HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>> {
-    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+    add_groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
+    remove_groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
+    engine: Arc<dyn Engine>,
+    table_root: Url,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
+) -> DeltaResult<()> {
+    for mut pair in pairs {
+        let (deletes, inserts) = resolve_dv_pair(
+            pair.add.deletion_vector.take(),
+            pair.rm_dv.take(),
+            &engine,
+            &table_root,
+        )?;
 
-    for spec in specs {
-        let spec_partition_values = create_spec_partition_values(&spec, action_type.as_ref());
+        let table_partition_values = table_partition_cols
+            .iter()
+            .map(|part| map_action_to_scalar(&pair.add, part, Arc::clone(&schema)))
+            .collect::<DeltaResult<Vec<ScalarValue>>>()?;
 
-        for action in spec.actions {
-            let partition_values = table_partition_cols
-                .iter()
-                .map(|part| map_action_to_scalar(&action, part, schema.clone()))
-                .collect::<DeltaResult<Vec<ScalarValue>>>()?;
-
-            let mut new_part_values = spec_partition_values.clone();
-            new_part_values.extend(partition_values);
-            let part_file = PartitionedFile::new(action.path(), action.size()? as u64)
-                .with_partition_values(new_part_values.clone());
-
-            file_groups
-                .entry(new_part_values)
-                .or_default()
-                .push(part_file);
-        }
+        push_pair_selection(
+            deletes,
+            "delete",
+            remove_groups,
+            &pair,
+            &table_partition_values,
+            Arc::clone(&cache),
+            &metrics,
+        )
+        .await?;
+        push_pair_selection(
+            inserts,
+            "insert",
+            add_groups,
+            &pair,
+            &table_partition_values,
+            Arc::clone(&cache),
+            &metrics,
+        )
+        .await?;
     }
-    Ok(file_groups)
+    Ok(())
+}
+
+async fn push_pair_selection(
+    selection: roaring::RoaringTreemap,
+    change_type: &str,
+    groups: &mut HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>,
+    pair: &ResolvedPair,
+    table_partition_values: &[ScalarValue],
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
+) -> DeltaResult<()> {
+    if selection.is_empty() {
+        return Ok(());
+    }
+    let access_plan = access_plan_for_selection(
+        selection,
+        &pair.add.path,
+        pair.add.size as u64,
+        Arc::clone(&cache),
+        metrics,
+    )
+    .await?;
+
+    let mut part_values = vec![
+        ScalarValue::Utf8(Some(change_type.to_string())),
+        ScalarValue::UInt64(Some(pair.version)),
+        ScalarValue::TimestampMillisecond(Some(pair.timestamp), None),
+    ];
+    part_values.extend_from_slice(table_partition_values);
+
+    let part_file = PartitionedFile::new(&pair.add.path, pair.add.size as u64)
+        .with_partition_values(part_values.clone())
+        .with_extension(access_plan);
+    groups.entry(part_values).or_default().push(part_file);
+    Ok(())
 }
 
 pub fn create_cdc_schema(mut schema_fields: Vec<Arc<Field>>, include_type: bool) -> SchemaRef {
@@ -249,6 +311,159 @@ pub fn prune_specs_by_partition<F: FileAction>(
         }
     }
     Ok(pruned)
+}
+
+impl TryInto<DeletionVectorDescriptor> for crate::kernel::DeletionVectorDescriptor {
+    type Error = DeltaTableError;
+
+    fn try_into(self) -> DeltaResult<DeletionVectorDescriptor> {
+        let storage_type = match self.storage_type {
+            StorageType::UuidRelativePath => DeletionVectorStorageType::PersistedRelative,
+            StorageType::Inline => DeletionVectorStorageType::Inline,
+            StorageType::AbsolutePath => DeletionVectorStorageType::PersistedAbsolute,
+        };
+
+        Ok(DeletionVectorDescriptor::try_new(
+            storage_type,
+            self.path_or_inline_dv,
+            self.offset,
+            self.size_in_bytes,
+            self.cardinality,
+        )?)
+    }
+}
+
+/// Parquet access plans can take row selectors as part of their construction. We take a treemap and
+/// given the indexes create row selectors for the marked rows.
+/// This requires:
+/// 1. Marking the rows up until the index as kept or omitted depending on the action
+/// 2. Marking the row itself for the opposite
+/// 3. Marking the tail end rows up until the row group end as kept or omitted depending on the action
+/// This then builds the final access plan for the individual row group.
+fn row_group_access(
+    marked: &roaring::RoaringTreemap,
+    rg_start: u64,
+    num_rows: usize,
+    keep_marked: bool,
+) -> RowGroupAccess {
+    let rg_end = rg_start + num_rows as u64;
+    let mut selectors = Vec::new();
+    let mut cursor = rg_start;
+    for idx in marked.iter() {
+        selectors.push(RowSelector {
+            row_count: (idx - cursor) as usize,
+            skip: keep_marked,
+        });
+        selectors.push(RowSelector {
+            row_count: 1,
+            skip: !keep_marked,
+        });
+        cursor = idx + 1;
+    }
+    selectors.push(RowSelector {
+        row_count: (rg_end - cursor) as usize,
+        skip: keep_marked,
+    });
+    RowGroupAccess::Selection(RowSelection::from(selectors))
+}
+
+async fn read_parquet_metadata(
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
+    file_path: Path,
+    file_size: u64,
+) -> DeltaResult<Arc<ParquetMetaData>> {
+    let arrow_reader = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Optional);
+    Ok(cache
+        .create_reader(0, PartitionedFile::new(file_path, file_size), None, metrics)?
+        .get_metadata(Some(&arrow_reader))
+        .await?)
+}
+
+fn read_dv_treemap(
+    dv: Option<crate::kernel::DeletionVectorDescriptor>,
+    engine: &Arc<dyn Engine>,
+    table_root_url: &Url,
+) -> DeltaResult<roaring::RoaringTreemap> {
+    match dv {
+        Some(dv) => {
+            let kernel_dv: DeletionVectorDescriptor = dv.try_into()?;
+            Ok(kernel_dv.read(engine.storage_handler(), table_root_url)?)
+        }
+        None => Ok(roaring::RoaringTreemap::new()),
+    }
+}
+
+fn resolve_dv_pair(
+    add_dv: Option<crate::kernel::DeletionVectorDescriptor>,
+    rm_dv: Option<crate::kernel::DeletionVectorDescriptor>,
+    engine: &Arc<dyn Engine>,
+    table_root_url: &Url,
+) -> DeltaResult<(roaring::RoaringTreemap, roaring::RoaringTreemap)> {
+    let add_tm = read_dv_treemap(add_dv, engine, table_root_url)?;
+    let rm_tm = read_dv_treemap(rm_dv, engine, table_root_url)?;
+    let deletes = &add_tm - &rm_tm;
+    let inserts = &rm_tm - &add_tm;
+    Ok((deletes, inserts))
+}
+
+fn access_plan_from_treemap(
+    treemap: &roaring::RoaringTreemap,
+    parquet_metadata: &ParquetMetaData,
+    keep_marked: bool,
+) -> ParquetAccessPlan {
+    let mut access_plan = ParquetAccessPlan::new_all(parquet_metadata.num_row_groups());
+    let mut rg_start = 0;
+    for (rg_idx, rg) in parquet_metadata.row_groups().iter().enumerate() {
+        let num_rows = rg.num_rows() as usize;
+        access_plan.set(
+            rg_idx,
+            row_group_access(treemap, rg_start, num_rows, keep_marked),
+        );
+        rg_start += num_rows as u64;
+    }
+    access_plan
+}
+
+async fn access_plan_for_selection(
+    selection: roaring::RoaringTreemap,
+    file_path_str: &str,
+    file_size: u64,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
+) -> DeltaResult<ParquetAccessPlan> {
+    let file_path = Path::parse(file_path_str)?;
+    let parquet_metadata = read_parquet_metadata(cache, metrics, file_path, file_size).await?;
+    Ok(access_plan_from_treemap(
+        &selection,
+        &parquet_metadata,
+        true,
+    ))
+}
+
+/// This function is a side effect of having 2 separate types of data at points in the scan
+/// process, but this exists for any actions that aren't paired up add/remove actions.
+pub async fn create_file_scan_plan<F: FileAction>(
+    engine: Arc<dyn Engine>,
+    file_action: F,
+    table_root_url: Url,
+    cache: Arc<CachedParquetFileReaderFactory>,
+    metrics: &ExecutionPlanMetricsSet,
+) -> DeltaResult<Option<ParquetAccessPlan>> {
+    if let Some(dv) = file_action.deletion_vector() {
+        let tree_map = read_dv_treemap(Some(dv), &engine, &table_root_url)?;
+        return Ok(Some(
+            access_plan_for_selection(
+                tree_map,
+                &file_action.path(),
+                file_action.size()? as u64,
+                cache,
+                metrics,
+            )
+            .await?,
+        ));
+    }
+    Ok(None)
 }
 
 #[cfg(test)]
