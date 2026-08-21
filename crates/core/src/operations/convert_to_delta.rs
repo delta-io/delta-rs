@@ -1052,6 +1052,9 @@ mod tests {
             matches!(
                 dtype,
                 crate::kernel::DataType::Primitive(crate::kernel::PrimitiveType::TimestampNanos)
+                    | crate::kernel::DataType::Primitive(
+                        crate::kernel::PrimitiveType::TimestampNanosNtz
+                    )
             )
         }
 

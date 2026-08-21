@@ -25,9 +25,9 @@ deltalake-core = { version = "1.0", path = "../core", default-features = false }
 deltalake-aws = { version = "1.0", path = "../aws", optional = true }
 deltalake-azure = { version = "1.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "1.0", path = "../gcp", optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "http2"] }
-reqwest-retry = "0.7"
-reqwest-middleware = { version = "0.4.0", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
+reqwest-retry = "0.9"
+reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
 rand = "0.10"
 dashmap = "6"
 datafusion = { workspace = true, optional = true }
@@ -36,7 +36,7 @@ moka = { version = "0.12", optional = true, features = ["future"] }
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
-httpmock = { version = "0.8.0-alpha.1" }
+httpmock = { version = "0.8.3" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]

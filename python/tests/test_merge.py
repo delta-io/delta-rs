@@ -2913,6 +2913,37 @@ def _merge_with_type_mismatch_actions(merger, action_style: str):
 
 
 @pytest.mark.pyarrow
+def test_merge_from_without_files_table_preserves_state(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    target = pa.table({"id": [1, 2], "value": ["a", "b"]})
+    source = pa.table({"id": [2, 3], "value": ["bb", "c"]})
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    metrics = (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_update({"value": "source.value"})
+        .when_not_matched_insert({"id": "source.id", "value": "source.value"})
+        .execute()
+    )
+
+    assert int(metrics["num_target_rows_updated"]) == 1
+    assert int(metrics["num_target_rows_inserted"]) == 1
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id")
+    assert result["value"].to_pylist() == ["a", "bb", "c"]
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("action_style", ("all", "explicit"))
 def test_merge_type_mismatch_default_castable_value_succeeds(
     tmp_path: pathlib.Path, action_style: str
@@ -3371,6 +3402,48 @@ def test_merge_streamed_exec_does_not_rescan_single_use_source(tmp_path: pathlib
 
 
 @pytest.mark.pyarrow
+def test_merge_when_matched_update_preserves_list_with_null_element(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    list_type = pa.list_(pa.field("element", pa.int32()))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("b", list_type)])
+    initial = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[1, 2, None]], type=list_type),
+        },
+        schema=schema,
+    )
+    write_deltalake(tmp_path, initial)
+
+    source = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[-9999, -9999, None]], type=list_type),
+        },
+        schema=schema,
+    )
+
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            source_alias="source",
+            target_alias="target",
+            predicate="source.id = target.id",
+        )
+        .when_matched_update(updates={"b": "source.b"})
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table()
+    row_b = result.filter(pa.compute.equal(result["id"], "row1"))["b"][0].as_py()
+    assert row_b == [-9999, -9999, None]
+
+
+@pytest.mark.pyarrow
 def test_merge_with_spill_config(tmp_path: pathlib.Path):
     """Verify merge accepts and uses spill configuration without error."""
     import pyarrow as pa
@@ -3447,7 +3520,8 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
         enable_nanosecond_timestamps()
         try:
             with pytest.raises(
-                DeltaError, match="does not have the required 'timestampNanos' feature"
+                DeltaError,
+                match="does not have the required 'timestampNanos' and 'timestampNtz' features",
             ):
                 do_merge()
         finally:

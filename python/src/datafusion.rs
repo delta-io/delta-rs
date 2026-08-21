@@ -14,6 +14,7 @@ use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
 use deltalake::datafusion::execution::object_store::ObjectStoreUrl;
+use deltalake::datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
 use deltalake::delta_datafusion::DeltaScanNext;
@@ -71,8 +72,12 @@ impl TableProvider for LazyTableProvider {
         let df_schema: DFSchema = plan.schema().try_into()?;
 
         if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr =
-                create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
+            let physical_expr = create_physical_expr(
+                &filter_expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
             plan = Arc::new(FilterExec::try_new(physical_expr, plan)?);
         }
 
@@ -88,6 +93,7 @@ impl TableProvider for LazyTableProvider {
                             &Expr::Column(Column::from((table_ref, field))),
                             &df_schema,
                             execution_props,
+                            &PhysicalPlanningContext::default(),
                         )
                         .map(|expr| (expr, field.name().clone()))
                         .map_err(DeltaTableError::from)

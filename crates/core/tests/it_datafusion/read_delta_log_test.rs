@@ -3,7 +3,7 @@ use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 use object_store::path::Path as StorePath;
 use object_store::{
     CopyOptions, GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions,
-    PutPayload, PutResult, RenameOptions,
+    PutPayload, PutResult, RenameOptions, local::LocalFileSystem,
 };
 use pretty_assertions::assert_eq;
 use std::path::{Path, PathBuf};
@@ -37,20 +37,20 @@ impl std::fmt::Display for InstrumentedStore {
 }
 
 impl InstrumentedStore {
-    fn new_slow(location: Url) -> DeltaResult<Self> {
-        Ok(Self {
-            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
+    fn new_slow() -> Self {
+        Self {
+            inner: Arc::new(LocalFileSystem::new()),
             recorded_gets: None,
             delay_gets: true,
-        })
+        }
     }
 
-    fn new_recording(location: Url) -> DeltaResult<Self> {
-        Ok(Self {
-            inner: deltalake_core::logstore::store_for(&location, None::<(&str, &str)>)?,
+    fn new_recording() -> Self {
+        Self {
+            inner: Arc::new(LocalFileSystem::new()),
             recorded_gets: Some(Mutex::new(Vec::new())),
             delay_gets: false,
-        })
+        }
     }
 
     fn recorded_gets(&self) -> Vec<String> {
@@ -186,7 +186,7 @@ async fn test_log_buffering() {
     let location = Url::from_directory_path(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
-    let store = Arc::new(InstrumentedStore::new_slow(location.clone()).unwrap());
+    let store = Arc::new(InstrumentedStore::new_slow());
 
     let mut seq_version = 0;
     let t = SystemTime::now();
@@ -352,8 +352,7 @@ async fn test_update_incremental_does_not_reread_initial_commit() {
     }
 
     let location = Url::from_directory_path(&path).unwrap();
-    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
-    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+    let store = Arc::new(InstrumentedStore::new_recording());
     let mut table = DeltaTableBuilder::from_url(location.clone())
         .unwrap()
         .with_storage_backend(store.clone(), location)
@@ -393,8 +392,7 @@ async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant
     }
 
     let location = Url::from_directory_path(&path).unwrap();
-    let store_root = Url::from_directory_path(path.ancestors().last().unwrap()).unwrap();
-    let store = Arc::new(InstrumentedStore::new_recording(store_root).unwrap());
+    let store = Arc::new(InstrumentedStore::new_recording());
 
     deltalake_core::checkpoints::create_checkpoint_from_table_url_and_cleanup(
         location.clone(),

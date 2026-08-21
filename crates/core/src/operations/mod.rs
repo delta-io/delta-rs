@@ -22,8 +22,8 @@ use uuid::Uuid;
 
 use self::{
     add_column::AddColumnBuilder, add_feature::AddTableFeatureBuilder, create::CreateBuilder,
-    filesystem_check::FileSystemCheckBuilder, restore::RestoreBuilder,
-    set_tbl_properties::SetTablePropertiesBuilder,
+    drop_column_not_null::DropColumnNotNullBuilder, filesystem_check::FileSystemCheckBuilder,
+    restore::RestoreBuilder, set_tbl_properties::SetTablePropertiesBuilder,
     update_field_metadata::UpdateFieldMetadataBuilder,
     update_table_metadata::UpdateTableMetadataBuilder, vacuum::VacuumBuilder,
 };
@@ -46,6 +46,7 @@ pub mod add_column;
 pub mod add_feature;
 pub mod convert_to_delta;
 pub mod create;
+pub mod drop_column_not_null;
 pub mod drop_constraints;
 pub mod filesystem_check;
 pub mod generate;
@@ -167,6 +168,12 @@ impl DeltaTable {
     #[must_use]
     pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
         UpdateFieldMetadataBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Drop the `NOT NULL` constraint on a column, making it nullable
+    #[must_use]
+    pub fn drop_column_not_null(self) -> DropColumnNotNullBuilder {
+        DropColumnNotNullBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
     }
 
     /// Update table metadata
@@ -520,6 +527,12 @@ impl DeltaOps {
     #[deprecated(note = "Use [`DeltaTable::update_field_metadata`] instead")]
     pub fn update_field_metadata(self) -> UpdateFieldMetadataBuilder {
         UpdateFieldMetadataBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
+    }
+
+    /// Drop the `NOT NULL` constraint on a column, making it nullable
+    #[deprecated(note = "Use [`DeltaTable::drop_column_not_null`] instead")]
+    pub fn drop_column_not_null(self) -> DropColumnNotNullBuilder {
+        DropColumnNotNullBuilder::new(self.0.log_store, self.0.state.map(|s| s.snapshot))
     }
 
     /// Update table metadata

@@ -27,6 +27,7 @@ pub enum MergeScenario {
     MultipleInsertOnly,
     DeleteOnly,
     Upsert,
+    NoopHeavyUpsert,
 }
 
 type MergeValidator = fn(&MergeMetrics, &MergeTestCase) -> DeltaResult<()>;
@@ -58,6 +59,7 @@ impl MergeTestCase {
             MergeScenario::MultipleInsertOnly => merge_multiple_insert(source, table),
             MergeScenario::DeleteOnly => merge_delete(source, table),
             MergeScenario::Upsert => merge_upsert(source, table),
+            MergeScenario::NoopHeavyUpsert => merge_noop_heavy_upsert(source, table),
         }
     }
 
@@ -104,6 +106,29 @@ fn validate_upsert(metrics: &MergeMetrics, case: &MergeTestCase) -> DeltaResult<
     ensure_zero(
         metrics.num_target_rows_deleted,
         "num_target_rows_deleted",
+        case,
+    )
+}
+
+fn validate_noop_heavy_upsert(metrics: &MergeMetrics, case: &MergeTestCase) -> DeltaResult<()> {
+    ensure_zero(
+        metrics.num_target_rows_updated,
+        "num_target_rows_updated",
+        case,
+    )?;
+    ensure_zero(
+        metrics.num_target_rows_deleted,
+        "num_target_rows_deleted",
+        case,
+    )?;
+    ensure_zero(
+        metrics.num_target_rows_copied,
+        "num_target_rows_copied",
+        case,
+    )?;
+    ensure_zero(
+        metrics.num_target_files_removed,
+        "num_target_files_removed",
         case,
     )
 }
@@ -276,11 +301,23 @@ const UPSERT_CASES: [MergeTestCase; 9] = [
     },
 ];
 
+const NOOP_HEAVY_UPSERT_CASES: [MergeTestCase; 1] = [MergeTestCase {
+    name:
+        "noop_heavy_upsert_filesMatchedFraction_1.0_rowsMatchedNoopFraction_1.0_rowsNotMatchedFraction_0.05",
+    scenario: MergeScenario::NoopHeavyUpsert,
+    params: MergePerfParams {
+        sample_matched_rows: 1.0,
+        sample_not_matched_rows: 0.05,
+    },
+    validator: validate_noop_heavy_upsert,
+}];
+
 fn all_cases_iter() -> impl Iterator<Item = &'static MergeTestCase> {
     INSERT_ONLY_CASES
         .iter()
         .chain(DELETE_ONLY_CASES.iter())
         .chain(UPSERT_CASES.iter())
+        .chain(NOOP_HEAVY_UPSERT_CASES.iter())
 }
 
 pub fn insert_only_cases() -> &'static [MergeTestCase] {
@@ -293,6 +330,10 @@ pub fn delete_only_cases() -> &'static [MergeTestCase] {
 
 pub fn upsert_cases() -> &'static [MergeTestCase] {
     &UPSERT_CASES
+}
+
+pub fn noop_heavy_upsert_cases() -> &'static [MergeTestCase] {
+    &NOOP_HEAVY_UPSERT_CASES
 }
 
 pub fn merge_case_names() -> Vec<&'static str> {
@@ -378,6 +419,25 @@ pub fn merge_upsert(source: DataFrame, table: DeltaTable) -> Result<MergeBuilder
         .with_source_alias("source")
         .with_target_alias("target")
         .when_matched_update(apply_update_projection)?
+        .when_not_matched_insert(apply_insert_projection)
+}
+
+pub fn merge_noop_heavy_upsert(
+    source: DataFrame,
+    table: DeltaTable,
+) -> Result<MergeBuilder, DeltaTableError> {
+    table
+        .merge(
+            source,
+            "source.wr_item_sk = target.wr_item_sk and source.wr_order_number = target.wr_order_number",
+        )
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_matched_update(|update| {
+            apply_update_projection(
+                update.predicate("source.wr_return_amt <> target.wr_return_amt"),
+            )
+        })?
         .when_not_matched_insert(apply_insert_projection)
 }
 

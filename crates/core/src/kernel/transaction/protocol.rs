@@ -135,17 +135,20 @@ impl ProtocolChecker {
     }
 
     #[cfg(feature = "nanosecond-timestamps")]
-    /// Check can write_timestamp_nanos
+    /// Check can write_timestamp_nanos.
+    /// Requires both timestampNanos and timestampNtz features.
     pub fn check_can_write_timestamp_nanos(
         &self,
         snapshot: &EagerSnapshot,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
         trace!("checking to see if {snapshot:?} can write timestampnanos");
+        let contains_nanos = contains_timestamp_nanos(schema.fields());
+        self.check_can_write_feature(snapshot, contains_nanos, TableFeature::TimestampNanos)?;
         self.check_can_write_feature(
             snapshot,
-            contains_timestamp_nanos(schema.fields()),
-            TableFeature::TimestampNanos,
+            contains_nanos,
+            TableFeature::TimestampWithoutTimezone,
         )
     }
 
@@ -299,6 +302,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::DeletionVectors);
     reader_features.insert(TableFeature::VariantType);
     reader_features.insert(TableFeature::VariantTypePreview);
+    reader_features.insert(TableFeature::V2Checkpoint);
     #[cfg(feature = "nanosecond-timestamps")]
     reader_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
@@ -313,6 +317,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::TimestampNanos);
     writer_features.insert(TableFeature::VariantType);
     writer_features.insert(TableFeature::VariantTypePreview);
+    writer_features.insert(TableFeature::V2Checkpoint);
     #[cfg(feature = "datafusion")]
     {
         writer_features.insert(TableFeature::ChangeDataFeed);

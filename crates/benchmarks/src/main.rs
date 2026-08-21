@@ -6,15 +6,16 @@ use std::{
 use clap::{Parser, Subcommand, ValueEnum};
 
 use delta_benchmarks::{
-    merge_case_by_name, merge_case_names, merge_delete, merge_insert, merge_upsert,
-    prepare_source_and_table, register_tpcds_tables, run_smoke_once, tpcds_queries, tpcds_query,
-    MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
+    merge_case_by_name, merge_case_names, merge_delete, merge_insert, merge_noop_heavy_upsert,
+    merge_upsert, prepare_source_and_table, register_tpcds_tables, run_smoke_once, tpcds_queries,
+    tpcds_query, MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
 };
 use deltalake_core::ensure_table_uri;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum OpKind {
     Upsert,
+    NoopHeavyUpsert,
     Delete,
     Insert,
 }
@@ -107,11 +108,14 @@ async fn main() -> anyhow::Result<()> {
                 run_merge_case(merge_case, &parquet_dir).await?;
             } else {
                 let op = op.ok_or_else(|| {
-                    anyhow::anyhow!("specify an operation (upsert/delete/insert) or provide --case")
+                    anyhow::anyhow!(
+                        "specify an operation (upsert/noop-heavy-upsert/delete/insert) or provide --case"
+                    )
                 })?;
 
                 let op_fn: MergeOp = match op {
                     OpKind::Upsert => merge_upsert,
+                    OpKind::NoopHeavyUpsert => merge_noop_heavy_upsert,
                     OpKind::Delete => merge_delete,
                     OpKind::Insert => merge_insert,
                 };

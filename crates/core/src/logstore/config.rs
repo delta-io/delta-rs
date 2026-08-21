@@ -104,8 +104,11 @@ pub struct StorageConfig {
     /// dedicated handle.
     pub runtime: Option<IORuntime>,
 
+    /// Retry config for object stores
+    ///
+    /// Configuration for how object store should retry failed requests
     #[cfg(feature = "cloud")]
-    pub retry: ::object_store::RetryConfig,
+    pub retry: RetryConfig,
 
     /// Limit configuration.
     ///
@@ -297,7 +300,7 @@ pub fn parse_f64(value: &str) -> DeltaResult<f64> {
 }
 
 #[cfg(feature = "cloud")]
-pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
+pub(crate) fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
     humantime::parse_duration(value)
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
 }

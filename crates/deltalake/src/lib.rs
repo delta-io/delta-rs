@@ -18,6 +18,8 @@ pub use deltalake_gcp as gcp;
 pub use deltalake_hdfs as hdfs;
 #[cfg(feature = "lakefs")]
 pub use deltalake_lakefs as lakefs;
+#[cfg(feature = "opendal")]
+pub use deltalake_opendal as opendal;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 mod __deltalake_auto_register_s3 {
@@ -48,6 +50,14 @@ mod __deltalake_auto_register_hdfs {
     #[ctor::ctor]
     fn register() {
         crate::hdfs::register_handlers(None);
+    }
+}
+
+#[cfg(feature = "opendal")]
+mod __deltalake_auto_register_opendal {
+    #[ctor::ctor]
+    fn register() {
+        crate::opendal::register_handlers(None);
     }
 }
 
