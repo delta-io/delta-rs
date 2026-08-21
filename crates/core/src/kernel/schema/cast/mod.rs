@@ -991,20 +991,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_normalize_for_delta_timestamp_to_us() {
+    #[rstest::rstest]
+    #[case(Some("UTC".into()))]
+    #[case(None)]
+    fn test_normalize_for_delta_timestamp_to_us(#[case] tz: Option<Arc<str>>) {
         use arrow_schema::TimeUnit;
 
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "ts_ns",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
                 true,
             ),
             Field::new("ts_sec", DataType::Timestamp(TimeUnit::Second, None), true),
             Field::new(
                 "ts_ms",
-                DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                DataType::Timestamp(TimeUnit::Millisecond, tz.clone()),
                 true,
             ),
             Field::new("id", DataType::Int32, false),
@@ -1013,9 +1015,9 @@ mod tests {
         let result = normalize_for_delta(&schema);
 
         let expected_ns_timestamp_dtype = if cfg!(feature = "nanosecond-timestamps") {
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()))
+            DataType::Timestamp(TimeUnit::Nanosecond, tz.clone())
         } else {
-            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            DataType::Timestamp(TimeUnit::Microsecond, tz.clone())
         };
 
         assert_eq!(result.field(0).data_type(), &expected_ns_timestamp_dtype);
@@ -1025,7 +1027,7 @@ mod tests {
         );
         assert_eq!(
             result.field(2).data_type(),
-            &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+            &DataType::Timestamp(TimeUnit::Microsecond, tz)
         );
         assert_eq!(result.field(3).data_type(), &DataType::Int32);
     }

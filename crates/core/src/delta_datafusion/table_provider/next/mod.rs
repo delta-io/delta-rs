@@ -1099,8 +1099,8 @@ mod tests {
             .with_columns(schema.fields().cloned())
             .with_actions(vec![Action::Protocol(
                 ProtocolInner::new(3, 7)
-                    .append_reader_features([TableFeature::V2Checkpoint])
-                    .append_writer_features([TableFeature::V2Checkpoint])
+                    .append_reader_features([TableFeature::TypeWidening])
+                    .append_writer_features([TableFeature::TypeWidening])
                     .as_kernel(),
             )])
             .await

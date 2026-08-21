@@ -6,7 +6,7 @@ use arrow_schema::{DataType, Field, TimeUnit};
 
 pub(crate) use self::scan_utils::*;
 use crate::DeltaResult;
-use crate::kernel::{Add, AddCDCFile, Remove, Version};
+use crate::kernel::{Add, AddCDCFile, DeletionVectorDescriptor, Remove, Version};
 
 /// Scan-related types and helpers for reading Change Data Feed (CDF) batches.
 pub mod scan;
@@ -41,11 +41,23 @@ pub(crate) static ADD_PARTITION_SCHEMA: LazyLock<Vec<Field>> = LazyLock::new(|| 
     ]
 });
 
+/// Sometimes when a data file is updated after a delete commit the data file is not re-written, but
+/// the deletion vector is updated. This manifests itself in the commit log as the data file being
+/// removed (with a DV) and then added back with a new DV. In this case, the difference of the two
+/// bitmaps is what is both deleted from this file and rows that haven't been touched.
+#[derive(Debug)]
+pub(crate) struct ResolvedPair {
+    pub version: Version,
+    pub timestamp: i64,
+    pub add: Add,
+    pub rm_dv: Option<DeletionVectorDescriptor>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CdcDataSpec<F: FileAction> {
-    version: Version,
-    timestamp: i64,
-    actions: Vec<F>,
+    pub version: Version,
+    pub timestamp: i64,
+    pub actions: Vec<F>,
 }
 
 impl<F: FileAction> CdcDataSpec<F> {
@@ -70,6 +82,12 @@ pub trait FileAction {
     fn path(&self) -> String;
     /// Byte size of the physical file
     fn size(&self) -> DeltaResult<usize>;
+    /// Possibly provide the deletion vector for the action
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor>;
+    /// Whether this file action contains a deletion vector
+    fn has_deletion_vector(&self) -> bool {
+        false
+    }
 }
 
 impl FileAction for Add {
@@ -84,6 +102,14 @@ impl FileAction for Add {
     fn size(&self) -> DeltaResult<usize> {
         Ok(self.size as usize)
     }
+
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector.clone()
+    }
+
+    fn has_deletion_vector(&self) -> bool {
+        self.deletion_vector.is_some()
+    }
 }
 
 impl FileAction for AddCDCFile {
@@ -97,6 +123,10 @@ impl FileAction for AddCDCFile {
 
     fn size(&self) -> DeltaResult<usize> {
         Ok(self.size as usize)
+    }
+
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        None
     }
 }
 
@@ -131,5 +161,13 @@ impl FileAction for Remove {
                 )),
             }
         }
+    }
+
+    fn deletion_vector(&self) -> Option<DeletionVectorDescriptor> {
+        self.deletion_vector.clone()
+    }
+
+    fn has_deletion_vector(&self) -> bool {
+        self.deletion_vector.is_some()
     }
 }

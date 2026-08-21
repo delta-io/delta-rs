@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use delta_benchmarks::{
-    delete_only_cases, insert_only_cases, prepare_source_and_table, upsert_cases, MergeTestCase,
+    delete_only_cases, insert_only_cases, noop_heavy_upsert_cases, prepare_source_and_table,
+    upsert_cases, MergeTestCase,
 };
 
 use divan::{AllocProfiler, Bencher};
@@ -50,5 +51,10 @@ fn delete_only(bencher: Bencher, case: &MergeTestCase) {
 
 #[divan::bench(args = upsert_cases())]
 fn upsert(bencher: Bencher, case: &MergeTestCase) {
+    bench_merge_case(bencher, case);
+}
+
+#[divan::bench(args = noop_heavy_upsert_cases())]
+fn noop_heavy_upsert(bencher: Bencher, case: &MergeTestCase) {
     bench_merge_case(bencher, case);
 }

@@ -57,6 +57,10 @@ from deltalake.writer._conversion import _convert_arro3_schema_to_delta
             ),
             Schema(fields=[Field("foo", DataType.timestamp("us", tz="UTC"))]),
         ),
+        (
+            Schema(fields=[Field("foo", DataType.timestamp("ns"))]),
+            Schema(fields=[Field("foo", DataType.timestamp("us"))]),
+        ),
         # Nullability variations
         (
             Schema(fields=[Field("foo", DataType.uint16(), nullable=False)]),
@@ -407,10 +411,10 @@ def test_schema_conversion(input_schema: Schema, expected_schema: Schema):
             ),
             Schema(fields=[Field("foo", DataType.timestamp("ns", tz="UTC"))]),
         ),
-        # Nanosecond timestamps without a timezone are still converted to microseconds
+        # Nanosecond timestamps without a timezone are also converted to microseconds
         (
             Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
-            Schema(fields=[Field("foo", DataType.timestamp("us"), nullable=True)]),
+            Schema(fields=[Field("foo", DataType.timestamp("ns"), nullable=True)]),
         ),
         # Nanosecond timestamp nested in a struct, with a timezone
         (
