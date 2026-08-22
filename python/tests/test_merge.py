@@ -3546,3 +3546,75 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
 
         expected_array = pa.array([None, None, 123_456], pa.timestamp("us", tz="UTC"))
         assert pa.chunked_array(result.column("ts")).combine_chunks() == expected_array
+
+
+def test_merge_with_target_partitions(tmp_path: pathlib.Path):
+    # `target_partitions=1` removes the `RepartitionExec` from the merge plan. Its
+    # motivating use is delta-io/delta-rs#4614: under a bounded memory pool a *partitioned*
+    # hash join can deadlock (RepartitionExec backpressure vs. the join waiting on memory),
+    # and dropping to a single partition avoids that.
+    #
+    # This test runs the merge under a `FairSpillPool` (`max_spill_size`) that is genuinely
+    # constraining -- 16 MiB, the same order as the join's working set for this data -- and
+    # asserts it completes with correct results. That is deliberately different from the
+    # original version of this test, which set a 100 MiB bound over three rows: such a bound
+    # is never reached, so it exercised nothing. (A test that reproduces the #4614 deadlock
+    # itself is not included: it does not reproduce reliably across machines -- see the PR
+    # discussion -- and a hanging merge is unsuitable for CI. `streamed_exec=True` is the
+    # execution path used in practice.)
+    n = 100_000
+    n_insert = 20_000
+    total_rows = n + n_insert
+
+    def column(name, values, dtype):
+        return Array(values, ArrowField(name, type=dtype, nullable=True))
+
+    target_table = Table(
+        {
+            "id": column("id", [str(i) for i in range(n)], DataType.string_view()),
+            "price": column("price", list(range(n)), DataType.int64()),
+            "sold": column("sold", [i % 1000 for i in range(n)], DataType.int32()),
+            "deleted": column("deleted", [False] * n, DataType.bool()),
+        },
+    )
+    write_deltalake(tmp_path, target_table, mode="append")
+
+    dt = DeltaTable(tmp_path)
+
+    # Update every existing row (price bumped by 1_000_000 so updates are detectable) and
+    # insert `n_insert` brand-new rows, so both join inputs are large.
+    source_table = Table(
+        {
+            "id": column(
+                "id", [str(i) for i in range(total_rows)], DataType.string_view()
+            ),
+            "price": column(
+                "price", [i + 1_000_000 for i in range(total_rows)], DataType.int64()
+            ),
+            "sold": column("sold", [1] * total_rows, DataType.int32()),
+            "deleted": column("deleted", [False] * total_rows, DataType.bool()),
+        },
+    )
+
+    dt.merge(
+        source=source_table,
+        predicate="t.id = s.id",
+        source_alias="s",
+        target_alias="t",
+        streamed_exec=True,
+        max_spill_size=16 * 1024 * 1024,
+        max_temp_directory_size=4 * 1024 * 1024 * 1024,
+        target_partitions=1,
+    ).when_matched_update_all().when_not_matched_insert_all().execute()
+
+    assert dt.history(1)[0]["operation"] == "MERGE"
+
+    result = dt.to_pyarrow_table()
+    assert result.num_rows == total_rows
+    price_by_id = dict(zip(result["id"].to_pylist(), result["price"].to_pylist()))
+    # Every original row was updated ...
+    assert price_by_id["0"] == 1_000_000
+    assert price_by_id[str(n - 1)] == (n - 1) + 1_000_000
+    # ... and the brand-new rows were inserted.
+    assert price_by_id[str(n)] == n + 1_000_000
+    assert price_by_id[str(total_rows - 1)] == (total_rows - 1) + 1_000_000
