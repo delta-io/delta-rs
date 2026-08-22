@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::pin::Pin;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -14,9 +16,9 @@ use url::Url;
 
 #[cfg(feature = "datafusion")]
 use super::MaterializedFiles;
-use super::stats_projection::{FileStatsMaterialization, StatsProjection};
-use crate::DeltaResult;
+use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSourcePolicy};
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
+use crate::{DeltaResult, DeltaTableError};
 
 /// A boxed, `Send`able stream of [`ScanMetadata`] results produced while scanning a snapshot.
 pub type SendableScanMetadataStream = Pin<Box<dyn Stream<Item = DeltaResult<ScanMetadata>> + Send>>;
@@ -77,10 +79,11 @@ impl ScanBuilder {
 
     /// Skip file statistics during kernel log replay.
     ///
-    /// When `true`, min/max/null stats are not parsed and `stats_parsed` in scan output may
-    /// be null. Partition filtering still applies. With a predicate, stats based data skipping
-    /// is disabled. Use `false` when file pruning from statistics is required. Passing `false`
-    /// clears any previous stats materialization override and restores default inference.
+    /// Set `true` to make the kernel skip minimum and maximum values plus null counts.
+    /// The kernel disables predicate pruning, including partition pruning. Scan metadata keeps
+    /// each active file for predicates that depend on file data. Readers must apply the predicate.
+    /// Set `false` to remove a prior override. The builder infers statistics materialization and
+    /// enables kernel pruning.
     pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
         if skip_stats {
             self.stats_materialization = Some(FileStatsMaterialization::without_stats());
@@ -119,9 +122,6 @@ impl ScanBuilder {
             )?),
         };
 
-        // Modernization: Use kernel's StatsOptions when available
-        // TODO: Add condition to use kernel StatsOptions API once fully integrated
-
         let inner = build_kernel_scan(snapshot, schema, predicate, Some(&stats_materialization))?;
 
         Ok(Scan::new(Arc::new(inner), stats_materialization))
@@ -158,22 +158,19 @@ fn with_kernel_stats_output(
     builder: KernelScanBuilder,
     materialization: &FileStatsMaterialization,
 ) -> KernelScanBuilder {
-    // Modernize to use kernel's StatsOptions API
-    // Map our legacy StatsProjection to kernel's modern StatsOptions
-
-    let stats_opts = match materialization.stats_projection() {
-        StatsProjection::None => delta_kernel::scan::StatsOptions::json_only(),
-        StatsProjection::Full => delta_kernel::scan::StatsOptions::all_struct(),
-        StatsProjection::PredicateColumns(_columns) => {
-            // Use kernel's efficient column-based stats
-            // TODO: Use specific column selection: StructStats::Columns(_columns.iter().cloned().collect())
-            delta_kernel::scan::StatsOptions::all_struct()
-        }
-        StatsProjection::NumRecordsOnly => delta_kernel::scan::StatsOptions::json_only(),
+    let stats_opts = match materialization.stats_source_policy() {
+        StatsSourcePolicy::None => delta_kernel::scan::StatsOptions::none(),
+        StatsSourcePolicy::ParsedWithJsonFallback => match materialization.stats_projection() {
+            StatsProjection::None => delta_kernel::scan::StatsOptions::json_only(),
+            StatsProjection::Full => delta_kernel::scan::StatsOptions::all_struct(),
+            StatsProjection::PredicateColumns(_columns) => {
+                // TODO: Pass the selected columns to `StatsOptions::struct_columns`.
+                delta_kernel::scan::StatsOptions::all_struct()
+            }
+            StatsProjection::NumRecordsOnly => delta_kernel::scan::StatsOptions::json_only(),
+        },
     };
 
-    // Apply the kernel's native stats options
-    // This reuses the kernel's efficient StructStats implementation
     builder.with_stats(stats_opts)
 }
 
@@ -182,12 +179,15 @@ mod tests {
     use delta_kernel::expressions::{ColumnName, Scalar};
     use delta_kernel::schema::{DataType, StructField, StructType};
     use delta_kernel::{Expression, PredicateRef};
+    use futures::TryStreamExt;
 
     use super::super::stats_projection::{
         FileStatsMaterialization, StatsProjection, StatsSourcePolicy,
     };
     use super::*;
-    use crate::DeltaTable;
+    use crate::kernel::Action;
+    use crate::test_utils::make_test_add;
+    use crate::{DeltaTable, kernel::snapshot::Snapshot};
 
     async fn synthetic_snapshot() -> DeltaResult<super::super::Snapshot> {
         let nested = StructType::try_new([
@@ -315,6 +315,68 @@ mod tests {
         );
         assert!(!scan.stats_materialization().preserves_raw_stats());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_builder_skip_stats_disables_partition_pruning() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("value", DataType::INTEGER),
+                StructField::nullable("part", DataType::STRING),
+            ])
+            .with_partition_columns(["part"])
+            .with_actions([
+                Action::Add(make_test_add("part=a/part-a.parquet", &[("part", "a")], 0)),
+                Action::Add(make_test_add("part=b/part-b.parquet", &[("part", "b")], 0)),
+            ])
+            .await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let predicate: PredicateRef =
+            Arc::new(Expression::column(["part"]).eq(Scalar::String("a".to_string())));
+        let scan = snapshot
+            .scan_builder()
+            .with_predicate(predicate)
+            .with_skip_stats(true)
+            .build()?;
+
+        let mut paths = Vec::new();
+        let mut metadata = scan.scan_metadata(log_store.engine(None));
+        while let Some(batch) = metadata.try_next().await? {
+            paths = batch.visit_scan_files(paths, |paths, file| paths.push(file.path))?;
+        }
+        paths.sort();
+
+        assert_eq!(paths, ["part=a/part-a.parquet", "part=b/part-b.parquet"]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scan_metadata_from_returns_error_for_malformed_cache() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::nullable("value", DataType::INTEGER)])
+            .await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let scan = snapshot.scan_builder().build()?;
+        let malformed = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
+
+        assert!(
+            scan.scan_metadata_from(
+                log_store.engine(None),
+                snapshot.version(),
+                Box::new(std::iter::once(malformed)),
+                None,
+            )
+            .try_collect::<Vec<_>>()
+            .await
+            .is_err(),
+            "malformed cached data must return an error"
+        );
         Ok(())
     }
 }
@@ -470,27 +532,39 @@ impl Scan {
             Ok(scan_row_in_eval) => scan_row_in_eval,
             Err(err) => return Box::pin(once(ready(Err(err)))),
         };
-        let scan_row_iter = existing_data
-            .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
-            .map(move |b| {
-                evaluator
-                    .evaluate(b.as_ref())
-                    .expect("malformed cached log data")
-            });
-
         // TODO: which capacity to choose?
         let mut builder = ReceiverStreamBuilder::<ScanMetadata>::new(100);
         let tx = builder.tx();
         let scan_inner = move || {
+            let evaluation_error: Rc<RefCell<Option<DeltaTableError>>> =
+                Rc::new(RefCell::new(None));
+            let error_slot = Rc::clone(&evaluation_error);
+            let scan_row_data = existing_data
+                .map(|batch| Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
+                .map_while(move |batch| match evaluator.evaluate(batch.as_ref()) {
+                    Ok(data) => Some(data),
+                    Err(err) => {
+                        *error_slot.borrow_mut() = Some(err.into());
+                        None
+                    }
+                })
+                .fuse();
+
             for res in inner.scan_metadata_from(
                 engine.as_ref(),
                 existing_version,
-                Box::new(scan_row_iter),
+                Box::new(scan_row_data),
                 existing_predicate,
             )? {
+                if let Some(err) = evaluation_error.borrow_mut().take() {
+                    return Err(err);
+                }
                 if tx.blocking_send(Ok(res?)).is_err() {
                     break;
                 }
+            }
+            if let Some(err) = evaluation_error.borrow_mut().take() {
+                return Err(err);
             }
             Ok(())
         };
