@@ -53,12 +53,12 @@ pub struct DeltaTableConfig {
     /// when processing record batches.
     pub log_batch_size: usize,
 
-    /// Skip parsing per-file statistics while opening the table.
+    /// Skip parsing file statistics while opening the table.
     /// This defaults to `false`.
     ///
-    /// Use for workflows that never need file pruning (vacuum, filesystem check,
-    /// append-only writes). Any predicated query on this instance will scan every
-    /// file because the cache has no stats. Partition pruning is unaffected.
+    /// Use this option for maintenance and append workflows that do not need file pruning.
+    /// Queries with predicates scan each file because the kernel disables statistics and
+    /// partition pruning.
     #[serde(default)]
     pub skip_stats: bool,
 

@@ -99,6 +99,22 @@ def assert_roundtrips(
 
 
 @pytest.mark.pyarrow
+def test_append_with_skip_stats_table_is_replay_safe(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.table({"id": [1]})
+    write_deltalake(tmp_path, data)
+
+    table = DeltaTable(tmp_path, skip_stats=True)
+    write_deltalake(table, data, mode="append")
+
+    assert table.version() == 1
+    fresh = DeltaTable(tmp_path)
+    assert fresh.version() == 1
+    assert fresh.to_pyarrow_table().num_rows == 2
+
+
+@pytest.mark.pyarrow
 def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.Path):
     """
     Unless ``enable_nanosecond_timestamps()`` is called, nanosecond timestamps
