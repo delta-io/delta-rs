@@ -164,7 +164,7 @@ fn parse_stats_column_impl(
         if field.name() == FIELD_STATS_PARSED {
             continue;
         }
-        if field.name() == FIELD_STATS && !stats_materialization.preserves_raw_stats() {
+        if field.name() == FIELD_STATS && !stats_materialization.retains_stats_field() {
             continue;
         }
         fields.push(field.clone());
