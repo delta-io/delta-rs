@@ -35,7 +35,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
     Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
-    Metadata, ProtocolExt as _, Remove, StructType, StructTypeExt,
+    Metadata, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -426,11 +426,12 @@ pub(super) async fn plan_overwrite_rewrite(
     prepared_write: &PreparedWrite,
     operation_id: Uuid,
 ) -> DeltaResult<MatchedFilesRewritePlan> {
-    let Some(snapshot) = snapshot else {
+    let Some(eager_snapshot) = snapshot else {
         return Ok(MatchedFilesRewritePlan::passthrough(
             prepared_write.insert_plan.clone(),
         ));
     };
+    let snapshot = eager_snapshot.snapshot();
 
     debug_assert_eq!(
         mode, prepared_write.mode,
@@ -455,13 +456,8 @@ pub(super) async fn plan_overwrite_rewrite(
                 dropped_pruning_term_count: analysis.dropped_pruning_term_count,
             };
 
-            let Some(files_scan) = scan_files_where_matches(
-                session,
-                snapshot.snapshot(),
-                log_store.clone(),
-                predicate,
-            )
-            .await?
+            let Some(files_scan) =
+                scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?
             else {
                 return Ok(MatchedFilesRewritePlan {
                     kind: RewriteKind::NoMatch,
@@ -520,7 +516,7 @@ pub(super) async fn plan_overwrite_rewrite(
                 .union(rescued_data)?
                 .build()?;
 
-            let cdc_plan = if should_write_cdc(snapshot)? {
+            let cdc_plan = if should_write_cdc(eager_snapshot)? {
                 Some(
                     LogicalPlanBuilder::new(files_scan.scan().clone())
                         .filter(files_scan.predicate.clone())?
@@ -580,12 +576,11 @@ fn planned_deletion_timestamp_ms() -> DeltaResult<i64> {
 }
 
 async fn collect_all_existing_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: &LogStoreRef,
 ) -> DeltaResult<MatchedExistingFiles> {
     Ok(MatchedExistingFiles::new(
         snapshot
-            .snapshot()
             .active_adds(
                 log_store.as_ref(),
                 ActiveAddOptions {
@@ -600,14 +595,13 @@ async fn collect_all_existing_files(
 }
 
 async fn collect_matched_existing_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     log_store: &LogStoreRef,
     files_scan: &crate::delta_datafusion::MatchedFilesScan,
 ) -> DeltaResult<MatchedExistingFiles> {
     let table_root = Arc::new(snapshot.table_configuration().table_root().clone());
     let valid_files = Arc::new(files_scan.files_set());
     let files = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {

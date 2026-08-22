@@ -770,8 +770,16 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
 
-        let eager = table.snapshot()?.snapshot();
-        let batches = eager.snapshot().add_actions_partition_batches()?;
+        let snapshot = Snapshot::try_new(
+            table.log_store().as_ref(),
+            DeltaTableConfig::default(),
+            None,
+        )
+        .await?;
+        let snapshot = Arc::new(snapshot)
+            .ensure_materialized_files(table.log_store().as_ref())
+            .await?;
+        let batches = snapshot.add_actions_partition_batches()?;
         assert!(!batches.is_empty());
 
         let schema = batches[0].schema();
