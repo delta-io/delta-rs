@@ -326,7 +326,7 @@ impl VacuumBuilder {
         // VacuumMode::Lite file set
         // Expired tombstones are *always deleted (*unless in keep list)
         for tombs in expired_tombstones.iter() {
-            let path = Path::from(tombs.path().to_string());
+            let path = tombs.object_store_path();
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
                 files_to_delete.push(path);
                 file_sizes.push(tombs.size().unwrap_or(0));
@@ -617,7 +617,7 @@ async fn collect_full_mode_tombstones(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let path = Path::from(tombstone.path().to_string());
+                let path = tombstone.object_store_path();
                 tombstone_path_sets.record(path, is_expired);
                 if is_expired {
                     expired_tombstones.push(tombstone);
@@ -712,6 +712,84 @@ mod tests {
                 "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
             ]
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_vacuum_lite_deletes_percent_encoded_partition_path() -> DeltaResult<()> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let table_path = temp_dir.path().to_str().unwrap();
+        let partition_columns = vec!["modified".to_string()];
+        let mut table = create_initialized_table(table_path, &partition_columns).await;
+
+        let mut writer = JsonWriter::for_table(&table)?;
+        writer
+            .write(vec![json!({
+                "id": "A",
+                "value": 1,
+                "modified": "a b"
+            })])
+            .await?;
+        writer.flush_and_commit(&mut table).await?;
+
+        let old_path = table
+            .snapshot()?
+            .log_data()
+            .into_iter()
+            .next()
+            .unwrap()
+            .object_store_path()
+            .to_string();
+        let old_file = temp_dir.path().join(&old_path);
+        assert!(old_file.exists(), "expected written file at {old_path}");
+
+        let remove_actions = table
+            .snapshot()?
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .map_ok(|file| {
+                let mut remove = file.remove_action(true);
+                remove.deletion_timestamp = Some(0);
+                Action::Remove(remove)
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+        let mut overwrite_writer = JsonWriter::for_table(&table)?;
+        overwrite_writer
+            .write(vec![json!({
+                "id": "B",
+                "value": 2,
+                "modified": "a b"
+            })])
+            .await?;
+        let add_actions = overwrite_writer.flush().await?.into_iter().map(Action::Add);
+        let mut actions = remove_actions;
+        actions.extend(add_actions);
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(table.snapshot()?),
+                table.log_store().clone(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Overwrite,
+                    partition_by: Some(partition_columns),
+                    predicate: None,
+                },
+            )
+            .await?;
+        table.update_state().await?;
+
+        let (_table, result) =
+            VacuumBuilder::new(table.log_store(), Some(table.snapshot()?.snapshot.clone()))
+                .with_retention_period(Duration::hours(0))
+                .with_dry_run(false)
+                .with_mode(VacuumMode::Lite)
+                .with_enforce_retention_duration(false)
+                .await?;
+
+        assert!(result.files_deleted.contains(&old_path));
+        assert!(!old_file.exists());
         Ok(())
     }
 
