@@ -39,8 +39,8 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Transaction,
-    Version,
+    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Remove,
+    Transaction, Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -1562,6 +1562,7 @@ impl RawDeltaTable {
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         add_actions,
+        remove_actions,
         mode,
         partition_by,
         schema,
@@ -1573,6 +1574,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         add_actions: Vec<PyAddAction>,
+        remove_actions: Vec<PyRemoveAction>,
         mode: &str,
         partition_by: Vec<String>,
         schema: PyRef<PySchema>,
@@ -1589,9 +1591,13 @@ impl RawDeltaTable {
                 Ok(snapshot.schema().clone())
             })?;
 
-            let mut actions: Vec<Action> = add_actions
+            // Remove actions must precede add actions. Delta's log replay
+            // deduplicates file actions using "first seen wins" semantics, so
+            // ordering removes first ensures they win over adds for the same path.
+            let mut actions: Vec<Action> = remove_actions
                 .iter()
-                .map(|add| Action::Add(add.into()))
+                .map(|remove| Action::Remove(remove.into()))
+                .chain(add_actions.iter().map(|add| Action::Add(add.into())))
                 .collect();
 
             match mode {
@@ -2711,6 +2717,34 @@ impl From<&PyAddAction> for Add {
 }
 
 #[derive(FromPyObject)]
+pub struct PyRemoveAction {
+    path: String,
+    data_change: bool,
+    deletion_timestamp: Option<i64>,
+    extended_file_metadata: Option<bool>,
+    partition_values: Option<HashMap<String, Option<String>>>,
+    size: Option<i64>,
+    tags: Option<HashMap<String, Option<String>>>,
+}
+
+impl From<&PyRemoveAction> for Remove {
+    fn from(action: &PyRemoveAction) -> Self {
+        Remove {
+            path: action.path.clone(),
+            data_change: action.data_change,
+            deletion_timestamp: action.deletion_timestamp,
+            extended_file_metadata: action.extended_file_metadata,
+            partition_values: action.partition_values.clone(),
+            size: action.size,
+            tags: action.tags.clone(),
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }
+    }
+}
+
+#[derive(FromPyObject)]
 pub struct BloomFilterProperties {
     pub set_bloom_filter_enabled: Option<bool>,
     pub fpp: Option<f64>,
@@ -3071,6 +3105,7 @@ fn create_deltalake(
     table_uri,
     schema,
     add_actions,
+    remove_actions,
     mode,
     partition_by,
     name=None,
@@ -3085,6 +3120,7 @@ fn create_table_with_add_actions(
     table_uri: String,
     schema: PyRef<PySchema>,
     add_actions: Vec<PyAddAction>,
+    remove_actions: Vec<PyRemoveAction>,
     mode: &str,
     partition_by: Vec<String>,
     name: Option<String>,
@@ -3107,11 +3143,23 @@ fn create_table_with_add_actions(
 
         let use_lakefs_handler = table.log_store().name() == "LakeFSLogStore";
 
+        // Remove actions must precede add actions in the resulting commit. Delta's log
+        // replay deduplicates file actions on (path, dv_unique_id) using "first seen in
+        // iteration order wins" semantics. If an add and a remove target the same path
+        // within this single commit, ordering removes first ensures the remove wins (the
+        // file is correctly treated as not live), matching the semantics of a
+        // compaction/rewrite that both adds and removes the same path atomically.
+        let actions = remove_actions
+            .iter()
+            .map(|remove| Action::Remove(remove.into()))
+            .chain(add_actions.iter().map(|add| Action::Add(add.into())))
+            .collect::<Vec<_>>();
+
         let mut builder = table
             .create()
             .with_columns(schema.fields().cloned())
             .with_partition_columns(partition_by)
-            .with_actions(add_actions.iter().map(|add| Action::Add(add.into())))
+            .with_actions(actions)
             .with_save_mode(SaveMode::from_str(mode).map_err(PythonError::from)?);
 
         if let Some(name) = &name {
