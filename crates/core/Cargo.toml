@@ -54,7 +54,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # "stdlib"
-bytes = { workspace = true }
+bytes = { workspace = true, features = ["serde"] }
 chrono = { workspace = true, default-features = false, features = ["clock"] }
 regex = { workspace = true }
 thiserror = { workspace = true }
