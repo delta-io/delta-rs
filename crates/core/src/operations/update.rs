@@ -284,6 +284,8 @@ async fn execute(
     operation_id: Uuid,
     safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
+    let eager_snapshot = snapshot;
+    let snapshot = eager_snapshot.snapshot();
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -312,8 +314,7 @@ async fn execute(
     let scan_start = Instant::now();
 
     let maybe_scan_plan =
-        scan_files_where_matches(session, snapshot.snapshot(), log_store.clone(), predicate)
-            .await?;
+        scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
@@ -378,7 +379,7 @@ async fn execute(
 
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
-        Some(snapshot),
+        Some(eager_snapshot),
         session,
         physical_plan.clone(),
         table_partition_cols.to_vec(),
@@ -399,7 +400,6 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -430,12 +430,12 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
-    if let Ok(true) = should_write_cdc(snapshot) {
+    if let Ok(true) = should_write_cdc(eager_snapshot) {
         match tracker.collect() {
             Ok(cdc_plan) => {
                 let cdc_exec = session.create_physical_plan(&cdc_plan).await?;
                 let cdc_actions = write_execution_plan_cdc(
-                    Some(snapshot),
+                    Some(eager_snapshot),
                     session,
                     cdc_exec,
                     table_partition_cols.to_vec(),

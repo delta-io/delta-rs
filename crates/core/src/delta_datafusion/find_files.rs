@@ -472,11 +472,12 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
     Ok(result)
 }
 
-/// Build a partition-metadata MemTable from snapshot add actions.
+/// Builds a partition metadata [`MemTable`] from snapshot `Add` actions.
 ///
-/// Projects only the `path` column and `partition.*` columns for evaluating
-/// partition predicates without materializing full add-action metadata.
-/// Returns `None` when the snapshot contains no add actions.
+/// DataFusion evaluates partition predicates with the `path` and `partition.*`
+/// columns. Callers must provide a snapshot with materialized `Add` batches.
+/// Use [`scan_memory_table`] with lazy snapshots.
+/// Returns `None` when the snapshot has no `Add` actions.
 pub(crate) fn add_actions_partition_mem_table(
     snapshot: &Snapshot,
 ) -> DeltaResult<Option<MemTable>> {
@@ -546,7 +547,7 @@ async fn scan_memory_table(
 ) -> DeltaResult<Vec<Add>> {
     let options = ActiveAddOptions {
         predicate: None,
-        stats: AddStatsPolicy::None,
+        stats: AddStatsPolicy::RawJson,
     };
     let add_action_batches = snapshot.active_add_batches(log_store, options).await?;
     let actions: Vec<Add> = add_action_batches
@@ -690,6 +691,7 @@ mod tests {
         DeltaTable, DeltaTableBuilder,
         delta_datafusion::{
             DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
+            update_datafusion_session,
         },
         kernel::{EagerSnapshot, Snapshot},
         protocol::SaveMode,
@@ -705,12 +707,26 @@ mod tests {
 
     use super::*;
 
-    fn candidate_paths(result: &FindFiles) -> BTreeSet<String> {
-        result
+    fn normalized_candidates(result: &FindFiles) -> Vec<serde_json::Value> {
+        let mut candidates = result
             .candidates
             .iter()
-            .map(|add| add.path.clone())
-            .collect()
+            .map(|add| serde_json::to_value(add).expect("serialize Add action"))
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
+        candidates
+    }
+
+    async fn lazy_snapshot(table: &DeltaTable) -> TestResult<Snapshot> {
+        Ok(Snapshot::try_new(
+            table.log_store().as_ref(),
+            crate::DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?)
     }
 
     #[tokio::test]
@@ -748,10 +764,11 @@ mod tests {
                 find_files(eager.snapshot(), log_store.clone(), &session, predicate).await?;
 
             assert_eq!(lazy_result.partition_scan, expected_partition_scan);
+            assert_eq!(lazy_result.partition_scan, eager_result.partition_scan);
             assert_eq!(lazy_result.candidates.len(), expected_candidates);
             assert_eq!(
-                candidate_paths(&lazy_result),
-                candidate_paths(&eager_result)
+                normalized_candidates(&lazy_result),
+                normalized_candidates(&eager_result)
             );
             assert!(!lazy.has_materialized_files_for_test());
         }
@@ -798,11 +815,11 @@ mod tests {
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
-        let eager = table.snapshot()?.snapshot().clone();
-        let snapshot = eager.snapshot();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
         let predicate = col("id").gt(lit(-1i64));
-        let Some(scan) = scan_files_where_matches(&session, snapshot, log_store, predicate).await?
+        let Some(scan) =
+            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
         else {
             panic!("Expected at least one matching file");
         };
@@ -820,11 +837,11 @@ mod tests {
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
-        let eager = table.snapshot()?.snapshot().clone();
-        let snapshot = eager.snapshot();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
         let predicate = col("id").gt(lit(-1i64));
-        let Some(scan) = scan_files_where_matches(&session, snapshot, log_store, predicate).await?
+        let Some(scan) =
+            scan_files_where_matches(&session, &snapshot, log_store, predicate).await?
         else {
             panic!("Expected at least one matching file");
         };
@@ -847,13 +864,13 @@ mod tests {
         let session = ctx.state();
         table.update_datafusion_session(&session)?;
 
-        let snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
         session.ensure_log_store_registered(log_store.as_ref())?;
         let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
 
         let by_id = find_files_scan(
-            snapshot.snapshot(),
+            &snapshot,
             log_store.clone(),
             &session,
             col("id").eq(lit(7i64)),
@@ -870,7 +887,7 @@ mod tests {
         let matched_paths = by_id.iter().map(|add| add.path.as_str()).collect_vec();
 
         let matches = find_files_scan(
-            snapshot.snapshot(),
+            &snapshot,
             log_store.clone(),
             &session,
             col("id")
@@ -884,9 +901,11 @@ mod tests {
         );
 
         let other_path = snapshot
-            .log_data()
-            .iter()
-            .map(|add| add.path().to_string())
+            .file_views(&log_store, None)
+            .map_ok(|view| view.to_add().path)
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
             .find(|path| !matched_paths.contains(&path.as_str()))
             .expect("expected a non-matching file path");
         let other_file_id = crate::delta_datafusion::normalize_path_as_file_id(
@@ -895,7 +914,7 @@ mod tests {
             "find_files test path",
         )?;
         let no_matches = find_files_scan(
-            snapshot.snapshot(),
+            &snapshot,
             log_store,
             &session,
             col("id")
@@ -918,19 +937,14 @@ mod tests {
             .without_files()
             .load()
             .await?;
-        let snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
 
-        let matches = find_files_scan(
-            snapshot.snapshot(),
-            log_store,
-            &session,
-            col("id").eq(lit(7i64)),
-        )
-        .await?;
+        let matches =
+            find_files_scan(&snapshot, log_store, &session, col("id").eq(lit(7i64))).await?;
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].path.ends_with(".parquet"));
@@ -967,16 +981,11 @@ mod tests {
         let ctx = create_session().into_inner();
         let session = ctx.state();
 
-        let snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
 
-        let matches = find_files_scan(
-            snapshot.snapshot(),
-            log_store,
-            &session,
-            col("price").eq(lit(10i64)),
-        )
-        .await?;
+        let matches =
+            find_files_scan(&snapshot, log_store, &session, col("price").eq(lit(10i64))).await?;
 
         assert_eq!(matches.len(), 1);
         assert_eq!(
@@ -1047,15 +1056,22 @@ mod tests {
         let session = ctx.state();
         table.update_datafusion_session(&session)?;
 
-        let snapshot = table.snapshot()?.snapshot().clone();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
         session.ensure_log_store_registered(log_store.as_ref())?;
 
         let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
         assert_eq!(file_column_name, format!("{PATH_COLUMN}_2"));
 
+        let expected_path = snapshot
+            .file_views(&log_store, None)
+            .map_ok(|view| view.to_add().path)
+            .try_next()
+            .await?
+            .expect("expected one active file");
+
         let matches = find_files_scan(
-            snapshot.snapshot(),
+            &snapshot,
             log_store,
             &session,
             col("id")
@@ -1065,10 +1081,7 @@ mod tests {
         .await?;
 
         assert_eq!(matches.len(), 1);
-        assert_eq!(
-            matches[0].path,
-            snapshot.log_data().iter().next().unwrap().path()
-        );
+        assert_eq!(matches[0].path, expected_path);
 
         Ok(())
     }
@@ -1083,9 +1096,8 @@ mod tests {
             .without_files()
             .load()
             .await?;
-        let eager = table.snapshot()?.snapshot().clone();
-        let snapshot = eager.snapshot();
         let log_store = table.log_store();
+        let snapshot = lazy_snapshot(&table).await?;
 
         let ctx = create_session().into_inner();
         let session = ctx.state();
@@ -1093,7 +1105,7 @@ mod tests {
         assert!(!snapshot.has_materialized_files_for_test());
 
         let Some(scan) =
-            scan_files_where_matches(&session, snapshot, log_store, col("id").eq(lit(7i64)))
+            scan_files_where_matches(&session, &snapshot, log_store, col("id").eq(lit(7i64)))
                 .await?
         else {
             panic!("Expected at least one matching file");
@@ -1130,9 +1142,8 @@ mod tests {
             .with_partition_columns(["modified"])
             .await?;
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let eager = table.snapshot()?.snapshot();
-        let matches =
-            scan_memory_table(eager.snapshot(), table.log_store().as_ref(), &predicate).await?;
+        let snapshot = lazy_snapshot(&table).await?;
+        let matches = scan_memory_table(&snapshot, table.log_store().as_ref(), &predicate).await?;
         assert!(matches.is_empty());
         Ok(())
     }
@@ -1149,11 +1160,14 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
 
-        let eager = table.snapshot()?.snapshot();
-        let total_actions = eager.log_data().iter().count();
+        let snapshot = lazy_snapshot(&table).await?;
+        let total_actions = snapshot
+            .file_views(&table.log_store(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .len();
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches =
-            scan_memory_table(eager.snapshot(), table.log_store().as_ref(), &predicate).await?;
+        let matches = scan_memory_table(&snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert!(!matches.is_empty());
         assert!(matches.len() < total_actions);
@@ -1236,6 +1250,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_lazy_data_discovery_replay_budgets() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let snapshot = Snapshot::try_new(
+            log_store.as_ref(),
+            crate::DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+        drain_recorded_ops(&mut operations).await;
+
+        snapshot
+            .active_add_batches(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .await?;
+        let single_replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+        assert!(single_replay_reads > 0);
+
+        let session = create_session().into_inner().state();
+        update_datafusion_session(&session, &log_store, None)?;
+        session.ensure_log_store_registered(log_store.as_ref())?;
+        let matches = find_files_scan(
+            &snapshot,
+            log_store.clone(),
+            &session,
+            col("value").gt(lit(0i32)),
+        )
+        .await?;
+        let discovery_replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        assert!(!matches.is_empty());
+        assert!(
+            discovery_replay_reads <= 2 * single_replay_reads,
+            "data predicate discovery read the log {discovery_replay_reads} times; limit {}",
+            2 * single_replay_reads
+        );
+        assert!(!snapshot.has_materialized_files_for_test());
+        let scan =
+            scan_files_where_matches(&session, &snapshot, log_store, col("value").gt(lit(0i32)))
+                .await?;
+        let scan_replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        assert!(scan.is_some());
+        assert!(
+            scan_replay_reads <= 2 * single_replay_reads,
+            "matched file scan planning read the log {scan_replay_reads} times; limit {}",
+            2 * single_replay_reads
+        );
+        assert!(!snapshot.has_materialized_files_for_test());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_memory_table_multibatch_stress_partition_filtering() -> TestResult {
         use std::collections::HashSet;
 
@@ -1255,8 +1350,10 @@ mod tests {
             .with_actions(actions)
             .await?;
 
-        let eager = table.snapshot()?.snapshot();
-        let snapshot = eager.snapshot();
+        let snapshot = lazy_snapshot(&table).await?;
+        let snapshot = Arc::new(snapshot)
+            .ensure_materialized_files(table.log_store().as_ref())
+            .await?;
         let add_action_batches = snapshot.add_actions_partition_batches()?;
         assert!(
             add_action_batches.len() > 1,
@@ -1264,7 +1361,7 @@ mod tests {
         );
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
+        let matches = scan_memory_table(&snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert_eq!(matches.len(), expected_matches);
 
