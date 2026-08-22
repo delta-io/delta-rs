@@ -6,6 +6,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use delta_kernel::expressions::PredicateRef;
 use futures::future::ready;
 use futures::stream::{BoxStream, once};
 use futures::{StreamExt, TryStreamExt};
@@ -287,6 +288,24 @@ impl DeltaTable {
         infos.pop().ok_or(DeltaTableError::Generic(
             "Somehow there is nothing in the history!".into(),
         ))
+    }
+
+    /// Stream all logical files matching the provided kernel [`Predicate`](delta_kernel::expressions::Predicate).
+    ///
+    /// Predicates over partition columns select files exactly. Predicates over
+    /// data columns are evaluated against file statistics and select a superset:
+    /// every file that may contain a matching row, including files without
+    /// statistics for the referenced columns.
+    pub fn get_active_add_actions_by_predicate(
+        &self,
+        predicate: Option<PredicateRef>,
+    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
+        let Some(state) = self.state.as_ref() else {
+            return Box::pin(futures::stream::once(async {
+                Err(DeltaTableError::NotInitialized)
+            }));
+        };
+        state.snapshot().file_views(&self.log_store, predicate)
     }
 
     /// Stream all logical files matching the provided `PartitionFilter`s.

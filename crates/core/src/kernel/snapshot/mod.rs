@@ -3675,6 +3675,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_views_with_dnf_predicate() -> TestResult {
+        use crate::kernel::schema::partitions::{FilterValue, dnf_to_kernel_predicate};
+
+        let base = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+
+        let dnf = vec![
+            vec![
+                ("year", "=", FilterValue::Scalar("2020")),
+                ("month", "=", FilterValue::Scalar("2")),
+            ],
+            vec![
+                ("year", "=", FilterValue::Scalar("2021")),
+                ("month", "=", FilterValue::Scalar("12")),
+            ],
+        ];
+        let predicate = Arc::new(dnf_to_kernel_predicate(&dnf, snapshot.schema().as_ref())?);
+
+        let mut paths: Vec<_> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect()
+            .await?;
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+                "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string(),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_partition_values_map_preserves_all_columns_under_narrowing_predicate()
     -> TestResult {
         use std::collections::BTreeSet;
