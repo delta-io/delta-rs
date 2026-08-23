@@ -178,13 +178,13 @@ To store more complex state as part of the delta log, use `domainMetadata`.
 
 #### removed `get_num_index_cols`, `get_stats_columns` and `check_can_write_timestamp_ntz`.
 
-These methods were rxposed for use by the `pyarrow` engine, which no longer exists.
+These methods were exposed for use by the `pyarrow` engine, which no longer exists.
 
 #### deprecated `files`
 
 The `files` method has been deprecated and will be removed in a future release. Use `file_uris` instead.
 The relative paths reported by `files` cannot properly be interpreted when using features like shallow clones.
-`file_uris` reposrts absolute paths that can handle a more dynamic path resolution.
+`file_uris` reports absolute paths that can handle a more dynamic path resolution.
 
 ### Internal changes
 

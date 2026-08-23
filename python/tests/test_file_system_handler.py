@@ -222,3 +222,51 @@ def test_write_partitioned_dataset(file_systems):
     assert table.schema == ds_table2.schema
     assert table.shape == ds_table.shape
     assert table.shape == ds_table2.shape
+
+
+@pytest.mark.pyarrow
+def test_delete_dir_nested(file_systems):
+    """delete_dir removes all objects under the prefix, including nested paths."""
+    store, arrow_fs = file_systems
+    import pyarrow.fs as fs
+
+    arrow_fs.create_dir("mydir/sub")
+    with arrow_fs.open_output_stream("mydir/b.txt") as f:
+        f.write(b"b")
+    with arrow_fs.open_output_stream("mydir/sub/a.txt") as f:
+        f.write(b"a")
+
+    store.delete_dir("mydir")
+
+    info_b = arrow_fs.get_file_info("mydir/b.txt")
+    info_a = arrow_fs.get_file_info("mydir/sub/a.txt")
+    assert info_b.type == fs.FileType.NotFound
+    assert info_a.type == fs.FileType.NotFound
+
+
+@pytest.mark.pyarrow
+def test_delete_dir_no_sibling_prefix_collision(file_systems):
+    """delete_dir('foo') must not delete objects under 'foo2/'."""
+    store, arrow_fs = file_systems
+    import pyarrow.fs as fs
+
+    arrow_fs.create_dir("foo")
+    arrow_fs.create_dir("foo2")
+    with arrow_fs.open_output_stream("foo/x.txt") as f:
+        f.write(b"x")
+    with arrow_fs.open_output_stream("foo2/y.txt") as f:
+        f.write(b"y")
+
+    store.delete_dir("foo")
+
+    info_x = arrow_fs.get_file_info("foo/x.txt")
+    info_y = arrow_fs.get_file_info("foo2/y.txt")
+    assert info_x.type == fs.FileType.NotFound
+    assert info_y.type == fs.FileType.File
+
+
+@pytest.mark.pyarrow
+def test_delete_dir_missing_prefix_is_noop(file_systems):
+    """delete_dir on a non-existent prefix should not raise."""
+    store, _ = file_systems
+    store.delete_dir("does_not_exist")

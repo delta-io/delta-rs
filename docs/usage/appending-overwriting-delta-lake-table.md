@@ -28,20 +28,22 @@ Append two additional rows of data to the table:
     ```
 
 === "Rust"
-`rust
-    let table = open_table("tmp/some-table").await?;
-    DeltaOps(table).write(RecordBatch::try_new(
-        Arc::new(Schema::new(vec![
-            Field::new("num", DataType::Int32, false),
-            Field::new("letter", DataType::Utf8, false),
+
+    ```rust
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
+    table.write(RecordBatch::try_new(
+    Arc::new(Schema::new(vec![
+        Field::new("num", DataType::Int32, false),
+        Field::new("letter", DataType::Utf8, false),
+    ])),
+    vec![
+        Arc::new(Int32Array::from(vec![8, 9])),
+        Arc::new(StringArray::from(vec![
+            "dd", "ee"
         ])),
-        vec![
-            Arc::new(Int32Array::from(vec![8, 9])),
-            Arc::new(StringArray::from(vec![
-                "dd", "ee"
-            ])),
-        ])).with_save_mode(SaveMode::Append).await?;
-    `
+    ])).with_save_mode(SaveMode::Append).await?;
+    ```
 
 Here are the updated contents of the Delta table:
 
@@ -63,26 +65,30 @@ Now let's see how to perform an overwrite transaction.
 
 Now let's see how to overwrite the existing Delta table.
 === "Python"
-`python
+
+    ```python
     df = pd.DataFrame({"num": [11, 22], "letter": ["aa", "bb"]})
     write_deltalake("tmp/some-table", df, mode="overwrite")
-    `
+    ```
 
 === "Rust"
-`rust
-    let table = open_table("tmp/some-table").await?;
-    DeltaOps(table).write(RecordBatch::try_new(
+
+    ```rust
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let table = open_table(delta_path).await?;
+    table.write(RecordBatch::try_new(
         Arc::new(Schema::new(vec![
             Field::new("num", DataType::Int32, false),
             Field::new("letter", DataType::Utf8, false),
         ])),
         vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Int32Array::from(vec![11, 22])),
             Arc::new(StringArray::from(vec![
-                "a", "b", "c",
+                "aa", "bb",
             ])),
         ])).with_save_mode(SaveMode::Overwrite).await?;
-    `
+    ```
+
 Here are the contents of the Delta table after the overwrite operation:
 
 ```
@@ -103,10 +109,12 @@ Overwriting just performs a logical delete. It doesn't physically remove the pre
     ```
 
 === "Rust"
-`rust
-    let mut table = open_table("tmp/some-table").await?;
+
+    ```rust
+    let delta_path = Url::from_directory_path("/tmp/some-table").unwrap();
+    let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;
-    `
+    ```
 
 ```
 +-------+----------+

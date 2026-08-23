@@ -1,8 +1,8 @@
 use deltalake_mount::register_handlers;
-use deltalake_test::utils::{set_env_if_not_set, StorageIntegration};
-use fs_extra::dir::{copy, CopyOptions};
+use deltalake_test::utils::{StorageIntegration, set_env_if_not_set};
+use fs_extra::dir::{CopyOptions, copy};
 use std::process::ExitStatus;
-use tempfile::{tempdir, TempDir};
+use tempfile::{TempDir, tempdir};
 
 pub struct MountIntegration {
     tmp_dir: TempDir,

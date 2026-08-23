@@ -1,5 +1,4 @@
 //! listing_schema contains a SchemaProvider that scans ObjectStores for tables automatically
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
-use crate::logstore::{store_for, StorageConfig};
+use crate::logstore::{StorageConfig, store_for};
 use crate::open_table_with_storage_options;
 use crate::table::builder::ensure_table_uri;
 
@@ -102,10 +101,6 @@ fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
 
 #[async_trait]
 impl SchemaProvider for ListingSchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.tables.iter().map(|t| t.key().clone()).collect()
     }
@@ -117,12 +112,12 @@ impl SchemaProvider for ListingSchemaProvider {
         let Some(location) = self.tables.get(name).map(|t| t.clone()) else {
             return Ok(None);
         };
-        let provider = open_table_with_storage_options(
+        let table = open_table_with_storage_options(
             ensure_table_uri(location)?,
             self.storage_options.raw.clone(),
         )
         .await?;
-        Ok(Some(Arc::new(provider) as Arc<dyn TableProvider>))
+        Ok(Some(table.table_provider().await?))
     }
 
     fn register_table(

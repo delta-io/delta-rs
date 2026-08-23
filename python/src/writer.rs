@@ -14,8 +14,8 @@ use deltalake::datafusion::physical_plan::memory::LazyBatchGenerator;
 use deltalake::kernel::schema::cast_record_batch;
 use parking_lot::RwLock;
 
-use crate::datafusion::LazyTableProvider;
 use crate::DeltaResult;
+use crate::datafusion::LazyTableProvider;
 
 /// Convert an [ArrowArrayStreamReader] into a [LazyTableProvider]
 pub fn to_lazy_table(
@@ -31,7 +31,10 @@ pub fn to_lazy_table(
     )?))
 }
 pub struct ReaderWrapper {
-    reader: Mutex<Box<dyn RecordBatchReader + Send + 'static>>,
+    /// The underlying reader. `None` once it has been handed off to a fresh
+    /// generator by [`ArrowStreamBatchGenerator::reset_state`], since a
+    /// one-shot stream can only be consumed once.
+    reader: Mutex<Option<Box<dyn RecordBatchReader + Send + 'static>>>,
 }
 
 impl fmt::Debug for ReaderWrapper {
@@ -61,7 +64,7 @@ impl ArrowStreamBatchGenerator {
     pub fn new(array_stream: Box<dyn RecordBatchReader + Send + 'static>) -> Self {
         Self {
             array_stream: ReaderWrapper {
-                reader: Mutex::new(array_stream),
+                reader: Mutex::new(Some(array_stream)),
             },
         }
     }
@@ -81,7 +84,15 @@ impl LazyBatchGenerator for ArrowStreamBatchGenerator {
             )
         })?;
 
-        match stream_reader.next() {
+        let Some(reader) = stream_reader.as_mut() else {
+            return Err(deltalake::datafusion::error::DataFusionError::Execution(
+                "Stream-based generator cannot be reset; the original stream has been consumed. \
+                 Buffer input data if plan re-execution is required."
+                    .to_string(),
+            ));
+        };
+
+        match reader.next() {
             Some(Ok(record_batch)) => Ok(Some(record_batch)),
             Some(Err(err)) => Err(deltalake::datafusion::error::DataFusionError::ArrowError(
                 Box::new(err),
@@ -89,6 +100,51 @@ impl LazyBatchGenerator for ArrowStreamBatchGenerator {
             )),
             None => Ok(None), // End of stream
         }
+    }
+
+    /// DataFusion 54's `LazyMemoryExec::execute` calls `reset_state` on every
+    /// execution (including the first) to obtain a fresh stream. Since the
+    /// underlying reader is one-shot, we hand it off to the new generator the
+    /// first time and leave an [`ExhaustedStreamGenerator`] behind so any later
+    /// re-execution fails loudly rather than silently yielding no rows.
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        match self.array_stream.reader.lock() {
+            Ok(mut guard) => match guard.take() {
+                Some(reader) => Arc::new(RwLock::new(ArrowStreamBatchGenerator::new(reader))),
+                None => Arc::new(RwLock::new(ExhaustedStreamGenerator)),
+            },
+            Err(_) => Arc::new(RwLock::new(ExhaustedStreamGenerator)),
+        }
+    }
+}
+
+/// Exhausted stream generator (consumed streams cannot be reset).
+#[derive(Debug)]
+struct ExhaustedStreamGenerator;
+
+impl std::fmt::Display for ExhaustedStreamGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ExhaustedStreamGenerator")
+    }
+}
+
+impl LazyBatchGenerator for ExhaustedStreamGenerator {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn generate_next_batch(
+        &mut self,
+    ) -> deltalake::datafusion::error::Result<Option<deltalake::arrow::array::RecordBatch>> {
+        Err(deltalake::datafusion::error::DataFusionError::Execution(
+            "Stream-based generator cannot be reset; the original stream has been consumed. \
+             Buffer input data if plan re-execution is required."
+                .to_string(),
+        ))
+    }
+
+    fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+        Arc::new(RwLock::new(ExhaustedStreamGenerator))
     }
 }
 

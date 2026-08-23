@@ -16,7 +16,7 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = open_table("../path/to/table")?;
+//! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
 //! let (table, metrics) = RestoreBuilder::new(table.object_store(), table.state).with_version_to_restore(1).await?;
 //! ````
 
@@ -27,16 +27,19 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
-use futures::future::BoxFuture;
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde::Serialize;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use crate::kernel::{Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{
+    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, ProtocolExt as _, ProtocolInner,
+    Remove, Version, resolve_snapshot,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -49,7 +52,7 @@ enum RestoreError {
     InvalidRestoreParameter,
 
     #[error("Version to restore {0} should be less then last available version {1}.")]
-    TooLargeRestoreVersion(i64, i64),
+    TooLargeRestoreVersion(Version, Version),
 
     #[error("Find missing file {0} when restore.")]
     MissingDataFile(String),
@@ -77,11 +80,11 @@ pub struct RestoreMetrics {
 /// See this module's documentation for more information
 pub struct RestoreBuilder {
     /// A snapshot of the to-be-restored table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Version to restore
-    version_to_restore: Option<i64>,
+    version_to_restore: Option<Version>,
     /// Datetime to restore
     datetime_to_restore: Option<DateTime<Utc>>,
     /// Ignore missing files
@@ -93,7 +96,7 @@ pub struct RestoreBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for RestoreBuilder {
+impl super::Operation for RestoreBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -104,7 +107,7 @@ impl super::Operation<()> for RestoreBuilder {
 
 impl RestoreBuilder {
     /// Create a new [`RestoreBuilder`]
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             snapshot,
             log_store,
@@ -118,7 +121,7 @@ impl RestoreBuilder {
     }
 
     /// Set the version to restore
-    pub fn with_version_to_restore(mut self, version: i64) -> Self {
+    pub fn with_version_to_restore(mut self, version: Version) -> Self {
         self.version_to_restore = Some(version);
         self
     }
@@ -159,13 +162,14 @@ impl RestoreBuilder {
 async fn execute(
     log_store: LogStoreRef,
     snapshot: EagerSnapshot,
-    version_to_restore: Option<i64>,
+    version_to_restore: Option<Version>,
     datetime_to_restore: Option<DateTime<Utc>>,
     ignore_missing_files: bool,
     protocol_downgrade_allowed: bool,
     mut commit_properties: CommitProperties,
+    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
-) -> DeltaResult<RestoreMetrics> {
+) -> DeltaResult<(RestoreMetrics, DeltaTableState)> {
     if !(version_to_restore
         .is_none()
         .bitxor(datetime_to_restore.is_none()))
@@ -201,10 +205,27 @@ async fn execute(
 
     let state_to_restore_files: Vec<_> = snapshot_restored
         .snapshot()
-        .file_views(&log_store, None)
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
         .try_collect()
         .await?;
-    let latest_state_files: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
+    let latest_state_files: Vec<_> = snapshot
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .try_collect()
+        .await?;
     let state_to_restore_files_set =
         HashSet::<_>::from_iter(state_to_restore_files.iter().map(|f| f.path().to_string()));
     let latest_state_files_set =
@@ -214,7 +235,7 @@ async fn execute(
         .iter()
         .filter(|a| !latest_state_files_set.contains(&a.path().to_string()))
         .map(|f| {
-            let mut a = f.add_action();
+            let mut a = f.to_add();
             a.data_change = true;
             a
         })
@@ -292,30 +313,15 @@ async fn execute(
         datetime: datetime_to_restore.map(|time| -> i64 { time.timestamp_millis() }),
     };
 
-    let prepared_commit = CommitBuilder::from(commit_properties)
+    let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
+        .with_max_retries(0)
+        .with_operation_id(operation_id)
+        .with_post_commit_hook_handler(custom_execute_handler)
         .build(Some(&snapshot), log_store.clone(), operation)
-        .into_prepared_commit_future()
         .await?;
 
-    let commit_version = snapshot.version() + 1;
-    let commit_bytes = prepared_commit.commit_or_bytes();
-    match log_store
-        .write_commit_entry(commit_version, commit_bytes.clone(), operation_id)
-        .await
-    {
-        Ok(_) => {}
-        Err(err @ TransactionError::VersionAlreadyExists(_)) => {
-            return Err(err.into());
-        }
-        Err(err) => {
-            log_store
-                .abort_commit_entry(commit_version, commit_bytes.clone(), operation_id)
-                .await?;
-            return Err(err.into());
-        }
-    }
-    Ok(metrics)
+    Ok((metrics, commit.snapshot()))
 }
 
 async fn check_files_available(
@@ -329,7 +335,7 @@ async fn check_files_available(
             Err(ObjectStoreError::NotFound { .. }) => {
                 return Err(DeltaTableError::from(RestoreError::MissingDataFile(
                     file.path.clone(),
-                )))
+                )));
             }
             Err(e) => return Err(DeltaTableError::from(e)),
         }
@@ -342,58 +348,59 @@ impl std::future::IntoFuture for RestoreBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let this = self;
+        let mut this = self;
 
         Box::pin(async move {
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let metrics = execute(
+            let handle = this.custom_execute_handler.take();
+            let (metrics, new_state) = execute(
                 this.log_store.clone(),
-                this.snapshot.clone(),
+                snapshot,
                 this.version_to_restore,
                 this.datetime_to_restore,
                 this.ignore_missing_files,
                 this.protocol_downgrade_allowed,
                 this.commit_properties.clone(),
+                handle.clone(),
                 operation_id,
             )
             .await?;
 
-            this.post_execute(operation_id).await?;
+            if let Some(handler) = handle {
+                handler.post_execute(&this.log_store, operation_id).await?;
+            }
 
-            let mut table = DeltaTable::new_with_state(
-                this.log_store,
-                DeltaTableState {
-                    snapshot: this.snapshot,
-                },
-            );
-            table.update().await?;
-            Ok((table, metrics))
+            Ok((
+                DeltaTable::new_with_state(this.log_store, new_state),
+                metrics,
+            ))
         })
     }
 }
 
 #[cfg(test)]
+#[cfg(feature = "datafusion")]
 mod tests {
 
+    use crate::DeltaResult;
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
-    use crate::{DeltaOps, DeltaResult};
 
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
     #[tokio::test]
-    #[cfg(feature = "datafusion")]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
         use crate::table::config::TablePropertiesExt as _;
 
         let batch = get_record_batch(None, false);
-        let table = DeltaOps(create_bare_table())
-            .write(vec![batch.clone()])
-            .await?;
+        let table = create_bare_table().write(vec![batch.clone()]).await?;
         let first_v = table.version().unwrap();
 
-        let constraint = DeltaOps(table)
+        let constraint = table
             .add_constraint()
             .with_constraint("my_custom_constraint", "value < 100")
             .await;
@@ -408,10 +415,7 @@ mod tests {
         assert!(constraints.len() == 1);
         assert_eq!(constraints[0].name, "my_custom_constraint");
 
-        let (table, _metrics) = DeltaOps(table)
-            .restore()
-            .with_version_to_restore(first_v)
-            .await?;
+        let (table, _metrics) = table.restore().with_version_to_restore(first_v).await?;
         assert_ne!(table.version(), Some(first_v));
 
         let constraints = table.state.unwrap().table_config().get_constraints();

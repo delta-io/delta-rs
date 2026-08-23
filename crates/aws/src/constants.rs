@@ -1,6 +1,10 @@
 //! Constants used for modifying and configuring various AWS S3 (or similar) connections with
 //! delta-rs
 //!
+//! Storage option keys to use when creating [`S3StorageOptions`].
+//!
+//! The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
+//! Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -156,9 +160,13 @@ pub static CONDITION_EXPR_CREATE: LazyLock<String> = LazyLock::new(|| {
 
 pub static CONDITION_DELETE_INCOMPLETE: LazyLock<String> = LazyLock::new(|| {
     format!(
-    "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
-)
+        "(complete = :f) or (attribute_not_exists({ATTR_TABLE_PATH}) and attribute_not_exists({ATTR_FILE_NAME}))"
+    )
 });
 
 pub const CONDITION_UPDATE_INCOMPLETE: &str = "complete = :f";
 pub const DEFAULT_COMMIT_ENTRY_EXPIRATION_DELAY: Duration = Duration::from_secs(86_400);
+
+pub const DEFAULT_S3_POOL_IDLE_TIMEOUT_SECONDS: u64 = 15;
+pub const DEFAULT_STS_POOL_IDLE_TIMEOUT_SECONDS: u64 = 10;
+pub const DEFAULT_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: usize = 10;

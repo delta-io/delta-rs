@@ -1,0 +1,52 @@
+#
+# This file contains the defined labels for <https://github.com/actions/labeler>
+---
+
+project:
+  - changed-files:
+    - any-glob-to-any-file:
+      - .github/**.*
+
+documentation:
+  - changed-files:
+    - any-glob-to-any-file:
+      - README.adoc
+      - ./**/README.md
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - python/docs/**/*
+
+binding/python:
+  - changed-files:
+    - any-glob-to-any-file:
+      - python/**/*
+
+binding/rust:
+  - changed-files:
+    - any-glob-to-any-file:
+        - crates/**/*
+
+storage/aws:
+  - changed-files:
+    - any-glob-to-any-file:
+      - crates/aws/**/*
+
+storage/azure:
+  - changed-files:
+    - any-glob-to-any-file:
+      - crates/azure/**/*
+
+storage/gcp:
+  - changed-files:
+    - any-glob-to-any-file:
+      - crates/gcp/**/*
+
+storage/hdfs:
+  - changed-files:
+    - any-glob-to-any-file:
+      - crates/hdfs/**/*
+
+storage/lakefs:
+  - changed-files:
+    - any-glob-to-any-file:
+      - crates/lakefs/**/*

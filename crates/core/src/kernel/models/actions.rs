@@ -3,17 +3,21 @@ use std::fmt::{self, Display};
 use std::str::FromStr;
 
 use delta_kernel::schema::{DataType, StructField};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::{error::Error, DeltaResult};
-use crate::kernel::{StructType, StructTypeExt};
 use crate::TableProperty;
+use crate::kernel::{DeltaResult, error::Error};
+use crate::kernel::{StructType, StructTypeExt, Version};
 
 pub use delta_kernel::actions::{Metadata, Protocol};
 
 /// Please don't use, this API will be leaving shortly!
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
+///
+/// Since the adoption of delta-kernel-rs we lost the direct ability to create [Metadata] actions
+/// which is required for some use-cases.
+///
+/// Upstream tracked here: <https://github.com/delta-io/delta-kernel-rs/issues/1055>
 pub fn new_metadata(
     schema: &StructType,
     partition_columns: impl IntoIterator<Item = impl ToString>,
@@ -38,18 +42,23 @@ pub fn new_metadata(
 /// This trait is a stop-gap to adopt the Metadata action from delta-kernel-rs
 /// while the update / mutation APIs are being implemented. It allows us to implement
 /// additional APIs on the Metadata action and hide specifics of how we do the updates.
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub trait MetadataExt {
+    /// Return a copy of the metadata with its unique table identifier replaced.
     fn with_table_id(self, table_id: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the user-facing table name set.
     fn with_name(self, name: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the table description set.
     fn with_description(self, description: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata whose schema string is replaced with `schema`.
     fn with_schema(self, schema: &StructType) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with a single configuration key set to `value`.
     fn add_config_key(self, key: String, value: String) -> DeltaResult<Metadata>;
 
+    /// Return a copy of the metadata with the given configuration key removed.
     fn remove_config_key(self, key: &str) -> DeltaResult<Metadata>;
 }
 
@@ -143,16 +152,48 @@ impl MetadataExt for Metadata {
     }
 }
 
+/// Checks if a datatype matches another type, or any of its inner fields match.
+fn matches_datatype(dtype_to_check: &DataType, dtype: &DataType) -> bool {
+    match dtype_to_check {
+        to_check if dtype == to_check => true,
+        DataType::Array(inner) => matches_datatype(inner.element_type(), dtype),
+        DataType::Struct(inner) => inner
+            .fields()
+            .any(|f| matches_datatype(f.data_type(), dtype)),
+        _ => false,
+    }
+}
+
 /// checks if table contains timestamp_ntz in any field including nested fields.
 pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| matches_datatype(f.data_type(), &DataType::TIMESTAMP_NTZ))
+}
+
+#[cfg(feature = "nanosecond-timestamps")]
+/// checks if table contains timestamp_nanos or timestamp_nanos_ntz in any
+/// field including nested fields. Both primitive types require the same
+/// `timestampNanos` table feature.
+pub fn contains_timestamp_nanos<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| {
+        matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS)
+            || matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS_NTZ)
+    })
+}
+
+/// checks if table contains variant in any field including nested fields.
+pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
     fn _check_type(dtype: &DataType) -> bool {
         match dtype {
-            &DataType::TIMESTAMP_NTZ => true,
+            DataType::Variant(_) => true,
             DataType::Array(inner) => _check_type(inner.element_type()),
             DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type())),
+            DataType::Map(inner) => {
+                _check_type(inner.key_type()) || _check_type(inner.value_type())
+            }
             _ => false,
         }
     }
+
     fields.any(|f| _check_type(f.data_type()))
 }
 
@@ -160,12 +201,11 @@ pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructFiel
 ///
 /// Allows us to extend the Protocol struct with additional methods
 /// to update the protocol actions.
-#[deprecated(since = "0.27.0", note = "stop-gap for adopting kernel actions")]
 pub(crate) trait ProtocolExt {
-    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>>;
-    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>>;
-    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol;
-    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol;
+    fn reader_features_set(&self) -> Option<HashSet<TableFeature>>;
+    fn writer_features_set(&self) -> Option<HashSet<TableFeature>>;
+    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol;
+    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol;
     fn move_table_properties_into_features(
         self,
         configuration: &HashMap<String, String>,
@@ -179,23 +219,23 @@ pub(crate) trait ProtocolExt {
 }
 
 impl ProtocolExt for Protocol {
-    fn reader_features_set(&self) -> Option<HashSet<ReaderFeature>> {
+    fn reader_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.reader_features()
             .map(|features| features.iter().cloned().collect())
     }
 
-    fn writer_features_set(&self) -> Option<HashSet<WriterFeature>> {
+    fn writer_features_set(&self) -> Option<HashSet<TableFeature>> {
         self.writer_features()
             .map(|features| features.iter().cloned().collect())
     }
 
-    fn append_reader_features(self, reader_features: &[ReaderFeature]) -> Protocol {
+    fn append_reader_features(self, reader_features: &[TableFeature]) -> Protocol {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.append_reader_features(reader_features.iter().cloned());
         inner.as_kernel()
     }
 
-    fn append_writer_features(self, writer_features: &[WriterFeature]) -> Protocol {
+    fn append_writer_features(self, writer_features: &[TableFeature]) -> Protocol {
         let mut inner = ProtocolInner::from_kernel(&self);
         inner = inner.append_writer_features(writer_features.iter().cloned());
         inner.as_kernel()
@@ -236,10 +276,6 @@ impl ProtocolExt for Protocol {
 /// use it to proxy updates to the kernel protocol action.
 ///
 // TODO: Remove once we can use kernel protocol update APIs.
-#[deprecated(
-    since = "0.27.0",
-    note = "Just an internal shim for adopting kernel actions"
-)]
 pub(crate) struct ProtocolInner {
     /// The minimum version of the Delta read protocol that a client must implement
     /// in order to correctly read this table
@@ -250,11 +286,11 @@ pub(crate) struct ProtocolInner {
     /// A collection of features that a client must implement in order to correctly
     /// read this table (exist only when minReaderVersion is set to 3)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reader_features: Option<HashSet<ReaderFeature>>,
+    pub reader_features: Option<HashSet<TableFeature>>,
     /// A collection of features that a client must implement in order to correctly
     /// write this table (exist only when minWriterVersion is set to 7)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub writer_features: Option<HashSet<WriterFeature>>,
+    pub writer_features: Option<HashSet<TableFeature>>,
 }
 
 impl Default for ProtocolInner {
@@ -270,7 +306,8 @@ impl Default for ProtocolInner {
 
 impl ProtocolInner {
     /// Create a new protocol action
-    pub fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(min_reader_version: i32, min_writer_version: i32) -> Self {
         Self {
             min_reader_version,
             min_writer_version,
@@ -292,7 +329,7 @@ impl ProtocolInner {
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
     pub fn append_reader_features(
         mut self,
-        reader_features: impl IntoIterator<Item = impl Into<ReaderFeature>>,
+        reader_features: impl IntoIterator<Item = impl Into<TableFeature>>,
     ) -> Self {
         let all_reader_features = reader_features
             .into_iter()
@@ -314,7 +351,7 @@ impl ProtocolInner {
     /// Append the writer features in the protocol action, automatically bumps min_writer_version
     pub fn append_writer_features(
         mut self,
-        writer_features: impl IntoIterator<Item = impl Into<WriterFeature>>,
+        writer_features: impl IntoIterator<Item = impl Into<TableFeature>>,
     ) -> Self {
         let all_writer_features = writer_features
             .into_iter()
@@ -351,25 +388,25 @@ impl ProtocolInner {
                 .filter(|(_, value)| value.to_ascii_lowercase().parse::<bool>().is_ok_and(|v| v))
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableChangeDataFeed" if parse_bool(value) => {
-                        Some(WriterFeature::ChangeDataFeed)
+                        Some(TableFeature::ChangeDataFeed)
                     }
-                    "delta.appendOnly" if parse_bool(value) => Some(WriterFeature::AppendOnly),
+                    "delta.appendOnly" if parse_bool(value) => Some(TableFeature::AppendOnly),
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(WriterFeature::DeletionVectors)
+                        Some(TableFeature::DeletionVectors)
                     }
                     "delta.enableRowTracking" if parse_bool(value) => {
-                        Some(WriterFeature::RowTracking)
+                        Some(TableFeature::RowTracking)
                     }
-                    "delta.checkpointPolicy" if value == "v2" => Some(WriterFeature::V2Checkpoint),
+                    "delta.checkpointPolicy" if value == "v2" => Some(TableFeature::V2Checkpoint),
                     _ => None,
                 })
-                .collect::<HashSet<WriterFeature>>();
+                .collect::<HashSet<TableFeature>>();
 
             if configuration
                 .keys()
                 .any(|v| v.starts_with("delta.constraints."))
             {
-                converted_writer_features.insert(WriterFeature::CheckConstraints);
+                converted_writer_features.insert(TableFeature::CheckConstraints);
             }
 
             match self.writer_features {
@@ -385,12 +422,12 @@ impl ProtocolInner {
                 .iter()
                 .filter_map(|(key, value)| match key.as_str() {
                     "delta.enableDeletionVectors" if parse_bool(value) => {
-                        Some(ReaderFeature::DeletionVectors)
+                        Some(TableFeature::DeletionVectors)
                     }
-                    "delta.checkpointPolicy" if value == "v2" => Some(ReaderFeature::V2Checkpoint),
+                    "delta.checkpointPolicy" if value == "v2" => Some(TableFeature::V2Checkpoint),
                     _ => None,
                 })
-                .collect::<HashSet<ReaderFeature>>();
+                .collect::<HashSet<TableFeature>>();
             match self.reader_features {
                 Some(mut features) => {
                     features.extend(converted_reader_features);
@@ -408,9 +445,23 @@ impl ProtocolInner {
         let generated_cols = schema.get_generated_columns()?;
         let invariants = schema.get_invariants()?;
         let contains_timestamp_ntz = self.contains_timestampntz(schema.fields());
+        #[cfg(feature = "nanosecond-timestamps")]
+        let contains_timestamp_nanos = self.contains_timestamp_nanos(schema.fields());
+        let contains_variant = self.contains_variant(schema.fields());
 
         if contains_timestamp_ntz {
             self = self.enable_timestamp_ntz()
+        }
+
+        #[cfg(feature = "nanosecond-timestamps")]
+        if contains_timestamp_nanos {
+            // Per the protocol RFC, non-timezone timestamps need to be required
+            // too, since there will eventually be a
+            // nanoseconds-without-timezones primitive type too.
+            self = self.enable_timestamp_nanos().enable_timestamp_ntz()
+        }
+        if contains_variant {
+            self = self.enable_variant_type()
         }
 
         if !generated_cols.is_empty() {
@@ -454,11 +505,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minReaderVersion = '{min_reader_version}' is invalid, valid values are ['1','2','3']"
+                    )));
                 }
             }
         }
@@ -474,11 +529,15 @@ impl ProtocolInner {
                         }
                     }
                     _ => {
-                        return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                        return Err(Error::Generic(format!(
+                            "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                        )));
                     }
                 },
                 Err(_) => {
-                    return Err(Error::Generic(format!("delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']")))
+                    return Err(Error::Generic(format!(
+                        "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                    )));
                 }
             }
         }
@@ -491,12 +550,12 @@ impl ProtocolInner {
                     if self.min_writer_version >= 7 {
                         match self.writer_features {
                             Some(mut features) => {
-                                features.insert(WriterFeature::ChangeDataFeed);
+                                features.insert(TableFeature::ChangeDataFeed);
                                 self.writer_features = Some(features);
                             }
                             None => {
                                 self.writer_features =
-                                    Some(HashSet::from([WriterFeature::ChangeDataFeed]))
+                                    Some(HashSet::from([TableFeature::ChangeDataFeed]))
                             }
                         }
                     } else if self.min_writer_version <= 3 {
@@ -505,7 +564,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableChangeDataFeed = '{enable_cdf}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -516,17 +577,17 @@ impl ProtocolInner {
                 Ok(true) => {
                     let writer_features = match self.writer_features {
                         Some(mut features) => {
-                            features.insert(WriterFeature::DeletionVectors);
+                            features.insert(TableFeature::DeletionVectors);
                             features
                         }
-                        None => HashSet::from([WriterFeature::DeletionVectors]),
+                        None => HashSet::from([TableFeature::DeletionVectors]),
                     };
                     let reader_features = match self.reader_features {
                         Some(mut features) => {
-                            features.insert(ReaderFeature::DeletionVectors);
+                            features.insert(TableFeature::DeletionVectors);
                             features
                         }
-                        None => HashSet::from([ReaderFeature::DeletionVectors]),
+                        None => HashSet::from([TableFeature::DeletionVectors]),
                     };
                     self.min_reader_version = 3;
                     self.min_writer_version = 7;
@@ -535,7 +596,9 @@ impl ProtocolInner {
                 }
                 Ok(false) => {}
                 _ => {
-                    return Err(Error::Generic(format!("delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']")))
+                    return Err(Error::Generic(format!(
+                        "delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']"
+                    )));
                 }
             }
         }
@@ -547,10 +610,36 @@ impl ProtocolInner {
         contains_timestampntz(fields)
     }
 
+    /// checks if table contains variant in any field including nested fields.
+    fn contains_variant<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_variant(fields)
+    }
+
     /// Enable timestamp_ntz in the protocol
     fn enable_timestamp_ntz(mut self) -> Self {
-        self = self.append_reader_features([ReaderFeature::TimestampWithoutTimezone]);
-        self = self.append_writer_features([WriterFeature::TimestampWithoutTimezone]);
+        self = self.append_reader_features([TableFeature::TimestampWithoutTimezone]);
+        self = self.append_writer_features([TableFeature::TimestampWithoutTimezone]);
+        self
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// checks if table contains timestamp_nanos in any field including nested fields.
+    fn contains_timestamp_nanos<'a>(&self, fields: impl Iterator<Item = &'a StructField>) -> bool {
+        contains_timestamp_nanos(fields)
+    }
+
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// Enable timestamp_nanos in the protocol
+    fn enable_timestamp_nanos(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::TimestampNanos]);
+        self = self.append_writer_features([TableFeature::TimestampNanos]);
+        self
+    }
+
+    /// Enable variantType in the protocol
+    fn enable_variant_type(mut self) -> Self {
+        self = self.append_reader_features([TableFeature::VariantType]);
+        self = self.append_writer_features([TableFeature::VariantType]);
         self
     }
 
@@ -560,7 +649,7 @@ impl ProtocolInner {
             self.min_writer_version = 4;
         }
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeature::GeneratedColumns]);
+            self = self.append_writer_features([TableFeature::GeneratedColumns]);
         }
         self
     }
@@ -568,7 +657,7 @@ impl ProtocolInner {
     /// Enabled generated columns
     fn enable_invariants(mut self) -> Self {
         if self.min_writer_version >= 7 {
-            self = self.append_writer_features([WriterFeature::Invariants]);
+            self = self.append_writer_features([TableFeature::Invariants]);
         }
         self
     }
@@ -585,6 +674,10 @@ pub enum TableFeatures {
     /// timestamps without timezone support
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
+    #[cfg(feature = "nanosecond-timestamps")]
+    #[serde(rename = "timestampNanos")]
+    /// Timestamps that are nanosecond resolution
+    TimestampNanos,
     /// version 2 of checkpointing
     V2Checkpoint,
     /// Append Only Tables
@@ -605,6 +698,14 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
+    /// Preview shredded variant support
+    VariantShreddingPreview,
+    /// Support for materializing partition column values into data files.
+    MaterializePartitionColumns,
 }
 
 impl FromStr for TableFeatures {
@@ -615,6 +716,8 @@ impl FromStr for TableFeatures {
             "columnMapping" => Ok(TableFeatures::ColumnMapping),
             "deletionVectors" => Ok(TableFeatures::DeletionVectors),
             "timestampNtz" => Ok(TableFeatures::TimestampWithoutTimezone),
+            #[cfg(feature = "nanosecond-timestamps")]
+            "timestampNanos" => Ok(TableFeatures::TimestampNanos),
             "v2Checkpoint" => Ok(TableFeatures::V2Checkpoint),
             "appendOnly" => Ok(TableFeatures::AppendOnly),
             "invariants" => Ok(TableFeatures::Invariants),
@@ -625,6 +728,10 @@ impl FromStr for TableFeatures {
             "rowTracking" => Ok(TableFeatures::RowTracking),
             "domainMetadata" => Ok(TableFeatures::DomainMetadata),
             "icebergCompatV1" => Ok(TableFeatures::IcebergCompatV1),
+            "variantType" => Ok(TableFeatures::VariantType),
+            "variantType-preview" => Ok(TableFeatures::VariantTypePreview),
+            "variantShredding-preview" => Ok(TableFeatures::VariantShreddingPreview),
+            "materializePartitionColumns" => Ok(TableFeatures::MaterializePartitionColumns),
             _ => Err(()),
         }
     }
@@ -636,6 +743,8 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::ColumnMapping => "columnMapping",
             TableFeatures::DeletionVectors => "deletionVectors",
             TableFeatures::TimestampWithoutTimezone => "timestampNtz",
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeatures::TimestampNanos => "timestampNanos",
             TableFeatures::V2Checkpoint => "v2Checkpoint",
             TableFeatures::AppendOnly => "appendOnly",
             TableFeatures::Invariants => "invariants",
@@ -646,6 +755,10 @@ impl AsRef<str> for TableFeatures {
             TableFeatures::RowTracking => "rowTracking",
             TableFeatures::DomainMetadata => "domainMetadata",
             TableFeatures::IcebergCompatV1 => "icebergCompatV1",
+            TableFeatures::VariantType => "variantType",
+            TableFeatures::VariantTypePreview => "variantType-preview",
+            TableFeatures::VariantShreddingPreview => "variantShredding-preview",
+            TableFeatures::MaterializePartitionColumns => "materializePartitionColumns",
         }
     }
 }
@@ -656,46 +769,75 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for ReaderFeature {
-    type Error = strum::ParseError;
+impl TryFrom<&TableFeatures> for TableFeature {
+    type Error = std::convert::Infallible;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        ReaderFeature::try_from(value.as_ref())
-    }
-}
-
-impl TryFrom<&TableFeatures> for WriterFeature {
-    type Error = strum::ParseError;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        WriterFeature::try_from(value.as_ref())
+        TableFeature::try_from(value.as_ref())
     }
 }
 
 impl TableFeatures {
     /// Convert table feature to respective reader or/and write feature
-    pub fn to_reader_writer_features(&self) -> (Option<ReaderFeature>, Option<WriterFeature>) {
-        let reader_feature = ReaderFeature::try_from(self)
-            .ok()
-            .and_then(|feature| match feature {
-                ReaderFeature::Unknown(_) => None,
-                _ => Some(feature),
-            });
-        let writer_feature = WriterFeature::try_from(self)
-            .ok()
-            .and_then(|feature| match feature {
-                WriterFeature::Unknown(_) => None,
-                _ => Some(feature),
-            });
-        (reader_feature, writer_feature)
+    pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
+        let feature = TableFeature::try_from(self).ok();
+        match feature {
+            Some(feature) => {
+                // Classify features based on their type
+                // Writer-only features
+                match feature {
+                    TableFeature::AppendOnly
+                    | TableFeature::Invariants
+                    | TableFeature::CheckConstraints
+                    | TableFeature::ChangeDataFeed
+                    | TableFeature::GeneratedColumns
+                    | TableFeature::IdentityColumns
+                    | TableFeature::InCommitTimestamp
+                    | TableFeature::RowTracking
+                    | TableFeature::DomainMetadata
+                    | TableFeature::IcebergCompatV1
+                    | TableFeature::IcebergCompatV2
+                    | TableFeature::ClusteredTable
+                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
+
+                    // ReaderWriter features
+                    TableFeature::CatalogManaged
+                    | TableFeature::CatalogOwnedPreview
+                    | TableFeature::ColumnMapping
+                    | TableFeature::DeletionVectors
+                    | TableFeature::TimestampWithoutTimezone
+                    | TableFeature::TypeWidening
+                    | TableFeature::TypeWideningPreview
+                    | TableFeature::V2Checkpoint
+                    | TableFeature::VacuumProtocolCheck
+                    | TableFeature::VariantType
+                    | TableFeature::VariantTypePreview
+                    | TableFeature::VariantShreddingPreview => {
+                        (Some(feature.clone()), Some(feature))
+                    }
+
+                    // Optional ReaderWriter features
+                    #[cfg(feature = "nanosecond-timestamps")]
+                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
+
+                    // Unknown features
+                    TableFeature::Unknown(_) => (None, None),
+                    others => {
+                        panic!("This table has unsupported table features: {others:?}");
+                    }
+                }
+            }
+            None => (None, None),
+        }
     }
 }
 
 ///Storage type of deletion vector
-#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageType {
     /// Stored at relative path derived from a UUID.
     #[serde(rename = "u")]
+    #[default]
     UuidRelativePath,
     /// Stored as inline string.
     #[serde(rename = "i")]
@@ -703,12 +845,6 @@ pub enum StorageType {
     /// Stored at an absolute path.
     #[serde(rename = "p")]
     AbsolutePath,
-}
-
-impl Default for StorageType {
-    fn default() -> Self {
-        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
-    }
 }
 
 impl FromStr for StorageType {
@@ -831,18 +967,18 @@ pub struct Add {
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// A relative path to a data file from the root of the table or an absolute path to a file
-    /// that should be added to the table. The path is a URI as specified by
+    /// that should be removed from the table. The path is a URI as specified by
     /// [RFC 2396 URI Generic Syntax], which needs to be decoded to get the data file path.
     ///
     /// [RFC 2396 URI Generic Syntax]: https://www.ietf.org/rfc/rfc2396.txt
     #[serde(with = "serde_path")]
     pub path: String,
 
-    /// When `false` the logical file must already be present in the table or the records
-    /// in the added file must be contained in one or more remove actions in the same version.
+    /// When `false` the records in the removed file must be contained
+    /// in one or more add file actions in the same version
     pub data_change: bool,
 
-    /// The time this logical file was created, as milliseconds since the epoch.
+    /// The time the deletion occurred, represented as milliseconds since the epoch
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_timestamp: Option<i64>,
 
@@ -862,7 +998,7 @@ pub struct Remove {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 
-    /// Information about deletion vector (DV) associated with this add action
+    /// Information about deletion vector (DV) associated with this remove action
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_vector: Option<DeletionVectorDescriptor>,
 
@@ -937,7 +1073,7 @@ impl Transaction {
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
+/// However, the reference implementation as well as delta-rs store useful information that may for instance
 /// allow us to be more permissive in commit conflict resolution.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -945,6 +1081,10 @@ pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
+
+    /// Same as timestamp above, but cooler
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_commit_timestamp: Option<i64>,
 
     /// Id of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -964,7 +1104,7 @@ pub struct CommitInfo {
 
     /// Version of the table when the operation was started
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub read_version: Option<i64>,
+    pub read_version: Option<Version>,
 
     /// The isolation level of the commit
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1039,12 +1179,14 @@ pub struct Sidecar {
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 /// The isolation level applied during transaction
+#[derive(Default)]
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
     /// exists a serial sequence of executing them one-at-a-time that generates
     /// the same outcome as that seen in the table. For the write operations,
     /// the serial sequence is exactly the same as that seen in the table’s history.
+    #[default]
     Serializable,
 
     /// A weaker isolation level than Serializable. It ensures only that the write
@@ -1062,11 +1204,6 @@ pub enum IsolationLevel {
 
 // Spark assumes Serializable as default isolation level
 // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1023
-impl Default for IsolationLevel {
-    fn default() -> Self {
-        Self::Serializable
-    }
-}
 
 impl AsRef<str> for IsolationLevel {
     fn as_ref(&self) -> &str {
@@ -1094,7 +1231,8 @@ impl FromStr for IsolationLevel {
 pub(crate) mod serde_path {
     use std::str::Utf8Error;
 
-    use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+    use percent_encoding::percent_decode_str;
+    use percent_encoding_rfc3986::{AsciiSet, CONTROLS, utf8_percent_encode};
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -1118,9 +1256,14 @@ pub(crate) mod serde_path {
     pub const _DELIMITER_BYTE: u8 = _DELIMITER.as_bytes()[0];
 
     /// Characters we want to encode.
+    ///
+    /// Paths are URIs, so the hierarchy delimiter stays literal. Partition values are single
+    /// strings and go through the stricter set in [`crate::kernel::scalars`] instead.
     const INVALID: &AsciiSet = &CONTROLS
         // The delimiter we are reserving for internal hierarchy
         // .add(DELIMITER_BYTE)
+        // RFC 2396 excludes the space from URIs and CONTROLS does not cover it, see #4304
+        .add(b' ')
         // Characters AWS recommends avoiding for object keys
         // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
         .add(b'\\')
@@ -1145,9 +1288,10 @@ pub(crate) mod serde_path {
         .add(b'?');
 
     fn encode_path(path: &str) -> String {
-        percent_encode(path.as_bytes(), INVALID).to_string()
+        utf8_percent_encode(path, INVALID).to_string()
     }
 
+    // rfc3986's percent_decode_str is fallible, so decoding stays on the url spec crate.
     pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
         Ok(percent_decode_str(path).decode_utf8()?.to_string())
     }
@@ -1180,19 +1324,100 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(
             protocol.reader_features(),
-            Some(vec![ReaderFeature::Unknown("catalogOwned".to_owned())].as_slice())
+            Some(vec![TableFeature::Unknown("catalogOwned".to_owned())].as_slice())
         );
         assert_eq!(
             protocol.writer_features(),
             Some(
                 vec![
-                    WriterFeature::Unknown("catalogOwned".to_owned()),
-                    WriterFeature::Invariants,
-                    WriterFeature::AppendOnly
+                    TableFeature::Unknown("catalogOwned".to_owned()),
+                    TableFeature::Invariants,
+                    TableFeature::AppendOnly
                 ]
                 .as_slice()
             )
         );
+    }
+
+    #[test]
+    fn test_serialize_add_path_encodes_space() {
+        let add = Add {
+            path: "year=2021/part 0.parquet".to_string(),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&add).unwrap();
+        assert_eq!(value["path"], "year=2021/part%200.parquet");
+    }
+
+    #[test]
+    fn test_serialize_remove_and_cdc_path_encodes_space() {
+        let remove = Remove {
+            path: "part 1.parquet".to_string(),
+            ..Default::default()
+        };
+        let cdc = AddCDCFile {
+            path: "_change_data/part 2.parquet".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            serde_json::to_value(&remove).unwrap()["path"],
+            "part%201.parquet"
+        );
+        assert_eq!(
+            serde_json::to_value(&cdc).unwrap()["path"],
+            "_change_data/part%202.parquet"
+        );
+    }
+
+    #[test]
+    fn test_serialize_path_preserves_hive_partition_delimiters() {
+        // A path is a multi segment URI, so encoding the delimiter or the `=` of a hive style
+        // directory would point the action at a file that does not exist.
+        let add = Add {
+            path: "year=2020/month=2/day=3/part-00000-abc.snappy.parquet".to_string(),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&add).unwrap();
+        assert_eq!(
+            value["path"],
+            "year=2020/month=2/day=3/part-00000-abc.snappy.parquet"
+        );
+    }
+
+    #[test]
+    fn test_serialize_round_trips_spark_written_path() {
+        // Spark writes this path, see dat/v0.0.3/reader_tests/generated/multi_partitioned_2.
+        // Re-serializing it has to reproduce the same string, because kernel matches removes
+        // against adds on the raw path rather than the decoded one.
+        let path = "bool=false/time=1970-01-02%2008%253A45%253A00/amount=12.000000000000000000/part-00000-12004196-1e98-4a42-a622-a12f05a4578e.c000.snappy.parquet";
+        let raw = serde_json::json!({
+            "path": path,
+            "partitionValues": {},
+            "size": 0,
+            "modificationTime": 0,
+            "dataChange": true
+        });
+
+        let add: Add = serde_json::from_value(raw).unwrap();
+        assert_eq!(serde_json::to_value(&add).unwrap()["path"], path);
+    }
+
+    #[test]
+    fn test_deserialize_path_accepts_unencoded_space() {
+        // Commits written before spaces were encoded have to keep decoding to the same path.
+        let raw = serde_json::json!({
+            "path": "city=New York/part-00000-abc.parquet",
+            "partitionValues": {},
+            "size": 0,
+            "modificationTime": 0,
+            "dataChange": true
+        });
+
+        let add: Add = serde_json::from_value(raw).unwrap();
+        assert_eq!(add.path, "city=New York/part-00000-abc.parquet");
     }
 
     // #[test]

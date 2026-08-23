@@ -1,11 +1,10 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_schema::Schema as ArrowSchema;
+use arrow_schema::{Schema as ArrowSchema, SchemaRef};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_expr::execution_props::ExecutionProps;
-use datafusion::physical_expr::{create_physical_expr, PhysicalExpr};
+use datafusion::physical_expr::{PhysicalExpr, create_physical_expr};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::memory::{LazyBatchGenerator, LazyMemoryExec};
@@ -14,10 +13,15 @@ use datafusion::physical_plan::{ExecutionPlan, Statistics};
 use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
+use deltalake::datafusion::execution::object_store::ObjectStoreUrl;
+use deltalake::datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
-use deltalake::{datafusion, DeltaResult, DeltaTableError};
+use deltalake::delta_datafusion::DeltaScanNext;
+use deltalake::logstore::object_store::DynObjectStore;
+use deltalake::{DeltaResult, DeltaTableError, datafusion};
 use parking_lot::RwLock;
+use tokio::runtime::Handle;
 
 #[derive(Debug)]
 pub(crate) struct LazyTableProvider {
@@ -26,7 +30,7 @@ pub(crate) struct LazyTableProvider {
 }
 
 impl LazyTableProvider {
-    /// Build a DeltaTableProvider
+    /// Build a LazyTableProvider
     pub fn try_new(
         schema: Arc<ArrowSchema>,
         batches: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
@@ -37,10 +41,6 @@ impl LazyTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for LazyTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<ArrowSchema> {
         self.schema.clone()
     }
@@ -72,8 +72,12 @@ impl TableProvider for LazyTableProvider {
         let df_schema: DFSchema = plan.schema().try_into()?;
 
         if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr =
-                create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
+            let physical_expr = create_physical_expr(
+                &filter_expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
             plan = Arc::new(FilterExec::try_new(physical_expr, plan)?);
         }
 
@@ -89,6 +93,7 @@ impl TableProvider for LazyTableProvider {
                             &Expr::Column(Column::from((table_ref, field))),
                             &df_schema,
                             execution_props,
+                            &PhysicalPlanningContext::default(),
                         )
                         .map(|expr| (expr, field.name().clone()))
                         .map_err(DeltaTableError::from)
@@ -117,10 +122,85 @@ impl TableProvider for LazyTableProvider {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TokioDeltaScan {
+    inner: DeltaScanNext,
+    handle: Handle,
+    object_store_url: Option<ObjectStoreUrl>,
+    object_store: Option<Arc<DynObjectStore>>,
+}
+
+impl TokioDeltaScan {
+    pub fn new(inner: DeltaScanNext, handle: Handle) -> Self {
+        Self {
+            inner,
+            handle,
+            object_store_url: None,
+            object_store: None,
+        }
+    }
+
+    pub fn with_object_store(
+        mut self,
+        object_store_url: ObjectStoreUrl,
+        object_store: Arc<DynObjectStore>,
+    ) -> Self {
+        self.object_store_url = Some(object_store_url);
+        self.object_store = Some(object_store);
+        self
+    }
+}
+
+#[async_trait::async_trait]
+impl TableProvider for TokioDeltaScan {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+
+    fn table_type(&self) -> TableType {
+        self.inner.table_type()
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        self.inner.get_table_definition()
+    }
+
+    fn get_logical_plan(&self) -> Option<Cow<'_, LogicalPlan>> {
+        self.inner.get_logical_plan()
+    }
+
+    async fn scan(
+        &self,
+        session: &dyn Session,
+        projection: Option<&Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        if let (Some(url), Some(store)) = (&self.object_store_url, &self.object_store) {
+            session
+                .runtime_env()
+                .register_object_store(url.as_ref(), store.clone());
+        }
+
+        let inner = &self.inner;
+
+        self.handle
+            .block_on(async { inner.scan(session, projection, filters, limit).await })
+    }
+
+    fn supports_filters_pushdown(
+        &self,
+        filter: &[&Expr],
+    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
+        self.inner.supports_filters_pushdown(filter)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -138,7 +218,6 @@ mod tests {
     // A dummy LazyBatchGenerator implementation for testing
     #[derive(Debug)]
     struct TestBatchGenerator {
-        schema: Arc<ArrowSchema>,
         data: Vec<RecordBatch>,
         current_index: usize,
     }
@@ -150,9 +229,8 @@ mod tests {
     }
 
     impl TestBatchGenerator {
-        fn new(schema: Arc<ArrowSchema>, data: Vec<RecordBatch>) -> Self {
+        fn new(data: Vec<RecordBatch>) -> Self {
             Self {
-                schema,
                 data,
                 current_index: 0,
             }
@@ -164,13 +242,11 @@ mod tests {
             let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
             let name_array = StringArray::from(vec!["Alice", "Bob", "Carol", "Dave", "Eve"]);
 
-            let batch = RecordBatch::try_new(
-                schema.clone(),
-                vec![Arc::new(id_array), Arc::new(name_array)],
-            )
-            .unwrap();
+            let batch =
+                RecordBatch::try_new(schema, vec![Arc::new(id_array), Arc::new(name_array)])
+                    .unwrap();
 
-            Arc::new(RwLock::new(TestBatchGenerator::new(schema, vec![batch])))
+            Arc::new(RwLock::new(TestBatchGenerator::new(vec![batch])))
         }
     }
 
@@ -187,6 +263,11 @@ mod tests {
             } else {
                 Ok(None)
             }
+        }
+
+        fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
+            // DataFusion may need to restart a stream from the beginning (e.g. recursive CTEs).
+            Arc::new(RwLock::new(TestBatchGenerator::new(self.data.clone())))
         }
     }
 
@@ -299,7 +380,7 @@ mod tests {
 
         // The plan should include a LimitExec
         // We can verify this by checking that the plan type is correct
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 
     #[tokio::test]
@@ -336,6 +417,6 @@ mod tests {
 
         // The resulting plan should have a chain of operations:
         // GlobalLimitExec -> ProjectionExec -> FilterExec -> LazyMemoryExec
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 }

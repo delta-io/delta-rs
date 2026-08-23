@@ -1,5 +1,5 @@
 #![cfg(feature = "integration_test_lakefs")]
-use deltalake_test::{test_read_tables, IntegrationContext, TestResult};
+use deltalake_test::{IntegrationContext, TestResult, test_read_tables};
 use serial_test::serial;
 
 mod context;

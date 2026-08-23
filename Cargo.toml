@@ -1,66 +1,62 @@
 [workspace]
-members = ["crates/*", "delta-inspect", "python"]
-exclude = ["proofs"]
-resolver = "2"
+members = ["crates/*", "python"]
+exclude = []
+resolver = "3"
 
 [workspace.package]
-authors = ["Qingping Hou <dave2008713@gmail.com>"]
-rust-version = "1.86"
+authors = ["Qingping Hou <dave2008713@gmail.com>", "R Tyler Croy <rtyler@brokenco.de>"]
+rust-version = "1.94.1"
 keywords = ["deltalake", "delta", "datalake"]
 readme = "README.md"
-edition = "2021"
+edition = "2024"
 description = "Native Delta Lake implementation in Rust"
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
 documentation = "https://docs.rs/deltalake"
 repository = "https://github.com/delta-io/delta.rs"
 
-[profile.release-with-debug]
-inherits = "release"
-debug = true
-
-# Reducing the debuginfo for the test profile in order to trim the disk and RAM
-# usage during development
-# <https://github.com/delta-io/delta-rs/issues/1550?
-[profile.test]
-debug = "line-tables-only"
-
 [workspace.dependencies]
-delta_kernel = { version = "0.16.0", features = [
-    "arrow-56",
-    "default-engine-rustls",
+#delta_kernel = { package = "buoyant_kernel", path = "../delta-kernel-rs/kernel", features = [
+#delta_kernel = { package = "buoyant_kernel", git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = [
+delta_kernel = { package = "buoyant_kernel", version = "0.25.0,<0.25.100", features = [
+    "arrow-59",
     "internal-api",
 ] }
+#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  path = "../delta-kernel-rs/default-engine", features = ["arrow-58", "rustls"], default-features = false }
+#delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  git = "https://github.com/buoyant-data/delta-kernel-rs", branch = "buoyant/main", features = ["arrow-58", "rustls"], default-features = false }
+delta_kernel_default_engine = {  package = "buoyant_kernel_engine",  version = "0.25.0,<0.25.100", features = ["arrow-59", "rustls"], default-features = false }
 
 
 # arrow
-arrow = { version = "56.0.0" }
-arrow-arith = { version = "56.0.0" }
-arrow-array = { version = "56.0.0", features = ["chrono-tz"] }
-arrow-buffer = { version = "56.0.0" }
-arrow-cast = { version = "56.0.0" }
-arrow-ipc = { version = "56.0.0" }
-arrow-json = { version = "56.0.0" }
-arrow-ord = { version = "56.0.0" }
-arrow-row = { version = "56.0.0" }
-arrow-schema = { version = "56.0.0" }
-arrow-select = { version = "56.0.0" }
-object_store = { version = "0.12.1" }
-parquet = { version = "56.0.0" }
+arrow = { version = "59" }
+arrow-arith = { version = "59" }
+arrow-array = { version = "59", features = ["chrono-tz"] }
+arrow-buffer = { version = "59" }
+arrow-cast = { version = "59" }
+arrow-ipc = { version = "59" }
+arrow-json = { version = "59" }
+arrow-ord = { version = "59" }
+arrow-row = { version = "59" }
+arrow-schema = { version = "59" }
+arrow-select = { version = "59" }
+object_store = { version = "0.13.2" }
+parquet = { version = "59" }
 
-# datafusion
-datafusion = "50.0.0"
-datafusion-ffi = "50.0.0"
-datafusion-proto = "50.0.0"
+# datafusion 54
+datafusion = { version = "55" }
+datafusion-datasource = { version = "55" }
+datafusion-physical-expr-adapter = { version = "55" }
+datafusion-ffi = { version = "55" }
+datafusion-proto = { version = "55" }
 
 # serde
 serde = { version = "1.0.194", features = ["derive"] }
 serde_json = "1"
-strum = { version = "0.27" }
 
 # "stdlib"
 bytes = { version = "1" }
 chrono = { version = "0.4.40", default-features = false, features = ["clock"] }
+time = { version = "=0.3.53" }
 tracing = { version = "0.1", features = ["log"] }
 regex = { version = "1" }
 thiserror = { version = "2" }
@@ -73,6 +69,7 @@ uuid = { version = "1" }
 async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 tokio = { version = "1" }
+typed-builder = { version = "0.23.0" }
 
 # opentelemetry
 tracing-opentelemetry = { version = "0.32" }
@@ -83,7 +80,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 num_cpus = { version = "1" }
 
 [workspace.metadata.typos]
-files.extend-exclude = ["CHANGELOG.md"]
+files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]
 default.extend-ignore-re = [
     # Custom ignore regex patterns: https://github.com/crate-ci/typos/blob/master/docs/reference.md#example-configurations
     "(?s)//\\s*spellchecker:ignore-next-line[^\\n]*\\n[^\\n]*",
@@ -103,10 +100,63 @@ AKS = "AKS"
 # to avoid using 'type' as a field name.
 tpe = "tpe"
 
-# for better flamegraphs when benchmarking
+# ============================================================================
+# Profile Configuration
+# ============================================================================
+# Profiles for different use cases:
+# - dev: Fast local development with good debug experience (Cargo defaults)
+# - test: test builds with minimal debug info to save disk/RAM (custom)
+# - release: Production Rust crates - maximum performance (Cargo defaults)
+# - bench: For benchmarking with flamegraphs (cargo bench)
+# - profiling: For performance profiling with release opts + debug info
+# - ci: CI/CD optimized - fast builds, release-like performance
+# - python-release: Python wheel builds - portable, reproducible (PyPI releases)
+# ============================================================================
+
+# Test profile - reduced debug info to save disk/RAM
+# Usage: cargo test (automatic)
+# <https://github.com/delta-io/delta-rs/issues/1550>
+[profile.test]
+debug = "line-tables-only"
+
+# Benchmark profile with debug symbols for flamegraphs
+# Usage: cargo bench (automatic)
 [profile.bench]
 debug = true
 
+# Profiling profile with release optimizations + debug info
+# Usage: cargo build --profile=profiling
 [profile.profiling]
 inherits = "release"
 debug = true
+
+# CI profile - optimized for Continuous Integration
+# Usage: cargo build --profile=ci
+[profile.ci]
+inherits = "dev"
+debug = false
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 3
+debug = false
+debug-assertions = false
+strip = "debuginfo"
+incremental = false
+
+# Python wheel release profile - for PyPI distribution
+# Usage: maturin build --profile python-release (via .github/workflows/python_release.yml)
+[profile.python-release]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "fat"
+
+
+# Python wheel release profile ARM - for PyPI distribution
+# Usage: maturin build --profile python-release-arm (via .github/workflows/python_release.yml)
+[profile.python-release-arm]
+inherits = "release"
+opt-level = 3
+codegen-units = 1
+lto = "thin"

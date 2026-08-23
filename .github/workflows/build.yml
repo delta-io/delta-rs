@@ -18,25 +18,19 @@ jobs:
       DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v5
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt,clippy
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+      - name: load DAT
+        run: make setup-dat
 
       - name: Rustfmt Check
-        uses: actions-rust-lang/rustfmt@v1
+        # <https://github.com/actions-rust-lang/rustfmt/releases/tag/v1.1.2>
+        uses: actions-rust-lang/rustfmt@4066006ec54a31931b9b1fddfd38f2fdf2d27143
 
       - name: build and lint with clippy
-        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }} --tests
+        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Run Machete to check for unused dependencies
         uses: bnjbvr/cargo-machete@aa070c61641e482bc2b5d41c97b496ee4755bf37
@@ -51,11 +45,7 @@ jobs:
       - name: Define test matrix
         id: matrix
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-          else
-            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
-          fi
+          echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
 
   build:
     needs: test-matrix
@@ -68,31 +58,28 @@ jobs:
       DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs"
 
     steps:
-      - uses: actions/checkout@v5
-
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      
+      - name: Set up Python 3.13
+        if: matrix.os == 'windows-latest'
+        # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
-          toolchain: stable
-          components: clippy
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+          python-version: 3.13
 
       - name: Default build
-        run: cargo build --package deltalake
+        run: cargo build --profile=ci --package deltalake
 
       - name: Default features with clippy
-        run: cargo clippy --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }}
 
       - name: Spot-check build for native-tls features
-        run: cargo build --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
+        run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
 
       - name: Check no default features (except rustls)
-        run: cargo check --no-default-features --features rustls
+        run: cargo check --profile=ci --package deltalake --no-default-features --features rustls
 
   test:
     name: Unit Tests
@@ -106,18 +93,27 @@ jobs:
       DEFAULT_FEATURES: "datafusion"
 
     steps:
-      - uses: actions/checkout@v5
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Claim disk space
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          sudo rm -rf /opt/microsoft || true                #   783M
+          sudo rm -rf /usr/local/julia* || true             #  1008M
+          sudo rm -rf /usr/local/share/chromium || true     #   613M
+          sudo rm -rf /usr/local/share/powershell || true   #  1244M
+          sudo rm -rf /usr/share/swift || true              #  3207M
+          sudo df -TBG /
 
-      - name: Setup Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Set up Python 3.13
+        if: matrix.os == 'windows-latest'
+        # <https://github.com/actions/setup-python/releases/tag/v6.2.0>
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
-          toolchain: stable
-          cache: true
-          # if we ever get rid of all the clippy warnings, we can remove this line
-          rustflags: ""
+          python-version: 3.13
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -136,10 +132,6 @@ jobs:
             --exclude deltalake-hdfs \
             --exclude deltalake-lakefs
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+      - uses: ./.github/actions/upload-coverage
         with:
-          files: codecov.json
-          fail_ci_if_error: true
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          token: ${{ secrets.CODECOV_TOKEN }}

@@ -8,18 +8,18 @@ such as creation time.
 {{ code_example('delta_table', 'get_table_info', ['DeltaTable'])}}
 
 Depending on your storage backend, you could use the `storage_options`
-parameter to provide some configuration. Configuration is defined for
-specific backends - [s3
-options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants),
-[azure
-options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants),
-[gcs
-options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants).
+parameter to provide some configuration.
+
+Configuration is defined for specific backends
+
+- [s3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants),
+- [azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants),
+- [gcs options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants).
 
 === "Python"
     ```python
-    >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
-    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
+    storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
+    dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
     ```
 
 === "Rust"
@@ -36,22 +36,28 @@ basic service provider is derived from the URL being used. We try to
 support many of the well-known formats to identify basic service
 properties.
 
-**S3**:
+=== "S3"
 
-> - s3://\<bucket\>/\<path\>
-> - s3a://\<bucket\>/\<path\>
+    ```
+    s3://\<bucket\>/\<path\>
+    s3a://\<bucket\>/\<path\>
+    ```
 
-Note that `delta-rs` does not read credentials from a local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can also pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+    Note that `delta-rs` does not read credentials from a local `.aws/config` or `.aws/creds` file. Credentials can be accessed from environment variables, ec2 metadata, profiles or web identity. You can also pass credentials to `storage_options` using `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 
-**Azure**:
+=== "Azure"
 
-> - az://\<container\>/\<path\>
-> - adl://\<container\>/\<path\>
-> - abfs://\<container\>/\<path\>
+    ```
+    az://\<container\>/\<path\>
+    adl://\<container\>/\<path\>
+    abfs://\<container\>/\<path\>
+    ```
 
-**GCS**:
+=== "GCS"
 
-> - gs://\<bucket\>/\<path\>
+    ```
+    gs://\<bucket\>/\<path\>
+    ```
 
 
 ## Verify Table Existence
@@ -109,7 +115,7 @@ the `DeltaTable.is_deltatable()` method.
 ## Custom Storage Backends
 
 While delta always needs its internal storage backend to work and be
-properly configured, in order to manage the delta log, it may sometime
+properly configured, in order to manage the delta log, it may sometimes
 be advantageous - and is common practice in the arrow world - to
 customize the storage interface used for reading the bulk data.
 
@@ -149,11 +155,12 @@ wish to load:
 
 === "Python"
     ```python
-    >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
+    >>> dt = DeltaTable("/rust/tests/data/simple_table", version=2)
     ```
 === "Rust"
     ```rust
-    let mut table = open_table("./data/simple_table").await?;
+    let delta_path = Url::from_directory_path("/rust/tests/data/simple_table").unwrap();
+    let mut table = open_table(delta_path).await?;
     table.load_version(1).await?;
     ```
 
@@ -213,3 +220,67 @@ You may load a Delta Table from your Databricks or Open Source Unity Catalog usi
     dt.is_deltatable(dt.table_uri)
     # True
     ```
+
+### Environment variables
+
+The following environment variables are supported when loading tables using a `uc://` URL:
+
+#### Connection Configuration
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_HOST` | Databricks workspace host URL |
+| `DATABRICKS_WORKSPACE_URL` | Alternative workspace URL variable |
+| `UNITY_WORKSPACE_URL` | Unity-prefixed workspace URL |
+
+#### Authentication Credentials
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_TOKEN` | Access token for Databricks authentication|
+| `DATABRICKS_ACCESS_TOKEN` | Alternative access token variable |
+| `UNITY_ACCESS_TOKEN` | Unity-prefixed access token variable |
+
+#### OAuth / Service Principal Authentication
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_AUTHORITY_HOST` | Authority host for OAuth flows |
+| `DATABRICKS_AUTHORITY_ID` | Authority (tenant) ID for OAuth flows |
+| `DATABRICKS_CLIENT_ID` | Service principal client ID |
+| `DATABRICKS_CLIENT_SECRET` | Service principal client secret |
+
+ or
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `UNITY_AUTHORITY_HOST` | Unity-prefixed authority host |
+| `UNITY_AUTHORITY_ID` | Unity-prefixed authority ID |
+| `UNITY_CLIENT_ID` | Unity-prefixed client ID |
+| `UNITY_CLIENT_SECRET` | Unity-prefixed client secret |
+
+#### Azure Managed Identity Authentication
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `DATABRICKS_FEDERATED_TOKEN_FILE` | File containing token for Azure AD workload identity federation |
+| `DATABRICKS_MSI_ENDPOINT` | Endpoint to request managed identity token |
+| `DATABRICKS_MSI_RESOURCE_ID` | MSI resource ID for managed identity |
+| `DATABRICKS_OBJECT_ID` | Object ID for managed identity authentication |
+| `DATABRICKS_USE_AZURE_CLI` | Use Azure CLI for acquiring access token |
+
+or
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `UNITY_FEDERATED_TOKEN_FILE` | Unity-prefixed federated token file |
+| `UNITY_MSI_ENDPOINT` | Unity-prefixed MSI endpoint |
+| `UNITY_MSI_RESOURCE_ID` | Unity-prefixed MSI resource ID |
+| `UNITY_OBJECT_ID` | Unity-prefixed object ID |
+| `UNITY_USE_AZURE_CLI` | Unity-prefixed Azure CLI flag |
+
+#### Additional Settings
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `UNITY_ALLOW_HTTP_URL` | Allow HTTP URLs (e.g., http://localhost:8080) for testing |

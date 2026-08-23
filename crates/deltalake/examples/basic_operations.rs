@@ -1,15 +1,18 @@
-use deltalake::arrow::{
-    array::{Int32Array, StringArray, TimestampMicrosecondArray},
-    datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
-    record_batch::RecordBatch,
-};
 use deltalake::kernel::{DataType, PrimitiveType, StructField};
 use deltalake::operations::collect_sendable_stream;
 use deltalake::parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
-use deltalake::{protocol::SaveMode, DeltaOps, DeltaTableError};
+use deltalake::{
+    DeltaTable,
+    arrow::{
+        array::{Int32Array, StringArray, TimestampMicrosecondArray},
+        datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema, TimeUnit},
+        record_batch::RecordBatch,
+    },
+};
+use deltalake::{DeltaTableError, protocol::SaveMode};
 use url::Url;
 
 use std::sync::Arc;
@@ -65,18 +68,18 @@ fn get_table_batches() -> RecordBatch {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // Create a delta operations client pointing at an un-initialized location.
-    let ops = if let Ok(table_uri) = std::env::var("TABLE_URI") {
+    let table = if let Ok(table_uri) = std::env::var("TABLE_URI") {
         let table_url = Url::parse(&table_uri)
             .map_err(|e| DeltaTableError::InvalidTableLocation(e.to_string()))?;
-        DeltaOps::try_from_uri(table_url).await?
+        DeltaTable::try_from_url(table_url).await?
     } else {
-        DeltaOps::new_in_memory()
+        DeltaTable::new_in_memory()
     };
 
     // The operations module uses a builder pattern that allows specifying several options
     // on how the command behaves. The builders implement `Into<Future>`, so once
     // options are set you can run the command using `.await`.
-    let table = ops
+    let table = table
         .create()
         .with_columns(get_table_columns())
         .with_partition_columns(["timestamp"])
@@ -91,7 +94,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .build();
 
     let batch = get_table_batches();
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![batch.clone()])
         .with_writer_properties(writer_properties)
         .await?;
@@ -103,7 +106,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
         .build();
 
     // To overwrite instead of append (which is the default), use `.with_save_mode`:
-    let table = DeltaOps(table)
+    let table = table
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .with_writer_properties(writer_properties)
@@ -111,7 +114,7 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
 
     assert_eq!(table.version(), Some(2));
 
-    let (_table, stream) = DeltaOps(table).load().await?;
+    let (_table, stream) = table.scan_table().await?;
     let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
     println!("{data:?}");

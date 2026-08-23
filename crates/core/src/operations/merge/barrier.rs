@@ -16,9 +16,10 @@ use std::{
     task::{Context, Poll},
 };
 
-use arrow::array::{builder::UInt64Builder, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, RecordBatch, builder::UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use dashmap::DashSet;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::physical_expr::{Distribution, PhysicalExpr};
@@ -28,9 +29,9 @@ use datafusion::physical_plan::{
 use futures::{Stream, StreamExt};
 
 use crate::{
+    DeltaTableError,
     delta_datafusion::get_path_column,
     operations::merge::{TARGET_DELETE_COLUMN, TARGET_INSERT_COLUMN, TARGET_UPDATE_COLUMN},
-    DeltaTableError,
 };
 
 pub(crate) type BarrierSurvivorSet = Arc<DashSet<String>>;
@@ -72,15 +73,11 @@ impl ExecutionPlan for MergeBarrierExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.input.schema()
     }
 
-    fn properties(&self) -> &datafusion::physical_plan::PlanProperties {
+    fn properties(&self) -> &Arc<datafusion::physical_plan::PlanProperties> {
         self.input.properties()
     }
 
@@ -120,6 +117,17 @@ impl ExecutionPlan for MergeBarrierExec {
             self.survivors.clone(),
             self.file_column.clone(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -253,7 +261,7 @@ impl Stream for MergeBarrierStream {
                             // However this approach exposes the cost of hashing so we want to minimize that as much as possible.
                             // A map from an arrow dictionary key to the correct index of `file_partition` is created for each batch that's processed.
                             // This ensures we only need to hash each file path at most once per batch.
-                            let mut key_map = Vec::new();
+                            let mut key_map = Vec::with_capacity(file_dictionary.len());
 
                             for file_name in file_dictionary.values().into_iter() {
                                 let key = match file_name {
@@ -273,9 +281,11 @@ impl Stream for MergeBarrierStream {
                                 key_map.push(key)
                             }
 
-                            let mut indices: Vec<_> = (0..(self.file_partitions.len()))
-                                .map(|_| UInt64Builder::with_capacity(batch.num_rows()))
-                                .collect();
+                            let mut indices: Vec<_> =
+                                Vec::with_capacity(self.file_partitions.len());
+                            for _ in 0..self.file_partitions.len() {
+                                indices.push(UInt64Builder::with_capacity(batch.num_rows()));
+                            }
 
                             for (idx, key) in file_dictionary.keys().iter().enumerate() {
                                 match key {
@@ -433,11 +443,11 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
-pub(crate) fn find_node<T: 'static>(
+pub(crate) fn find_node<T: ExecutionPlan>(
     parent: &Arc<dyn ExecutionPlan>,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate a Node::<T> after the planner converts the logical node
-    if parent.as_any().downcast_ref::<T>().is_some() {
+    if parent.downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
@@ -468,8 +478,9 @@ mod tests {
     use datafusion::datasource::memory::MemorySourceConfig;
     use datafusion::execution::TaskContext;
     use datafusion::physical_expr::expressions::Column;
-    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::ExecutionPlan;
+    #[allow(deprecated)]
+    use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use futures::StreamExt;
     use std::sync::Arc;
 
@@ -595,17 +606,16 @@ mod tests {
         batches.push(batch);
 
         let (actual, _survivors) = execute(batches).await;
-        let expected = vec!
-            [
-                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
-                "| id | __delta_rs_path | __delta_rs_target_insert | __delta_rs_target_update | __delta_rs_target_delete |",
-                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
-                "| 0  | file0           | false                    | false                    | false                    |",
-                "| 1  | file1           | false                    | false                    | false                    |",
-                "| 2  | file1           | false                    |                          | false                    |",
-                "| 3  | file0           | false                    | false                    |                          |",
-                "+----+-----------------+--------------------------+--------------------------+--------------------------+",
-            ];
+        let expected = vec![
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| id | __delta_rs_path | __delta_rs_target_insert | __delta_rs_target_update | __delta_rs_target_delete |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+            "| 0  | file0           | false                    | false                    | false                    |",
+            "| 1  | file1           | false                    | false                    | false                    |",
+            "| 2  | file1           | false                    |                          | false                    |",
+            "| 3  | file0           | false                    | false                    |                          |",
+            "+----+-----------------+--------------------------+--------------------------+--------------------------+",
+        ];
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -657,6 +667,7 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
+        #[allow(deprecated)]
         let coalescence = CoalesceBatchesExec::new(Arc::new(merge), 100);
         let mut stream = coalescence.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)

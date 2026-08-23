@@ -4,10 +4,10 @@ use std::{
 };
 
 use dashmap::DashMap;
-use object_store::{path::Path, DynObjectStore};
+use object_store::{DynObjectStore, path::Path};
 use url::Url;
 
-use super::{default_logstore, DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig};
+use super::{DeltaIOStorageBackend, LogStore, ObjectStoreRef, StorageConfig, default_logstore};
 use crate::{DeltaResult, DeltaTableError};
 
 /// Factory registry to manage [`ObjectStoreFactory`] instances
@@ -66,9 +66,9 @@ fn default_parse_url_opts(
 /// Access global registry of object store factories
 pub fn object_store_factories() -> ObjectStoreFactoryRegistry {
     static REGISTRY: OnceLock<ObjectStoreFactoryRegistry> = OnceLock::new();
-    let factory = Arc::new(DefaultObjectStoreFactory::default());
     REGISTRY
         .get_or_init(|| {
+            let factory = Arc::new(DefaultObjectStoreFactory::default());
             let registry = ObjectStoreFactoryRegistry::default();
             registry.insert(Url::parse("memory://").unwrap(), factory.clone());
             registry.insert(Url::parse("file://").unwrap(), factory);
@@ -151,6 +151,11 @@ pub fn logstore_factories() -> LogStoreFactoryRegistry {
             );
             registry.insert(
                 Url::parse("file://").unwrap(),
+                Arc::new(DefaultLogStoreFactory::default()),
+            );
+            #[cfg(target_os = "windows")]
+            registry.insert(
+                Url::parse(&format!("{}://", super::DELTA_UNC_SCHEME)).unwrap(),
                 Arc::new(DefaultLogStoreFactory::default()),
             );
             registry

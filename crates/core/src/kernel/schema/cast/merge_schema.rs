@@ -269,15 +269,14 @@ pub(crate) fn merge_arrow_field(
                         | DataType::Decimal256(left_precision, left_scale),
                         DataType::Decimal128(right_precision, right_scale),
                     ) = (right.data_type(), new_field.data_type())
+                        && !(left_precision <= right_precision && left_scale <= right_scale)
                     {
-                        if !(left_precision <= right_precision && left_scale <= right_scale) {
-                            return Err(ArrowError::SchemaError(format!(
-                                "Cannot merge field {} from {} to {}",
-                                right.name(),
-                                right.data_type(),
-                                new_field.data_type()
-                            )));
-                        }
+                        return Err(ArrowError::SchemaError(format!(
+                            "Cannot merge field {} from {} to {}",
+                            right.name(),
+                            right.data_type(),
+                            new_field.data_type()
+                        )));
                     };
                     // If it's not Decimal datatype, the new_field remains the left table field.
                 }
@@ -288,12 +287,12 @@ pub(crate) fn merge_arrow_field(
 }
 
 /// Merges Arrow Table schema and Arrow Batch Schema, by allowing Large/View Types to passthrough.
-// Sometimes fields can't be merged because they are not the same types. So table has int32,
-// but batch int64. We want the preserve the table type. At later stage we will call cast_record_batch
-// which will cast the batch int64->int32. This is desired behavior so we can have flexibility
-// in the batch data types. But preserve the correct table and parquet types.
-//
-// Preserve_new_fields can also be disabled if you just want to only use the passthrough functionality
+/// Sometimes fields can't be merged because they are not the same types. So table has int32,
+/// but batch int64. We want the preserve the table type. At later stage we will call cast_record_batch
+/// which will cast the batch int64->int32. This is desired behavior so we can have flexibility
+/// in the batch data types. But preserve the correct table and parquet types.
+///
+/// Preserve_new_fields can also be disabled if you just want to only use the passthrough functionality
 pub(crate) fn merge_arrow_schema(
     table_schema: ArrowSchemaRef,
     batch_schema: ArrowSchemaRef,
@@ -330,12 +329,21 @@ fn merge_arrow_vec_fields(
                         Err(e)
                     }
                     Ok(mut f) => {
-                        // UNDO the implicit schema merging of batch fields into table fields that is done by
-                        // field.try_merge
-                        f.set_metadata(right_field.metadata().clone());
+                        // Preserve existing (table) column metadata (e.g. generated column
+                        // expressions) as the base, then merge in compatible metadata from the
+                        // batch. This prevents batch-side schemas (which often lack table-defined
+                        // metadata) from overwriting table metadata that `Field::try_merge` may
+                        // have merged in.
+                        f.set_metadata(field.metadata().clone());
 
                         let mut field_metadata = f.metadata().clone();
-                        try_merge_metadata(&mut field_metadata, right_field.metadata())?;
+                        // Column generation expressions are table-defined metadata and should not
+                        // be inferred or overridden by incoming batch schemas. Ignore them when
+                        // merging Arrow field metadata to avoid spurious schema errors when the
+                        // input includes conflicting `delta.generationExpression` metadata.
+                        let mut right_metadata = right_field.metadata().clone();
+                        right_metadata.remove(ColumnMetadataKey::GenerationExpression.as_ref());
+                        try_merge_metadata(&mut field_metadata, &right_metadata)?;
                         f.set_metadata(field_metadata);
                         Ok(f)
                     }

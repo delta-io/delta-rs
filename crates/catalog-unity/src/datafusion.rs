@@ -6,20 +6,18 @@ use datafusion::catalog::SchemaProvider;
 use datafusion::catalog::{CatalogProvider, CatalogProviderList};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::TableProvider;
-use futures::FutureExt;
-use moka::future::Cache;
 use moka::Expiry;
-use std::any::Any;
+use moka::future::Cache;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::error;
+use tracing::{Level, error, instrument};
 
 use super::models::{
-    GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse,
-    TableTempCredentialsResponse, TemporaryTableCredentials,
+    GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse, Table,
+    TableTempCredentialsResponse, TableType, TemporaryTableCredentials,
 };
 use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
-use deltalake_core::{ensure_table_uri, DeltaTableBuilder};
+use deltalake_core::{DeltaTableBuilder, ensure_table_uri};
 
 /// In-memory list of catalogs populated by unity catalog
 #[derive(Debug)]
@@ -50,10 +48,6 @@ impl UnityCatalogList {
 }
 
 impl CatalogProviderList for UnityCatalogList {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn register_catalog(
         &self,
         name: String,
@@ -105,10 +99,6 @@ impl UnityCatalogProvider {
 }
 
 impl CatalogProvider for UnityCatalogProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema_names(&self) -> Vec<String> {
         self.schemas.iter().map(|c| c.key().clone()).collect()
     }
@@ -144,6 +134,7 @@ pub struct UnitySchemaProvider {
 
     /// Parent catalog for schemas of interest.
     table_names: Vec<String>,
+    table_cache: DashMap<String, Arc<dyn TableProvider>>,
     token_cache: Cache<String, TemporaryTableCredentials>,
 }
 
@@ -162,6 +153,9 @@ impl UnitySchemaProvider {
         {
             ListTableSummariesResponse::Success { tables, .. } => tables
                 .into_iter()
+                .filter(|t| {
+                    t.table_type == TableType::Managed || t.table_type == TableType::External
+                })
                 .filter_map(|t| t.full_name.split('.').next_back().map(|n| n.into()))
                 .collect(),
             ListTableSummariesResponse::Error(_) => vec![],
@@ -173,29 +167,45 @@ impl UnitySchemaProvider {
             catalog_name,
             schema_name,
             token_cache,
+            table_cache: DashMap::new(),
         })
     }
 
+    #[instrument(skip_all)]
     async fn get_creds(
         &self,
         catalog: &str,
         schema: &str,
         table: &str,
     ) -> Result<TemporaryTableCredentials, UnityCatalogError> {
-        tracing::debug!("Fetching new credential for: {catalog}.{schema}.{table}",);
+        let full_path = format!("{}.{}.{}", catalog, schema, table);
+        if let Some(token) = self.token_cache.get(&full_path).await {
+            tracing::event!(Level::DEBUG, "Cache hit for {full_path}");
+            return Ok(token.clone());
+        } else {
+            tracing::event!(Level::DEBUG, "Fetching new credential for {full_path}");
+        }
         match self
             .client
             .get_temp_table_credentials_with_permission(catalog, schema, table, "READ_WRITE")
             .await
         {
             Ok(TableTempCredentialsResponse::Success(temp_creds)) => Ok(temp_creds),
-            Ok(TableTempCredentialsResponse::Error(_err)) => match self
+            Ok(TableTempCredentialsResponse::Error(rw_error)) => match self
                 .client
                 .get_temp_table_credentials(catalog, schema, table)
                 .await?
             {
                 TableTempCredentialsResponse::Success(temp_creds) => Ok(temp_creds),
-                _ => Err(UnityCatalogError::TemporaryCredentialsFetchFailure),
+                TableTempCredentialsResponse::Error(read_error) => {
+                    Err(UnityCatalogError::TemporaryCredentialsFetchFailure {
+                        error_code: read_error.error_code,
+                        message: format!(
+                            "READ_WRITE failed: {}. READ failed: {}",
+                            rw_error.message, read_error.message
+                        ),
+                    })
+                }
             },
             Err(err) => Err(err),
         }
@@ -204,10 +214,6 @@ impl UnitySchemaProvider {
 
 #[async_trait::async_trait]
 impl SchemaProvider for UnitySchemaProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn table_names(&self) -> Vec<String> {
         self.table_names.clone()
     }
@@ -216,18 +222,26 @@ impl SchemaProvider for UnitySchemaProvider {
         &self,
         name: &str,
     ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+        if self.table_cache.contains_key(name) {
+            tracing::event!(Level::DEBUG, "Cache hit: {name}");
+            return Ok(Some(self.table_cache.get(name).unwrap().clone()));
+        }
         let maybe_table = self
             .client
-            .get_table(&self.catalog_name, &self.schema_name, name)
+            .get_table(&self.catalog_name, &self.schema_name, &name.to_string())
             .await
             .map_err(|err| DataFusionError::External(Box::new(err)))?;
 
         match maybe_table {
-            GetTableResponse::Success(table) => {
+            GetTableResponse::Success(Table {
+                storage_location: Some(sl),
+                ..
+            }) => {
+                let full_path = format!("{}.{}.{}", self.catalog_name, self.schema_name, name);
                 let temp_creds = self
                     .token_cache
                     .try_get_with(
-                        table.table_id,
+                        full_path,
                         self.get_creds(&self.catalog_name, &self.schema_name, name),
                     )
                     .await
@@ -236,15 +250,26 @@ impl SchemaProvider for UnitySchemaProvider {
                 let new_storage_opts = temp_creds.get_credentials().ok_or_else(|| {
                     DataFusionError::External(UnityCatalogError::MissingCredential.into())
                 })?;
-                let table_url = ensure_table_uri(&table.storage_location)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let table = DeltaTableBuilder::from_uri(table_url)
+                let table_url =
+                    ensure_table_uri(&sl).map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table = DeltaTableBuilder::from_url(table_url)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                     .with_storage_options(new_storage_opts)
                     .load()
                     .await?;
-                Ok(Some(Arc::new(table)))
+                let provider = table.table_provider().await?;
+                self.table_cache
+                    .insert(name.to_string(), Arc::clone(&provider));
+                Ok(Some(provider))
             }
+            GetTableResponse::Success(Table {
+                storage_location: None,
+                name,
+                table_type,
+                ..
+            }) => Err(DataFusionError::External(Box::new(
+                UnityCatalogError::NotATable(name, table_type),
+            ))),
             GetTableResponse::Error(err) => {
                 error!("failed to fetch table from unity catalog: {}", err.message);
                 Err(DataFusionError::External(Box::new(err)))
@@ -253,6 +278,6 @@ impl SchemaProvider for UnitySchemaProvider {
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        self.table_names.contains(&String::from(name))
+        self.table_names.contains(&name.to_string())
     }
 }

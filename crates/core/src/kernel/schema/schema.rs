@@ -144,12 +144,11 @@ impl StructTypeExt for StructType {
                         line: invariant_json.to_string(),
                     }
                 })?;
-                if let Value::Object(json) = json {
-                    if let Some(Value::Object(expr1)) = json.get("expression") {
-                        if let Some(Value::String(sql)) = expr1.get("expression") {
-                            invariants.push(Invariant::new(&field_path, sql));
-                        }
-                    }
+                if let Value::Object(json) = json
+                    && let Some(Value::Object(expr1)) = json.get("expression")
+                    && let Some(Value::String(sql)) = expr1.get("expression")
+                {
+                    invariants.push(Invariant::new(&field_path, sql));
                 }
             }
         }

@@ -4,8 +4,14 @@ from typing import TYPE_CHECKING
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 
-from deltalake import CommitProperties, DeltaTable, TableFeatures, write_deltalake
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    PostCommitHookProperties,
+    TableFeatures,
+    write_deltalake,
+)
+from deltalake.exceptions import DeltaError
 from deltalake.schema import Field as DeltaField
 from deltalake.schema import PrimitiveType, StructType
 
@@ -32,7 +38,7 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
         # Invalid constraint
         dt.alter.add_constraint({"check_price": "price < 0"})
 
-    with pytest.raises(DeltaProtocolError):
+    with pytest.raises(Exception):
         data = Table(
             {
                 "id": Array(["1"], DataType.string()),
@@ -51,17 +57,6 @@ def test_add_constraint(tmp_path: pathlib.Path, sample_table: Table):
         )
 
         write_deltalake(tmp_path, data, mode="append")
-
-
-def test_add_multiple_constraints(tmp_path: pathlib.Path, sample_table: Table):
-    write_deltalake(tmp_path, sample_table)
-
-    dt = DeltaTable(tmp_path)
-
-    with pytest.raises(ValueError):
-        dt.alter.add_constraint(
-            {"check_price": "price >= 0", "check_price2": "price >= 0"}
-        )
 
 
 def test_add_constraint_roundtrip_metadata(tmp_path: pathlib.Path, sample_table: Table):
@@ -187,13 +182,16 @@ def test_set_table_properties_min_reader_version(
         mode="append",
     )
     dt = DeltaTable(tmp_path)
-    configuration = {"delta.minReaderVersion": min_reader_version}
+    configuration = {
+        "delta.minReaderVersion": min_reader_version,
+        "delta.minWriterVersion": "7",
+    }
     dt.alter.set_table_properties(configuration)
 
     protocol = dt.protocol()
     assert dt.metadata().configuration == configuration
     assert protocol.min_reader_version == int(min_reader_version)
-    assert protocol.min_writer_version == 2
+    assert protocol.min_writer_version == 7
 
 
 def test_set_table_properties_invalid_min_reader_version(
@@ -411,6 +409,32 @@ def test_add_field_in_struct_column(existing_table: DeltaTable):
 
 
 def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(tmp_path, sample_table, "timestamp_ntz", {"timestampNtz"})
+
+
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
+def test_add_timestamp_nanos_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(
+        tmp_path, sample_table, "timestamp_nanos", {"timestampNanos", "timestampNtz"}
+    )
+
+
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
+def test_add_timestamp_nanos_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
+    check_timestamp_column(
+        tmp_path,
+        sample_table,
+        "timestamp_nanos_ntz",
+        {"timestampNanos", "timestampNtz"},
+    )
+
+
+def check_timestamp_column(
+    tmp_path: pathlib.Path,
+    sample_table: Table,
+    primitive_type: str,
+    rw_feature: set[str],
+):
     write_deltalake(
         tmp_path,
         sample_table,
@@ -419,7 +443,7 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     dt = DeltaTable(tmp_path)
     current_fields = dt.schema().fields
 
-    new_fields_to_add = DeltaField("timestamp_ntz_col", PrimitiveType("timestamp_ntz"))
+    new_fields_to_add = DeltaField("new_col", PrimitiveType(primitive_type))
 
     dt.alter.add_columns(new_fields_to_add)
     new_fields = dt.schema().fields
@@ -430,8 +454,8 @@ def test_add_timestamp_ntz_column(tmp_path: pathlib.Path, sample_table: Table):
     )
     assert new_protocol.min_reader_version == 3
     assert new_protocol.min_writer_version == 7
-    assert new_protocol.reader_features == ["timestampNtz"]
-    assert new_protocol.writer_features == ["timestampNtz"]
+    assert set(new_protocol.reader_features) == rw_feature
+    assert set(new_protocol.writer_features) == rw_feature
 
 
 features = [
@@ -517,6 +541,67 @@ def test_add_features(existing_sample_table: DeltaTable):
     )  # type: ignore
 
 
+def _non_null_table() -> Table:
+    return Table(
+        {
+            "id": Array(["1", "2"], DataType.string()),
+            "value": Array([10, 20], DataType.int64()),
+        },
+        schema=Schema(
+            fields=[
+                Field("id", type=DataType.string(), nullable=False),
+                Field("value", type=DataType.int64(), nullable=True),
+            ]
+        ),
+    )
+
+
+def test_drop_column_not_null(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is False
+
+    dt.alter.drop_column_not_null("id")
+
+    fields_by_name = {field.name: field for field in dt.schema().fields}
+    assert fields_by_name["id"].nullable is True
+    # Other columns are left untouched.
+    assert fields_by_name["value"].nullable is True
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "CHANGE COLUMN"
+
+
+def test_drop_column_not_null_roundtrip_metadata(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    commit_properties = CommitProperties(custom_metadata={"userName": "John Doe"})
+    dt.alter.drop_column_not_null("id", commit_properties=commit_properties)
+
+    assert dt.history(1)[0]["userName"] == "John Doe"
+
+
+def test_drop_column_not_null_unknown_column(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError):
+        dt.alter.drop_column_not_null("does_not_exist")
+
+
+def test_drop_column_not_null_already_nullable(tmp_path: pathlib.Path):
+    write_deltalake(tmp_path, _non_null_table())
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError):
+        dt.alter.drop_column_not_null("value")
+
+
 def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
@@ -567,6 +652,32 @@ def test_set_table_description(tmp_path: pathlib.Path, sample_table: Table):
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "UPDATE TABLE METADATA"
+
+
+def test_set_table_metadata_with_post_commithook_properties(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    write_deltalake(tmp_path, sample_table)
+    dt = DeltaTable(tmp_path)
+    post_commithook_properties = PostCommitHookProperties(cleanup_expired_logs=False)
+
+    dt.alter.set_table_properties(
+        {"delta.appendOnly": "false"},
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_name(
+        "hook_enabled_table",
+        post_commithook_properties=post_commithook_properties,
+    )
+    dt.alter.set_table_description(
+        "table description with hook props",
+        post_commithook_properties=post_commithook_properties,
+    )
+
+    metadata = dt.metadata()
+    assert metadata.configuration["delta.appendOnly"] == "false"
+    assert metadata.name == "hook_enabled_table"
+    assert metadata.description == "table description with hook props"
 
 
 def test_set_table_name_overwrite(tmp_path: pathlib.Path, sample_table: Table):

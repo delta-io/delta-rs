@@ -8,6 +8,7 @@
  */
 use chrono::prelude::*;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use deltalake::Path;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::errors::DeltaTableError;
@@ -17,7 +18,6 @@ use deltalake::parquet::{
     file::properties::WriterProperties,
 };
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::Path;
 use deltalake::*;
 use std::sync::Arc;
 use tracing::*;
@@ -199,7 +199,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
     let table_url = Url::parse(&format!("file://{}", table_path.as_ref())).unwrap();
-    DeltaOps::try_from_uri(table_url)
+    DeltaTable::try_from_url(table_url)
         .await
         .unwrap()
         .create()

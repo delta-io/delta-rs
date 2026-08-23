@@ -2,7 +2,7 @@
 
 Delta Lake is an excellent storage format for big data and small data.
 
-This post explains why Delta Lake is suitable for massive datasets and why many of these features that are great, even for tiny tables.  Delta Lake is fine for a table with less than 1 GB of data or hundreds of petabytes of data.
+This post explains why Delta Lake is suitable for massive datasets and why many of these features are great, even for tiny tables.  Delta Lake is fine for a table with less than 1 GB of data or hundreds of petabytes of data.
 
 Let’s start by discussing the features that are great for small data.
 

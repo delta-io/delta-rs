@@ -3,11 +3,11 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderValue, ACCEPT};
+use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Method, Response};
 use reqwest_middleware::ClientWithMiddleware;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use super::UnityCatalogError;
 use crate::client::token::{TemporaryToken, TokenCache};
@@ -475,7 +475,9 @@ mod tests {
     async fn test_managed_identity() {
         let server = MockServer::start_async().await;
 
-        std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
+        unsafe {
+            std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
+        }
 
         let client = reqwest_middleware::ClientBuilder::new(Client::new()).build();
 
@@ -513,6 +515,9 @@ mod tests {
         let token = credential.fetch_token(&client).await.unwrap();
 
         assert_eq!(&token.token, "TOKEN");
+        unsafe {
+            std::env::remove_var(MSI_SECRET_ENV_KEY);
+        }
     }
 
     #[tokio::test]

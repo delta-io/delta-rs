@@ -50,6 +50,45 @@ impl TestCaseInfo {
             serde_json::from_reader(file).map_err(|_| AssertionError::InvalidTestCase)?;
         Ok(info)
     }
+
+    pub fn all_table_versions(&self) -> TestResult<impl Iterator<Item = TestResult<TableVersion>>> {
+        use std::fs;
+
+        let expected_dir = self.root_dir().join("expected");
+        let entries = fs::read_dir(expected_dir).map_err(|_| AssertionError::InvalidTestCase)?;
+
+        let summaries = entries
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+                if path.is_dir() {
+                    let metadata_file = path.join("table_version_metadata.json");
+                    if metadata_file.exists() {
+                        Some(metadata_file)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .map(|metadata_path| {
+                let data_dir = metadata_path.parent().unwrap().join("table_content");
+                let file =
+                    File::open(metadata_path).map_err(|_| AssertionError::InvalidTestCase)?;
+                let meta: TableVersionMetaData =
+                    serde_json::from_reader(file).map_err(|_| AssertionError::InvalidTestCase)?;
+                Ok(TableVersion { meta, data_dir })
+            });
+
+        Ok(summaries)
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+pub struct TableVersion {
+    pub meta: TableVersionMetaData,
+    pub data_dir: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]

@@ -1,15 +1,16 @@
 //! the code in this file is hoisted from datafusion with only slight modifications
 //!
-use std::pin::Pin;
-
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::stream::BoxStream;
-use futures::{Future, Stream, StreamExt};
+use futures::{Stream, StreamExt};
+use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
+use tracing::Span;
+use tracing::dispatcher;
 
-use crate::errors::DeltaResult;
 use crate::DeltaTableError;
+use crate::errors::DeltaResult;
 
 /// Trait for types that stream [RecordBatch]
 ///
@@ -50,13 +51,15 @@ pub trait RecordBatchStream: Stream<Item = DeltaResult<RecordBatch>> {
 /// `Ready(None)` is recommended.
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
+/// A boxed, `Send`able stream of [`RecordBatch`] results, without the schema guarantees of
+/// [`SendableRecordBatchStream`].
 pub type SendableRBStream = Pin<Box<dyn Stream<Item = DeltaResult<RecordBatch>> + Send>>;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.
 ///
 /// Note that this is similar to  [`ReceiverStream` from tokio-stream], with the differences being:
 ///
-/// 1. Methods to bound and "detach"  tasks (`spawn()` and `spawn_blocking()`).
+/// 1. Methods to bound and "detach" tasks (`spawn_blocking()`).
 ///
 /// 2. Propagates panics, whereas the `tokio` version doesn't propagate panics to the receiver.
 ///
@@ -86,16 +89,6 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         self.tx.clone()
     }
 
-    /// Spawn task that will be aborted if this builder (or the stream
-    /// built from it) are dropped
-    pub fn spawn<F>(&mut self, task: F)
-    where
-        F: Future<Output = DeltaResult<()>>,
-        F: Send + 'static,
-    {
-        self.join_set.spawn(task);
-    }
-
     /// Spawn a blocking task that will be aborted if this builder (or the stream
     /// built from it) are dropped.
     ///
@@ -106,7 +99,16 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
         F: FnOnce() -> DeltaResult<()>,
         F: Send + 'static,
     {
-        self.join_set.spawn_blocking(f);
+        // Capture the current dispatcher and span
+        let dispatch = dispatcher::get_default(|d| d.clone());
+        let span = Span::current();
+
+        self.join_set.spawn_blocking(move || {
+            dispatcher::with_default(&dispatch, || {
+                let _enter = span.enter();
+                f()
+            })
+        });
     }
 
     /// Create a stream of all data written to `tx`

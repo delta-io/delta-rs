@@ -6,17 +6,22 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _};
-use crate::logstore::LogStoreRef;
-use crate::protocol::DeltaOperation;
 use crate::DeltaResult;
 use crate::DeltaTable;
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef,
+    resolve_snapshot,
+};
+use crate::logstore::LogStoreRef;
+use crate::protocol::DeltaOperation;
+use crate::table::config::TableProperty;
 
 /// Remove constraints from the table
 pub struct SetTablePropertiesBuilder {
     /// A snapshot of the table's state
-    snapshot: EagerSnapshot,
+    snapshot: Option<EagerSnapshot>,
     /// Name of the property
     properties: HashMap<String, String>,
     /// Raise if property doesn't exist
@@ -28,7 +33,7 @@ pub struct SetTablePropertiesBuilder {
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
-impl super::Operation<()> for SetTablePropertiesBuilder {
+impl super::Operation for SetTablePropertiesBuilder {
     fn log_store(&self) -> &LogStoreRef {
         &self.log_store
     }
@@ -39,7 +44,7 @@ impl super::Operation<()> for SetTablePropertiesBuilder {
 
 impl SetTablePropertiesBuilder {
     /// Create a new builder
-    pub fn new(log_store: LogStoreRef, snapshot: EagerSnapshot) -> Self {
+    pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         Self {
             properties: HashMap::new(),
             raise_if_not_exists: true,
@@ -75,6 +80,41 @@ impl SetTablePropertiesBuilder {
     }
 }
 
+fn plan_set_table_properties_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    properties: HashMap<String, String>,
+    raise_if_not_exists: bool,
+) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
+    if properties.contains_key(TableProperty::ColumnMappingMode.as_ref()) {
+        return Err(DeltaTableError::unsupported_column_mapping(
+            ColumnMappingOperation::Write,
+            "SET TBLPROPERTIES delta.columnMapping.mode",
+        ));
+    }
+
+    let mut metadata = snapshot.metadata.clone();
+    let current_protocol = snapshot.protocol;
+    let new_protocol = current_protocol
+        .clone()
+        .apply_properties_to_protocol(&properties, raise_if_not_exists)?;
+
+    for (key, value) in &properties {
+        metadata = metadata.add_config_key(key.clone(), value.to_string())?;
+    }
+
+    let final_protocol = new_protocol.move_table_properties_into_features(metadata.configuration());
+
+    let operation = DeltaOperation::SetTableProperties { properties };
+
+    let mut actions = vec![Action::Metadata(metadata)];
+
+    if current_protocol.ne(&final_protocol) {
+        actions.push(Action::Protocol(final_protocol));
+    }
+
+    Ok((actions, operation))
+}
+
 impl std::future::IntoFuture for SetTablePropertiesBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -84,42 +124,24 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
+            let snapshot =
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let mut metadata = this.snapshot.metadata().clone();
-
-            let current_protocol = this.snapshot.protocol();
             let properties = this.properties;
-
-            let new_protocol = current_protocol
-                .clone()
-                .apply_properties_to_protocol(&properties, this.raise_if_not_exists)?;
-
-            for (key, value) in &properties {
-                metadata = metadata.add_config_key(key.clone(), value.to_string())?;
-            }
-
-            let final_protocol =
-                new_protocol.move_table_properties_into_features(metadata.configuration());
-
-            let operation = DeltaOperation::SetTableProperties { properties };
-
-            let mut actions = vec![Action::Metadata(metadata)];
-
-            if current_protocol.ne(&final_protocol) {
-                actions.push(Action::Protocol(final_protocol));
-            }
+            let (actions, operation) = plan_set_table_properties_actions(
+                snapshot.snapshot().metadata_state(),
+                properties,
+                this.raise_if_not_exists,
+            )?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions.clone())
                 .with_operation_id(operation_id)
                 .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(
-                    Some(&this.snapshot),
-                    this.log_store.clone(),
-                    operation.clone(),
-                )
+                .build(Some(&snapshot), this.log_store.clone(), operation.clone())
                 .await?;
 
             if let Some(handler) = this.custom_execute_handler {
@@ -130,5 +152,27 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+#[cfg(test)]
+/// Tests for the set-table-properties operation.
+pub mod tests {
+    use crate::writer::test_utils::create_initialized_table;
+    use std::collections::HashMap;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    /// Verify that setting table properties is persisted to table metadata.
+    pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+        let props = HashMap::from([
+            ("delta.minReaderVersion".to_string(), "3".to_string()),
+            ("delta.minWriterVersion".to_string(), "7".to_string()),
+        ]);
+        ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
     }
 }
