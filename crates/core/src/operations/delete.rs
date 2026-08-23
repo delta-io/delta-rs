@@ -70,8 +70,8 @@ use crate::delta_datafusion::logical::{
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
-    scan_files_where_matches, update_datafusion_session,
+    Expression, create_session, resolve_session_state, scan_files_where_matches,
+    try_materialized_add_actions_partition_mem_table, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
@@ -671,7 +671,7 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::collect;
 
-    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+    let Some(mem_table) = try_materialized_add_actions_partition_mem_table(snapshot)? else {
         return Ok(std::collections::HashSet::new());
     };
 
