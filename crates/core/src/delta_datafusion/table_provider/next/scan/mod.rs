@@ -14,17 +14,25 @@
 //! The scan planning process in [`plan`] determines which files to read and how to apply
 //! predicates, while execution plans handle the actual data reading and transformation.
 
-use std::{collections::VecDeque, pin::Pin, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    pin::Pin,
+    sync::Arc,
+};
 
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow::datatypes::UInt16Type;
+use arrow_array::{
+    ArrayRef, DictionaryArray, RecordBatch, StringArray, StringViewArray, UInt16Array,
+};
 use arrow_cast::{CastOptions, cast_with_options};
-use arrow_schema::{FieldRef, Schema, SchemaBuilder, SchemaRef};
+use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
 use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
-        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, plan_err, stats::Precision,
+        ColumnStatistics, HashMap, Result, Statistics, ToDFSchema, internal_datafusion_err,
+        plan_err, stats::Precision,
     },
     config::TableParquetOptions,
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
@@ -43,11 +51,11 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
-    BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapterFactory,
-    PhysicalExprAdapterFactory,
+    BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
 };
 use delta_kernel::{
-    Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
+    Engine, Expression, engine::arrow_data::ArrowEngineData, expressions::StructData,
+    scan::ScanMetadata, table_features::TableFeature,
 };
 use futures::{Stream, TryStreamExt as _, future::ready};
 use itertools::Itertools as _;
@@ -57,9 +65,10 @@ use url::Url;
 
 pub use self::exec::DeltaScanExec;
 use self::exec_meta::DeltaScanMetaExec;
+use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
-use super::FileSelection;
+use super::{FileSelection, ResolvedFileSelection};
 use crate::{
     DeltaTableError,
     delta_datafusion::{
@@ -68,14 +77,25 @@ use crate::{
         file_id::wrap_file_id_value,
         table_provider::next::DeletionVectorSelection,
     },
+    kernel::LogicalFileView,
 };
 
 mod exec;
 mod exec_meta;
+mod expr_adapter;
 mod plan;
 mod replay;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
+type PublicFileIdMap = HashMap<String, String>;
+
+struct ReplayedScanFiles {
+    files: Vec<ScanFileContext>,
+    transforms: HashMap<String, Arc<Expression>>,
+    dvs: DashMap<String, Vec<bool>>,
+    public_file_ids: PublicFileIdMap,
+    metrics: ExecutionPlanMetricsSet,
+}
 
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
@@ -84,16 +104,23 @@ pub(super) async fn execution_plan(
     stream: ScanMetadataStream,
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
-    file_selection: Option<&FileSelection>,
+    file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let (files, transforms, dvs, metrics) =
-        replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
+    if let Some(selection) = file_selection
+        && selection.active_file_ids.is_empty()
+    {
+        return Ok(Arc::new(EmptyExec::new(
+            scan_plan.contract.result_schema.clone(),
+        )));
+    }
+
+    let replayed = replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
 
     let file_id_field = scan_plan.contract.file_id_field.clone();
-    if scan_plan.is_metadata_only() {
-        let map_file = |f: &ScanFileContext| {
+    if scan_plan.is_metadata_only() && !scan_plan.contract.retain_row_index {
+        let map_file = |(file_index, f): (usize, &ScanFileContext)| {
             Ok((
-                f.file_url.to_string(),
+                compact_internal_file_id(file_index),
                 match &f.stats.num_rows {
                     Precision::Exact(n) => *n,
                     _ => {
@@ -106,17 +133,27 @@ pub(super) async fn execution_plan(
             ))
         };
 
-        let maybe_file_rows = files
+        let maybe_file_rows = replayed
+            .files
             .iter()
+            .enumerate()
             .map(map_file)
             .try_collect::<_, VecDeque<_>, _>();
         if let Ok(file_rows) = maybe_file_rows {
             let retain_file_id = scan_plan.contract.retain_file_id;
+            let ReplayedScanFiles {
+                transforms,
+                dvs,
+                public_file_ids,
+                metrics,
+                ..
+            } = replayed;
             let exec = DeltaScanMetaExec::new(
                 Arc::new(scan_plan),
                 vec![file_rows],
                 Arc::new(transforms),
                 Arc::new(dvs),
+                Arc::new(public_file_ids),
                 retain_file_id.then_some(file_id_field),
                 metrics,
             );
@@ -124,7 +161,7 @@ pub(super) async fn execution_plan(
         }
     }
 
-    get_data_scan_plan(session, scan_plan, files, transforms, dvs, metrics, limit).await
+    get_data_scan_plan(session, scan_plan, replayed, limit).await
 }
 
 /// Materialize deletion vector keep masks for every file in the scan that has one.
@@ -143,8 +180,15 @@ pub(super) async fn replay_deletion_vectors(
     scan_plan: &KernelScanPlan,
     config: &DeltaScanConfig,
     stream: ScanMetadataStream,
+    file_selection: Option<&ResolvedFileSelection>,
 ) -> Result<Vec<DeletionVectorSelection>> {
-    let mut stream = ScanFileStream::new(engine, &scan_plan.scan, config.clone(), None, stream);
+    let mut stream = ScanFileStream::new(
+        engine,
+        &scan_plan.scan,
+        config.clone(),
+        file_selection.map(|selection| &selection.active_file_ids),
+        stream,
+    );
     while stream.try_next().await?.is_some() {}
 
     let dv_stream = stream.dv_stream.build();
@@ -175,23 +219,99 @@ pub(super) async fn replay_deletion_vectors(
     Ok(vectors)
 }
 
+pub(super) async fn resolve_file_selection(
+    selection: &FileSelection,
+    scan_plan: &KernelScanPlan,
+    stream: ScanMetadataStream,
+) -> Result<ResolvedFileSelection> {
+    let requested_file_ids =
+        resolve_input_file_ids_on_blocking_pool(selection, scan_plan.scan.table_root()).await?;
+    if requested_file_ids.is_empty() {
+        return Ok(ResolvedFileSelection::new(
+            HashSet::new(),
+            Vec::new(),
+            selection.missing_file_policy,
+        ));
+    }
+
+    let mut missing_file_ids = requested_file_ids;
+    let selected_active_file_ids = collect_selected_active_file_ids(
+        scan_plan.scan.table_root(),
+        stream,
+        &mut missing_file_ids,
+    )
+    .await?;
+    let mut missing_file_ids: Vec<_> = missing_file_ids.into_iter().collect();
+    missing_file_ids.sort_unstable();
+
+    let resolved = ResolvedFileSelection::new(
+        selected_active_file_ids,
+        missing_file_ids,
+        selection.missing_file_policy,
+    );
+    resolved.validate_missing()?;
+    Ok(resolved)
+}
+
+async fn resolve_input_file_ids_on_blocking_pool(
+    selection: &FileSelection,
+    table_root: &Url,
+) -> Result<HashSet<String>> {
+    let selection = selection.clone();
+    let table_root = table_root.clone();
+    tokio::task::spawn_blocking(move || selection.resolve_input_file_ids(&table_root))
+        .await
+        .map_err(|err| DataFusionError::External(Box::new(err)))?
+        .map_err(DataFusionError::from)
+}
+
+async fn collect_selected_active_file_ids(
+    table_root: &Url,
+    mut stream: ScanMetadataStream,
+    missing_file_ids: &mut HashSet<String>,
+) -> Result<HashSet<String>> {
+    let mut selected_active_file_ids = HashSet::new();
+
+    while let Some(scan_data) = stream.try_next().await? {
+        let (data, mut selection_vector) = scan_data.scan_files.into_parts();
+        let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
+            .map_err(DeltaTableError::from)?
+            .into();
+        // Delta Kernel may return a short selection vector. Missing entries are selected.
+        selection_vector.resize(batch.num_rows(), true);
+
+        for (idx, selected) in selection_vector.into_iter().enumerate() {
+            if selected {
+                let file_url = replay::parse_path(
+                    table_root,
+                    LogicalFileView::new(batch.clone(), idx).path_raw(),
+                )?;
+                let file_id = file_url.to_string();
+                if missing_file_ids.remove(&file_id) {
+                    selected_active_file_ids.insert(file_id);
+                    if missing_file_ids.is_empty() {
+                        return Ok(selected_active_file_ids);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(selected_active_file_ids)
+}
+
 async fn replay_files(
     engine: Arc<dyn Engine>,
     scan_plan: &KernelScanPlan,
     scan_config: DeltaScanConfig,
     stream: ScanMetadataStream,
-    file_selection: Option<&FileSelection>,
-) -> Result<(
-    Vec<ScanFileContext>,
-    HashMap<String, Arc<Expression>>,
-    DashMap<String, Vec<bool>>,
-    ExecutionPlanMetricsSet,
-)> {
+    file_selection: Option<&ResolvedFileSelection>,
+) -> Result<ReplayedScanFiles> {
     let mut stream = ScanFileStream::new(
         engine,
         &scan_plan.scan,
         scan_config,
-        file_selection.map(|selection| &selection.file_ids),
+        file_selection.map(|selection| &selection.active_file_ids),
         stream,
     );
     let mut files = Vec::new();
@@ -199,53 +319,45 @@ async fn replay_files(
         files.extend(file);
     }
 
-    if let Some(selection) = file_selection
-        && selection.missing_file_policy == super::MissingFilePolicy::Error
-    {
-        let found: std::collections::HashSet<_> =
-            files.iter().map(|f| f.file_url.to_string()).collect();
-        let all_missing: Vec<_> = selection.file_ids.difference(&found).sorted().collect();
-
-        if !all_missing.is_empty() {
-            let missing_total = all_missing.len();
-            let missing: Vec<_> = all_missing
-                .iter()
-                .take(10)
-                .map(|id| super::redact_url_str_for_error(id))
-                .collect();
-            let extra = if missing_total > missing.len() {
-                format!(" (and {} more)", missing_total - missing.len())
-            } else {
-                String::new()
-            };
-            return plan_err!(
-                "File selection contains {missing_total} missing files (showing up to 10, redacted): {}{extra}",
-                missing.join(", ")
+    let mut public_file_ids = PublicFileIdMap::default();
+    if scan_plan.contract.retain_file_id {
+        for (file_index, file) in files.iter().enumerate() {
+            public_file_ids.insert(
+                compact_internal_file_id(file_index),
+                file.file_url.to_string(),
             );
         }
     }
 
     let transforms: HashMap<_, _> = files
         .iter_mut()
-        .flat_map(|file| {
+        .enumerate()
+        .flat_map(|(file_index, file)| {
             file.transform
                 .take()
-                .map(|t| (file.file_url.to_string(), t))
+                .map(|t| (compact_internal_file_id(file_index), t))
         })
         .collect();
 
     let dv_stream = stream.dv_stream.build();
-    let dvs: DashMap<_, _> = dv_stream
+    let dvs_by_url: HashMap<_, _> = dv_stream
         .try_filter_map(|(url, dv, _)| ready(Ok(dv.map(|dv| (url.to_string(), dv)))))
         .try_collect()
         .await?;
+    let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
 
     let metrics = ExecutionPlanMetricsSet::new();
     MetricBuilder::new(&metrics)
         .global_counter("count_files_scanned")
         .add(stream.metrics.num_scanned);
 
-    Ok((files, transforms, dvs, metrics))
+    Ok(ReplayedScanFiles {
+        files,
+        transforms,
+        dvs,
+        public_file_ids,
+        metrics,
+    })
 }
 
 /// Normalize a DV keep mask for `deletion_vectors()`.
@@ -288,19 +400,23 @@ fn normalize_dv_keep_mask_for_api(
 async fn get_data_scan_plan(
     session: &dyn Session,
     scan_plan: KernelScanPlan,
-    files: Vec<ScanFileContext>,
-    transforms: HashMap<String, Arc<Expression>>,
-    dvs: DashMap<String, Vec<bool>>,
-    metrics: ExecutionPlanMetricsSet,
+    replayed: ReplayedScanFiles,
     limit: Option<usize>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    let ReplayedScanFiles {
+        files,
+        transforms,
+        dvs,
+        public_file_ids,
+        metrics,
+    } = replayed;
     let mut partition_stats = HashMap::new();
 
-    // Convert the files into datafusions `PartitionedFile`s grouped by the object store they are stored in
-    // this is used to create a DataSourceExec plan for each store
-    // To correlate the data with the original file, we add the file url as a partition value
-    // This is required to apply the correct transform to the data in downstream processing.
-    let to_partitioned_file = |f: ScanFileContext| {
+    // Convert files into DataFusion `PartitionedFile`s grouped by object store.
+    // Create one `DataSourceExec` plan for each store.
+    // Add a compact scan file id as a partition value for file correlation.
+    // The exec maps that id back to the public file path only when the file column is projected.
+    let to_partitioned_file = |(file_index, f): (usize, ScanFileContext)| {
         if let Some(part_stata) = &f.partitions {
             update_partition_stats(part_stata, &f.stats, &mut partition_stats)?;
         }
@@ -315,7 +431,7 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
-        let file_value = wrap_file_id_value(f.file_url.as_str());
+        let file_value = wrap_file_id_value(compact_internal_file_id(file_index));
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
@@ -328,12 +444,13 @@ async fn get_data_scan_plan(
 
     // Group the files by their object store url. Since datafusion assumes that all files in a
     // DataSourceExec are stored in the same object store, we need to create one plan per store
-    let files_by_store = files
+    let partitioned_files = files
         .into_iter()
+        .enumerate()
         .map(to_partitioned_file)
-        .try_collect::<_, Vec<_>, _>()?
-        .into_iter()
-        .into_group_map();
+        .try_collect::<_, Vec<_>, _>()?;
+
+    let files_by_store = partitioned_files.into_iter().into_group_map();
 
     // TODO(roeap); not sure exactly how row tracking is implemented in kernel right now
     // so leaving predicate as None for now until we are sure this is safe to do.
@@ -355,11 +472,15 @@ async fn get_data_scan_plan(
     )
     .await?;
 
+    let transforms = Arc::new(transforms);
+    let dvs = Arc::new(dvs);
+    let public_file_ids = Arc::new(public_file_ids);
     let exec = DeltaScanExec::new(
         Arc::new(scan_plan),
         pq_plan,
-        Arc::new(transforms),
-        Arc::new(dvs),
+        Arc::clone(&transforms),
+        Arc::clone(&dvs),
+        Arc::clone(&public_file_ids),
         partition_stats,
         metrics,
     );
@@ -405,6 +526,75 @@ fn update_partition_stats(
 
 type FilesByStore = (ObjectStoreUrl, Vec<(PartitionedFile, Option<Vec<bool>>)>);
 
+fn compact_internal_file_id(file_index: usize) -> String {
+    file_index.to_string()
+}
+
+fn remap_deletion_vectors_to_internal_file_ids(
+    files: &[ScanFileContext],
+    mut dvs_by_url: HashMap<String, Vec<bool>>,
+) -> Result<DashMap<String, Vec<bool>>> {
+    let dvs = DashMap::new();
+    for (file_index, file) in files.iter().enumerate() {
+        if dvs_by_url.is_empty() {
+            break;
+        }
+        if let Some(dv) = dvs_by_url.remove(file.file_url.as_str()) {
+            dvs.insert(compact_internal_file_id(file_index), dv);
+        }
+    }
+    if let Some(file_url) = dvs_by_url.keys().next() {
+        let redacted_url = Url::parse(file_url)
+            .map(|url| super::redact_url_for_error(&url))
+            .unwrap_or_else(|_| file_url.clone());
+        return Err(internal_datafusion_err!(
+            "missing internal file id mapping for file with deletion vector: {redacted_url}"
+        ));
+    }
+    Ok(dvs)
+}
+
+fn public_file_id<'a>(
+    public_file_ids: &'a PublicFileIdMap,
+    internal_file_id: &str,
+) -> Result<&'a str> {
+    public_file_ids
+        .get(internal_file_id)
+        .map(String::as_str)
+        .ok_or_else(|| {
+            internal_datafusion_err!(
+                "missing public file id mapping for internal file id '{internal_file_id}'"
+            )
+        })
+}
+
+fn file_id_array_for_value(
+    file_id_field: &FieldRef,
+    file_id: &str,
+    row_count: usize,
+) -> Result<ArrayRef> {
+    let keys = UInt16Array::from(vec![0u16; row_count]);
+    let values: ArrayRef = match file_id_field.data_type() {
+        DataType::Dictionary(_, value_type) if value_type.as_ref() == &DataType::Utf8View => {
+            if row_count == 0 {
+                Arc::new(StringViewArray::from_iter_values(std::iter::empty::<&str>()))
+            } else {
+                Arc::new(StringViewArray::from_iter_values([file_id]))
+            }
+        }
+        _ => {
+            if row_count == 0 {
+                Arc::new(StringArray::from(Vec::<Option<&str>>::new()))
+            } else {
+                Arc::new(StringArray::from(vec![Some(file_id)]))
+            }
+        }
+    };
+
+    let file_id_array: DictionaryArray<UInt16Type> = DictionaryArray::try_new(keys, values)?;
+    Ok(Arc::new(file_id_array))
+}
+
 /// Maximum number of distinct values representable by DataFusion's default partition dictionary
 /// encoding (`Dictionary<UInt16, _>`).
 const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
@@ -412,17 +602,43 @@ const MAX_PARTITION_DICT_CARDINALITY: usize = (u16::MAX as usize) + 1;
 fn partitioned_files_to_file_groups(
     files: impl IntoIterator<Item = PartitionedFile>,
 ) -> Vec<FileGroup> {
-    let max_files_per_group = MAX_PARTITION_DICT_CARDINALITY;
+    partitioned_files_to_file_groups_with_limit(files, MAX_PARTITION_DICT_CARDINALITY)
+}
 
-    files
+fn partitioned_files_to_file_groups_with_limit(
+    files: impl IntoIterator<Item = PartitionedFile>,
+    max_files_per_group: usize,
+) -> Vec<FileGroup> {
+    let file_groups = files
         .into_iter()
+        // Each `PartitionedFile` is assigned to exactly one file group. DeltaScanStream stores
+        // row ordinal counters per execution partition. Whole file ownership is required for
+        // scan row ordinals.
         // Partition values are dictionary encoded using a UInt16 key (DataFusion's default
         // `wrap_partition_type_in_dict`). Keep file groups small enough that the file-id partition
         // dictionary doesn't exceed the key space (one distinct value per file).
         .chunks(max_files_per_group)
         .into_iter()
-        .map(|chunk| chunk.collect())
-        .collect()
+        .map(|chunk| chunk.collect::<FileGroup>())
+        .collect_vec();
+
+    #[cfg(debug_assertions)]
+    {
+        let mut owner_by_path = HashMap::new();
+        for (partition, group) in file_groups.iter().enumerate() {
+            for file in group.iter() {
+                let path = file.object_meta.location.to_string();
+                if let Some(previous_partition) = owner_by_path.insert(path.clone(), partition) {
+                    debug_assert_eq!(
+                        previous_partition, partition,
+                        "file {path} was assigned to multiple scan partitions; row indexes require whole file ownership"
+                    );
+                }
+            }
+        }
+    }
+
+    file_groups
 }
 
 async fn get_read_plan(
@@ -442,6 +658,13 @@ async fn get_read_plan(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
+    // Relax nested-field nullability on the schema handed to the parquet source:
+    // Delta's `nullable = false` is a write-time invariant, and Spark-written files
+    // may mark nested fields optional. The logical schema is restored above the
+    // parquet scan by DeltaScanExec's transforms.
+    let parquet_read_schema = Arc::new(relax_schema_nested_nullability(parquet_read_schema));
+    let parquet_read_schema = &parquet_read_schema;
+
     let pq_options = TableParquetOptions {
         global: state.config().options().execution.parquet.clone(),
         ..Default::default()
@@ -451,7 +674,7 @@ async fn get_read_plan(
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
     let full_read_schema = Arc::new(full_read_schema.finish());
     let parquet_predicate_df_schema = parquet_predicate_schema.clone().to_dfschema()?;
-    let adapter_factory = Arc::new(DefaultPhysicalExprAdapterFactory {});
+    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory);
 
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(
@@ -551,7 +774,21 @@ fn finalize_transformed_batch(
     let result = if result.schema_ref().eq(&scan_plan.contract.result_schema) {
         result
     } else {
-        schema_adapter.adapt(result)?
+        let adapted = schema_adapter.adapt(result)?;
+        if adapted.schema_ref().eq(&scan_plan.contract.result_schema) {
+            adapted
+        } else {
+            // The batch adapter targets a nullability-relaxed schema (see
+            // `expr_adapter`). Restamp to the strict logical schema; this
+            // validates actual data nulls rather than declared nullability.
+            crate::kernel::cast_record_batch(
+                &adapted,
+                scan_plan.contract.result_schema.clone(),
+                false,
+                false,
+            )
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+        }
     };
     if let Some((arr, field)) = file_id_col {
         let arr = if arr.data_type() != field.data_type() {
@@ -589,7 +826,8 @@ struct SchemaAdapter {
 impl SchemaAdapter {
     fn new(target_schema: SchemaRef) -> Self {
         Self {
-            factory: BatchAdapterFactory::new(target_schema),
+            factory: BatchAdapterFactory::new(target_schema)
+                .with_adapter_factory(Arc::new(DeltaPhysicalExprAdapterFactory)),
             cached_source: None,
             cached_adapter: None,
         }
@@ -621,6 +859,7 @@ impl SchemaAdapter {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::AsArray;
     use arrow_array::Array;
     use arrow_array::{
         BinaryArray, BinaryViewArray, Int32Array, Int64Array, RecordBatch, RecordBatchOptions,
@@ -638,8 +877,14 @@ mod tests {
 
     use crate::{
         assert_batches_sorted_eq,
-        delta_datafusion::{session::create_session, table_provider::next::FILE_ID_COLUMN_DEFAULT},
-        test_utils::TestResult,
+        delta_datafusion::{
+            DeltaScanConfig, MissingSelectedFilePolicy,
+            engine::DataFusionEngine,
+            session::create_session,
+            table_provider::next::{FILE_ID_COLUMN_DEFAULT, FileSelection},
+        },
+        kernel::Snapshot,
+        test_utils::{TestResult, TestTables},
     };
 
     use super::{plan::build_parquet_predicate_schema, *};
@@ -654,6 +899,209 @@ mod tests {
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].len(), MAX_PARTITION_DICT_CARDINALITY);
         assert_eq!(groups[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_empty_file_selection_does_not_poll_metadata_stream() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let scan_plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
+            panic!("unexpected metadata stream poll for empty file selection")
+        }));
+
+        let resolved = resolve_file_selection(
+            &FileSelection::from_file_paths(Vec::<String>::new()),
+            &scan_plan,
+            stream,
+        )
+        .await?;
+
+        assert!(resolved.active_file_ids.is_empty());
+        assert!(resolved.missing_file_ids.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_empty_resolved_file_selection_plan_does_not_poll_metadata_stream() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let scan_plan =
+            KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
+        let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
+            panic!("unexpected metadata stream poll for empty file selection execution")
+        }));
+        let session = create_session().into_inner();
+        let state = session.state();
+        let engine = DataFusionEngine::new_from_session(&state);
+        let selection = ResolvedFileSelection::new(
+            std::collections::HashSet::new(),
+            Vec::new(),
+            MissingSelectedFilePolicy::Error,
+        );
+
+        let plan = execution_plan(
+            &DeltaScanConfig::default(),
+            &state,
+            scan_plan,
+            stream,
+            engine,
+            None,
+            Some(&selection),
+        )
+        .await?;
+
+        assert!(plan.is::<EmptyExec>());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_uses_compact_internal_file_id_partition_values() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = create_session().into_inner();
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+        let data_source = exec.children()[0]
+            .downcast_ref::<DataSourceExec>()
+            .expect("expected DataSourceExec child");
+        let (file_scan_config, _) = data_source
+            .downcast_to_file_source::<ParquetSource>()
+            .expect("expected parquet file source");
+
+        let internal_file_ids = file_scan_config
+            .file_groups
+            .iter()
+            .flat_map(|group| group.iter())
+            .map(|file| {
+                file.partition_values
+                    .first()
+                    .and_then(|value| value.try_as_str().flatten())
+                    .expect("file-id partition value")
+            })
+            .collect_vec();
+
+        assert!(
+            !internal_file_ids.is_empty(),
+            "test fixture should plan at least one file"
+        );
+        for internal_file_id in internal_file_ids {
+            assert!(
+                internal_file_id.len() <= 20,
+                "internal file id should be compact, got {internal_file_id:?}"
+            );
+            assert!(
+                !internal_file_id.contains('/'),
+                "internal file id should not carry a full file path, got {internal_file_id:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_public_file_id_uses_file_path_with_compact_internal_ids() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = create_session().into_inner();
+
+        session.register_table("delta_table", provider)?;
+
+        let file_id_batches = session
+            .sql("SELECT CAST(file_id AS STRING) AS file_id FROM delta_table LIMIT 1")
+            .await?
+            .collect()
+            .await?;
+        let file_id = file_id_batches[0].column(0).as_string_view().value(0);
+        assert!(
+            file_id.starts_with("file://") && file_id.ends_with(".parquet"),
+            "public file id should remain a file path, got {file_id:?}"
+        );
+
+        let escaped_file_id = file_id.replace('\'', "''");
+        let df = session
+            .sql(&format!(
+                "SELECT id FROM delta_table WHERE file_id = '{escaped_file_id}'"
+            ))
+            .await?;
+        let filtered = df.collect().await?;
+
+        assert!(filtered.iter().map(|batch| batch.num_rows()).sum::<usize>() > 0);
+        assert!(filtered[0].schema().column_with_name("file_id").is_none());
+
+        Ok(())
+    }
+
+    fn scan_file_context(file_url: &str) -> ScanFileContext {
+        ScanFileContext {
+            file_url: Url::parse(file_url).expect("valid test URL"),
+            size: 0,
+            transform: None,
+            stats: Statistics::new_unknown(&Schema::empty()),
+            partitions: None,
+        }
+    }
+
+    #[test]
+    fn test_remap_deletion_vectors_to_internal_file_ids_uses_compact_keys() -> TestResult {
+        let files = vec![
+            scan_file_context("s3://bucket/very/long/path/first.parquet"),
+            scan_file_context("s3://bucket/very/long/path/second.parquet"),
+        ];
+        let mut dvs_by_url = HashMap::new();
+        dvs_by_url.insert(files[1].file_url.to_string(), vec![true, false, true]);
+
+        let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
+
+        assert!(dvs.contains_key("1"));
+        assert!(!dvs.contains_key(files[1].file_url.as_str()));
+        assert_eq!(
+            dvs.get("1").expect("compact dv key").as_slice(),
+            &[true, false, true]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_remap_deletion_vectors_to_internal_file_ids_errors_for_unknown_url() {
+        let files = vec![scan_file_context(
+            "s3://bucket/very/long/path/first.parquet",
+        )];
+        let mut dvs_by_url = HashMap::new();
+        dvs_by_url.insert(
+            "s3://bucket/very/long/path/missing.parquet?X-Amz-Signature=secret-token".to_string(),
+            vec![true],
+        );
+
+        let err = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url).unwrap_err();
+        let err = err.to_string();
+        assert!(
+            err.contains("missing internal file id mapping for file with deletion vector"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            !err.contains("secret-token"),
+            "error should redact URL query secrets: {err}"
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "row indexes require whole file ownership")]
+    fn test_partitioned_files_to_file_groups_rejects_split_file_across_groups_in_debug() {
+        let files = vec![
+            PartitionedFile::new("memory:///same.parquet", 0),
+            PartitionedFile::new("memory:///other.parquet", 0),
+            PartitionedFile::new("memory:///same.parquet", 0),
+        ];
+
+        let _ = partitioned_files_to_file_groups_with_limit(files, 1);
     }
 
     #[test]
@@ -1115,6 +1563,101 @@ mod tests {
             "+----+--------------------+-----------------------------+",
         ];
         assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    /// Reading a file that contains actual null values in a nested field declared
+    /// non-nullable in the table schema must fail: the nullability relaxation in
+    /// the expression adapter only accommodates Spark-style relaxed on-disk
+    /// schemas, while the final `cast_record_batch` in
+    /// `finalize_transformed_batch` validates the actual data.
+    #[tokio::test]
+    async fn test_scan_rejects_actual_nested_nulls() -> TestResult {
+        let store_url = Url::parse("memory:///")?;
+        let log_store =
+            crate::logstore::logstore_for(&store_url, crate::logstore::StorageConfig::default())?;
+
+        // Delta log schema: metadata_col.int_id is NOT nullable.
+        let meta_type = crate::kernel::StructType::try_new(vec![crate::kernel::StructField::new(
+            "int_id",
+            crate::kernel::DataType::Primitive(crate::kernel::PrimitiveType::String),
+            false,
+        )])?;
+        let table = crate::operations::create::CreateBuilder::new()
+            .with_log_store(log_store.clone())
+            .with_columns(vec![crate::kernel::StructField::new(
+                "metadata_col",
+                crate::kernel::DataType::Struct(Box::new(meta_type)),
+                true,
+            )])
+            .await?;
+
+        // Parquet file whose data contains an actual null in int_id, registered
+        // via a raw Add action to bypass the delta-rs writer.
+        let meta_fields = Fields::from(vec![Field::new("int_id", DataType::Utf8, true)]);
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "metadata_col",
+            DataType::Struct(meta_fields.clone()),
+            true,
+        )]));
+        let meta = StructArray::try_new(
+            meta_fields,
+            vec![Arc::new(StringArray::from(vec![Some("t1"), None])) as ArrayRef],
+            None,
+        )?;
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![Arc::new(meta)])?;
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, file_schema, None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let size = buffer.len() as i64;
+
+        let store = log_store.object_store(None);
+        store
+            .put(&Path::from("part-00000.parquet"), buffer.into())
+            .await?;
+
+        crate::kernel::transaction::CommitBuilder::default()
+            .with_actions(vec![crate::kernel::Action::Add(crate::kernel::Add {
+                path: "part-00000.parquet".to_string(),
+                size,
+                data_change: true,
+                ..Default::default()
+            })])
+            .build(
+                Some(table.snapshot()?),
+                log_store.clone(),
+                crate::protocol::DeltaOperation::Write {
+                    mode: crate::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
+            .with_snapshot(snapshot)
+            .with_log_store(log_store)
+            .await?;
+
+        let session = Arc::new(create_session().into_inner());
+        session
+            .runtime_env()
+            .register_object_store(&store_url, store);
+        session.register_table("delta_table", provider)?;
+
+        let result = session
+            .sql("SELECT * FROM delta_table")
+            .await?
+            .collect()
+            .await;
+        assert!(
+            result.is_err(),
+            "expected error when reading actual nulls in a non-nullable nested field, got: {result:?}"
+        );
 
         Ok(())
     }

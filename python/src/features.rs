@@ -9,6 +9,9 @@ pub enum TableFeatures {
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
     DeletionVectors,
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// nanosecond-resolution timestamps
+    TimestampNanos,
     /// timestamps without timezone support
     TimestampWithoutTimezone,
     /// version 2 of checkpointing
@@ -31,6 +34,10 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
 }
 
 impl From<TableFeatures> for KernelTableFeatures {
@@ -38,6 +45,8 @@ impl From<TableFeatures> for KernelTableFeatures {
         match value {
             TableFeatures::ColumnMapping => KernelTableFeatures::ColumnMapping,
             TableFeatures::DeletionVectors => KernelTableFeatures::DeletionVectors,
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeatures::TimestampNanos => KernelTableFeatures::TimestampNanos,
             TableFeatures::TimestampWithoutTimezone => {
                 KernelTableFeatures::TimestampWithoutTimezone
             }
@@ -51,6 +60,8 @@ impl From<TableFeatures> for KernelTableFeatures {
             TableFeatures::RowTracking => KernelTableFeatures::RowTracking,
             TableFeatures::DomainMetadata => KernelTableFeatures::DomainMetadata,
             TableFeatures::IcebergCompatV1 => KernelTableFeatures::IcebergCompatV1,
+            TableFeatures::VariantType => KernelTableFeatures::VariantType,
+            TableFeatures::VariantTypePreview => KernelTableFeatures::VariantTypePreview,
         }
     }
 }

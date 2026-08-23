@@ -10,32 +10,43 @@
 //! let provider = DeltaCdfTableProvider::try_new(builder)?;
 //! let df = ctx.read_table(provider).await?;
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
-use arrow_schema::{ArrowError, Field, Schema};
-use chrono::{DateTime, Utc};
-use datafusion::catalog::Session;
-use datafusion::common::ScalarValue;
-use datafusion::config::TableParquetOptions;
-use datafusion::datasource::memory::DataSourceExec;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::table_schema::TableSchema;
-use datafusion::physical_expr::{PhysicalExpr, expressions};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
-use tracing::log;
-
 use crate::DeltaTableError;
-use crate::delta_datafusion::{DataFusionMixins, DeltaSessionExt};
-use crate::errors::DeltaResult;
+use crate::delta_datafusion::{
+    DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
+};
+use crate::errors::{ColumnMappingOperation, DeltaResult};
 use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
 };
-use crate::logstore::{LogStoreRef, get_actions};
+use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
+use arrow_schema::{ArrowError, Field, Schema, SchemaRef};
+use chrono::{DateTime, Utc};
+use datafusion::catalog::Session;
+use datafusion::common::DFSchema;
+use datafusion::common::ScalarValue;
+use datafusion::config::TableParquetOptions;
+use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::table_schema::TableSchema;
+use datafusion::execution::cache::default_cache::DefaultCache;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::{PhysicalExpr, expressions};
+use datafusion::physical_expr_common::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion_datasource::PartitionedFile;
+use delta_kernel::table_features::ColumnMappingMode;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::SystemTime;
+use tracing::log;
+
+type ScalarPartitionMap = HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>;
+const METADATA_CACHE_SIZE: usize = 1024 * 1024;
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -54,8 +65,12 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
-    /// Datafusion session state relevant for executing the input plan
-    session: Option<Arc<dyn Session>>,
+    /// Optional logical predicate used ONLY to prune files by their partition
+    /// values. This is never applied as a row-level filter, so any non-partition
+    /// conjuncts are ignored here and row-level correctness must be enforced by a
+    /// separate `FilterExec` wrapped around the resulting plan.
+    filter: Option<Expr>,
+    parquet_metadata_cache: Arc<CachedParquetFileReaderFactory>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -75,6 +90,10 @@ impl std::fmt::Debug for CdfLoadBuilder {
 impl CdfLoadBuilder {
     /// Create a new [`CdfLoadBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let parquet_metadata_cache = Arc::new(CachedParquetFileReaderFactory::new(
+            log_store.object_store(None),
+            Arc::new(DefaultCache::new(METADATA_CACHE_SIZE)),
+        ));
         Self {
             snapshot,
             log_store,
@@ -83,7 +102,8 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
-            session: None,
+            filter: None,
+            parquet_metadata_cache,
         }
     }
 
@@ -117,10 +137,23 @@ impl CdfLoadBuilder {
         self
     }
 
-    /// The Datafusion session state to use
-    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
-        self.session = Some(session);
+    /// A logical predicate used ONLY to prune files by their partition values.
+    ///
+    /// This does NOT apply a row-level filter: only the conjuncts that reference
+    /// partition columns exclusively are used, and they merely decide which files
+    /// to scan. Any data-column predicate is ignored for correctness purposes, so
+    /// callers that need the rows actually filtered must wrap the resulting plan in
+    /// a `FilterExec` (as `DeltaCdfTableProvider::scan` does). It is `pub(crate)`
+    /// to prevent external callers from mistaking it for a row-level filter.
+    pub(crate) fn with_partition_pruning_filter(mut self, filter: Expr) -> Self {
+        self.filter = Some(filter);
         self
+    }
+
+    #[inline]
+    fn timestamp_in_range(action: &Action, ts: DateTime<Utc>) -> bool {
+        matches!(action, Action::CommitInfo(CommitInfo { in_commit_timestamp: Some(t), .. }) if ts.timestamp_millis() <= *t)
+            || matches!(action, Action::CommitInfo(CommitInfo { timestamp: Some(t), .. }) if ts.timestamp_millis() <= *t)
     }
 
     async fn calculate_earliest_version(&self, snapshot: &EagerSnapshot) -> DeltaResult<Version> {
@@ -128,11 +161,9 @@ impl CdfLoadBuilder {
         for v in 0..snapshot.version() {
             if let Ok(Some(bytes)) = self.log_store.read_commit_entry(v).await
                 && let Ok(actions) = get_actions(v, &bytes)
-                && actions.iter().any(|action| {
-                    matches!(action, Action::CommitInfo(CommitInfo {
-                            timestamp: Some(t), ..
-                        }) if ts.timestamp_millis() < *t)
-                })
+                && actions
+                    .iter()
+                    .any(|action| Self::timestamp_in_range(action, ts))
             {
                 return Ok(v);
             }
@@ -147,10 +178,12 @@ impl CdfLoadBuilder {
     async fn determine_files_to_read(
         &self,
         snapshot: &EagerSnapshot,
+        partition_pruning: Option<&PartitionPruningPredicate>,
     ) -> DeltaResult<(
         Vec<CdcDataSpec<AddCDCFile>>,
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
+        Vec<ResolvedPair>,
     )> {
         if self.starting_version.is_none() && self.starting_timestamp.is_none() {
             return Err(DeltaTableError::NoStartingVersionOrTimestamp);
@@ -161,15 +194,16 @@ impl CdfLoadBuilder {
             self.calculate_earliest_version(snapshot).await?
         };
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
-        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = Vec::new();
+        let mut add_files: Vec<CdcDataSpec<Add>> = Vec::new();
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::new();
+        let mut resolved_pairs: Vec<ResolvedPair> = Vec::new();
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
             Ok(latest_version) => latest_version,
             Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
-                return Ok((change_files, add_files, remove_files));
+                return Ok((change_files, add_files, remove_files, resolved_pairs));
             }
             Err(e) => return Err(e),
         };
@@ -182,14 +216,14 @@ impl CdfLoadBuilder {
 
         if end < start {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
         if start > latest_version {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::InvalidVersion(start))
             };
@@ -220,7 +254,7 @@ impl CdfLoadBuilder {
             && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
             };
@@ -241,28 +275,44 @@ impl CdfLoadBuilder {
             let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?)?;
 
             let mut ts = 0;
-            let mut cdc_actions = vec![];
-
+            let mut cdc_actions = Vec::new();
+            let mut add_actions = Vec::new();
+            let mut remove_actions = Vec::new();
             if self.starting_timestamp.is_some() || self.ending_timestamp.is_some() {
                 // TODO: fallback on other actions for timestamps because CommitInfo action is optional
                 // theoretically.
                 let version_commit = version_actions
                     .iter()
                     .find(|a| matches!(a, Action::CommitInfo(_)));
-                if let Some(Action::CommitInfo(CommitInfo {
-                    timestamp: Some(t), ..
-                })) = version_commit
-                    && (starting_timestamp.timestamp_millis() > *t
-                        || *t > ending_timestamp.timestamp_millis())
-                {
-                    log::debug!("Version: {version} skipped, due to commit timestamp");
-                    continue;
+
+                match version_commit {
+                    Some(Action::CommitInfo(CommitInfo {
+                        in_commit_timestamp: Some(t),
+                        ..
+                    })) if starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis() =>
+                    {
+                        log::debug!("Version: {version} skipped, due to in commit timestamp");
+                        continue;
+                    }
+                    Some(Action::CommitInfo(CommitInfo {
+                        timestamp: Some(t), ..
+                    })) if starting_timestamp.timestamp_millis() > *t
+                        || *t > ending_timestamp.timestamp_millis() =>
+                    {
+                        log::debug!("Version: {version} skipped, due to commit timestamp");
+                        continue;
+                    }
+                    _ => {}
                 }
             }
 
-            for action in &version_actions {
+            for action in version_actions {
                 match action {
-                    Action::Cdc(f) => cdc_actions.push(f.clone()),
+                    Action::CommitInfo(ci) => {
+                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0)
+                    }
+                    Action::Cdc(f) => cdc_actions.push(f),
                     Action::Metadata(md) => {
                         log::info!("Metadata: {md:?}");
                         if let Some(key) = &md.configuration().get("delta.enableChangeDataFeed") {
@@ -280,9 +330,8 @@ impl CdfLoadBuilder {
                             return Err(DeltaTableError::ChangeDataNotEnabled { version });
                         };
                     }
-                    Action::CommitInfo(ci) => {
-                        ts = ci.timestamp.unwrap_or(0);
-                    }
+                    Action::Add(a) if a.data_change => add_actions.push(a),
+                    Action::Remove(r) if r.data_change => remove_actions.push(r),
                     _ => {}
                 }
             }
@@ -294,41 +343,50 @@ impl CdfLoadBuilder {
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
-                let add_actions = version_actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        Action::Add(a) if a.data_change => Some(a.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Add>>();
+                let mut removes_by_path: HashMap<String, Remove> = remove_actions
+                    .into_iter()
+                    .map(|r| (r.path.clone(), r))
+                    .collect();
+                let mut unpaired_adds: Vec<Add> = Vec::with_capacity(add_actions.len());
+                for add in add_actions {
+                    if let Some(remove) = removes_by_path.remove(&add.path) {
+                        resolved_pairs.push(ResolvedPair {
+                            version,
+                            timestamp: ts,
+                            rm_dv: remove.deletion_vector.clone(),
+                            add,
+                        });
+                    } else {
+                        unpaired_adds.push(add);
+                    }
+                }
+                let remove_actions: Vec<Remove> = removes_by_path.into_values().collect();
 
-                let remove_actions = version_actions
-                    .iter()
-                    .filter_map(|r| match r {
-                        Action::Remove(r) if r.data_change => Some(r.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Remove>>();
-
-                if !add_actions.is_empty() {
+                if !unpaired_adds.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        add_actions.len(),
+                        "Located {} add cdf actions for version: {version}",
+                        unpaired_adds.len()
                     );
-                    add_files.push(CdcDataSpec::new(version, ts, add_actions));
+                    add_files.push(CdcDataSpec::new(version, ts, unpaired_adds));
                 }
 
                 if !remove_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        remove_actions.len(),
+                        "Located {} remove cdf actions for version: {version}",
+                        remove_actions.len()
                     );
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
             }
         }
 
-        Ok((change_files, add_files, remove_files))
+        if let Some(partition_pruning) = partition_pruning {
+            change_files = prune_specs_by_partition(change_files, partition_pruning)?;
+            add_files = prune_specs_by_partition(add_files, partition_pruning)?;
+            remove_files = prune_specs_by_partition(remove_files, partition_pruning)?;
+        }
+
+        Ok((change_files, add_files, remove_files, resolved_pairs))
     }
 
     #[inline]
@@ -341,20 +399,172 @@ impl CdfLoadBuilder {
         Some(ScalarValue::Utf8(Some(String::from("delete"))))
     }
 
-    /// Executes the scan
+    /// Extract the partition-only conjuncts of [`Self::filter`] and compile them
+    /// into a physical predicate that can be evaluated against a file's
+    /// `partitionValues`. Returns `None` when there is no filter, no partition
+    /// columns, or no conjunct restricted to partition columns -- in which case
+    /// the file set is left untouched and correctness still relies on the
+    /// row-level `FilterExec`.
+    ///
+    /// Pruning is purely an optimization, so it **fails open**: if simplifying
+    /// the predicate, building the partition schema, or compiling the physical
+    /// expression fails for any reason, this logs at debug and returns `Ok(None)`
+    /// rather than propagating the error. A pruning failure must never change the
+    /// query result or error a read that would otherwise succeed.
+    fn partition_pruning_predicate(
+        &self,
+        session: &dyn Session,
+        schema: &arrow_schema::SchemaRef,
+        partition_columns: &[String],
+    ) -> DeltaResult<Option<PartitionPruningPredicate>> {
+        let Some(filter) = self.filter.clone() else {
+            return Ok(None);
+        };
+        if partition_columns.is_empty() {
+            return Ok(None);
+        }
+
+        match self.try_build_partition_pruning_predicate(session, schema, partition_columns, filter)
+        {
+            Ok(predicate) => Ok(predicate),
+            Err(e) => {
+                // Fail open: pruning is an optimization. Keep every file and let
+                // the row-level FilterExec enforce correctness.
+                log::debug!(
+                    "load_cdf: skipping partition pruning, failed to build pruning predicate: {e}"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    /// Fallible inner builder for [`Self::partition_pruning_predicate`]. Any error
+    /// returned here is swallowed by the caller (pruning falls open), so it is
+    /// safe for the steps below to propagate errors with `?`.
+    fn try_build_partition_pruning_predicate(
+        &self,
+        session: &dyn Session,
+        schema: &SchemaRef,
+        partition_columns: &[String],
+        filter: Expr,
+    ) -> DeltaResult<Option<PartitionPruningPredicate>> {
+        let Some((partition_predicate, referenced_columns)) =
+            extract_partition_only_predicate(filter, partition_columns)?
+        else {
+            return Ok(None);
+        };
+
+        // Materialize only the partition columns the predicate actually references.
+        // Coercing every partition column would waste work on columns the predicate
+        // never reads, and a malformed/missing value in an unreferenced column would
+        // make the file fail open and silently weaken pruning.
+        let partition_fields = referenced_columns
+            .iter()
+            .map(|name| schema.field_with_name(name).cloned())
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+        let partition_schema: SchemaRef = Arc::new(Schema::new(partition_fields));
+        let df_schema: DFSchema = partition_schema.as_ref().clone().try_into()?;
+        let predicate = session.create_physical_expr(partition_predicate, &df_schema)?;
+
+        Ok(Some(PartitionPruningPredicate {
+            predicate,
+            partition_schema,
+            table_schema: schema.clone(),
+        }))
+    }
+
+    #[inline]
+    fn create_data_source(
+        &self,
+        source: ParquetSource,
+        groups: ScalarPartitionMap,
+    ) -> Arc<DataSourceExec> {
+        DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(source))
+                .with_file_groups(groups.into_values().map(FileGroup::from).collect())
+                .build(),
+        )
+    }
+
+    async fn create_file_groups<F: FileAction>(
+        &self,
+        schema: SchemaRef,
+        specs: Vec<CdcDataSpec<F>>,
+        table_partition_cols: &[String],
+        action_type: Option<ScalarValue>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> DeltaResult<ScalarPartitionMap> {
+        let mut file_groups: ScalarPartitionMap = HashMap::new();
+
+        for spec in specs {
+            let spec_partition_values = create_spec_partition_values(&spec, action_type.as_ref());
+
+            for action in spec.actions {
+                let partition_values = table_partition_cols
+                    .iter()
+                    .map(|part| map_action_to_scalar(&action, part, schema.clone()))
+                    .collect::<DeltaResult<Vec<ScalarValue>>>()?;
+
+                let mut new_part_values = spec_partition_values.clone();
+                new_part_values.extend(partition_values);
+                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
+                    .with_partition_values(new_part_values.clone());
+
+                if let Some(access_plan) = create_file_scan_plan(
+                    Arc::clone(&self.log_store.engine(None)),
+                    action,
+                    self.log_store.table_root_url(),
+                    Arc::clone(&self.parquet_metadata_cache),
+                    metrics,
+                )
+                .await?
+                {
+                    part_file = part_file.with_extension(access_plan);
+                }
+                file_groups
+                    .entry(new_part_values)
+                    .or_default()
+                    .push(part_file);
+            }
+        }
+        Ok(file_groups)
+    }
+
+    /// Executes the scan with no metric set
     pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        self.build_with_metrics(session, filters, None).await
+    }
+
+    /// Executes the scan with a metric set to report
+    pub async fn build_with_metrics(
+        &self,
+        session: &dyn Session,
+        filters: Option<&Arc<dyn PhysicalExpr>>,
+        metrics: Option<ExecutionPlanMetricsSet>,
+    ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
+        if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+            return Err(DeltaTableError::unsupported_column_mapping(
+                ColumnMappingOperation::Read,
+                "CHANGE DATA FEED scans",
+            ));
+        }
 
-        let (cdc, add, remove) = self.determine_files_to_read(&snapshot).await?;
+        let partition_values = snapshot.metadata().partition_columns();
+        let schema = snapshot.input_schema();
+
+        let partition_pruning =
+            self.partition_pruning_predicate(session, &schema, partition_values)?;
+        let (cdc, add, remove, pairs) = self
+            .determine_files_to_read(&snapshot, partition_pruning.as_ref())
+            .await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
 
-        let partition_values = snapshot.metadata().partition_columns().clone();
-        let schema = snapshot.input_schema();
         let schema_fields: Vec<Arc<Field>> = schema
             .fields()
             .into_iter()
@@ -381,22 +591,6 @@ impl CdfLoadBuilder {
         cdc_partition_cols.extend_from_slice(&this_partition_values);
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
-        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let cdc_file_groups =
-            create_partition_values(schema.clone(), cdc, &partition_values, None)?;
-        let add_file_groups = create_partition_values(
-            schema.clone(),
-            add,
-            &partition_values,
-            Self::get_add_action_type(),
-        )?;
-        let remove_file_groups = create_partition_values(
-            schema.clone(),
-            remove,
-            &partition_values,
-            Self::get_remove_action_type(),
-        )?;
-
         let cdc_partition_fields: Vec<Arc<Field>> =
             cdc_partition_cols.into_iter().map(Arc::new).collect();
         let add_remove_partition_fields: Vec<Arc<Field>> = add_remove_partition_cols
@@ -413,18 +607,61 @@ impl CdfLoadBuilder {
             Arc::clone(&add_remove_file_schema),
             add_remove_partition_fields,
         );
-
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
         let mut add_source = ParquetSource::new(add_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
-        let mut remove_source =
-            ParquetSource::new(remove_table_schema).with_table_parquet_options(parquet_options);
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        let mut remove_source = ParquetSource::new(remove_table_schema)
+            .with_table_parquet_options(parquet_options)
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+
+        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
+        let engine = self.log_store.engine(None);
+        let metrics = metrics.unwrap_or_default();
+
+        let cdc_file_groups = self
+            .create_file_groups(schema.clone(), cdc, partition_values, None, &metrics)
+            .await?;
+
+        let mut add_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                add,
+                partition_values,
+                Self::get_add_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        let mut remove_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                remove,
+                partition_values,
+                Self::get_remove_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        extend_groups_with_pairs(
+            schema.clone(),
+            pairs,
+            partition_values,
+            &mut add_file_groups,
+            &mut remove_file_groups,
+            Arc::clone(&engine),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+            &metrics,
+        )
+        .await?;
 
         if let Some(filters) = filters {
             cdc_source = cdc_source.with_predicate(Arc::clone(filters));
@@ -432,31 +669,9 @@ impl CdfLoadBuilder {
             remove_source = remove_source.with_predicate(Arc::clone(filters));
         }
 
-        let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(cdc_source))
-                .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(add_source))
-                .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(remove_source))
-                .with_file_groups(
-                    remove_file_groups
-                        .into_values()
-                        .map(FileGroup::from)
-                        .collect(),
-                )
-                .build(),
-        );
-
-        // The output batches are then unioned to create a single output. Coalesce partitions is only here for the time
-        // being for development. I plan to parallelize the reads once the base idea is correct.
+        let cdc_scan = self.create_data_source(cdc_source, cdc_file_groups);
+        let add_scan = self.create_data_source(add_source, add_file_groups);
+        let remove_scan = self.create_data_source(remove_source, remove_file_groups);
         let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
         // We project the union in the order of the input_schema + cdc cols at the end
@@ -497,23 +712,522 @@ pub(crate) mod tests {
     use arrow_schema::Schema;
     use chrono::NaiveDateTime;
     use datafusion::common::assert_batches_sorted_eq;
-    use datafusion::physical_plan::collect;
+    use datafusion::physical_plan::{collect, displayable};
     use datafusion::prelude::SessionContext;
     use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
     use itertools::Itertools;
 
+    use crate::delta_datafusion::cdf::scan::DeltaCdfTableProvider;
     use crate::test_utils::TestSchemas;
     use crate::writer::test_utils::TestResult;
     use crate::{DeltaTable, TableProperty};
     use std::path::Path;
     use url::Url;
 
+    /// Regression test for partition pruning in `load_cdf`.
+    ///
+    /// The cdf-table fixture is partitioned by `birthday`. A WHERE clause on `birthday`
+    /// should narrow the physical plan's file_groups to only the matching partition.
+    /// Until partition pruning is implemented, `determine_files_to_read` enumerates every
+    /// Add/AddCDCFile/Remove action in the version range without consulting partition
+    /// predicates, so all partitions' files end up in the plan and only a row-level
+    /// FilterExec rescues correctness.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_file_groups() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let builder = table.scan_cdf().with_starting_version(0);
+        let provider = DeltaCdfTableProvider::try_new(builder)?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let df = ctx
+            .sql("SELECT * FROM cdf WHERE birthday = DATE '2023-12-25'")
+            .await?;
+        let plan = df.create_physical_plan().await?;
+        let txt = displayable(plan.as_ref()).indent(true).to_string();
+
+        let mut paths: Vec<&str> = txt
+            .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())
+            .filter(|s| s.contains("part-") && s.ends_with(".parquet"))
+            .collect();
+        paths.sort();
+        paths.dedup();
+        let non_matching: Vec<&&str> = paths
+            .iter()
+            .filter(|p| !p.contains("birthday=2023-12-25"))
+            .collect();
+
+        assert!(
+            non_matching.is_empty(),
+            "load_cdf should prune non-matching partitions, but found {} file(s) from other partitions:\n{}\n\nFull plan:\n{}",
+            non_matching.len(),
+            non_matching
+                .iter()
+                .map(|p| format!("  {p}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            txt,
+        );
+        Ok(())
+    }
+
+    /// Pruning files by partition value must not drop any matching change rows.
+    #[tokio::test]
+    async fn cdf_partition_predicate_keeps_matching_rows() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-25'")
+            .await?
+            .collect()
+            .await?;
+
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+--------------+",
+            "| id | name   | birthday   | _change_type |",
+            "+----+--------+------------+--------------+",
+            "| 10 | Borb   | 2023-12-25 | insert       |",
+            "| 8  | Claire | 2023-12-25 | insert       |",
+            "| 9  | Ada    | 2023-12-25 | insert       |",
+            "+----+--------+------------+--------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// Open the `cdf-table` fixture (partitioned by `birthday`) and register it as
+    /// a CDF table provider so partition pruning can be exercised through SQL.
+    async fn register_cdf_table(ctx: &SessionContext) -> TestResult {
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+        Ok(())
+    }
+
+    async fn copied_column_mapping_cdf_table()
+    -> Result<(tempfile::TempDir, DeltaTable), Box<dyn std::error::Error + 'static>> {
+        let fixture = Path::new("../test/tests/data/table_with_column_mapping");
+        let temp_dir = tempfile::tempdir()?;
+        fs_extra::dir::copy(fixture, temp_dir.path(), &Default::default())?;
+        let table_path = temp_dir.path().join("table_with_column_mapping");
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        let log = std::fs::read_to_string(&log_path)?;
+        let updated_log = log.replace(
+            "\"delta.columnMapping.mode\":\"name\"",
+            "\"delta.enableChangeDataFeed\":\"true\",\"delta.columnMapping.mode\":\"name\"",
+        );
+        assert_ne!(
+            log, updated_log,
+            "expected column mapping table fixture metadata to contain column mapping mode"
+        );
+        std::fs::write(log_path, updated_log)?;
+
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+        Ok((temp_dir, table))
+    }
+
+    #[tokio::test]
+    async fn cdf_scan_rejects_column_mapping_tables() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let (_temp_dir, table) = copied_column_mapping_cdf_table().await?;
+
+        let err = table
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await
+            .expect_err("cdf scan should reject column-mapped tables before planning files");
+
+        match err {
+            DeltaTableError::UnsupportedColumnMapping {
+                mode: _,
+                operation: _,
+            } => {}
+            _ => panic!("Unexpected error: {err:?}"),
+        }
+
+        Ok(())
+    }
+
+    /// Collect the distinct `birthday=YYYY-MM-DD` partition segments referenced by
+    /// every parquet file (both `part-` add/remove files and `cdc-` change files)
+    /// in a rendered physical plan. This reflects exactly which partitions survived
+    /// file-group pruning.
+    fn partitions_in_plan(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
+        let txt = displayable(plan.as_ref()).indent(true).to_string();
+        let mut parts: Vec<String> = txt
+            .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace() || c == '/')
+            .filter(|s| s.starts_with("birthday="))
+            .map(|s| s.to_string())
+            .collect();
+        parts.sort();
+        parts.dedup();
+        parts
+    }
+
+    /// Build the physical plan for `query` against the registered `cdf` table and
+    /// return the distinct partitions remaining in its file groups.
+    async fn pruned_partitions(ctx: &SessionContext, query: &str) -> DeltaResult<Vec<String>> {
+        let plan = ctx.sql(query).await?.create_physical_plan().await?;
+        Ok(partitions_in_plan(&plan))
+    }
+
+    /// Equality on the partition column should keep only the `2023-12-23` partition,
+    /// which is materialized as CDC files (`_change_data/birthday=2023-12-23/...`)
+    /// for the update at version 1 in addition to the original add at version 0.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_to_cdc_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday = DATE '2023-12-23'").await?;
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-23".to_string()],
+            "equality on partition column must prune to the single matching CDC partition",
+        );
+
+        // Results must still be correct: the 2023-12-23 partition carries the
+        // version-0 inserts and the version-1 update preimages.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-23'")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+------+------------+-----------------+",
+            "| id | name | birthday   | _change_type    |",
+            "+----+------+------------+-----------------+",
+            "| 2  | Bob  | 2023-12-23 | insert          |",
+            "| 2  | Bob  | 2023-12-23 | update_preimage |",
+            "| 3  | Dave | 2023-12-23 | insert          |",
+            "| 3  | Dave | 2023-12-23 | update_preimage |",
+            "| 4  | Kate | 2023-12-23 | insert          |",
+            "| 4  | Kate | 2023-12-23 | update_preimage |",
+            "+----+------+------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// The `2023-12-29` partition exercises the Remove-action fallback: version 3
+    /// deletes id 7 via a `Remove` action (the partition also has version-2 adds
+    /// and CDC files). Pruning to it must keep that Remove file so the `delete`
+    /// change row is still produced.
+    #[tokio::test]
+    async fn cdf_partition_predicate_prunes_to_remove_fallback_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday = DATE '2023-12-29'").await?;
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-29".to_string()],
+            "equality on partition column must prune to the single matching partition, \
+             including its Remove-action file",
+        );
+
+        // The delete (sourced from the version-3 Remove action) must survive.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-29'")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+------------------+",
+            "| id | name   | birthday   | _change_type     |",
+            "+----+--------+------------+------------------+",
+            "| 5  | Emily  | 2023-12-29 | update_postimage |",
+            "| 6  | Carl   | 2023-12-29 | update_postimage |",
+            "| 7  | Dennis | 2023-12-29 | delete           |",
+            "| 7  | Dennis | 2023-12-29 | update_postimage |",
+            "+----+--------+------------+------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// `IS NULL` on the partition column matches no partition (every partition has a
+    /// concrete `birthday`), so all files should be pruned away and no rows returned.
+    #[tokio::test]
+    async fn cdf_partition_predicate_is_null_prunes_everything() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions =
+            pruned_partitions(&ctx, "SELECT * FROM cdf WHERE birthday IS NULL").await?;
+        assert!(
+            partitions.is_empty(),
+            "IS NULL on a fully-populated partition column must prune every partition, got {partitions:?}",
+        );
+
+        let batches = ctx
+            .sql("SELECT * FROM cdf WHERE birthday IS NULL")
+            .await?
+            .collect()
+            .await?;
+        assert!(
+            batches.iter().all(|b| b.num_rows() == 0),
+            "IS NULL must return no rows",
+        );
+        Ok(())
+    }
+
+    /// `IN (...)` over partition values should keep exactly the listed partitions.
+    #[tokio::test]
+    async fn cdf_partition_predicate_in_list_prunes_to_listed_partitions() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday IN (DATE '2023-12-22', DATE '2023-12-25')",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-22".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "IN list must keep exactly the listed partitions",
+        );
+
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday IN (DATE '2023-12-22', DATE '2023-12-25')")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+------------------+",
+            "| id | name   | birthday   | _change_type     |",
+            "+----+--------+------------+------------------+",
+            "| 1  | Steve  | 2023-12-22 | insert           |",
+            "| 10 | Borb   | 2023-12-25 | insert           |",
+            "| 2  | Bob    | 2023-12-22 | update_postimage |",
+            "| 3  | Dave   | 2023-12-22 | update_postimage |",
+            "| 4  | Kate   | 2023-12-22 | update_postimage |",
+            "| 8  | Claire | 2023-12-25 | insert           |",
+            "| 9  | Ada    | 2023-12-25 | insert           |",
+            "+----+--------+------------+------------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// An `OR` of two partition equalities should keep both matching partitions.
+    #[tokio::test]
+    async fn cdf_partition_predicate_or_keeps_both_partitions() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday = DATE '2023-12-22' OR birthday = DATE '2023-12-25'",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-22".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "OR of partition equalities must keep both partitions",
+        );
+        Ok(())
+    }
+
+    /// `NOT (birthday = ...)` should keep every partition except the negated one.
+    #[tokio::test]
+    async fn cdf_partition_predicate_not_excludes_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE NOT (birthday = DATE '2023-12-22')",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-23".to_string(),
+                "birthday=2023-12-24".to_string(),
+                "birthday=2023-12-25".to_string(),
+                "birthday=2023-12-29".to_string(),
+            ],
+            "NOT equality must keep every partition except the excluded one",
+        );
+        assert!(
+            !partitions.contains(&"birthday=2023-12-22".to_string()),
+            "the negated partition must be pruned away",
+        );
+        Ok(())
+    }
+
+    /// A range predicate (`>`/`<`) should keep only partitions inside the range.
+    #[tokio::test]
+    async fn cdf_partition_predicate_range_prunes_outside_bounds() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        // 2023-12-23 < birthday < 2023-12-29 leaves only 2023-12-24/25.
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday > DATE '2023-12-23' AND birthday < DATE '2023-12-29'",
+        )
+        .await?;
+        assert_eq!(
+            partitions,
+            vec![
+                "birthday=2023-12-24".to_string(),
+                "birthday=2023-12-25".to_string(),
+            ],
+            "range predicate must keep only partitions strictly inside the bounds",
+        );
+        Ok(())
+    }
+
+    /// A predicate mixing a partition column and a data column must only prune on
+    /// the partition part. The data conjunct (`id > 5`) is NOT a pruning criterion,
+    /// so the partition must still be kept whole and correctness is left to the
+    /// row-level `FilterExec`.
+    #[tokio::test]
+    async fn cdf_mixed_partition_and_data_predicate_only_prunes_partition() -> TestResult {
+        let ctx = SessionContext::new();
+        register_cdf_table(&ctx).await?;
+
+        let partitions = pruned_partitions(
+            &ctx,
+            "SELECT * FROM cdf WHERE birthday = DATE '2023-12-24' AND id > 5",
+        )
+        .await?;
+        // Only the partition conjunct prunes; the whole 2023-12-24 partition is kept
+        // and no other partition leaks in because of the data predicate.
+        assert_eq!(
+            partitions,
+            vec!["birthday=2023-12-24".to_string()],
+            "mixed predicate must prune on the partition part only, keeping the matching partition whole",
+        );
+
+        // The data part is still applied by the row-level filter, so only id > 5 rows
+        // from the 2023-12-24 partition are returned.
+        let batches = ctx
+            .sql("SELECT id, name, birthday, _change_type FROM cdf WHERE birthday = DATE '2023-12-24' AND id > 5")
+            .await?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq! {
+        [
+            "+----+--------+------------+-----------------+",
+            "| id | name   | birthday   | _change_type    |",
+            "+----+--------+------------+-----------------+",
+            "| 6  | Carl   | 2023-12-24 | insert          |",
+            "| 6  | Carl   | 2023-12-24 | update_preimage |",
+            "| 7  | Dennis | 2023-12-24 | insert          |",
+            "| 7  | Dennis | 2023-12-24 | update_preimage |",
+            "+----+--------+------------+-----------------+",
+        ], &batches }
+        Ok(())
+    }
+
+    /// A predicate on a non-partition column must not prune any files; the
+    /// matching is left to the row-level filter, so every partition's files
+    /// still appear in the plan.
+    #[tokio::test]
+    async fn cdf_non_partition_predicate_does_not_prune() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri).await?;
+
+        let provider = DeltaCdfTableProvider::try_new(table.scan_cdf().with_starting_version(0))?;
+        ctx.register_table("cdf", Arc::new(provider))?;
+
+        let collect_paths = |txt: &str| -> Vec<String> {
+            let mut paths: Vec<String> = txt
+                .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())
+                .filter(|s| s.contains("part-") && s.ends_with(".parquet"))
+                .map(|s| s.to_string())
+                .collect();
+            paths.sort();
+            paths.dedup();
+            paths
+        };
+
+        let baseline_plan = ctx
+            .sql("SELECT * FROM cdf")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let baseline_paths =
+            collect_paths(&displayable(baseline_plan.as_ref()).indent(true).to_string());
+
+        let filtered_plan = ctx
+            .sql("SELECT * FROM cdf WHERE id > 5")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let filtered_paths =
+            collect_paths(&displayable(filtered_plan.as_ref()).indent(true).to_string());
+
+        assert_eq!(
+            baseline_paths, filtered_paths,
+            "non-partition predicate must not prune files"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_respect_ict() -> TestResult {
+        let ctx: SessionContext = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdc_ict_table");
+        let starting_timestamp = NaiveDateTime::from_str("2026-07-11T16:36:53.881")?;
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri)
+            .await?
+            .scan_cdf()
+            // .with_starting_version(0)
+            .with_starting_timestamp(starting_timestamp.and_utc())
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table, ctx.task_ctx()).await?;
+        assert_batches_sorted_eq! {
+                            [
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+            "| name  | age | birthyear | _change_type     | _commit_version | _commit_timestamp       |",
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+            "| Dan   | 14  | 1995      | delete           | 2               | 2026-07-12T16:36:52.175 |",
+            "| Dave  | 22  | 1995      | delete           | 2               | 2026-07-12T16:36:52.175 |",
+            "| Kate  | 36  | 1995      | update_preimage  | 3               | 2026-07-12T16:36:53.881 |",
+            "| Kate  | 37  | 1995      | update_postimage | 3               | 2026-07-12T16:36:53.881 |",
+            "| Steve | 40  | 1986      | update_preimage  | 3               | 2026-07-12T16:36:53.881 |",
+            "| Steve | 41  | 1986      | update_postimage | 3               | 2026-07-12T16:36:53.881 |",
+            "+-------+-----+-----------+------------------+-----------------+-------------------------+",
+        ], &batches }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_load_local() -> TestResult {
         let ctx: SessionContext = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -558,18 +1272,16 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_local_datetime() -> TestResult {
         let ctx = SessionContext::new();
-        let starting_timestamp = NaiveDateTime::from_str("2023-12-22T17:10:21.675").unwrap();
+        let starting_timestamp = NaiveDateTime::from_str("2023-12-22T17:10:21.675")?;
         let table_path = Path::new("../test/tests/data/cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
             .with_starting_version(0)
             .with_ending_timestamp(starting_timestamp.and_utc())
             .build(&ctx.state(), None)
-            .await
-            .unwrap();
+            .await?;
 
         let batches = collect(table, ctx.task_ctx()).await?;
 
@@ -605,8 +1317,7 @@ pub(crate) mod tests {
     async fn test_load_local_non_partitioned() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -655,8 +1366,7 @@ pub(crate) mod tests {
     async fn test_load_bad_version_range() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -678,8 +1388,7 @@ pub(crate) mod tests {
     async fn test_load_version_out_of_range() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -700,8 +1409,7 @@ pub(crate) mod tests {
     async fn test_load_version_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -719,11 +1427,10 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_load_timestamp_out_of_range() -> TestResult {
-        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675")?;
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -743,10 +1450,9 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn test_load_timestamp_out_of_range_with_flag() -> TestResult {
         let ctx = SessionContext::new();
-        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675").unwrap();
+        let ending_timestamp = NaiveDateTime::from_str("2033-12-22T17:10:21.675")?;
         let table_path = Path::new("../test/tests/data/cdf-table-non-partitioned");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -766,8 +1472,7 @@ pub(crate) mod tests {
     async fn test_load_non_cdf() -> TestResult {
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/simple_table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -789,8 +1494,7 @@ pub(crate) mod tests {
         let ending_timestamp = NaiveDateTime::from_str("2024-01-06T15:44:59.570")?;
         let ctx = SessionContext::new();
         let table_path = Path::new("../test/tests/data/checkpoint-cdf-table");
-        let table_uri =
-            Url::from_directory_path(std::fs::canonicalize(table_path).unwrap()).unwrap();
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
         let table = DeltaTable::try_from_url(table_uri)
             .await?
             .scan_cdf()
@@ -834,8 +1538,7 @@ pub(crate) mod tests {
             .with_columns(delta_schema.fields().cloned())
             .with_partition_columns(["id"])
             .with_configuration_property(TableProperty::EnableChangeDataFeed, Some("true"))
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(table.version(), Some(0));
 
         let schema: Arc<Schema> = Arc::new(delta_schema.try_into_arrow()?);
@@ -851,8 +1554,7 @@ pub(crate) mod tests {
                     Some("no"),
                 ])),
             ],
-        )
-        .unwrap();
+        )?;
 
         let second_batch = RecordBatch::try_new(
             Arc::clone(&schema),
@@ -861,8 +1563,7 @@ pub(crate) mod tests {
                 Arc::new(Int32Array::from(vec![Some(10)])),
                 Arc::new(StringArray::from(vec![Some("yes")])),
             ],
-        )
-        .unwrap();
+        )?;
 
         let table = table
             .write(vec![batch])
@@ -873,8 +1574,7 @@ pub(crate) mod tests {
         let table = table
             .write([second_batch])
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
-            .await
-            .unwrap();
+            .await?;
         assert_eq!(table.version(), Some(2));
 
         let ctx = SessionContext::new();
@@ -919,6 +1619,76 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reading_cdf_with_dv() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table-with-cdc-and-dvs");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri.clone())
+            .await?
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table.clone(), ctx.task_ctx()).await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| id | comment            | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| 0  | new                | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | after-large-delete | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | initial            | insert           | 0               | 2024-12-13T06:07:53.501 |",
+                "| 1  | initial            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 1  | update1            | delete           | 10              | 2024-12-13T06:08:26.693 |",
+                "| 1  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 10 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 |                    | delete           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 11 |                    | update_postimage | 20              | 2024-12-13T06:08:49.795 |",
+                "| 11 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 | merge1-insert      | update_preimage  | 20              | 2024-12-13T06:08:49.795 |",
+                "| 12 | merge2-insert      | insert           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 2  |                    | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 2  | insert1            | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 2  | insert1            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_preimage  | 12              | 2024-12-13T06:08:30.100 |",
+                "| 2  | update2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 2  | update2            | update_postimage | 12              | 2024-12-13T06:08:30.100 |",
+                "| 3  | insert1-delete1    | delete           | 2               | 2024-12-13T06:08:07.275 |",
+                "| 3  | insert1-delete1    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 3  | insert1-delete1    | insert           | 4               | 2024-12-13T06:08:10.377 |",
+                "| 3  | insert1-delete1    | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 3  | update1            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 3  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 4  | insert1-delete2    | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 4  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 4  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 4  | insert1-delete2    | insert           | 7               | 2024-12-13T06:08:17.886 |",
+                "| 5  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 5  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 5  | insert2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 5  | insert2            | insert           | 8               | 2024-12-13T06:08:20.269 |",
+                "| 6  | insert3            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 6  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
+                "| 7  | insert3            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 7  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
+                "| 8  | insert4            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 8  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | update_preimage  | 18              | 2024-12-13T06:08:46.555 |",
+                "| 9  | merge1-update      | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 9  | merge1-update      | update_postimage | 18              | 2024-12-13T06:08:46.555 |",
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+            ],
+            &batches
+        );
+
         Ok(())
     }
 }

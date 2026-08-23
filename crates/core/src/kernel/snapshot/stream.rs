@@ -51,6 +51,8 @@ pub trait RecordBatchStream: Stream<Item = DeltaResult<RecordBatch>> {
 /// `Ready(None)` is recommended.
 pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
+/// A boxed, `Send`able stream of [`RecordBatch`] results, without the schema guarantees of
+/// [`SendableRecordBatchStream`].
 pub type SendableRBStream = Pin<Box<dyn Stream<Item = DeltaResult<RecordBatch>> + Send>>;
 
 /// Creates a stream from a collection of producing tasks, routing panics to the stream.

@@ -2273,6 +2273,62 @@ def test_merge_partitioned_schema_evolution_with_existing_string_partition_4292(
 
 
 @pytest.mark.parametrize("streaming", (True, False))
+def test_merge_boolean_target_predicate_4490(tmp_path: pathlib.Path, streaming: bool):
+    data = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "active": Array(
+                [True, False], ArrowField("active", type=DataType.bool(), nullable=True)
+            ),
+            "value": Array(
+                ["old-1", "old-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    source = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "value": Array(
+                ["new-1", "new-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    dt.merge(
+        source=source,
+        source_alias="source",
+        target_alias="target",
+        predicate="target.id = source.id and target.active = true",
+        streamed_exec=streaming,
+    ).when_matched_update(updates={"value": "source.value"}).execute()
+
+    actual = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, active, value from tbl order by id")
+        .read_all()
+    )
+    expected = Table(
+        {
+            "id": Array([1, 2], ArrowField("id", type=DataType.int64(), nullable=True)),
+            "active": Array(
+                [True, False], ArrowField("active", type=DataType.bool(), nullable=True)
+            ),
+            "value": Array(
+                ["new-1", "old-2"],
+                ArrowField("value", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    assert actual == expected
+
+
+@pytest.mark.parametrize("streaming", (True, False))
 def test_merge_stats_columns_stats_provided(tmp_path: pathlib.Path, streaming: bool):
     data = Table(
         {
@@ -2847,6 +2903,398 @@ def test_merge_when_wrong_but_castable_type_passed_while_merge(
     assert table_schema.field("price").type == sample_table["price"].type
 
 
+def _merge_with_type_mismatch_actions(merger, action_style: str):
+    if action_style == "all":
+        return merger.when_matched_update_all().when_not_matched_insert_all()
+
+    return merger.when_matched_update(
+        {"value": "source.value"}
+    ).when_not_matched_insert({"id": "source.id", "value": "source.value"})
+
+
+@pytest.mark.pyarrow
+def test_merge_from_without_files_table_preserves_state(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    target = pa.table({"id": [1, 2], "value": ["a", "b"]})
+    source = pa.table({"id": [2, 3], "value": ["bb", "c"]})
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    metrics = (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+        )
+        .when_matched_update({"value": "source.value"})
+        .when_not_matched_insert({"id": "source.id", "value": "source.value"})
+        .execute()
+    )
+
+    assert int(metrics["num_target_rows_updated"]) == 1
+    assert int(metrics["num_target_rows_inserted"]) == 1
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id")
+    assert result["value"].to_pylist() == ["a", "bb", "c"]
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_type_mismatch_default_castable_value_succeeds(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["old"], type=pa.string()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([99, 100], type=pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+    )
+
+    _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": ["99", "100"]}
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_type_mismatch_default_uncastable_value_errors(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+    )
+
+    with pytest.raises(
+        Exception,
+        match="Cannot cast string '.+' to value of Int64 type",
+    ):
+        _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_safe_cast_uncastable_value_becomes_null_for_nullable_target(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        error_on_type_mismatch=False,
+    )
+
+    _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [None, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_numeric_overflow_becomes_null_for_nullable_target(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int32()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([2**31, -(2**31) - 1], type=pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value"})
+        .when_not_matched_insert({"id": "source.id", "value": "source.value"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [None, None]}
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_not_matched_by_source_update_failed_cast_becomes_null(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array([10, 20], type=pa.int64()),
+        }
+    )
+    source = pa.table({"id": pa.array([1], type=pa.int64())})
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_not_matched_by_source_update({"value": "'abc'"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {"id": [1, 2], "value": [10, None]}
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("action_style", ("all", "explicit"))
+def test_merge_safe_cast_uncastable_value_still_fails_for_non_nullable_target(
+    tmp_path: pathlib.Path, action_style: str
+):
+    import pyarrow as pa
+
+    target_schema = pa.schema(
+        [
+            pa.field("id", pa.int64(), nullable=False),
+            pa.field("value", pa.int64(), nullable=False),
+        ]
+    )
+    target = pa.Table.from_arrays(
+        [pa.array([1], type=pa.int64()), pa.array([10], type=pa.int64())],
+        schema=target_schema,
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        error_on_type_mismatch=False,
+    )
+
+    with pytest.raises(Exception, match="Invalid data found:"):
+        _merge_with_type_mismatch_actions(merger, action_style).execute()
+
+
+@pytest.mark.pyarrow
+def test_merge_safe_cast_cdf_projection_uses_null_on_failed_cast(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        target,
+        configuration={"delta.enableChangeDataFeed": "true"},
+    )
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value"})
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().to_pydict()
+    assert result == {"id": [1], "value": [None]}
+
+    cdf = pa.table(dt.load_cdf(1, 1).read_all()).select(["id", "value", "_change_type"])
+    values_by_change_type = {
+        row["_change_type"]: row["value"] for row in cdf.to_pylist()
+    }
+    assert values_by_change_type == {
+        "update_preimage": 10,
+        "update_postimage": None,
+    }
+
+
+@pytest.mark.pyarrow
+def test_merge_schema_type_mismatch_existing_column_still_errors_by_default(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array(["abc"], type=pa.string()),
+            "extra": pa.array(["new"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    merger = dt.merge(
+        source=source,
+        predicate="target.id = source.id",
+        source_alias="source",
+        target_alias="target",
+        merge_schema=True,
+    ).when_matched_update({"value": "source.value", "extra": "source.extra"})
+
+    with pytest.raises(
+        Exception,
+        match="Cannot cast string 'abc' to value of Int64 type",
+    ):
+        merger.execute()
+
+
+@pytest.mark.pyarrow
+def test_merge_schema_safe_cast_existing_column_failed_cast_becomes_null(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    target = pa.table(
+        {
+            "id": pa.array([1], type=pa.int64()),
+            "value": pa.array([10], type=pa.int64()),
+        }
+    )
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], type=pa.int64()),
+            "value": pa.array(["abc", "def"], type=pa.string()),
+            "extra": pa.array(["matched", "inserted"], type=pa.string()),
+        }
+    )
+    write_deltalake(tmp_path, target)
+
+    dt = DeltaTable(tmp_path)
+    (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            merge_schema=True,
+            error_on_type_mismatch=False,
+        )
+        .when_matched_update({"value": "source.value", "extra": "source.extra"})
+        .when_not_matched_insert(
+            {
+                "id": "source.id",
+                "value": "source.value",
+                "extra": "source.extra",
+            }
+        )
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")]).to_pydict()
+    assert result == {
+        "id": [1, 2],
+        "value": [None, None],
+        "extra": ["matched", "inserted"],
+    }
+
+
 @pytest.mark.pyarrow
 def test_merge_on_decimal_3033(tmp_path):
     import pyarrow as pa
@@ -2922,6 +3370,80 @@ def test_merge(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
+def test_merge_streamed_exec_does_not_rescan_single_use_source(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    target = pa.table({"id": [1, 2], "value": [10, 20]})
+    write_deltalake(str(tmp_path), target)
+
+    dt = DeltaTable(str(tmp_path))
+    source_batch = pa.record_batch({"id": [2, 3], "value": [200, 300]})
+    source = pa.RecordBatchReader.from_batches(source_batch.schema, [source_batch])
+
+    metrics = (
+        dt.merge(
+            source=source,
+            predicate="target.id = source.id",
+            source_alias="source",
+            target_alias="target",
+            streamed_exec=True,
+        )
+        .when_matched_update_all()
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    result = dt.to_pyarrow_table().sort_by([("id", "ascending")])
+    expected = pa.table({"id": [1, 2, 3], "value": [10, 200, 300]})
+
+    assert metrics["num_target_rows_updated"] == 1
+    assert metrics["num_target_rows_inserted"] == 1
+    assert result.equals(expected)
+
+
+@pytest.mark.pyarrow
+def test_merge_when_matched_update_preserves_list_with_null_element(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    list_type = pa.list_(pa.field("element", pa.int32()))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("b", list_type)])
+    initial = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[1, 2, None]], type=list_type),
+        },
+        schema=schema,
+    )
+    write_deltalake(tmp_path, initial)
+
+    source = pa.table(
+        {
+            "id": pa.array(["row1"], type=pa.string()),
+            "b": pa.array([[-9999, -9999, None]], type=list_type),
+        },
+        schema=schema,
+    )
+
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            source_alias="source",
+            target_alias="target",
+            predicate="source.id = target.id",
+        )
+        .when_matched_update(updates={"b": "source.b"})
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table()
+    row_b = result.filter(pa.compute.equal(result["id"], "row1"))["b"][0].as_py()
+    assert row_b == [-9999, -9999, None]
+
+
+@pytest.mark.pyarrow
 def test_merge_with_spill_config(tmp_path: pathlib.Path):
     """Verify merge accepts and uses spill configuration without error."""
     import pyarrow as pa
@@ -2949,3 +3471,78 @@ def test_merge_with_spill_config(tmp_path: pathlib.Path):
 
     assert result["num_target_rows_updated"] == 2
     assert result["num_target_rows_copied"] == 1
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("enable_nanos", [False, True])
+def test_merge_schema_evolution_with_nanosecond_timestamps(
+    tmp_path: pathlib.Path,
+    enable_nanos: bool,
+):
+    """A schema-evolving merge that adds a new nanosecond timestamp
+    column must truncate it to microseconds when the experimental nanosecond
+    timestamp feature is disabled (the default).
+    """
+    import pyarrow as pa
+
+    from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
+    from deltalake._internal import _NANOSECOND_TIMESTAMPS
+
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array(["1", "2"], pa.string())}),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+
+    source_table = pa.table(
+        {
+            "id": pa.array(["3"], pa.string()),
+            "ts": pa.array([123_456_789], pa.timestamp("ns", tz="UTC")),
+        }
+    )
+
+    def do_merge():
+        dt.merge(
+            source=source_table,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+            merge_schema=True,
+        ).when_not_matched_insert_all().execute()
+
+    if enable_nanos:
+        if not _NANOSECOND_TIMESTAMPS:
+            pytest.skip("Rust library not built with nanosecond-timestamps enabled")
+        # This currently errors because a merge doesn't automatically add
+        # the nanosecond timestamps feature to the table.
+        enable_nanosecond_timestamps()
+        try:
+            with pytest.raises(
+                DeltaError,
+                match="does not have the required 'timestampNanos' and 'timestampNtz' features",
+            ):
+                do_merge()
+        finally:
+            _disable_nanosecond_timestamps()
+
+    else:
+        do_merge()
+
+        dt = DeltaTable(tmp_path)
+
+        # The committed table schema must record microsecond precision.
+        assert dt.schema().to_arrow().field("ts").type == DataType.timestamp(
+            "us", tz="UTC"
+        )
+
+        result = (
+            QueryBuilder()
+            .register("tbl", dt)
+            .execute("select * from tbl order by id asc")
+            .read_all()
+        )
+
+        expected_array = pa.array([None, None, 123_456], pa.timestamp("us", tz="UTC"))
+        assert pa.chunked_array(result.column("ts")).combine_chunks() == expected_array

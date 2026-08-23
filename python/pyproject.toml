@@ -22,7 +22,7 @@ dependencies = ["arro3-core>=0.5.0", "deprecated>=1.2.18"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
-pyarrow = ["pyarrow>=16"]
+pyarrow = ["pyarrow>=21"]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"

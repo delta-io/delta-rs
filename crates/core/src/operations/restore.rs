@@ -37,7 +37,8 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    Action, Add, EagerSnapshot, ProtocolExt as _, ProtocolInner, Remove, Version, resolve_snapshot,
+    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, ProtocolExt as _, ProtocolInner,
+    Remove, Version, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
@@ -204,10 +205,27 @@ async fn execute(
 
     let state_to_restore_files: Vec<_> = snapshot_restored
         .snapshot()
-        .file_views(&log_store, None)
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
         .try_collect()
         .await?;
-    let latest_state_files: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
+    let latest_state_files: Vec<_> = snapshot
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .try_collect()
+        .await?;
     let state_to_restore_files_set =
         HashSet::<_>::from_iter(state_to_restore_files.iter().map(|f| f.path().to_string()));
     let latest_state_files_set =

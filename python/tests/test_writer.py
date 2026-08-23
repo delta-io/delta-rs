@@ -12,8 +12,17 @@ from arro3.core import Array, ChunkedArray, DataType, RecordBatchReader, Table
 from arro3.core import Field as ArrowField
 from arro3.core import Schema as ArrowSchema
 
-from deltalake import CommitProperties, DeltaTable, Transaction, write_deltalake
+from deltalake import (
+    CommitProperties,
+    DeltaTable,
+    Transaction,
+    _disable_nanosecond_timestamps,
+    _nanosecond_timestamps_enabled,
+    enable_nanosecond_timestamps,
+    write_deltalake,
+)
 from deltalake._internal import (
+    _NANOSECOND_TIMESTAMPS,
     CommitFailedError,
     Field,
     PrimitiveType,
@@ -52,6 +61,13 @@ def test_roundtrip_basic(
     tmp_path: pathlib.Path,
     sample_data_pyarrow: "pa.Table",
 ):
+    assert_roundtrips(tmp_path, sample_data_pyarrow)
+
+
+def assert_roundtrips(
+    tmp_path: pathlib.Path,
+    sample_data_pyarrow: "pa.Table",
+):
     # Check we can create the subdirectory
     import pyarrow as pa
 
@@ -80,6 +96,58 @@ def test_roundtrip_basic(
         modification_time = action["modificationTime"] / 1000  # convert back to seconds
         assert start_time < modification_time
         assert modification_time < end_time
+
+
+@pytest.mark.pyarrow
+def test_append_with_skip_stats_table_is_replay_safe(tmp_path: pathlib.Path):
+    import pyarrow as pa
+
+    data = pa.table({"id": [1]})
+    write_deltalake(tmp_path, data)
+
+    table = DeltaTable(tmp_path, skip_stats=True)
+    write_deltalake(table, data, mode="append")
+
+    assert table.version() == 1
+    fresh = DeltaTable(tmp_path)
+    assert fresh.version() == 1
+    assert fresh.to_pyarrow_table().num_rows == 2
+
+
+@pytest.mark.pyarrow
+def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.Path):
+    """
+    Unless ``enable_nanosecond_timestamps()`` is called, nanosecond timestamps
+    are cast to microseconds.
+    """
+    import pyarrow as pa
+
+    table = pa.table(
+        {"timestamp_ns": [pa.scalar(700123, type=pa.timestamp("ns", "UTC"))]}
+    )
+
+    # If nanoseconds are disabled when writing, the data is written as
+    # microseconds:
+    assert not _nanosecond_timestamps_enabled()
+    path = tmp_path / "ns_disabled"
+    write_deltalake(path, table)
+    result = DeltaTable(path).to_pyarrow_table()
+    # Should be rounded to microseconds:
+    assert result == pa.table(
+        {"timestamp_ns": [pa.scalar(700, type=pa.timestamp("us", "UTC"))]}
+    )
+
+    if not _NANOSECOND_TIMESTAMPS:
+        return
+
+    # If nanoseconds are enabled when writing, the data is written as
+    # nanoseconds:
+    enable_nanosecond_timestamps()
+    try:
+        assert _nanosecond_timestamps_enabled()
+        assert_roundtrips(tmp_path / "ns_enabled", table)
+    finally:
+        _disable_nanosecond_timestamps()
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
@@ -141,6 +209,122 @@ def test_update_schema(existing_sample_table: DeltaTable):
         .read_all()
     )
     assert new_data == read_data
+
+
+@pytest.mark.pyarrow
+def test_overwrite_schema_can_change_partition_by(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        data,
+        partition_by=["some_str"],
+        name="preserve_name",
+        description="preserve_description",
+    )
+    table = DeltaTable(tmp_path)
+    assert table.metadata().partition_columns == ["some_str"]
+
+    write_deltalake(
+        table,
+        data,
+        mode="overwrite",
+        schema_mode="overwrite",
+        partition_by=["some_int"],
+    )
+
+    table.update_incremental()
+    assert table.version() == 1
+    assert table.metadata().partition_columns == ["some_int"]
+    assert table.metadata().name == "preserve_name"
+    assert table.metadata().description == "preserve_description"
+    assert table.to_pyarrow_table().to_pydict() == {
+        "some_int": [1],
+        "some_str": ["foo"],
+    }
+
+    version_actions = get_version_actions(table, 1)
+    add_actions = [entry["add"] for entry in version_actions if "add" in entry]
+    remove_actions = [entry["remove"] for entry in version_actions if "remove" in entry]
+    assert add_actions
+    assert all("some_int=" in add["path"] for add in add_actions)
+    assert len(remove_actions) == 1
+
+
+@pytest.mark.pyarrow
+def test_overwrite_schema_can_remove_partition_by(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, partition_by=["some_str"])
+    table = DeltaTable(tmp_path)
+
+    write_deltalake(
+        table,
+        data,
+        mode="overwrite",
+        schema_mode="overwrite",
+        partition_by=[],
+    )
+
+    table.update_incremental()
+    assert table.version() == 1
+    assert table.metadata().partition_columns == []
+    version_actions = get_version_actions(table, 1)
+    add_actions = [entry["add"] for entry in version_actions if "add" in entry]
+    assert add_actions
+    assert all("/" not in add["path"] for add in add_actions)
+
+
+def test_replace_where_rejects_partition_by_change(tmp_path: pathlib.Path):
+    data = Table(
+        {
+            "some_int": Array(
+                [1, 2],
+                ArrowField("some_int", type=DataType.int32(), nullable=True),
+            ),
+            "some_str": Array(
+                ["foo", "bar"],
+                ArrowField("some_str", type=DataType.string(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, partition_by=["some_str"])
+
+    with pytest.raises(
+        DeltaError,
+        match="Specified table partitioning does not match table partitioning",
+    ):
+        write_deltalake(
+            tmp_path,
+            data,
+            mode="overwrite",
+            schema_mode="overwrite",
+            partition_by=["some_int"],
+            predicate="some_int = 1",
+        )
 
 
 @pytest.mark.pyarrow
@@ -845,6 +1029,11 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
+def get_version_actions(table: DeltaTable, version: int) -> list[dict]:
+    log_path = table._table.table_uri() + "/_delta_log/" + f"{version:020}.json"
+    return [json.loads(line) for line in urlopen(log_path).readlines()]
+
+
 def get_add_actions(table: DeltaTable) -> list[dict]:
     log_path = get_log_path(table)
 
@@ -896,6 +1085,7 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
         "float64": -0.0,
         "bool": False,
         "timestamp": "2022-01-01T00:00:00Z",
+        "timestamp_ntz": "2022-01-01 00:00:00",
         "struct": {
             "x": 0,
             "y": "0",
@@ -904,6 +1094,9 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_mins["decimal"] = 10.0
     expected_mins["date32"] = "2022-01-01"
+    if _nanosecond_timestamps_enabled():
+        expected_mins["timestamp_ns"] = "1970-01-01T00:00:00Z"
+        expected_mins["timestamp_ns_ntz"] = "1970-01-01 00:00:00"
 
     assert stats["minValues"] == expected_mins
 
@@ -917,11 +1110,15 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
         "float64": 4.0,
         "bool": True,
         "timestamp": "2022-01-01T04:00:00Z",
+        "timestamp_ntz": "2022-01-01 04:00:00",
         "struct": {"x": 4, "y": "4"},
     }
     # PyArrow added support for decimal and date32 in 8.0.0
     expected_maxs["decimal"] = 14.0
     expected_maxs["date32"] = "2022-01-05"
+    if _nanosecond_timestamps_enabled():
+        expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000000004Z"
+        expected_maxs["timestamp_ns_ntz"] = "1970-01-01 00:00:00.000000004"
 
     assert stats["maxValues"] == expected_maxs
 
@@ -955,6 +1152,92 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
 
     expected_nulls = {"int32": 2, "float64": 3, "str": 4}
     assert stats["nullCount"] == expected_nulls
+
+
+@pytest.mark.pyarrow
+def test_list_values_with_null_elements_and_empty_lists_read_with_default_stats(
+    tmp_path: pathlib.Path,
+):
+    import pyarrow as pa
+
+    list_type = pa.list_(pa.field("element", pa.int32()))
+    schema = pa.schema([pa.field("id", pa.string()), pa.field("b", list_type)])
+    data = pa.table(
+        {
+            "id": pa.array(
+                ["with_element_null", "only_null_element", "empty", "true_null"],
+                type=pa.string(),
+            ),
+            "b": pa.array([[1, 2, None], [None], [], None], type=list_type),
+        },
+        schema=schema,
+    )
+
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path)
+    result_by_id = {row["id"]: row["b"] for row in dt.to_pyarrow_table().to_pylist()}
+    assert result_by_id == {
+        "with_element_null": [1, 2, None],
+        "only_null_element": [None],
+        "empty": [],
+        "true_null": None,
+    }
+
+    fragment_expressions = [
+        str(fragment.partition_expression)
+        for fragment in dt.to_pyarrow_dataset().get_fragments()
+    ]
+    assert all("is_null(b" not in expression for expression in fragment_expressions)
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    ("case_name", "expected"),
+    [
+        ("list", [[1, 2], [3, None]]),
+        ("large_list", [[1, 2], [3, None]]),
+        ("fixed_size_list", [[1, 2], [3, None]]),
+        ("map", [[("a", 1), ("b", None)], [("c", 2)]]),
+    ],
+)
+def test_container_null_count_stats_keep_parquet_values(
+    tmp_path: pathlib.Path,
+    case_name: str,
+    expected,
+):
+    import pyarrow as pa
+
+    if case_name == "list":
+        arrow_type = pa.list_(pa.field("element", pa.int32()))
+    elif case_name == "large_list":
+        arrow_type = pa.large_list(pa.field("element", pa.int32()))
+    elif case_name == "fixed_size_list":
+        arrow_type = pa.list_(pa.field("element", pa.int32()), 2)
+    elif case_name == "map":
+        arrow_type = pa.map_(pa.string(), pa.int32())
+    else:
+        raise AssertionError(f"unexpected case: {case_name}")
+
+    data = pa.table({"b": pa.array(expected, type=arrow_type)})
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+    stats = get_stats(dt)
+    assert "b" not in stats["nullCount"]
+
+    log_path = tmp_path / "_delta_log" / ("0" * 20 + ".json")
+    rewritten_lines = []
+    for line in log_path.read_text().splitlines():
+        action = json.loads(line)
+        if add := action.get("add"):
+            stats = json.loads(add["stats"])
+            stats.setdefault("nullCount", {})["b"] = stats["numRecords"]
+            add["stats"] = json.dumps(stats, separators=(",", ":"))
+        rewritten_lines.append(json.dumps(action, separators=(",", ":")))
+    log_path.write_text("\n".join(rewritten_lines) + "\n")
+
+    dt = DeltaTable(tmp_path)
+    assert dt.to_pyarrow_table()["b"].to_pylist() == expected
 
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
@@ -1259,6 +1542,52 @@ def test_replace_where_overwrite(
         )
         == expected_data
     )
+
+
+@pytest.mark.pyarrow
+def test_replace_where_overwrite_preserves_mixed_case_columns(tmp_path: pathlib.Path):
+    """Regression test for issue 4404."""
+    import pyarrow as pa
+
+    initial = pa.table(
+        {
+            "utcDate": ["2008-08-16T15:00:00Z", "2009-05-16T15:00:00Z"],
+            "homeTeam": ["Everton", "Everton"],
+            "score": ["0-1", "3-1"],
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        initial,
+        mode="overwrite",
+        schema_mode="overwrite",
+    )
+
+    update = pa.table(
+        {
+            "utcDate": ["2010-01-01T15:00:00Z"],
+            "homeTeam": ["Everton"],
+            "score": ["0-1"],
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        update,
+        mode="overwrite",
+        schema_mode="overwrite",
+        predicate="score = '0-1'",
+    )
+
+    expected = pa.table(
+        {
+            "utcDate": ["2009-05-16T15:00:00Z", "2010-01-01T15:00:00Z"],
+            "homeTeam": ["Everton", "Everton"],
+            "score": ["3-1", "0-1"],
+        }
+    )
+    actual = DeltaTable(tmp_path).to_pyarrow_table().sort_by("utcDate")
+    assert actual.schema.names == ["utcDate", "homeTeam", "score"]
+    assert actual == expected
 
 
 @pytest.mark.pyarrow
@@ -1885,6 +2214,54 @@ def test_write_stats_column_idx(tmp_path: pathlib.Path):
     _check_stats(dt)
 
 
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        pytest.param(
+            {"delta.dataSkippingNumIndexedCols": "1"},
+            id="num_indexed_cols",
+        ),
+        pytest.param(
+            {"delta.dataSkippingStatsColumns": "p,a"},
+            id="stats_columns",
+        ),
+    ],
+)
+def test_get_add_actions_excludes_partition_columns_from_stats_schema(
+    tmp_path: pathlib.Path,
+    configuration: dict[str, str],
+):
+    data = Table(
+        {
+            "p": Array(
+                [10, 10, 20, 20],
+                ArrowField("p", type=DataType.int64(), nullable=False),
+            ),
+            "a": Array(
+                [1, 2, 3, 4],
+                ArrowField("a", type=DataType.int64(), nullable=False),
+            ),
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+        partition_by=["p"],
+        configuration=configuration,
+    )
+
+    actions = DeltaTable(tmp_path).get_add_actions(flatten=True)
+    paths = actions["path"].to_pylist()
+    order = sorted(range(len(paths)), key=paths.__getitem__)
+
+    assert [actions.column("min.a")[idx].as_py() for idx in order] == [1, 3]
+    assert [actions.column("max.a")[idx].as_py() for idx in order] == [2, 4]
+
+    assert "min.p" not in actions.column_names
+
+
 def test_write_stats_columns_stats_provided(tmp_path: pathlib.Path):
     def _check_stats(dt: DeltaTable):
         add_actions_table = dt.get_add_actions(flatten=True)
@@ -1966,6 +2343,46 @@ def test_write_timestamp_ntz_nested(tmp_path: pathlib.Path, array):
     assert protocol.min_writer_version == 7
     assert protocol.reader_features == ["timestampNtz"]
     assert protocol.writer_features == ["timestampNtz"]
+
+
+@pytest.mark.usefixtures("nanosecond_timestamps_enabled")
+@pytest.mark.pyarrow
+@pytest.mark.parametrize(
+    "array",
+    [
+        lambda pa, ts: pa.array([[ts]]),
+        lambda pa, ts: pa.array([{"foo": ts}]),
+        lambda pa, ts: pa.array([{"foo": [[ts]]}]),
+        lambda pa, ts: pa.array([{"foo": [[{"foo": ts}]]}]),
+    ],
+)
+def test_write_timestamp_nanos_nested(tmp_path: pathlib.Path, array):
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "x": array(
+                pa,
+                pa.scalar(datetime(2010, 1, 1), type=pa.timestamp("ns", "UTC")),
+            ),
+            "x_ntz": array(
+                pa,
+                pa.scalar(datetime(2010, 1, 1), type=pa.timestamp("ns", None)),
+            ),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        data,
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 3
+    assert protocol.min_writer_version == 7
+    assert set(protocol.reader_features) == {"timestampNanos", "timestampNtz"}
+    assert set(protocol.writer_features) == {"timestampNanos", "timestampNtz"}
 
 
 def test_parse_stats_with_new_schema(tmp_path):
@@ -2179,6 +2596,8 @@ def test_write_timestamp(tmp_path: pathlib.Path):
     ]
     columns = ["ts", "ins", "date", "fb", "fc"]
     df = pd.DataFrame(data, columns=columns)
+    # Versions of Pandas < 3 default to nanoseconds:
+    df["ts"] = df["ts"].astype(pd.DatetimeTZDtype("us", "UTC"))
     write_deltalake(
         table_or_uri=tmp_path,
         data=df,
@@ -2681,6 +3100,26 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
+def test_without_files_delta_table_write_preserves_state(
+    tmp_path: pathlib.Path,
+) -> None:
+    import pyarrow as pa
+
+    initial = pa.table({"id": pa.array([1, 2], type=pa.int64())})
+    write_deltalake(tmp_path, initial)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    write_deltalake(dt, pa.table({"id": pa.array([3], type=pa.int64())}), mode="append")
+
+    latest = DeltaTable(tmp_path)
+    assert latest.version() == 1
+    assert latest.to_pyarrow_table().sort_by("id")["id"].to_pylist() == [1, 2, 3]
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
 def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
     """
     Calling create_write_transaction with mode="overwrite" and non-empty
@@ -2807,7 +3246,7 @@ def test_write_date64_normalizes_to_date32(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
-def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
+def test_write_timestamp_ns_normalize(tmp_path: pathlib.Path):
     import pyarrow as pa
 
     ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456, tzinfo=timezone.utc)
@@ -2833,16 +3272,28 @@ def test_write_timestamp_ns_normalizes_to_us(tmp_path: pathlib.Path):
 
     delta_schema = dt.schema()
     ts_field = delta_schema.fields[1]
-    assert ts_field.type == PrimitiveType("timestamp")
+    if _nanosecond_timestamps_enabled():
+        expected_type = PrimitiveType("timestamp_nanos")
+    else:
+        expected_type = PrimitiveType("timestamp")
+    assert ts_field.type == expected_type
 
     result = dt.to_pyarrow_table()
     assert result.num_rows == 2
-    assert result.schema.field("ts").type == pa.timestamp("us", tz="UTC")
+    if _nanosecond_timestamps_enabled():
+        expected_resolution = "ns"
+    else:
+        expected_resolution = "us"
+    assert result.schema.field("ts").type == pa.timestamp(expected_resolution, tz="UTC")
     assert result.column("ts").to_pylist() == [ts1, ts2]
 
 
 @pytest.mark.pyarrow
-def test_write_timestamp_ntz_ns_normalizes_to_us(tmp_path: pathlib.Path):
+@pytest.mark.parametrize("ns_enabled", [False, True])
+def test_write_timestamp_ntz_ns_normalize(tmp_path: pathlib.Path, ns_enabled: bool):
+    if ns_enabled and not _NANOSECOND_TIMESTAMPS:
+        pytest.skip("nanosecond timestamps not enabled in build")
+
     import pyarrow as pa
 
     ts1 = datetime(2025, 10, 20, 12, 0, 0, 123456)
@@ -2861,12 +3312,20 @@ def test_write_timestamp_ntz_ns_normalizes_to_us(tmp_path: pathlib.Path):
         schema=schema,
     )
 
-    write_deltalake(tmp_path, table)
+    if ns_enabled:
+        enable_nanosecond_timestamps()
+    try:
+        write_deltalake(tmp_path, table)
 
-    dt = DeltaTable(tmp_path)
-    result = dt.to_pyarrow_table()
+        dt = DeltaTable(tmp_path)
+        result = dt.to_pyarrow_table()
+
+    finally:
+        _disable_nanosecond_timestamps()
+
     assert result.num_rows == 1
-    assert result.schema.field("ts_ntz").type == pa.timestamp("us")
+    expected_resolution = "ns" if ns_enabled else "us"
+    assert result.schema.field("ts_ntz").type == pa.timestamp(expected_resolution)
 
 
 def test_writing_with_generator(tmp_path):

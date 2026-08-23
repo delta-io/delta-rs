@@ -6,7 +6,7 @@ from arro3.core import Table
 
 from deltalake import CommitProperties, DeltaTable, Field, Schema, write_deltalake
 from deltalake.exceptions import DeltaError
-from deltalake.schema import PrimitiveType
+from deltalake.schema import PrimitiveType, VariantType
 
 if TYPE_CHECKING:
     pass
@@ -78,6 +78,24 @@ def test_create_schema(tmp_path: pathlib.Path):
     )
 
     assert dt.schema() == schema
+
+
+def test_create_schema_with_variant_type(tmp_path: pathlib.Path):
+    variant_schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=True),
+            Field("payload", type=VariantType(), nullable=True),
+        ]
+    )
+
+    dt = DeltaTable.create(tmp_path, variant_schema)
+    protocol = dt.protocol()
+
+    assert protocol.min_reader_version == 3
+    assert protocol.min_writer_version == 7
+    assert "variantType" in protocol.reader_features
+    assert "variantType" in protocol.writer_features
+    assert dt.schema() == variant_schema
 
 
 def test_create_with_deletion_vectors_enabled(tmp_path: pathlib.Path):

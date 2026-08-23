@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -24,14 +24,14 @@ use tracing::*;
 
 use crate::delta_datafusion::engine::to_delta_predicate;
 use crate::delta_datafusion::logical::LogicalPlanBuilderExt as _;
-use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
+use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
 use crate::delta_datafusion::{
     DataFusionMixins as _, DeltaScanNext, FILE_ID_COLUMN_DEFAULT, PATH_COLUMN, get_path_column,
     normalize_path_as_file_id, resolve_file_column_name,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, EagerSnapshot};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView};
+use crate::logstore::{LogStore, LogStoreRef};
 
 #[derive(Debug, Hash, Eq, PartialEq)]
 /// Representing the result of the [find_files] function.
@@ -40,17 +40,6 @@ pub(crate) struct FindFiles {
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
-}
-
-/// Abstraction over sources that can provide partition metadata add-action batches.
-pub(crate) trait PartitionAddActionsProvider {
-    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>>;
-}
-
-impl PartitionAddActionsProvider for EagerSnapshot {
-    fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
-        EagerSnapshot::add_actions_partition_batches(self)
-    }
 }
 
 /// Finds files in a snapshot that match the provided predicate.
@@ -78,7 +67,8 @@ pub(crate) async fn find_files(
             let predicate = analysis.predicate();
 
             if analysis.partition_only {
-                let candidates = scan_memory_table(snapshot, &predicate).await?;
+                let candidates =
+                    scan_memory_table(snapshot, log_store.as_ref(), &predicate).await?;
                 let result = FindFiles {
                     candidates,
                     partition_scan: true,
@@ -119,6 +109,8 @@ pub(crate) struct FindFilesExprProperties {
 
     pub partition_only: bool,
     pub result: DeltaResult<()>,
+    /// Partition columns referenced by the visited expression.
+    pub referenced_partition_columns: BTreeSet<String>,
 }
 
 impl Default for FindFilesExprProperties {
@@ -127,6 +119,7 @@ impl Default for FindFilesExprProperties {
             partition_columns: Vec::new(),
             partition_only: true,
             result: Ok(()),
+            referenced_partition_columns: BTreeSet::new(),
         }
     }
 }
@@ -158,7 +151,9 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
 
         match expr {
             Expr::Column(c) => {
-                if !self.partition_columns.contains(&c.name) {
+                if self.partition_columns.contains(&c.name) {
+                    self.referenced_partition_columns.insert(c.name.clone());
+                } else {
                     self.partition_only = false;
                 }
             }
@@ -207,6 +202,54 @@ impl TreeNodeVisitor<'_> for FindFilesExprProperties {
     }
 }
 
+/// Extract the partition-only conjuncts of `predicate`, together with the partition
+/// columns they reference.
+///
+/// `predicate` is split into conjuncts and simplified; only terms that reference
+/// partition columns exclusively (and contain no nondeterministic or unsupported
+/// expressions) are retained and re-joined with `AND`. Returns `None` when no such
+/// term survives.
+///
+/// The returned column list is the subset of `partition_columns` actually referenced,
+/// in `partition_columns` order. Callers can use it to build a minimal pruning schema
+/// rather than materializing every partition column — which avoids coercing values the
+/// predicate never reads and prevents an unrelated/malformed partition value from
+/// weakening pruning.
+pub(crate) fn extract_partition_only_predicate(
+    predicate: Expr,
+    partition_columns: &[String],
+) -> DeltaResult<Option<(Expr, Vec<String>)>> {
+    let mut referenced = BTreeSet::new();
+    let partition_terms = simplify_predicates(split_conjunction_owned(predicate))?
+        .into_iter()
+        .filter(|term| {
+            let mut visitor = FindFilesExprProperties {
+                partition_columns: partition_columns.to_vec(),
+                ..Default::default()
+            };
+            let keep = term.visit(&mut visitor).is_ok()
+                && visitor.result.is_ok()
+                && visitor.partition_only;
+            if keep {
+                referenced.extend(visitor.referenced_partition_columns);
+            }
+            keep
+        })
+        .collect::<Vec<_>>();
+
+    let Some(predicate) = conjunction(partition_terms) else {
+        return Ok(None);
+    };
+
+    let referenced_columns = partition_columns
+        .iter()
+        .filter(|name| referenced.contains(*name))
+        .cloned()
+        .collect();
+
+    Ok(Some((predicate, referenced_columns)))
+}
+
 pub(crate) fn analyze_predicate_for_find_files(
     predicate: Expr,
     partition_columns: &[String],
@@ -214,8 +257,7 @@ pub(crate) fn analyze_predicate_for_find_files(
     let simplified_terms = simplify_predicates(split_conjunction_owned(predicate))?;
     let mut visitor = FindFilesExprProperties {
         partition_columns: partition_columns.to_vec(),
-        partition_only: true,
-        result: Ok(()),
+        ..Default::default()
     };
 
     for term in &simplified_terms {
@@ -376,12 +418,7 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
     expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
     let file_column_name = resolve_file_column_name(snapshot.input_schema().as_ref(), None)?;
-    let table_root = snapshot
-        .snapshot()
-        .scan_builder()
-        .build()?
-        .table_root()
-        .clone();
+    let table_root = snapshot.snapshot().inner.table_root().clone();
     let mut candidate_map: HashMap<_, _> = snapshot
         .file_views(log_store.as_ref(), None)
         .try_fold(HashMap::new(), |mut candidate_map, view| {
@@ -441,9 +478,14 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
 /// partition predicates without materializing full add-action metadata.
 /// Returns `None` when the snapshot contains no add actions.
 pub(crate) fn add_actions_partition_mem_table(
-    snapshot: &(impl PartitionAddActionsProvider + ?Sized),
+    snapshot: &EagerSnapshot,
 ) -> DeltaResult<Option<MemTable>> {
-    let add_action_batches = snapshot.add_actions_partition_batches()?;
+    add_actions_partition_mem_table_from_batches(snapshot.add_actions_partition_batches()?)
+}
+
+fn add_actions_partition_mem_table_from_batches(
+    add_action_batches: Vec<RecordBatch>,
+) -> DeltaResult<Option<MemTable>> {
     if add_action_batches.is_empty() {
         return Ok(None);
     }
@@ -497,10 +539,30 @@ pub(crate) fn add_actions_partition_mem_table(
     )?))
 }
 
-async fn scan_memory_table(snapshot: &EagerSnapshot, predicate: &Expr) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.log_data().iter().map(|f| f.to_add()).collect_vec();
+async fn scan_memory_table(
+    snapshot: &EagerSnapshot,
+    log_store: &dyn LogStore,
+    predicate: &Expr,
+) -> DeltaResult<Vec<Add>> {
+    let options = ActiveAddOptions {
+        predicate: None,
+        stats: AddStatsPolicy::None,
+    };
+    let add_action_batches = snapshot
+        .snapshot()
+        .active_add_batches(log_store, options)
+        .await?;
+    let actions: Vec<Add> = add_action_batches
+        .iter()
+        .flat_map(|batch| {
+            (0..batch.num_rows()).map(|idx| LogicalFileView::new(batch.clone(), idx).to_add())
+        })
+        .collect_vec();
 
-    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+    let partition_batches = snapshot
+        .snapshot()
+        .active_add_partition_batches_from(&add_action_batches)?;
+    let Some(mem_table) = add_actions_partition_mem_table_from_batches(partition_batches)? else {
         return Ok(vec![]);
     };
 
@@ -592,19 +654,12 @@ pub(crate) async fn scan_files_where_matches(
 
     // Create a table scan limited to the matched files by forwarding an explicit
     // file selection into the table provider.
-    let table_root = snapshot
-        .snapshot()
-        .scan_builder()
-        .build()?
-        .table_root()
-        .clone();
     let file_selection = FileSelection::from_file_paths(
         valid_files
             .iter()
             .flat_map(|arr| arr.iter().flatten().map(|v| v.to_string())),
-        &table_root,
-    )?
-    .with_missing_file_policy(MissingFilePolicy::Ignore);
+    )
+    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore);
     let selected_provider = DeltaScanNext::builder()
         .with_snapshot(snapshot.snapshot().clone())
         .with_file_skipping_predicates(file_skipping_predicates)
@@ -642,11 +697,49 @@ mod tests {
             DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
         },
         protocol::SaveMode,
-        test_utils::{TestResult, multibatch_add_actions_for_partition, open_fs_path},
+        test_utils::{
+            TestResult, multibatch_add_actions_for_partition,
+            object_store::{
+                drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
+            },
+            open_fs_path,
+        },
         writer::test_utils::{get_delta_schema, get_record_batch},
     };
 
     use super::*;
+
+    #[test]
+    fn extract_partition_only_predicate_returns_only_referenced_columns() {
+        let partition_columns = vec!["p0".to_string(), "p1".to_string()];
+
+        // Predicate references only `p0`: the result must reference `p0` alone, never
+        // the unreferenced `p1`. Including `p1` would force a per-file coercion of a
+        // column the predicate never reads and let a malformed/missing `p1` value
+        // silently disable pruning by failing open.
+        let (_predicate, referenced) =
+            extract_partition_only_predicate(col("p0").eq(lit(5_i32)), &partition_columns)
+                .unwrap()
+                .expect("a partition-only predicate");
+        assert_eq!(referenced, vec!["p0".to_string()]);
+
+        // A mixed partition + data predicate keeps only the partition-only conjunct,
+        // and still reports only the partition column it references.
+        let (_predicate, referenced) = extract_partition_only_predicate(
+            col("p0").eq(lit(5_i32)).and(col("data").gt(lit(3_i32))),
+            &partition_columns,
+        )
+        .unwrap()
+        .expect("the partition-only conjunct survives");
+        assert_eq!(referenced, vec!["p0".to_string()]);
+
+        // No partition-only term -> no pruning predicate at all.
+        assert!(
+            extract_partition_only_predicate(col("data").gt(lit(3_i32)), &partition_columns)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn test_scan_files_where_matches_plan_can_be_planned() -> TestResult {
@@ -718,12 +811,7 @@ mod tests {
         .await?;
         assert!(!by_id.is_empty());
         let expected_path = by_id[0].path.clone();
-        let table_root = snapshot
-            .snapshot()
-            .scan_builder()
-            .build()?
-            .table_root()
-            .clone();
+        let table_root = snapshot.snapshot().inner.table_root().clone();
         let expected_file_id = crate::delta_datafusion::normalize_path_as_file_id(
             &expected_path,
             &table_root,
@@ -978,7 +1066,12 @@ mod tests {
             .with_partition_columns(["modified"])
             .await?;
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(table.snapshot()?.snapshot(), &predicate).await?;
+        let matches = scan_memory_table(
+            table.snapshot()?.snapshot(),
+            table.log_store().as_ref(),
+            &predicate,
+        )
+        .await?;
         assert!(matches.is_empty());
         Ok(())
     }
@@ -998,10 +1091,86 @@ mod tests {
         let snapshot = table.snapshot()?.snapshot();
         let total_actions = snapshot.log_data().iter().count();
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, &predicate).await?;
+        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert!(!matches.is_empty());
         assert!(matches.len() < total_actions);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_filters_lazy_snapshot_without_materializing() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let log_store = table.log_store().clone();
+        let config = crate::DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+
+        assert!(!matches.is_empty());
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_scan_memory_table_replays_lazy_snapshot_once() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let config = crate::DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+        drain_recorded_ops(&mut operations).await;
+
+        snapshot
+            .snapshot()
+            .active_add_batches(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .await?;
+        let single_replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        let predicate = col("modified").eq(lit("2021-02-02"));
+        let matches = scan_memory_table(&snapshot, log_store.as_ref(), &predicate).await?;
+        let replay_reads = drain_recorded_ops(&mut operations)
+            .await
+            .into_iter()
+            .filter(|op| op.is_log_replay_read())
+            .count();
+
+        assert!(!matches.is_empty());
+        assert_eq!(replay_reads, single_replay_reads);
         Ok(())
     }
 
@@ -1033,7 +1202,7 @@ mod tests {
         );
 
         let predicate = col("modified").eq(lit("2021-02-02"));
-        let matches = scan_memory_table(snapshot, &predicate).await?;
+        let matches = scan_memory_table(snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert_eq!(matches.len(), expected_matches);
 
@@ -1046,26 +1215,6 @@ mod tests {
             .map(|idx| format!("modified=2021-02-02/file-{idx:05}.parquet"))
             .collect::<HashSet<_>>();
         assert_eq!(match_paths, expected_paths);
-        Ok(())
-    }
-
-    struct MockPartitionProvider {
-        batches: Vec<RecordBatch>,
-    }
-
-    impl PartitionAddActionsProvider for MockPartitionProvider {
-        fn add_actions_partition_batches(&self) -> DeltaResult<Vec<RecordBatch>> {
-            Ok(self.batches.clone())
-        }
-    }
-
-    #[test]
-    fn test_add_actions_partition_mem_table_accepts_generic_provider() -> DeltaResult<()> {
-        let provider = MockPartitionProvider {
-            batches: Vec::new(),
-        };
-        let mem_table = add_actions_partition_mem_table(&provider)?;
-        assert!(mem_table.is_none());
         Ok(())
     }
 }

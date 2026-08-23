@@ -75,7 +75,7 @@
 //! };
 //! ```
 
-// #![deny(missing_docs)]
+#![warn(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 #![allow(clippy::nonminimal_bool)]
 pub mod data_catalog;
@@ -88,6 +88,8 @@ pub mod protocol;
 pub use kernel::schema;
 pub mod table;
 
+/// Test fixtures and helpers (reference tables, env scoping, batch assertions) exposed for
+/// integration tests of this crate and downstream crates.
 #[cfg(any(test, feature = "integration_test"))]
 pub mod test_utils;
 
@@ -103,11 +105,11 @@ pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use self::table::DeltaTable;
 pub use self::table::builder::{
     DeltaTableBuilder, DeltaTableConfig, DeltaVersion, ensure_table_uri,
 };
 pub use self::table::config::TableProperty;
+pub use self::table::{BlindDeltaTable, DeltaTable};
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
 #[allow(deprecated)]
 pub use operations::DeltaOps;
@@ -181,11 +183,21 @@ pub async fn open_table_with_ds(
 
 static CLIENT_VERSION: OnceLock<String> = OnceLock::new();
 
+/// Record the client version reported by `crate_version`.
+///
+/// Bindings (such as the Python package) call this once at startup so that user agents and
+/// telemetry identify the embedding client rather than the bare core crate version. Subsequent
+/// calls after the first are ignored.
 pub fn init_client_version(version: &str) {
     let _ = CLIENT_VERSION.set(version.to_string());
 }
 
 /// Returns Rust core version or custom set client_version such as the py-binding
+///
+/// ```
+/// // Always returns a non-empty version string.
+/// assert!(!deltalake_core::crate_version().is_empty());
+/// ```
 pub fn crate_version() -> &'static str {
     CLIENT_VERSION
         .get()
@@ -196,21 +208,9 @@ pub fn crate_version() -> &'static str {
 /// Creates `DeltaTableBuilder` from verified table url.
 /// Will fail fast if specified `table_url` is a local path but doesn't exist.
 fn builder_from_valid_url(table_url: Url) -> Result<DeltaTableBuilder, DeltaTableError> {
-    if table_url.scheme() == "file" {
-        let p = table_url
-            .to_file_path()
-            .map_err(|_| DeltaTableError::InvalidTableLocation(table_url.as_str().to_string()))?;
+    let url = table::builder::parse_table_uri(table_url.as_str())?;
 
-        if !p.exists() {
-            let msg = format!(
-                "Local path \"{}\" does not exist or you don't have access!",
-                p.display(),
-            );
-            return Err(DeltaTableError::InvalidTableLocation(msg));
-        }
-    }
-
-    DeltaTableBuilder::from_url(table_url)
+    DeltaTableBuilder::from_url(url)
 }
 
 #[cfg(test)]
@@ -763,6 +763,40 @@ mod tests {
             error,
             DeltaTableError::InvalidTableLocation(_expected_error_msg),
         ))
+    }
+
+    #[test]
+    fn test_builder_from_valid_url_local_existing_path() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let table_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let table_url = Url::from_directory_path(table_path).unwrap();
+
+        let builder = builder_from_valid_url(table_url.clone()).unwrap();
+        let built = builder.build().unwrap();
+
+        assert_eq!(built.table_url(), &table_url);
+    }
+
+    #[test]
+    fn test_builder_from_valid_url_local_missing_path() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let missing_path = tmp_dir.path().join("missing-table");
+        assert!(!missing_path.exists());
+
+        let table_url = Url::from_directory_path(missing_path).unwrap();
+        let error = builder_from_valid_url(table_url).unwrap_err();
+
+        assert!(matches!(error, DeltaTableError::InvalidTableLocation(_)));
+    }
+
+    #[test]
+    fn test_builder_from_valid_url_remote_path() {
+        let table_url = Url::parse("memory:///table/path/").unwrap();
+
+        let builder = builder_from_valid_url(table_url.clone()).unwrap();
+        let built = builder.build().unwrap();
+
+        assert_eq!(built.table_url(), &table_url);
     }
 
     /// <https://github.com/delta-io/delta-rs/issues/2152>

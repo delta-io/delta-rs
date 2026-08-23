@@ -9,6 +9,10 @@ use percent_encoding::percent_decode_str;
 
 use crate::kernel::snapshot::iterators::get_string_value;
 
+/// A lightweight, cloneable view over a single tombstone (`Remove` action) row.
+///
+/// Rather than materializing a `Remove` struct, this borrows into the backing
+/// [`RecordBatch`] and decodes individual fields on demand.
 #[derive(Clone)]
 pub struct TombstoneView {
     data: RecordBatch,
@@ -30,6 +34,7 @@ impl TombstoneView {
         percent_decode_str(raw).decode_utf8_lossy()
     }
 
+    /// Returns the deletion timestamp (milliseconds since epoch), if recorded.
     pub fn deletion_timestamp(&self) -> Option<i64> {
         static FIELD_INDEX: LazyLock<usize> = LazyLock::new(|| {
             Remove::to_schema()
@@ -43,6 +48,7 @@ impl TombstoneView {
             .map(|a| a.value(self.index))
     }
 
+    /// Returns whether removing this file represents a data change (vs. a compaction-style rewrite).
     pub fn data_change(&self) -> bool {
         static FIELD_INDEX: LazyLock<usize> = LazyLock::new(|| {
             Remove::to_schema()
@@ -56,6 +62,7 @@ impl TombstoneView {
             .value(self.index)
     }
 
+    /// Returns the size of the removed file in bytes, if recorded.
     pub fn size(&self) -> Option<i64> {
         static FIELD_INDEX: LazyLock<usize> =
             LazyLock::new(|| Remove::to_schema().field_with_index("size").unwrap().0);

@@ -109,6 +109,7 @@ impl IORuntime {
 /// Wraps any object store and runs IO in it's own runtime [EXPERIMENTAL]
 #[derive(Clone)]
 pub struct DeltaIOStorageBackend<T: ObjectStore + Clone> {
+    /// The wrapped object store that performs the actual IO.
     pub inner: T,
     rt: IORuntime,
 }
@@ -117,6 +118,7 @@ impl<T> DeltaIOStorageBackend<T>
 where
     T: ObjectStore + Clone,
 {
+    /// Wrap `store` so that its IO operations are executed on the dedicated runtime `rt`.
     pub fn new(store: T, rt: IORuntime) -> Self {
         Self { inner: store, rt }
     }

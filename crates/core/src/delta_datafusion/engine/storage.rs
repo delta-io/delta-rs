@@ -5,11 +5,11 @@ use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
-use delta_kernel::engine::default::executor::tokio::{
+use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
-use delta_kernel::engine::default::filesystem::ObjectStoreStorageHandler;
-use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel_default_engine::filesystem::ObjectStoreStorageHandler;
 use itertools::Itertools;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
@@ -54,12 +54,10 @@ impl DataFusionStorageHandler {
             RuntimeFlavor::MultiThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioMultiThreadExecutor::new(self.handle.clone())),
-                None,
             )),
             RuntimeFlavor::CurrentThread => Arc::new(ObjectStoreStorageHandler::new(
                 store,
                 Arc::new(TokioBackgroundExecutor::new()),
-                None,
             )),
             _ => panic!("unsupported runtime flavor"),
         };
@@ -110,9 +108,15 @@ impl StorageHandler for DataFusionStorageHandler {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("head not implemented"))
     }
+    fn delete(&self, _: &Url) -> DeltaResult<()> {
+        todo!("delete is not implemented");
+    }
 }
 
+/// Conversion to a DataFusion [`ObjectStoreUrl`], the key used to register and look up an
+/// object store in a session's runtime environment.
 pub trait AsObjectStoreUrl {
+    /// Return the [`ObjectStoreUrl`] that identifies the object store backing `self`.
     fn as_object_store_url(&self) -> ObjectStoreUrl;
 }
 

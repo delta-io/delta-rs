@@ -48,12 +48,12 @@ use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use either::Either;
 
 use crate::delta_datafusion::expr::parse_predicate_expression;
-use crate::delta_datafusion::table_provider::DeltaScanWire;
+use crate::delta_datafusion::table_provider::{DeltaScan, DeltaScanWire};
 use crate::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, EagerSnapshot, LogDataHandler, Snapshot};
@@ -64,17 +64,19 @@ pub use self::session::{
     DeltaParserOptions, DeltaRuntimeEnvBuilder, DeltaSessionConfig, DeltaSessionContext,
     create_session, create_session_state_with_spill_config,
 };
-pub use self::table_provider::next::{DeletionVectorSelection, DeltaScan as DeltaScanNext};
+pub use self::table_provider::next::{
+    DeletionVectorSelection, DeltaScan as DeltaScanNext, FileSelection, MissingSelectedFilePolicy,
+};
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
+pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{
     DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
 };
 pub(crate) use find_files::*;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
-    DeltaScan, DeltaScanConfig, DeltaScanConfigBuilder, DeltaTableProvider, TableProviderBuilder,
-    next::DeltaScanExec,
+    DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
 };
 pub(crate) use table_provider::{
     next::FILE_ID_COLUMN_DEFAULT, resolve_file_column_name, update_datafusion_session,
@@ -85,7 +87,9 @@ pub(crate) const PATH_COLUMN: &str = "__delta_rs_path";
 #[doc(hidden)]
 pub mod bench_support;
 pub mod cdf;
+mod column_mapping;
 mod data_validation;
+/// DataFusion-backed kernel engine and its storage/format handlers.
 pub mod engine;
 pub mod expr;
 mod file_id;
@@ -267,9 +271,12 @@ pub(crate) fn files_matching_predicate<'a>(
     if let Some(Some(predicate)) =
         (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
     {
-        let expr = SessionContext::new()
-            .create_physical_expr(predicate, &log_data.read_schema().to_dfschema()?)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, log_data.read_schema())?;
+        let session: SessionContext = create_session().into();
+        let schema = log_data.read_schema();
+        let df_schema = Arc::new(schema.clone().to_dfschema()?);
+        let resolved = Expression::from(predicate).resolve(&session.state(), df_schema.clone())?;
+        let expr = session.create_physical_expr(resolved, &df_schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let mask = pruning_predicate.prune(&log_data)?;
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
@@ -437,25 +444,28 @@ pub(crate) fn to_correct_scalar_value(
     }
 }
 
-/// A codec for deltalake physical plans
+/// Legacy codec for serialized plans that still contain the retired physical
+/// [`DeltaScan`] wrapper.
+#[deprecated(
+    note = "DeltaPhysicalCodec only supports the retired physical DeltaScan wrapper. \
+            Use DeltaLogicalCodec for table-provider serialization until a DeltaScanExec \
+            physical codec is available."
+)]
 #[derive(Debug)]
 pub struct DeltaPhysicalCodec {}
 
+#[allow(deprecated)]
 impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_decode(
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &TaskContext,
+        _converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
-        let delta_scan = DeltaScan::new(
-            &wire.table_url,
-            wire.config,
-            (*inputs)[0].clone(),
-            wire.logical_schema,
-        );
+        let delta_scan = wire.into_delta_scan((*inputs)[0].clone());
         Ok(Arc::new(delta_scan))
     }
 
@@ -463,15 +473,16 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         &self,
         node: Arc<dyn ExecutionPlan>,
         buf: &mut Vec<u8>,
+        _converter: &dyn PhysicalProtoConverterExtension,
     ) -> Result<(), DataFusionError> {
         let delta_scan = node
-            .as_any()
             .downcast_ref::<DeltaScan>()
-            .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
+            .ok_or_else(|| DataFusionError::Internal("Not a legacy delta scan!".to_string()))?;
 
         let wire = DeltaScanWire::from(delta_scan);
-        serde_json::to_writer(buf, &wire)
-            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
+        serde_json::to_writer(buf, &wire).map_err(|_| {
+            DataFusionError::Internal("Unable to encode legacy delta scan!".to_string())
+        })?;
         Ok(())
     }
 }
@@ -512,13 +523,9 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
         node: Arc<dyn TableProvider>,
         buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let scan = node
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .ok_or_else(|| {
-                DataFusionError::Internal("Can't encode non-delta tables".to_string())
-            })?;
+        let scan = node.downcast_ref::<DeltaScanNext>().ok_or_else(|| {
+            DataFusionError::Internal("Can't encode non-delta tables".to_string())
+        })?;
         serde_json::to_writer(buf, scan)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
@@ -535,11 +542,15 @@ impl TableProviderFactory for DeltaTableFactory {
         ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let location = cmd
+            .locations
+            .get(0)
+            .expect("The command should have at least one location!");
         let table = if cmd.options.is_empty() {
-            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            let table_url = ensure_table_uri(&location)?;
             open_table(table_url).await?
         } else {
-            let table_url = ensure_table_uri(&cmd.to_owned().location)?;
+            let table_url = ensure_table_uri(&location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         let table_uri = table.log_store().root_url().clone();
@@ -610,6 +621,7 @@ mod tests {
     use crate::DeltaTable;
     use crate::operations::write::SchemaMode;
     use crate::test_utils::{
+        make_test_add,
         object_store::{
             RecordedObjectStoreOperation as ObjectStoreOperation, RecordedPathKind as PathKind,
             drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
@@ -619,16 +631,9 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
     use arrow::datatypes::{Field, Schema};
-    use arrow_array::cast::AsArray;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::config::TableParquetOptions;
-    use datafusion::datasource::physical_plan::{FileScanConfig, ParquetSource};
-    use datafusion::datasource::source::DataSourceExec;
-    use datafusion::logical_expr::lit;
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{ExecutionPlanVisitor, PhysicalExpr, visit_execution_plan};
-    use datafusion::prelude::{SessionConfig, col};
-    use datafusion_datasource::file::FileSource as _;
+    use datafusion::prelude::SessionConfig;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
@@ -639,7 +644,7 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingFilePolicy};
+    use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
@@ -715,6 +720,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn roundtrip_test_delta_exec_plan() {
         let ctx = SessionContext::new();
         let codec = DeltaPhysicalCodec {};
@@ -752,12 +758,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        let table_root = snapshot
-            .scan_builder()
-            .build()
-            .unwrap()
-            .table_root()
-            .clone();
+        let table_root = snapshot.inner.table_root().clone();
         let selected_file_ids: Vec<String> = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -773,8 +774,8 @@ mod tests {
             .await
             .unwrap()
             .with_file_selection(
-                FileSelection::new(selected_file_ids.clone())
-                    .with_missing_file_policy(MissingFilePolicy::Ignore),
+                FileSelection::from_file_paths(selected_file_ids.clone())
+                    .with_missing_file_policy(MissingSelectedFilePolicy::Ignore),
             );
 
         let codec = DeltaLogicalCodec {};
@@ -793,16 +794,12 @@ mod tests {
                 &ctx.task_ctx(),
             )
             .unwrap();
-        let decoded_provider = decoded
-            .as_ref()
-            .as_any()
-            .downcast_ref::<DeltaScanNext>()
-            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
 
         let serialized = serde_json::to_value(decoded_provider).unwrap();
         let decoded_file_ids = serialized
             .get("file_selection")
-            .and_then(|value| value.get("file_ids"))
+            .and_then(|value| value.get("paths"))
             .and_then(|value| value.as_array())
             .unwrap()
             .iter()
@@ -816,6 +813,121 @@ mod tests {
 
         assert_eq!(decoded_file_ids, selected_file_ids);
         assert_eq!(decoded_policy, "Ignore");
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_serializes_file_selection_adds_as_identity_only() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let mut add = make_test_add("part=a/part-000.parquet", &[("part", "a")], 123);
+        add.stats = Some(r#"{"numRecords":999}"#.to_string());
+        add.tags = Some(std::collections::HashMap::from([(
+            "secret-tag".to_string(),
+            Some("secret-value".to_string()),
+        )]));
+        add.size = 999;
+
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_adds([add]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("part=a/part-000.parquet"));
+        for forbidden in [
+            "partitionValues",
+            "numRecords",
+            "secret-tag",
+            "secret-value",
+            "modificationTime",
+            "\"size\"",
+        ] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "FileSelection::from_adds serialized Add metadata field {forbidden}: {file_selection_json}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_test_delta_logical_codec_strips_file_selection_url_credentials() {
+        let log_store = crate::test_utils::TestTables::Simple
+            .table_builder()
+            .unwrap()
+            .build_storage()
+            .unwrap();
+        let snapshot = Arc::new(
+            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+                .await
+                .unwrap(),
+        );
+        let provider = DeltaScanNext::builder()
+            .with_snapshot(snapshot)
+            .build()
+            .await
+            .unwrap()
+            .with_file_selection(FileSelection::from_file_paths([
+                "https://urluser:urlpassword@example.com/table/part.parquet?token=urltoken#frag",
+            ]));
+
+        let codec = DeltaLogicalCodec {};
+        let table_ref = TableReference::bare("delta_table");
+        let mut encoded = Vec::new();
+        codec
+            .try_encode_table_provider(&table_ref, Arc::new(provider), &mut encoded)
+            .unwrap();
+
+        let ctx = SessionContext::new();
+        let decoded = codec
+            .try_decode_table_provider(
+                &encoded,
+                &table_ref,
+                Arc::new(ArrowSchema::empty()),
+                &ctx.task_ctx(),
+            )
+            .unwrap();
+        let decoded_provider = decoded.downcast_ref::<DeltaScanNext>().unwrap();
+        let serialized = serde_json::to_value(decoded_provider).unwrap();
+        let file_selection = serialized.get("file_selection").unwrap();
+        let file_selection_json = serde_json::to_string(file_selection).unwrap();
+
+        assert!(file_selection_json.contains("https://example.com/table/part.parquet"));
+        for forbidden in ["urluser", "urlpassword", "urltoken", "frag"] {
+            assert!(
+                !file_selection_json.contains(forbidden),
+                "encoded file selection contains {forbidden}: {file_selection_json}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -946,16 +1058,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select ID, moDified, vaLue from test")
@@ -1039,16 +1144,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx.sql("select col_1, col_2 from test").await.unwrap();
         let actual = df.collect().await.unwrap();
@@ -1096,19 +1194,12 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
 
         let mut cfg = SessionConfig::default();
         cfg.options_mut().execution.parquet.pushdown_filters = true;
         let ctx = SessionContext::new_with_config(cfg);
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1, col_2 from test WHERE col_1 = 'A'")
@@ -1193,16 +1284,9 @@ mod tests {
             .await
             .unwrap();
 
-        let config = DeltaScanConfigBuilder::new()
-            .build(table.snapshot().unwrap().snapshot())
-            .unwrap();
-        let log = table.log_store();
-
-        let provider =
-            DeltaTableProvider::try_new(table.snapshot().unwrap().snapshot().clone(), log, config)
-                .unwrap();
+        let provider = table.table_provider().await.unwrap();
         let ctx: SessionContext = DeltaSessionContext::default().into();
-        ctx.register_table("test", Arc::new(provider)).unwrap();
+        ctx.register_table("test", provider).unwrap();
 
         let df = ctx
             .sql("select col_1.col_1a, col_1.col_1b from test")
@@ -1262,136 +1346,11 @@ mod tests {
             .unwrap();
 
         let df = datafusion
-            .sql("select * from snapshot where id > 10000 and id < 20000")
+            .sql(r#"select * from snapshot where "vaLue" > 10000 and "vaLue" < 20000"#)
             .await
             .unwrap();
 
         df.collect().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_builder_no_scan_config() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan = table_provider::DeltaScanBuilder::new(
-            table.snapshot().unwrap().snapshot(),
-            table.log_store(),
-            &state,
-        )
-        .with_filter(Some(col("a").eq(lit("s"))))
-        .build()
-        .await
-        .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(visitor.predicate.unwrap().to_string(), "a@0 = s");
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_builder_scan_config_disable_pushdown() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-        let ctx = SessionContext::new();
-        let state = ctx.state();
-        let scan =
-            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-                .with_filter(Some(col("a").eq(lit("s"))))
-                .with_scan_config(
-                    DeltaScanConfigBuilder::new()
-                        .with_parquet_pushdown(false)
-                        .build(snapshot.snapshot())
-                        .unwrap(),
-                )
-                .build()
-                .await
-                .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert!(visitor.predicate.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_delta_scan_applies_parquet_options() {
-        let arr: Arc<dyn Array> = Arc::new(arrow::array::StringArray::from(vec!["s"]));
-        let batch = RecordBatch::try_from_iter_with_nullable(vec![("a", arr, false)]).unwrap();
-        let table = DeltaTable::new_in_memory()
-            .write(vec![batch])
-            .with_save_mode(crate::protocol::SaveMode::Append)
-            .await
-            .unwrap();
-
-        let snapshot = table.snapshot().unwrap();
-
-        let mut config = SessionConfig::default();
-        config.options_mut().execution.parquet.pushdown_filters = true;
-        let ctx = SessionContext::new_with_config(config);
-        let state = ctx.state();
-
-        let scan =
-            table_provider::DeltaScanBuilder::new(snapshot.snapshot(), table.log_store(), &state)
-                .build()
-                .await
-                .unwrap();
-
-        let mut visitor = ParquetVisitor::default();
-        visit_execution_plan(&scan, &mut visitor).unwrap();
-
-        assert_eq!(ctx.copied_table_options().parquet, visitor.options.unwrap());
-    }
-
-    /// Extracts fields from the parquet scan
-    #[derive(Default)]
-    struct ParquetVisitor {
-        predicate: Option<Arc<dyn PhysicalExpr>>,
-        options: Option<TableParquetOptions>,
-    }
-
-    impl ExecutionPlanVisitor for ParquetVisitor {
-        type Error = DataFusionError;
-
-        fn pre_visit(&mut self, plan: &dyn ExecutionPlan) -> Result<bool, Self::Error> {
-            let Some(datasource_exec) = plan.as_any().downcast_ref::<DataSourceExec>() else {
-                return Ok(true);
-            };
-
-            let Some(scan_config) = datasource_exec
-                .data_source()
-                .as_any()
-                .downcast_ref::<FileScanConfig>()
-            else {
-                return Ok(true);
-            };
-
-            if let Some(parquet_source) = scan_config
-                .file_source
-                .as_any()
-                .downcast_ref::<ParquetSource>()
-            {
-                self.options = Some(parquet_source.table_parquet_options().clone());
-                self.predicate = parquet_source.filter();
-            }
-
-            Ok(true)
-        }
     }
 
     // Run a query that filters out all files and sorts.
@@ -1433,12 +1392,9 @@ mod tests {
             .unwrap();
 
         let (log_store, mut operations) = recording_log_store(table.log_store());
-        let provider = DeltaTableProvider::try_new(
-            table.snapshot().unwrap().snapshot().clone(),
-            log_store.clone(),
-            config,
-        )
-        .unwrap();
+        let provider = DeltaScanNext::new(table.snapshot().unwrap().snapshot().clone(), config)
+            .unwrap()
+            .with_log_store(log_store.clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(provider)).unwrap();
         let state = ctx.state();
@@ -1453,8 +1409,8 @@ mod tests {
         assert!(stream.next().await.is_none());
         assert_eq!(1, batch.num_columns());
         assert_eq!(1, batch.num_rows());
-        let small = batch.column_by_name("small").unwrap().as_string::<i32>();
-        assert_eq!("a", small.iter().next().unwrap().unwrap());
+        let small = ScalarValue::try_from_array(batch.column_by_name("small").unwrap(), 0).unwrap();
+        assert_eq!("a", small.to_string());
 
         let files = table.get_files_by_partitions(&[]).await.unwrap();
         assert_eq!(1, files.len());
@@ -1561,5 +1517,188 @@ mod tests {
 
         let _ = df.collect().await?;
         Ok(())
+    }
+
+    /// Tests that binary partition columns support equality pruning (= / IN predicates)
+    /// even though they do not support range pruning (< / > predicates).
+    ///
+    /// Resolves issue #1214.
+    #[tokio::test]
+    async fn test_files_matching_predicate_binary_partition_not_pruned() {
+        use crate::delta_datafusion::files_matching_predicate;
+        use arrow::array::BinaryArray;
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{col, lit};
+
+        // Write two files into separate binary partitions.
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("bin_part", ArrowDataType::Binary, true),
+        ]));
+
+        let batch_a = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"aaa".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let batch_b = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![2_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"bbb".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        // Two separate appends so each lands in its own partition file.
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Integer,
+                ),
+                true,
+                None,
+            )
+            .with_column(
+                "bin_part",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Binary,
+                ),
+                true,
+                None,
+            )
+            .with_partition_columns(["bin_part"])
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_a])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_b])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let log_data = snapshot.log_data();
+
+        // Without a predicate all files are returned.
+        let all_files: Vec<_> = files_matching_predicate(log_data.clone(), &[])
+            .unwrap()
+            .collect();
+        assert_eq!(all_files.len(), 2, "expected 2 files before pruning");
+
+        // Apply a predicate that selects only the "aaa" partition.
+        // `contained()` now handles binary exact-match pruning (issue #1214).
+        let predicate = col("bin_part").eq(lit(ScalarValue::Binary(Some(b"aaa".to_vec()))));
+        let kept_files: Vec<_> = files_matching_predicate(log_data.clone(), &[predicate])
+            .unwrap()
+            .collect();
+
+        assert_eq!(
+            kept_files.len(),
+            1,
+            "expected exactly the 'aaa' partition file to survive equality pruning"
+        );
+    }
+
+    /// Range predicates (`<`, `>`) on binary partition columns must NOT prune any files
+    /// because binary values have no natural ordering.  All files are conservatively kept.
+    #[tokio::test]
+    async fn test_files_matching_predicate_binary_partition_range_not_pruned() {
+        use crate::delta_datafusion::files_matching_predicate;
+        use arrow::array::BinaryArray;
+        use datafusion::common::ScalarValue;
+        use datafusion::logical_expr::{col, lit};
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Int32, true),
+            Field::new("bin_part", ArrowDataType::Binary, true),
+        ]));
+
+        let batch_a = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![1_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"aaa".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let batch_b = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![
+                Arc::new(arrow::array::Int32Array::from(vec![2_i32])) as Arc<dyn Array>,
+                Arc::new(BinaryArray::from_vec(vec![b"bbb".as_ref()])) as Arc<dyn Array>,
+            ],
+        )
+        .unwrap();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_column(
+                "id",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Integer,
+                ),
+                true,
+                None,
+            )
+            .with_column(
+                "bin_part",
+                delta_kernel::schema::DataType::Primitive(
+                    delta_kernel::schema::PrimitiveType::Binary,
+                ),
+                true,
+                None,
+            )
+            .with_partition_columns(["bin_part"])
+            .await
+            .unwrap();
+
+        let table = table
+            .write(vec![batch_a])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+        let table = table
+            .write(vec![batch_b])
+            .with_save_mode(crate::protocol::SaveMode::Append)
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot().clone();
+        let log_data = snapshot.log_data();
+
+        // A `>` predicate on a binary column must keep all files — there are no
+        // min/max stats for binary, so datafusion cannot eliminate any file.
+        let gt_pred = col("bin_part").gt(lit(ScalarValue::Binary(Some(b"aaa".to_vec()))));
+        let kept = files_matching_predicate(log_data.clone(), &[gt_pred])
+            .unwrap()
+            .count();
+        assert_eq!(
+            kept, 2,
+            "range predicate '>' on binary partition must not prune any files"
+        );
+
+        // Likewise for `<`.
+        let lt_pred = col("bin_part").lt(lit(ScalarValue::Binary(Some(b"bbb".to_vec()))));
+        let kept = files_matching_predicate(log_data.clone(), &[lt_pred])
+            .unwrap()
+            .count();
+        assert_eq!(
+            kept, 2,
+            "range predicate '<' on binary partition must not prune any files"
+        );
     }
 }

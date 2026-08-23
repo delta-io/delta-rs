@@ -203,6 +203,8 @@ pub const DEFAULT_NUM_INDEX_COLS: u64 = 32;
 /// Default target file size
 pub const DEFAULT_TARGET_FILE_SIZE: NonZeroU64 = NonZeroU64::new(100 * 1024 * 1024).unwrap();
 
+/// Convenience accessors for reading well-known Delta table properties with their defaults
+/// applied, layered on top of the raw [`TableProperties`] parsed from table metadata.
 pub trait TablePropertiesExt {
     /// true for this Delta table to be append-only. If append-only, existing records cannot be
     /// deleted, and existing values cannot be updated. See [append-only tables] in the protocol.
@@ -229,14 +231,19 @@ pub trait TablePropertiesExt {
     /// Number of columns to be indexed.
     fn num_indexed_cols(&self) -> DataSkippingNumIndexedCols;
 
+    /// Target size in bytes for data files produced by writes and compaction.
     fn target_file_size(&self) -> NonZero<u64>;
 
+    /// Whether the Change Data Feed is enabled for this table.
     fn enable_change_data_feed(&self) -> bool;
 
+    /// How long removed data files are retained before they may be physically deleted by vacuum.
     fn deleted_file_retention_duration(&self) -> Duration;
 
+    /// The isolation level used when checking for conflicts during commits.
     fn isolation_level(&self) -> IsolationLevel;
 
+    /// The list of constraints (e.g. CHECK constraints) declared on the table.
     fn get_constraints(&self) -> Vec<Constraint>;
 }
 

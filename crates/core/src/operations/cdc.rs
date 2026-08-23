@@ -13,7 +13,7 @@ use datafusion::prelude::*;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 
-/// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
+/// The CDCTracker is useful for hooking reads/writes in a manner necessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
     pre_dataframe: LogicalPlan,
@@ -321,8 +321,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
-        let _ = arrow::util::pretty::print_batches(&[updated_batch.clone()]);
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&batch));
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&updated_batch));
 
         let ctx = SessionContext::new();
         let before = ctx.read_batch(batch).expect("Failed to make DataFrame");

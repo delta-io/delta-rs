@@ -7,6 +7,12 @@ pub(crate) mod object_store;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
+#[cfg(test)]
+use delta_kernel::{
+    actions::{Metadata, Protocol},
+    schema::{ColumnMetadataKey, DataType, MetadataValue, StructField, StructType},
+    table_configuration::TableConfiguration,
+};
 use url::Url;
 
 pub use self::factories::*;
@@ -22,6 +28,7 @@ use crate::{DeltaResult, DeltaTableBuilder};
 #[cfg(test)]
 use futures::TryStreamExt;
 
+/// Convenient result type for tests, boxing any error so `?` works with heterogeneous errors.
 pub type TestResult<T = ()> = Result<T, Box<dyn std::error::Error + 'static>>;
 
 #[cfg(test)]
@@ -29,6 +36,59 @@ pub(crate) fn open_fs_path(path: &str) -> DeltaTable {
     let url =
         url::Url::from_directory_path(std::path::Path::new(path).canonicalize().unwrap()).unwrap();
     DeltaTableBuilder::from_url(url).unwrap().build().unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn build_test_table_configuration(
+    schema: StructType,
+    partition_columns: Vec<String>,
+    configuration: HashMap<String, String>,
+) -> TableConfiguration {
+    let metadata = Metadata::try_new(
+        None,
+        None,
+        std::sync::Arc::new(schema),
+        partition_columns,
+        0,
+        configuration,
+    )
+    .unwrap();
+    let protocol: Protocol = serde_json::from_value(serde_json::json!({
+        "minReaderVersion": 2,
+        "minWriterVersion": 5,
+    }))
+    .unwrap();
+    TableConfiguration::try_new(
+        metadata,
+        protocol,
+        Url::parse("file:///tmp/table").unwrap(),
+        0,
+    )
+    .unwrap()
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field_with_type(
+    name: &str,
+    physical_name: &str,
+    id: i64,
+    data_type: DataType,
+) -> StructField {
+    StructField::nullable(name, data_type).with_metadata([
+        (
+            ColumnMetadataKey::ColumnMappingId.as_ref(),
+            MetadataValue::Number(id),
+        ),
+        (
+            ColumnMetadataKey::ColumnMappingPhysicalName.as_ref(),
+            MetadataValue::String(physical_name.to_string()),
+        ),
+    ])
+}
+
+#[cfg(test)]
+pub(crate) fn column_mapping_test_field(name: &str, physical_name: &str, id: i64) -> StructField {
+    column_mapping_test_field_with_type(name, physical_name, id, DataType::INTEGER)
 }
 
 /// Internal test helper function to return the raw paths from every file view in the snapshot.
@@ -49,24 +109,38 @@ pub(crate) async fn file_paths_from(
 
 /// Reference tables from the test data folder
 pub enum TestTables {
+    /// The canonical `simple_table` fixture.
     Simple,
+    /// A simple table that includes a checkpoint.
     SimpleWithCheckpoint,
+    /// A table containing a Spark-written variant-type checkpoint.
+    SparkVariantCheckpoint,
+    /// A minimal table used for commit-related tests.
     SimpleCommit,
+    /// The "golden" reader fixture (data-reader-array-primitives).
     Golden,
+    /// A Delta 0.8.0 partitioned table.
     Delta0_8_0Partitioned,
+    /// A Delta 0.8.0 table with special characters in partition values.
     Delta0_8_0SpecialPartitioned,
+    /// A table with multiple checkpoints.
     Checkpoints,
+    /// A table whose latest version is not checkpointed.
     LatestNotCheckpointed,
+    /// A small table that uses deletion vectors.
     WithDvSmall,
+    /// A custom, caller-named table (path resolution is not provided).
     Custom(String),
 }
 
 impl TestTables {
+    /// Return the on-disk path of this fixture within the test data folder.
     pub fn as_path(&self) -> PathBuf {
         let data_path = find_git_root().join("crates/test/tests/data");
         match self {
             Self::Simple => data_path.join("simple_table"),
             Self::SimpleWithCheckpoint => data_path.join("simple_table_with_checkpoint"),
+            Self::SparkVariantCheckpoint => data_path.join("spark-variant-checkpoint"),
             Self::SimpleCommit => data_path.join("simple_commit"),
             Self::Golden => data_path.join("golden/data-reader-array-primitives"),
             Self::Delta0_8_0Partitioned => data_path.join("delta-0.8.0-partitioned"),
@@ -79,10 +153,12 @@ impl TestTables {
         }
     }
 
+    /// Return the canonical name of this fixture (used as a directory/table name).
     pub fn as_name(&self) -> String {
         match self {
             Self::Simple => "simple".into(),
             Self::SimpleWithCheckpoint => "simple_table_with_checkpoint".into(),
+            Self::SparkVariantCheckpoint => "spark-variant-checkpoint".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
@@ -94,6 +170,7 @@ impl TestTables {
         }
     }
 
+    /// Join this fixture's name onto `root_uri` to form a table URI.
     pub fn uri_for_table(&self, root_uri: impl AsRef<str>) -> String {
         let root_uri = root_uri.as_ref();
         if root_uri.ends_with('/') {
@@ -103,6 +180,7 @@ impl TestTables {
         }
     }
 
+    /// Build a [`DeltaTableBuilder`] pointed at this fixture's location.
     pub fn table_builder(&self) -> DeltaResult<DeltaTableBuilder> {
         let url = Url::from_directory_path(self.as_path()).map_err(|_| {
             crate::DeltaTableError::InvalidTableLocation(
@@ -156,6 +234,10 @@ pub fn with_env(vars: Vec<(&str, &str)>) -> impl Drop {
     EnvCleanup(original_values)
 }
 
+/// Assert that two collections of record batches are equal after sorting their data rows.
+///
+/// The header and footer lines of the pretty-printed output are left in place; only the data
+/// rows are sorted, making the comparison order-insensitive for test assertions.
 #[macro_export]
 macro_rules! assert_batches_sorted_eq {
     ($EXPECTED_LINES: expr, $CHUNKS: expr) => {

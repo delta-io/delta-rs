@@ -32,6 +32,7 @@ use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
+use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -52,7 +53,7 @@ use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
 };
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
@@ -415,6 +416,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+                return Err(DeltaTableError::unsupported_column_mapping(
+                    ColumnMappingOperation::Write,
+                    "OPTIMIZE",
+                ));
+            }
             PROTOCOL.can_write_to(&snapshot)?;
 
             let operation_id = this.get_operation_id();
@@ -640,7 +647,7 @@ impl SelectedFileScanFactory {
         } else {
             provider
         };
-        provider.with_selected_adds(adds)
+        Ok(provider.with_adds(adds))
     }
 }
 
@@ -693,6 +700,7 @@ impl MergePlan {
             } else {
                 Some(task_parameters.input_parameters.target_size)
             },
+            None,
             None,
             None,
         )?;
@@ -1191,12 +1199,13 @@ async fn build_compaction_plan(
     filters: &[PartitionFilter],
     target_size: NonZeroU64,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
+    type PartitionFileEntry = (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>);
+
     let mut metrics = Metrics::default();
     let mut planner_stats = PlannerStats::preserve_locality();
-    let mut partition_files: HashMap<
-        String,
-        (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>),
-    > = HashMap::new();
+    let mut partition_files: HashMap<String, PartitionFileEntry> = HashMap::new();
+    let partition_columns = snapshot.metadata().partition_columns();
+    let table_schema = snapshot.schema();
 
     let predicate = if filters.is_empty() {
         None
@@ -1214,16 +1223,8 @@ async fn build_compaction_plan(
         let file = file?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&file)?;
-        let partition_values = file
-            .partition_values()
-            .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let partition_values =
+            file.full_partition_values(partition_columns, table_schema.as_ref())?;
         let partition_path = partition_values.hive_partition_path();
         let entry = partition_files
             .entry(partition_path)
@@ -1335,6 +1336,7 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
+    let table_schema = snapshot.schema();
 
     let predicate = if filters.is_empty() {
         None
@@ -1348,16 +1350,7 @@ async fn build_zorder_plan(
     let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
-        let partition_values = file
-            .partition_values()
-            .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let partition_values = file.full_partition_values(partition_keys, table_schema.as_ref())?;
         metrics.total_considered_files += 1;
         partition_files
             .entry(partition_values.hive_partition_path())
@@ -1366,6 +1359,7 @@ async fn build_zorder_plan(
             .add(file.to_add());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
+    metrics.partitions_optimized = partition_files.len() as u64;
 
     let max_bin_span_files = partition_files
         .values()
@@ -1538,7 +1532,6 @@ pub(super) mod zorder {
         use ::datafusion::prelude::SessionContext;
         use arrow_schema::DataType;
         use itertools::Itertools;
-        use std::any::Any;
 
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
 
@@ -1567,10 +1560,6 @@ pub(super) mod zorder {
         pub struct ZOrderUDF;
 
         impl ScalarUDFImpl for ZOrderUDF {
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-
             fn name(&self) -> &str {
                 ZORDER_UDF_NAME
             }
@@ -1628,7 +1617,7 @@ pub(super) mod zorder {
             use arrow_ord::sort::sort_to_indices;
             use arrow_schema::Field;
             use arrow_select::take::take;
-            use rand::{Rng, RngExt};
+            use rand::RngExt;
 
             #[test]
             fn test_order() {

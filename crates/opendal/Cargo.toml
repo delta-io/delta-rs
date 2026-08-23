@@ -1,0 +1,53 @@
+[package]
+name = "deltalake-opendal"
+version = "1.0.0"
+authors.workspace = true
+keywords.workspace = true
+readme.workspace = true
+edition.workspace = true
+homepage.workspace = true
+description = "Generic OpenDAL storage backend for delta-rs"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deltalake-core = { version = "1.0", path = "../core", default-features = false }
+object_store_opendal = { version = "0.56", default-features = false }
+opendal = { version = "0.56", default-features = false, features = ["executors-tokio"] }
+object_store = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile = { workspace = true }
+arrow-array = { workspace = true }
+arrow-schema = { workspace = true }
+
+[features]
+default = ["rustls", "opendal-fs", "opendal-memory"]
+native-tls = ["deltalake-core/native-tls", "rustls"]
+rustls = ["deltalake-core/rustls", "opendal/reqwest-rustls-tls"]
+# Per-service OpenDAL backends. The lightweight local services (`opendal-fs`,
+# `opendal-memory`) are on by default; cloud backends are opt-in. Enabling a
+# service auto-registers its scheme via `register_handlers`.
+opendal-fs = ["opendal/services-fs"]
+opendal-memory = ["opendal/services-memory"]
+opendal-s3 = ["opendal/services-s3"]
+opendal-gcs = ["opendal/services-gcs"]
+opendal-azblob = ["opendal/services-azblob"]
+opendal-azdls = ["opendal/services-azdls"]
+opendal-oss = ["opendal/services-oss"]
+opendal-obs = ["opendal/services-obs"]
+opendal-cos = ["opendal/services-cos"]
+opendal-tos = ["opendal/services-tos"]
+opendal-b2 = ["opendal/services-b2"]
+opendal-swift = ["opendal/services-swift"]
+opendal-webhdfs = ["opendal/services-webhdfs"]
+opendal-webdav = ["opendal/services-webdav"]
+opendal-ftp = ["opendal/services-ftp"]
+opendal-sftp = ["opendal/services-sftp"]
+opendal-hf = ["opendal/services-hf"]

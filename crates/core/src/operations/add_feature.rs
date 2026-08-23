@@ -9,7 +9,9 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, ProtocolExt as _, TableFeatures, resolve_snapshot};
+use crate::kernel::{
+    Action, EagerSnapshot, ProtocolExt as _, SnapshotMetadataRef, TableFeatures, resolve_snapshot,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -83,6 +85,43 @@ impl AddTableFeatureBuilder {
     }
 }
 
+fn plan_add_table_feature_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    name: &[TableFeatures],
+    allow_protocol_versions_increase: bool,
+) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
+    debug_assert!(!name.is_empty());
+
+    let (reader_features, writer_features): (Vec<Option<TableFeature>>, Vec<Option<TableFeature>>) =
+        name.iter().map(|v| v.to_reader_writer_features()).unzip();
+    let reader_features = reader_features.into_iter().flatten().collect_vec();
+    let writer_features = writer_features.into_iter().flatten().collect_vec();
+
+    let mut protocol = snapshot.protocol.clone();
+
+    if !allow_protocol_versions_increase {
+        if !reader_features.is_empty()
+            && !writer_features.is_empty()
+            && !(protocol.min_reader_version() == 3 && protocol.min_writer_version() == 7)
+        {
+            return Err(DeltaTableError::Generic("Table feature enables reader and writer feature, but reader is not v3, and writer not v7. Set allow_protocol_versions_increase or increase versions explicitly through set_tbl_properties".to_string()));
+        } else if !reader_features.is_empty() && protocol.min_reader_version() < 3 {
+            return Err(DeltaTableError::Generic("Table feature enables reader feature, but min_reader is not v3. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
+        } else if !writer_features.is_empty() && protocol.min_writer_version() < 7 {
+            return Err(DeltaTableError::Generic("Table feature enables writer feature, but min_writer is not v7. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
+        }
+    }
+
+    protocol = protocol.append_reader_features(&reader_features);
+    protocol = protocol.append_writer_features(&writer_features);
+
+    let operation = DeltaOperation::AddFeature {
+        name: name.to_vec(),
+    };
+
+    Ok((vec![protocol.into()], operation))
+}
+
 impl std::future::IntoFuture for AddTableFeatureBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -95,44 +134,17 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
-            let name = if this.name.is_empty() {
+            if this.name.is_empty() {
                 return Err(DeltaTableError::Generic("No features provided".to_string()));
-            } else {
-                &this.name
-            };
+            }
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let (reader_features, writer_features): (
-                Vec<Option<TableFeature>>,
-                Vec<Option<TableFeature>>,
-            ) = name.iter().map(|v| v.to_reader_writer_features()).unzip();
-            let reader_features = reader_features.into_iter().flatten().collect_vec();
-            let writer_features = writer_features.into_iter().flatten().collect_vec();
-
-            let mut protocol = snapshot.protocol().clone();
-
-            if !this.allow_protocol_versions_increase {
-                if !reader_features.is_empty()
-                    && !writer_features.is_empty()
-                    && !(protocol.min_reader_version() == 3 && protocol.min_writer_version() == 7)
-                {
-                    return Err(DeltaTableError::Generic("Table feature enables reader and writer feature, but reader is not v3, and writer not v7. Set allow_protocol_versions_increase or increase versions explicitly through set_tbl_properties".to_string()));
-                } else if !reader_features.is_empty() && protocol.min_reader_version() < 3 {
-                    return Err(DeltaTableError::Generic("Table feature enables reader feature, but min_reader is not v3. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
-                } else if !writer_features.is_empty() && protocol.min_writer_version() < 7 {
-                    return Err(DeltaTableError::Generic("Table feature enables writer feature, but min_writer is not v7. Set allow_protocol_versions_increase or increase version explicitly through set_tbl_properties".to_string()));
-                }
-            }
-
-            protocol = protocol.append_reader_features(&reader_features);
-            protocol = protocol.append_writer_features(&writer_features);
-
-            let operation = DeltaOperation::AddFeature {
-                name: name.to_vec(),
-            };
-
-            let actions = vec![protocol.into()];
+            let (actions, operation) = plan_add_table_feature_actions(
+                snapshot.snapshot().metadata_state(),
+                &this.name,
+                this.allow_protocol_versions_increase,
+            )?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions)

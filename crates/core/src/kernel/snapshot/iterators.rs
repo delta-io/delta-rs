@@ -12,18 +12,22 @@ use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
+#[cfg(any(test, feature = "datafusion"))]
+use indexmap::IndexMap;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
 
 #[cfg(feature = "datafusion")]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
+pub use self::tombstones::TombstoneView;
+#[cfg(any(test, feature = "datafusion"))]
+use crate::kernel::StructType;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
 
 pub(crate) use self::scan_row::{ScanRowOutStream, scan_row_in_eval};
-pub use self::tombstones::TombstoneView;
 
 mod scan_row;
 mod tombstones;
@@ -33,6 +37,7 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
 const FIELD_NAME_RAW_PARTITION_VALUES: &str = "partitionValues";
+const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
 const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
@@ -118,6 +123,7 @@ impl LogicalFileView {
     }
 
     /// Returns the raw file path as stored in the log, without URL decoding.
+    #[cfg(any(test, feature = "datafusion"))]
     pub(crate) fn path_raw(&self) -> &str {
         get_string_value(
             self.files
@@ -168,11 +174,17 @@ impl LogicalFileView {
 
     /// Returns the raw JSON statistics string for this file, if available.
     pub fn stats(&self) -> Option<String> {
-        let stats = self.stats_parsed()?.slice(self.index, 1);
-        let value = to_json(&stats)
-            .ok()
-            .map(|arr| arr.as_string::<i32>().value(0).to_string());
-        value.and_then(|v| (!v.is_empty()).then_some(v))
+        self.files
+            .column_by_name(FIELD_NAME_STATS)
+            .and_then(|col| get_string_value(col, self.index))
+            .map(ToString::to_string)
+            .or_else(|| {
+                let stats = self.stats_parsed()?.slice(self.index, 1);
+                let value = to_json(&stats)
+                    .ok()
+                    .map(|arr| arr.as_string::<i32>().value(0).to_string());
+                value.and_then(|v| (!v.is_empty()).then_some(v))
+            })
     }
 
     /// Returns the parsed partition values as structured data.
@@ -204,11 +216,25 @@ impl LogicalFileView {
     ///
     /// This preserves all partition columns even when `partitionValues_parsed` was narrowed to the
     /// predicate-referenced subset for data skipping.
-    fn partition_values_map(&self) -> HashMap<String, Option<String>> {
+    pub fn partition_values_map(&self) -> HashMap<String, Option<String>> {
         self.raw_partition_values()
             .filter(|partitions| partitions.is_valid(self.index))
             .and_then(|partitions| collect_string_map(&partitions.value(self.index)))
             .unwrap_or_default()
+    }
+
+    /// Builds the complete typed partition tuple in table metadata order.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn full_partition_values(
+        &self,
+        partition_columns: &[String],
+        table_schema: &StructType,
+    ) -> DeltaResult<IndexMap<String, Scalar>> {
+        typed_partition_values_from_raw_map(
+            &self.partition_values_map(),
+            partition_columns,
+            table_schema,
+        )
     }
 
     /// Returns the parsed statistics as a StructArray, if available.
@@ -333,17 +359,54 @@ impl LogicalFileView {
     }
 }
 
+#[cfg(any(test, feature = "datafusion"))]
+fn typed_partition_values_from_raw_map(
+    raw_partition_values: &HashMap<String, Option<String>>,
+    partition_columns: &[String],
+    table_schema: &StructType,
+) -> DeltaResult<IndexMap<String, Scalar>> {
+    let mut partition_values = IndexMap::with_capacity(partition_columns.len());
+
+    for column in partition_columns {
+        let field = table_schema
+            .field(column)
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("Partition column '{column}' is not present in table schema"),
+            })?;
+        let primitive_type = field.data_type().as_primitive_opt().ok_or_else(|| {
+            DeltaTableError::SchemaMismatch {
+                msg: format!("Partition column '{column}' is not a primitive type"),
+            }
+        })?;
+        let scalar = match raw_partition_values.get(column) {
+            Some(Some(raw)) => primitive_type.parse_scalar(raw.as_str())?,
+            Some(None) => Scalar::Null(field.data_type().clone()),
+            None => {
+                return Err(DeltaTableError::SchemaMismatch {
+                    msg: format!(
+                        "Add action for optimized file is missing partition value for '{column}'"
+                    ),
+                });
+            }
+        };
+
+        partition_values.insert(column.clone(), scalar);
+    }
+
+    Ok(partition_values)
+}
+
 /// Rounds up timestamp values to handle microsecond truncation in checkpoint statistics.
 ///
 /// When delta.checkpoint.writeStatsAsStruct is enabled, microsecond timestamps are
 /// truncated to milliseconds. This function rounds up by 1ms to ensure correct
 /// range queries when stats are parsed on-the-fly.
-fn ceil_datetime(v: i64) -> i64 {
-    let remainder = v % 1000;
+fn ceil_datetime(v: i64, ratio: i64) -> i64 {
+    let remainder = v % ratio;
     if remainder == 0 {
         // if nanoseconds precision remainder is 0, we assume it was truncated
         // else we use the exact stats
-        ((v as f64 / 1000.0).floor() as i64 + 1) * 1000
+        ((v as f64 / ratio as f64).floor() as i64 + 1) * ratio
     } else {
         v
     }
@@ -352,11 +415,15 @@ fn ceil_datetime(v: i64) -> i64 {
 /// Recursively applies a rounding function to timestamp values in scalar data.
 fn round_ms_datetimes<F>(value: Scalar, func: &F) -> Scalar
 where
-    F: Fn(i64) -> i64,
+    F: Fn(i64, i64) -> i64,
 {
     match value {
-        Scalar::Timestamp(v) => Scalar::Timestamp(func(v)),
-        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v)),
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanos(v) => Scalar::TimestampNanos(func(v, 1_000_000)),
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanosNtz(v) => Scalar::TimestampNanosNtz(func(v, 1_000_000)),
+        Scalar::Timestamp(v) => Scalar::Timestamp(func(v, 1_000)),
+        Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v, 1_000)),
         Scalar::Struct(struct_data) => {
             let mut fields = Vec::with_capacity(struct_data.fields().len());
             let mut scalars = Vec::with_capacity(struct_data.values().len());
@@ -493,8 +560,216 @@ impl TryFrom<&LogicalFileView> for ObjectMeta {
 mod tests {
     use super::*;
     use crate::test_utils::TestTables;
+    use arrow::array::{ArrayRef, Int64Array, new_null_array};
     use chrono::DateTime;
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+    use delta_kernel::scan::scan_row_schema;
     use futures::TryStreamExt;
+    use std::sync::Arc;
+
+    fn logical_file_view_with_stats(
+        raw_stats_json: Option<&str>,
+        stats_parsed: StructArray,
+    ) -> LogicalFileView {
+        let base_schema: arrow_schema::Schema =
+            scan_row_schema().as_ref().try_into_arrow().unwrap();
+        let mut columns: Vec<ArrayRef> = base_schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 1))
+            .collect();
+        columns[base_schema.index_of("path").unwrap()] =
+            Arc::new(StringArray::from(vec![Some("part-000.parquet")]));
+        columns[base_schema.index_of("size").unwrap()] = Arc::new(Int64Array::from(vec![1]));
+        columns[base_schema.index_of("modificationTime").unwrap()] =
+            Arc::new(Int64Array::from(vec![1]));
+        columns[base_schema.index_of("stats").unwrap()] =
+            Arc::new(StringArray::from(vec![raw_stats_json]));
+
+        let mut fields = base_schema.fields().to_vec();
+        fields.push(Arc::new(arrow_schema::Field::new(
+            "stats_parsed",
+            stats_parsed.data_type().to_owned(),
+            true,
+        )));
+        columns.push(Arc::new(stats_parsed));
+
+        let batch =
+            RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), columns).unwrap();
+        LogicalFileView::new(batch, 0)
+    }
+
+    fn logical_file_view_with_partial_stats(full_stats_json: &str) -> LogicalFileView {
+        let partial_stats = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "numRecords",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+        )]);
+
+        logical_file_view_with_stats(Some(full_stats_json), partial_stats)
+    }
+
+    fn logical_file_view_without_raw_stats() -> LogicalFileView {
+        let min_values = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+        )]);
+        let max_values = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(9)])) as ArrayRef,
+        )]);
+        let null_count = StructArray::from(vec![(
+            Arc::new(arrow_schema::Field::new(
+                "value",
+                ArrowDataType::Int64,
+                true,
+            )),
+            Arc::new(Int64Array::from(vec![Some(0)])) as ArrayRef,
+        )]);
+        let full_stats = StructArray::from(vec![
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "numRecords",
+                    ArrowDataType::Int64,
+                    true,
+                )),
+                Arc::new(Int64Array::from(vec![Some(11)])) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "minValues",
+                    min_values.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(min_values) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "maxValues",
+                    max_values.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(max_values) as ArrayRef,
+            ),
+            (
+                Arc::new(arrow_schema::Field::new(
+                    "nullCount",
+                    null_count.data_type().to_owned(),
+                    true,
+                )),
+                Arc::new(null_count) as ArrayRef,
+            ),
+        ]);
+
+        logical_file_view_with_stats(None, full_stats)
+    }
+
+    fn partition_identity_schema() -> StructType {
+        StructType::try_new([
+            crate::kernel::StructField::nullable("part_b", DataType::STRING),
+            crate::kernel::StructField::nullable("part_a", DataType::LONG),
+            crate::kernel::StructField::nullable("part_c", DataType::STRING),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_preserves_metadata_order_and_parses_values() {
+        let raw_partition_values = HashMap::from([
+            ("part_a".to_string(), Some("42".to_string())),
+            ("part_b".to_string(), Some("x".to_string())),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_values.keys().cloned().collect::<Vec<_>>(),
+            partition_columns
+        );
+        assert_eq!(
+            partition_values.get("part_b"),
+            Some(&Scalar::String("x".to_string()))
+        );
+        assert_eq!(partition_values.get("part_a"), Some(&Scalar::Long(42)));
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_preserves_typed_nulls() {
+        let raw_partition_values = HashMap::from([
+            ("part_b".to_string(), Some("x".to_string())),
+            ("part_a".to_string(), None),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_values.get("part_a"),
+            Some(&Scalar::Null(DataType::LONG))
+        );
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_errors_on_missing_partition_column() {
+        let raw_partition_values = HashMap::from([("part_b".to_string(), Some("x".to_string()))]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let error = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing partition value for 'part_a'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_ignores_extra_raw_partition_keys() {
+        let raw_partition_values = HashMap::from([
+            ("part_a".to_string(), Some("42".to_string())),
+            ("part_b".to_string(), Some("x".to_string())),
+            ("part_c".to_string(), Some("extra".to_string())),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(partition_values.len(), 2);
+        assert!(!partition_values.contains_key("part_c"));
+    }
 
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
@@ -585,14 +860,20 @@ mod tests {
 
     #[test]
     fn test_ceil_datetime() {
+        // Microseconds
         // Test exact millisecond (should be rounded up)
-        assert_eq!(ceil_datetime(1609459200000), 1609459201000);
+        assert_eq!(ceil_datetime(1609459200000, 1000), 1609459201000);
 
         // Test with microsecond remainder (should stay the same)
-        assert_eq!(ceil_datetime(1609459200123), 1609459200123);
+        assert_eq!(ceil_datetime(1609459200123, 1000), 1609459200123);
 
         // Test zero
-        assert_eq!(ceil_datetime(0), 1000);
+        assert_eq!(ceil_datetime(0, 1000), 1000);
+
+        // Nanoseconds
+        assert_eq!(ceil_datetime(1609459200000000, 1000000), 1609459201000000);
+        assert_eq!(ceil_datetime(1609459200000123, 1000000), 1609459200000123);
+        assert_eq!(ceil_datetime(0, 1000000), 1000000);
     }
 
     #[test]
@@ -600,7 +881,7 @@ mod tests {
         use delta_kernel::expressions::{Scalar, StructData};
         use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 
-        let ceil_fn = |v: i64| v + 1000;
+        let ceil_fn = |v: i64, ratio: i64| v + ratio;
 
         // Test timestamp scalar
         let timestamp = Scalar::Timestamp(1609459200000);
@@ -611,6 +892,17 @@ mod tests {
         let timestamp_ntz = Scalar::TimestampNtz(1609459200000);
         let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
         assert_eq!(rounded, Scalar::TimestampNtz(1609459201000));
+
+        #[cfg(feature = "nanosecond-timestamps")]
+        {
+            let timestamp = Scalar::TimestampNanos(1609459200000000);
+            let rounded = round_ms_datetimes(timestamp, &ceil_fn);
+            assert_eq!(rounded, Scalar::TimestampNanos(1609459201000000));
+
+            let timestamp_ntz = Scalar::TimestampNanosNtz(1609459200000000);
+            let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
+            assert_eq!(rounded, Scalar::TimestampNanosNtz(1609459201000000));
+        }
 
         // Test non-timestamp scalar (should be unchanged)
         let string_scalar = Scalar::String("test".into());
@@ -646,5 +938,43 @@ mod tests {
         let valid_timestamp = 1609459200000; // 2021-01-01
         let result = DateTime::from_timestamp_millis(valid_timestamp);
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn logical_file_view_stats_prefers_raw_stats_json() {
+        let full_stats_json = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let view = logical_file_view_with_partial_stats(full_stats_json);
+
+        assert_eq!(view.stats().as_deref(), Some(full_stats_json));
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn logical_file_view_add_action_preserves_full_stats_when_stats_parsed_is_partial() {
+        let full_stats_json = r#"{"maxValues":{"value":9},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":1}}"#;
+        let view = logical_file_view_with_partial_stats(full_stats_json);
+
+        assert_eq!(view.add_action().stats.as_deref(), Some(full_stats_json));
+        assert_eq!(view.num_records(), Some(11));
+        assert!(view.min_values().is_none());
+    }
+
+    #[test]
+    fn logical_file_view_stats_falls_back_to_parsed_stats_when_raw_is_missing() {
+        let view = logical_file_view_without_raw_stats();
+        let stats = view
+            .stats()
+            .expect("stats fallback should rebuild JSON from stats_parsed");
+        let actual: serde_json::Value = serde_json::from_str(&stats).unwrap();
+
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "numRecords": 11,
+                "minValues": {"value": 1},
+                "maxValues": {"value": 9},
+                "nullCount": {"value": 0}
+            })
+        );
     }
 }

@@ -22,6 +22,7 @@
 //! Utility functions for Datafusion's Expressions
 use std::fmt::{self, Display, Error, Formatter, Write};
 use std::marker::PhantomData;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use arrow_array::{Array, GenericListArray};
@@ -37,19 +38,28 @@ use datafusion::functions_nested::planner::{FieldAccessPlanner, NestedFunctionPl
 use datafusion::logical_expr::expr::InList;
 use datafusion::logical_expr::planner::ExprPlanner;
 use datafusion::logical_expr::{
-    AggregateUDF, Between, BinaryExpr, Cast, Expr, Like, ScalarFunctionArgs, TableSource,
+    AggregateUDF, Between, BinaryExpr, Cast, Expr, HigherOrderUDF, Like, ScalarFunctionArgs,
+    TableSource,
 };
 // Needed for MakeParquetArray
 use datafusion::functions::core::planner::CoreFunctionPlanner;
-use datafusion::logical_expr::{ColumnarValue, Documentation, ScalarUDF, ScalarUDFImpl, Signature};
+use datafusion::logical_expr::{
+    ColumnarValue, Documentation, ExprSchemable, ScalarUDF, ScalarUDFImpl, Signature,
+};
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
 use datafusion::sql::sqlparser::ast::escape_quoted_string;
+use datafusion::sql::sqlparser::ast::{
+    Expr as SqlExpr, Function, FunctionArg, FunctionArgExpr, FunctionArgumentList,
+    FunctionArguments, Ident, ObjectName, ObjectNamePart, Value, VisitMut, VisitorMut,
+};
 use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
+use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use tracing::log::*;
 
 use crate::delta_datafusion::session::DeltaParserOptions;
+use crate::table::GeneratedColumn;
 use crate::{DeltaResult, DeltaTableError};
 
 /// This struct is like Datafusion's MakeArray but ensures that `element` is used rather than `item
@@ -71,10 +81,6 @@ impl MakeParquetArray {
 }
 
 impl ScalarUDFImpl for MakeParquetArray {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "make_parquet_array"
     }
@@ -204,7 +210,7 @@ impl<'a> DeltaContextProvider<'a> {
             crate::delta_datafusion::SessionFallbackPolicy::DeriveFromTrait,
             || SessionStateBuilder::new().with_default_features().build(),
             crate::delta_datafusion::SessionResolveContext {
-                operation: "parse_predicate_expression",
+                operation: "parse_sql_expression",
                 table_uri: None,
                 cdc: false,
             },
@@ -235,6 +241,10 @@ impl ContextProvider for DeltaContextProvider<'_> {
         self.state.scalar_functions().get(name).cloned()
     }
 
+    fn get_higher_order_meta(&self, name: &str) -> Option<Arc<HigherOrderUDF>> {
+        self.state.higher_order_functions().get(name).cloned()
+    }
+
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.state.aggregate_functions().get(name).cloned()
     }
@@ -255,6 +265,14 @@ impl ContextProvider for DeltaContextProvider<'_> {
         self.state.scalar_functions().keys().cloned().collect()
     }
 
+    fn higher_order_function_names(&self) -> Vec<String> {
+        self.state
+            .higher_order_functions()
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     fn udaf_names(&self) -> Vec<String> {
         self.state.aggregate_functions().keys().cloned().collect()
     }
@@ -270,6 +288,10 @@ pub fn parse_predicate_expression(
     expr: impl AsRef<str>,
     session: &dyn Session,
 ) -> DeltaResult<Expr> {
+    sql_expr_to_df_expr(session, schema, parse_sql_expr(expr)?)
+}
+
+fn parse_sql_expr(expr: impl AsRef<str>) -> DeltaResult<SqlExpr> {
     let dialect = &GenericDialect {};
     let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
     let tokens = tokenizer
@@ -277,18 +299,156 @@ pub fn parse_predicate_expression(
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
         })?;
-    let sql = Parser::new(dialect)
+    Parser::new(dialect)
         .with_tokens(tokens)
         .parse_expr()
         .map_err(|err| DeltaTableError::GenericError {
             source: Box::new(err),
-        })?;
+        })
+}
 
+fn sql_expr_to_df_expr(
+    session: &dyn Session,
+    schema: &DFSchema,
+    sql: SqlExpr,
+) -> DeltaResult<Expr> {
     let context_provider = DeltaContextProvider::try_new(session)?;
     let sql_to_rel =
         SqlToRel::new_with_options(&context_provider, DeltaParserOptions::default().into());
 
     Ok(sql_to_rel.sql_to_expr(sql, schema, &mut Default::default())?)
+}
+
+const SUPPORTED_SPARK_TRUNC_UNITS: &[(&str, &str)] = &[
+    ("YEAR", "year"),
+    ("YYYY", "year"),
+    ("YY", "year"),
+    ("QUARTER", "quarter"),
+    ("MONTH", "month"),
+    ("MON", "month"),
+    ("MM", "month"),
+    ("WEEK", "week"),
+];
+
+struct SparkGeneratedColumnExprRewrite;
+
+impl SparkGeneratedColumnExprRewrite {
+    fn normalize_trunc_unit(unit: &str) -> DeltaResult<&'static str> {
+        match SUPPORTED_SPARK_TRUNC_UNITS
+            .iter()
+            .find(|(alias, _)| alias.eq_ignore_ascii_case(unit))
+        {
+            Some((_, normalized)) => Ok(*normalized),
+            None => {
+                let supported_units = SUPPORTED_SPARK_TRUNC_UNITS
+                    .iter()
+                    .map(|(alias, _)| *alias)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(DeltaTableError::generic(format!(
+                    "Unsupported Spark generated column TRUNC unit '{unit}'. Supported units: {supported_units}"
+                )))
+            }
+        }
+    }
+
+    fn is_trunc(function: &Function) -> bool {
+        // Generated column metadata uses builtin Spark names directly.
+        // Qualified calls are left unchanged.
+        function.name.0.len() == 1
+            && function.name.0[0]
+                .as_ident()
+                .is_some_and(|ident| ident.value.eq_ignore_ascii_case("trunc"))
+    }
+
+    fn truncate_args(function: &Function) -> Option<(&SqlExpr, &str)> {
+        let FunctionArguments::List(FunctionArgumentList { args, .. }) = &function.args else {
+            return None;
+        };
+        if args.len() != 2 {
+            return None;
+        }
+
+        let FunctionArg::Unnamed(FunctionArgExpr::Expr(expr)) = &args[0] else {
+            return None;
+        };
+        let FunctionArg::Unnamed(FunctionArgExpr::Expr(SqlExpr::Value(value))) = &args[1] else {
+            return None;
+        };
+
+        match &value.value {
+            Value::SingleQuotedString(unit) | Value::TripleSingleQuotedString(unit) => {
+                Some((expr, unit.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    fn rewrite_date_trunc(expr: &SqlExpr, unit: &str) -> DeltaResult<SqlExpr> {
+        let normalized = Self::normalize_trunc_unit(unit)?;
+        Ok(SqlExpr::Function(Function {
+            name: ObjectName(vec![ObjectNamePart::Identifier(Ident::new("date_trunc"))]),
+            uses_odbc_syntax: false,
+            parameters: FunctionArguments::None,
+            args: FunctionArguments::List(FunctionArgumentList {
+                duplicate_treatment: None,
+                args: vec![
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SqlExpr::Value(
+                        Value::SingleQuotedString(normalized.to_string()).into(),
+                    ))),
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(expr.clone())),
+                ],
+                clauses: vec![],
+            }),
+            filter: None,
+            null_treatment: None,
+            over: None,
+            within_group: vec![],
+        }))
+    }
+}
+
+impl VisitorMut for SparkGeneratedColumnExprRewrite {
+    type Break = DeltaTableError;
+
+    fn post_visit_expr(&mut self, expr: &mut SqlExpr) -> ControlFlow<Self::Break> {
+        let SqlExpr::Function(function) = expr else {
+            return ControlFlow::Continue(());
+        };
+        if !Self::is_trunc(function) {
+            return ControlFlow::Continue(());
+        }
+        let Some((arg_expr, unit)) = Self::truncate_args(function) else {
+            return ControlFlow::Continue(());
+        };
+
+        match Self::rewrite_date_trunc(arg_expr, unit) {
+            Ok(rewritten) => {
+                *expr = rewritten;
+                ControlFlow::Continue(())
+            }
+            Err(err) => ControlFlow::Break(err),
+        }
+    }
+}
+
+/// Delta metadata expressions use Spark SQL.
+/// Generated columns need a small rewrite before DataFusion plans them.
+pub(crate) fn parse_generated_column_expression(
+    schema: &DFSchema,
+    generated_col: &GeneratedColumn,
+    session: &dyn Session,
+) -> DeltaResult<Expr> {
+    let mut sql = parse_sql_expr(generated_col.get_generation_expression())?;
+    match sql.visit(&mut SparkGeneratedColumnExprRewrite) {
+        ControlFlow::Continue(()) => {}
+        ControlFlow::Break(err) => return Err(err),
+    }
+
+    let expr = sql_expr_to_df_expr(session, schema, sql)?;
+    let expected = (&generated_col.data_type).try_into_arrow()?;
+
+    Ok(expr.cast_to(&expected, schema)?)
 }
 
 struct SqlFormat<'a> {
@@ -373,7 +533,8 @@ impl Display for SqlFormat<'_> {
             Expr::IsNotUnknown(expr) => write!(f, "{} IS NOT UNKNOWN", SqlFormat { expr }),
             Expr::BinaryExpr(expr) => write!(f, "{}", BinaryExprFormat { expr }),
             Expr::ScalarFunction(func) => fmt_function(f, func.func.name(), false, &func.args),
-            Expr::Cast(Cast { expr, data_type }) => {
+            Expr::Cast(Cast { expr, field }) => {
+                let data_type = field.data_type();
                 write!(f, "arrow_cast({}, '{data_type}')", SqlFormat { expr })
             }
             Expr::Between(Between {
@@ -537,6 +698,32 @@ impl fmt::Display for ScalarValueFormat<'_> {
                 )?,
                 None => write!(f, "NULL")?,
             },
+            #[cfg(feature = "nanosecond-timestamps")]
+            ScalarValue::TimestampNanosecond(e, tz) => match e {
+                Some(e) => match tz {
+                    Some(_tz) => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Nanosecond, Some(\"UTC\"))')",
+                        DateTime::from_timestamp(
+                            e.div_euclid(1_000_000_000),
+                            e.rem_euclid(1_000_000_000) as u32
+                        )
+                        .ok_or(Error)?
+                        .format("%Y-%m-%dT%H:%M:%S%.9f")
+                    )?,
+                    None => write!(
+                        f,
+                        "arrow_cast('{}', 'Timestamp(Nanosecond, None)')",
+                        DateTime::from_timestamp(
+                            e.div_euclid(1_000_000_000),
+                            e.rem_euclid(1_000_000_000) as u32
+                        )
+                        .ok_or(Error)?
+                        .format("%Y-%m-%dT%H:%M:%S%.9f")
+                    )?,
+                },
+                None => write!(f, "NULL")?,
+            },
             ScalarValue::TimestampMicrosecond(e, tz) => match e {
                 Some(e) => match tz {
                     Some(_tz) => write!(
@@ -585,7 +772,7 @@ impl fmt::Display for ScalarValueFormat<'_> {
 
 #[cfg(test)]
 mod test {
-    use arrow_schema::DataType as ArrowDataType;
+    use arrow_schema::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
     use datafusion::common::{Column, DFSchema, ScalarValue, ToDFSchema};
     use datafusion::execution::SessionStateBuilder;
     use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -603,9 +790,11 @@ mod test {
     use crate::delta_datafusion::planner::DeltaPlanner;
     use crate::delta_datafusion::{DataFusionMixins, DeltaSessionContext};
     use crate::kernel::{ArrayType, DataType, PrimitiveType, StructField, StructType};
+    use crate::table::GeneratedColumn;
     use crate::test_utils::datafusion::{WrapperSession, make_test_scalar_udf};
 
     use super::fmt_expr_to_sql;
+    use super::parse_generated_column_expression;
     use super::parse_predicate_expression;
 
     const TEST_UDF_NAME: &str = "delta_rs_parse_expr_test_udf";
@@ -666,6 +855,18 @@ mod test {
             StructField::new(
                 "_date".to_string(),
                 DataType::Primitive(PrimitiveType::Date),
+                true,
+            ),
+            #[cfg(feature = "nanosecond-timestamps")]
+            StructField::new(
+                "_timestamp_nanos".to_string(),
+                DataType::Primitive(PrimitiveType::TimestampNanos),
+                true,
+            ),
+            #[cfg(feature = "nanosecond-timestamps")]
+            StructField::new(
+                "_timestamp_nanos_ntz".to_string(),
+                DataType::Primitive(PrimitiveType::TimestampNanosNtz),
                 true,
             ),
             StructField::new(
@@ -758,6 +959,131 @@ mod test {
         );
     }
 
+    #[test]
+    fn parse_generated_column_expression_rewrites_quoted_spark_trunc() {
+        let session = SessionContext::new();
+        let schema = DFSchema::try_from(ArrowSchema::new(vec![ArrowField::new(
+            "event_date",
+            ArrowDataType::Date32,
+            false,
+        )]))
+        .unwrap();
+
+        let generated_col = GeneratedColumn::new(
+            "event_year",
+            "\"TRUNC\"(event_date, 'YEAR')",
+            &DataType::DATE,
+        );
+
+        let expr =
+            parse_generated_column_expression(&schema, &generated_col, &session.state()).unwrap();
+        assert_eq!(
+            fmt_expr_to_sql(&expr).unwrap(),
+            "arrow_cast(date_trunc('year', event_date), 'Date32')"
+        );
+    }
+
+    #[test]
+    fn parse_generated_column_expression_normalizes_supported_spark_trunc_aliases() {
+        let session = SessionContext::new();
+        let schema = DFSchema::try_from(ArrowSchema::new(vec![ArrowField::new(
+            "event_date",
+            ArrowDataType::Date32,
+            false,
+        )]))
+        .unwrap();
+
+        for (unit, normalized) in [
+            ("YEAR", "year"),
+            ("YYYY", "year"),
+            ("YY", "year"),
+            ("year", "year"),
+            ("QUARTER", "quarter"),
+            ("MONTH", "month"),
+            ("MON", "month"),
+            ("MM", "month"),
+            ("mOn", "month"),
+            ("WEEK", "week"),
+        ] {
+            let generated_col = GeneratedColumn::new(
+                "event_period",
+                &format!("TRUNC(event_date, '{unit}')"),
+                &DataType::DATE,
+            );
+
+            let expr = parse_generated_column_expression(&schema, &generated_col, &session.state())
+                .unwrap();
+            assert_eq!(
+                fmt_expr_to_sql(&expr).unwrap(),
+                format!("arrow_cast(date_trunc('{normalized}', event_date), 'Date32')"),
+                "unit {unit} normalized unexpectedly",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_generated_column_expression_preserves_numeric_trunc() {
+        let session = SessionContext::new();
+        let schema = DFSchema::try_from(ArrowSchema::new(vec![ArrowField::new(
+            "amount",
+            ArrowDataType::Float64,
+            false,
+        )]))
+        .unwrap();
+
+        let generated_col =
+            GeneratedColumn::new("amount_trunc", "TRUNC(amount, 2)", &DataType::DOUBLE);
+
+        let expr =
+            parse_generated_column_expression(&schema, &generated_col, &session.state()).unwrap();
+        assert_eq!(fmt_expr_to_sql(&expr).unwrap(), "trunc(amount, 2)");
+    }
+
+    #[test]
+    fn parse_generated_column_expression_rejects_unsupported_spark_trunc_unit() {
+        let session = SessionContext::new();
+        let schema = DFSchema::try_from(ArrowSchema::new(vec![ArrowField::new(
+            "event_date",
+            ArrowDataType::Date32,
+            false,
+        )]))
+        .unwrap();
+
+        let generated_col =
+            GeneratedColumn::new("event_year", "TRUNC(event_date, 'DAY')", &DataType::DATE);
+
+        let err = parse_generated_column_expression(&schema, &generated_col, &session.state())
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unsupported Spark generated column TRUNC unit 'DAY'")
+        );
+    }
+
+    #[test]
+    fn parse_generated_column_expression_rewrites_nested_spark_trunc() {
+        let session = SessionContext::new();
+        let schema = DFSchema::try_from(ArrowSchema::new(vec![ArrowField::new(
+            "event_date",
+            ArrowDataType::Date32,
+            false,
+        )]))
+        .unwrap();
+
+        let generated_col = GeneratedColumn::new(
+            "event_month_or_date",
+            "coalesce(TRUNC(event_date, 'MONTH'), event_date)",
+            &DataType::DATE,
+        );
+
+        let expr =
+            parse_generated_column_expression(&schema, &generated_col, &session.state()).unwrap();
+        assert_eq!(
+            fmt_expr_to_sql(&expr).unwrap(),
+            "arrow_cast(coalesce(date_trunc('month', event_date), event_date), 'Date32')"
+        );
+    }
+
     #[tokio::test]
     async fn test_expr_sql() {
         let table = setup_table().await;
@@ -765,10 +1091,7 @@ mod test {
         // String expression that we output must be parsable for conflict resolution.
         let tests = vec![
             ParseTest {
-                expr: Expr::Cast(Cast {
-                    expr: Box::new(lit(1_i64)),
-                    data_type: ArrowDataType::Int32
-                }),
+                expr: Expr::Cast(Cast::new(Box::new(lit(1_i64)), ArrowDataType::Int32)),
                 expected: "arrow_cast(1, 'Int32')".to_string(),
                 override_expected_expr: Some(
                     datafusion::logical_expr::Expr::ScalarFunction(
@@ -959,28 +1282,62 @@ mod test {
                     )
                 )),
             },
+            #[cfg(feature = "nanosecond-timestamps")]
+            ParseTest {
+                expr: col("_timestamp_nanos").gt(lit(ScalarValue::TimestampNanosecond(
+                    Some(1262304000000000123),
+                    Some("UTC".into())
+                ))),
+                expected: "_timestamp_nanos > arrow_cast('2010-01-01T00:00:00.000000123', 'Timestamp(Nanosecond, Some(\"UTC\"))')".to_string(),
+                override_expected_expr: Some(col("_timestamp_nanos").gt(
+                    datafusion::logical_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: arrow_cast(),
+                            args: vec![
+                                lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000123".into()))),
+                                lit(ScalarValue::Utf8(Some("Timestamp(Nanosecond, Some(\"UTC\"))".into())))
+                            ]
+                        }
+                    )
+                )),
+            },
+            #[cfg(feature = "nanosecond-timestamps")]
+            ParseTest {
+                expr: col("_timestamp_nanos_ntz").gt(lit(ScalarValue::TimestampNanosecond(
+                    Some(1262304000000000123),
+                    None
+                ))),
+                expected: "_timestamp_nanos_ntz > arrow_cast('2010-01-01T00:00:00.000000123', 'Timestamp(Nanosecond, None)')".to_string(),
+                override_expected_expr: Some(col("_timestamp_nanos_ntz").gt(
+                    datafusion::logical_expr::Expr::ScalarFunction(
+                        ScalarFunction {
+                            func: arrow_cast(),
+                            args: vec![
+                                lit(ScalarValue::Utf8(Some("2010-01-01T00:00:00.000000123".into()))),
+                                lit(ScalarValue::Utf8(Some("Timestamp(Nanosecond, None)".into())))
+                            ]
+                        }
+                    )
+                )),
+            },
             ParseTest {
                 expr: col("_date").eq(lit(ScalarValue::Date32(Some(18262)))),
                 expected: "_date = '2020-01-01'::date".to_string(),
                 override_expected_expr: Some(col("_date").eq(
-                    Expr::Cast(
-                        Cast {
-                            expr: Box::from(lit("2020-01-01")),
-                            data_type: arrow_schema::DataType::Date32
-                        }
-                    )
+                    Expr::Cast(Cast::new(
+                        Box::from(lit("2020-01-01")),
+                        arrow_schema::DataType::Date32
+                    ))
                 )),
             },
             ParseTest {
                 expr: col("_decimal").eq(lit(ScalarValue::Decimal128(Some(1),2,2))),
                 expected: "_decimal = '1'::decimal(2, 2)".to_string(),
                 override_expected_expr: Some(col("_decimal").eq(
-                    Expr::Cast(
-                        Cast {
-                            expr: Box::from(lit("1")),
-                            data_type: arrow_schema::DataType::Decimal128(2, 2)
-                        }
-                    )
+                    Expr::Cast(Cast::new(
+                        Box::from(lit("1")),
+                        arrow_schema::DataType::Decimal128(2, 2)
+                    ))
                 )),
             },
         ];

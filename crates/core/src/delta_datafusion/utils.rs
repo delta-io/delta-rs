@@ -29,15 +29,16 @@ impl Expression {
         // Coerce literal types to match schema column types for parsed string predicates
         let expr = coerce_predicate_literals(expr, schema.as_ref())?;
         let execution_props = session.execution_props();
-        let context = SimplifyContext::default()
+        let context = SimplifyContext::builder()
             .with_schema(schema)
-            .with_query_execution_start_time(execution_props.query_execution_start_time.clone())
+            .with_query_execution_start_time(execution_props.query_execution_start_time)
             .with_config_options(
                 execution_props
                     .config_options()
                     .cloned()
                     .unwrap_or_else(|| session.config().options().clone()),
-            );
+            )
+            .build();
         let simplifier = ExprSimplifier::new(context);
         simplifier.simplify(expr)
     }

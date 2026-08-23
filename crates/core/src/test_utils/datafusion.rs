@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::Session as DataFusionSession;
+use datafusion::catalog::CatalogProviderList;
+use datafusion::catalog::{EmptyCatalogProviderList, Session as DataFusionSession};
 use datafusion::common::{DFSchema, DataFusionError, ScalarValue};
 use datafusion::config::TableOptions;
 use datafusion::error::Result as DataFusionResult;
@@ -11,9 +12,10 @@ use datafusion::execution::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::session_state::SessionState;
 use datafusion::logical_expr::execution_props::ExecutionProps;
+use datafusion::logical_expr::registry::ExtensionTypeRegistryRef;
 use datafusion::logical_expr::{
-    AggregateUDF, ColumnarValue, Expr, LogicalPlan, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, TypeSignature, Volatility, WindowUDF,
+    AggregateUDF, ColumnarValue, Expr, HigherOrderUDF, LogicalPlan, ScalarFunctionArgs, ScalarUDF,
+    ScalarUDFImpl, Signature, TypeSignature, Volatility, WindowUDF,
 };
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
@@ -29,10 +31,6 @@ struct TestScalarUdf {
 }
 
 impl ScalarUDFImpl for TestScalarUdf {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.name
     }
@@ -81,6 +79,10 @@ impl WrapperSession {
 
 #[async_trait]
 impl DataFusionSession for WrapperSession {
+    fn catalog_list(&self) -> Arc<dyn CatalogProviderList> {
+        Arc::new(EmptyCatalogProviderList)
+    }
+
     fn session_id(&self) -> &str {
         DataFusionSession::session_id(&self.inner)
     }
@@ -114,12 +116,20 @@ impl DataFusionSession for WrapperSession {
         DataFusionSession::scalar_functions(&self.inner)
     }
 
+    fn higher_order_functions(&self) -> &HashMap<String, Arc<HigherOrderUDF>> {
+        DataFusionSession::higher_order_functions(&self.inner)
+    }
+
     fn aggregate_functions(&self) -> &HashMap<String, Arc<AggregateUDF>> {
         DataFusionSession::aggregate_functions(&self.inner)
     }
 
     fn window_functions(&self) -> &HashMap<String, Arc<WindowUDF>> {
         DataFusionSession::window_functions(&self.inner)
+    }
+
+    fn extension_type_registry(&self) -> &ExtensionTypeRegistryRef {
+        DataFusionSession::extension_type_registry(&self.inner)
     }
 
     fn runtime_env(&self) -> &Arc<RuntimeEnv> {

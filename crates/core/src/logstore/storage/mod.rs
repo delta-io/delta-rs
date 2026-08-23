@@ -23,6 +23,8 @@ static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"
 /// Sharable reference to [`ObjectStore`]
 pub type ObjectStoreRef = Arc<DynObjectStore>;
 
+/// A registry mapping URLs to [`ObjectStore`] instances, supporting registration and lookup
+/// (with optional lazy, ad-hoc discovery on miss).
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
@@ -52,6 +54,7 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
+    /// Create an empty registry with no stores registered.
     pub fn new() -> Self {
         let object_stores: DashMap<Url, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }

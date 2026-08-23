@@ -18,24 +18,26 @@
 //!     .await?;
 //! ````
 
+use futures::future::BoxFuture;
+use futures::prelude::*;
+use itertools::Itertools;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::{
     catalog::Session,
     common::{Column, ScalarValue, ToDFSchema as _, exec_datafusion_err},
     error::DataFusionError,
-    execution::context::SessionState,
     logical_expr::{
-        Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode, case, col, lit, when,
+        ExprSchemable as _, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+        case, cast, col, lit, try_cast, when,
     },
     physical_plan::{ExecutionPlan, metrics::MetricBuilder},
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
-use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
-use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
@@ -64,7 +66,7 @@ use crate::{
         resolve_session_state,
     },
     kernel::{
-        Action, EagerSnapshot,
+        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -235,7 +237,8 @@ impl ExtensionPlanner for UpdateMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && metric_observer.id.eq(UPDATE_COUNT_ID)
@@ -279,6 +282,7 @@ async fn execute(
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
     operation_id: Uuid,
+    safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -343,10 +347,20 @@ async fn execute(
         .into_iter()
         .map(|field| {
             let expr = match updates.get(field.name()) {
-                Some(expr) => case(col(UPDATE_PREDICATE_COLNAME))
-                    .when(lit(true), expr.to_owned())
-                    .otherwise(col(Column::from_name(field.name())))?
-                    .alias(field.name()),
+                Some(expr) => {
+                    let target_type = field.data_type().clone();
+                    let update_expr = if expr.get_type(plan_with_metrics.schema())? == target_type {
+                        expr.to_owned()
+                    } else if safe_cast {
+                        try_cast(expr.to_owned(), target_type)
+                    } else {
+                        cast(expr.to_owned(), target_type)
+                    };
+                    case(col(UPDATE_PREDICATE_COLNAME))
+                        .when(lit(true), update_expr)
+                        .otherwise(col(Column::from_name(field.name())))?
+                        .alias(field.name())
+                }
                 None => col(Column::from_name(field.name())),
             };
             Ok::<_, DataFusionError>(expr)
@@ -384,7 +398,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),
@@ -495,6 +516,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 &state,
                 this.writer_properties,
                 operation_id,
+                this.safe_cast,
             )
             .await?;
 

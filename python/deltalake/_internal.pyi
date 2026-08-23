@@ -28,6 +28,9 @@ if TYPE_CHECKING:
         WriterProperties,
     )
 __version__: str
+_NANOSECOND_TIMESTAMPS: bool
+
+def _set_cast_nanos_timestamps_to_micros(cast: bool) -> None: ...
 
 class TableFeatures(Enum):
     # Mapping of one column to another
@@ -56,6 +59,10 @@ class TableFeatures(Enum):
     DomainMetadata = "DomainMetadata"
     # Iceberg compatibility support
     IcebergCompatV1 = "IcebergCompatV1"
+    # Variant type support
+    VariantType = "VariantType"
+    # Preview variant type support
+    VariantTypePreview = "VariantTypePreview"
 
 class RawDeltaTableMetaData:
     id: int
@@ -165,6 +172,12 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
+    def drop_column_not_null(
+        self,
+        column_name: str,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
+    ) -> None: ...
     def set_table_properties(
         self,
         properties: dict[str, str],
@@ -192,7 +205,7 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...
-    def history(self, limit: int | None) -> list[str]: ...
+    def history(self, limit: int | None) -> tuple[int, list[str]]: ...
     def update_incremental(self) -> None: ...
     def dataset_partitions(
         self,
@@ -376,7 +389,27 @@ class PyMergeBuilder:
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
-DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
+DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType", "VariantType"]
+
+class VariantType:
+    """The Delta VARIANT datatype, represented as the unshredded `variant` logical type."""
+
+    def __init__(self) -> None: ...
+    type: Literal["variant"]
+
+    def to_json(self) -> str: ...
+    @staticmethod
+    def from_json(json: str) -> VariantType: ...
+    def to_arrow(self) -> ArrowDataType: ...
+    @staticmethod
+    def from_arrow(type: ArrowSchemaExportable) -> VariantType: ...
+    def __arrow_c_schema__(self) -> object:
+        """
+        An implementation of the [Arrow PyCapsule
+        Interface](https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
+        This dunder method should not be called directly, but enables zero-copy data
+        transfer to other Python libraries that understand Arrow memory.
+        """
 
 class PrimitiveType:
     """A primitive datatype, such as a string or number.

@@ -19,6 +19,8 @@ use crate::delta_datafusion::planner::DeltaPlanner;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::logstore::LogStore;
 
+/// Create a default [`DeltaSessionContext`], a DataFusion session pre-configured with the
+/// settings delta-rs relies on (custom planner, object-store registration, etc.).
 pub fn create_session() -> DeltaSessionContext {
     DeltaSessionContext::default()
 }
@@ -304,24 +306,29 @@ pub struct DeltaRuntimeEnvBuilder {
 }
 
 impl DeltaRuntimeEnvBuilder {
+    /// Create a new builder with DataFusion's default runtime settings.
     pub fn new() -> Self {
         Self {
             inner: RuntimeEnvBuilder::new(),
         }
     }
 
+    /// Cap in-memory usage by installing a [`FairSpillPool`] of `size` bytes, allowing
+    /// operators to spill to disk once the budget is exhausted.
     pub fn with_max_spill_size(mut self, size: usize) -> Self {
         let memory_pool = FairSpillPool::new(size);
         self.inner = self.inner.with_memory_pool(Arc::new(memory_pool));
         self
     }
 
+    /// Limit the total bytes the disk manager may use for temporary spill files to `size`.
     pub fn with_max_temp_directory_size(mut self, size: u64) -> Self {
         let disk_manager = DiskManagerBuilder::default().with_max_temp_directory_size(size);
         self.inner = self.inner.with_disk_manager_builder(disk_manager);
         self
     }
 
+    /// Finalize the configuration and build the shared [`RuntimeEnv`].
     pub fn build(self) -> Arc<RuntimeEnv> {
         self.inner.build_arc().unwrap()
     }
@@ -362,10 +369,12 @@ impl DeltaSessionContext {
         Self { inner }
     }
 
+    /// Consume the wrapper and return the underlying DataFusion [`SessionContext`].
     pub fn into_inner(self) -> SessionContext {
         self.inner
     }
 
+    /// Return a snapshot of the underlying [`SessionState`] for planning or execution.
     pub fn state(&self) -> SessionState {
         self.inner.state()
     }

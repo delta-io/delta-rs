@@ -19,7 +19,7 @@ use crate::kernel::Add;
 pub fn commit_uri_from_version(version: Option<Version>) -> Path {
     if let Some(version) = version {
         let version = format!("{version:020}.json");
-        super::DELTA_LOG_PATH.child(version.as_str())
+        super::DELTA_LOG_PATH.clone().join(version.as_str())
     } else {
         /*
          * Currently there are some situations where we're relying on negative versions for silly
@@ -27,7 +27,7 @@ pub fn commit_uri_from_version(version: Option<Version>) -> Path {
          */
         let version = -1;
         let version = format!("{version:020}.json");
-        super::DELTA_LOG_PATH.child(version.as_str())
+        super::DELTA_LOG_PATH.clone().join(version.as_str())
     }
 }
 

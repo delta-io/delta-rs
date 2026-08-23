@@ -16,7 +16,10 @@ use datafusion_ffi::table_provider::FFI_TableProvider;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::arrow::{
+    self,
+    datatypes::{DataType as ArrowDataType, Schema as ArrowSchema},
+};
 use deltalake::checkpoints::{cleanup_metadata, create_checkpoint};
 use deltalake::datafusion::catalog::TableProvider;
 use deltalake::datafusion::datasource::provider_as_source;
@@ -36,7 +39,8 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, LogicalFileView, MetadataExt as _, Transaction, Version,
+    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Transaction,
+    Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -59,8 +63,10 @@ use deltalake::{DeltaResult, DeltaTable, DeltaTableBuilder, init_client_version}
 use futures::TryStreamExt;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::pybacked::PyBackedStr;
-use pyo3::types::{PyCapsule, PyDict, PyFrozenSet, PyModule};
-use pyo3::{IntoPyObjectExt, prelude::*};
+use pyo3::types::{
+    IntoPyDict, PyCapsule, PyDict, PyFrozenSet, PyMapping, PyMappingMethods, PyModule, PyTuple,
+};
+use pyo3::{Borrowed, IntoPyObjectExt, prelude::*};
 use pyo3_arrow::export::{Arro3RecordBatchReader, Arro3Table};
 use pyo3_arrow::{PyRecordBatchReader, PySchema as PyArrowSchema, PyTable};
 use schema::PySchema;
@@ -89,12 +95,22 @@ use crate::utils::rt;
 use crate::writer::to_lazy_table;
 
 #[global_allocator]
-#[cfg(all(target_family = "unix", not(target_os = "emscripten")))]
-static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+#[cfg(all(
+    target_family = "unix",
+    not(target_os = "emscripten"),
+    not(target_os = "freebsd")
+))]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 #[global_allocator]
 #[cfg(any(not(target_family = "unix"), target_os = "emscripten"))]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+// On FreeBSD, neither jemallocator nor mimalloc is set as global allocator.
+// jemallocator fails its dlsym(RTLD_NEXT, "pthread_create") init under
+// FreeBSD's threading model (see python/Cargo.toml comment). The Rust
+// system allocator is used by default; FreeBSD's libc malloc is
+// jemalloc-derived already, so there is no performance regression.
 
 #[derive(FromPyObject)]
 enum PartitionFilterValue {
@@ -123,7 +139,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 53;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 54;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
@@ -1032,6 +1048,36 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    #[pyo3(signature = (column_name, commit_properties=None, post_commithook_properties=None))]
+    pub fn drop_column_not_null(
+        &self,
+        py: Python,
+        column_name: String,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.detach(|| {
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = table.drop_column_not_null().with_column(column_name);
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     #[pyo3()]
     pub fn generate(&self, _py: Python) -> PyResult<()> {
         let table = self._table.lock().map_err(to_rt_err)?.clone();
@@ -1280,36 +1326,59 @@ impl RawDeltaTable {
 
     /// Run the History command on the Delta Table: Returns provenance information,
     /// including the operation, user, and so on, for each write to a table.
+    ///
+    /// Returns `(latest_version, commits)` where `latest_version` is the version of
+    /// the most recent commit in `commits`, captured atomically with the history
+    /// fetch so concurrent writes cannot shift the version numbering on the Python
+    /// side. See https://github.com/delta-io/delta-rs/issues/4488.
     #[pyo3(signature = (limit=None))]
-    pub fn history(&self, limit: Option<usize>) -> PyResult<Vec<String>> {
+    pub fn history(&self, limit: Option<usize>) -> PyResult<(Version, Vec<String>)> {
         #[allow(clippy::await_holding_lock)]
-        let history = rt().block_on(async {
+        rt().block_on(async {
             match self._table.lock() {
-                Ok(table) => table
-                    .history(limit)
-                    .await
-                    .map_err(PythonError::from)
-                    .map_err(PyErr::from),
+                Ok(table) => {
+                    let history = table
+                        .history(limit)
+                        .await
+                        .map_err(PythonError::from)
+                        .map_err(PyErr::from)?;
+                    // history() iterates the loaded snapshot, so version() is Some
+                    // here. Capturing it under the same lock guarantees it matches
+                    // the commits we just returned.
+                    let version = table.version().ok_or_else(|| {
+                        PyRuntimeError::new_err(
+                            "table snapshot is not loaded; cannot determine history version",
+                        )
+                    })?;
+                    let commits = history
+                        .map(|c| serde_json::to_string(&c).unwrap())
+                        .collect();
+                    Ok((version, commits))
+                }
                 Err(e) => Err(PyRuntimeError::new_err(e.to_string())),
             }
-        })?;
-        Ok(history
-            .map(|c| serde_json::to_string(&c).unwrap())
-            .collect())
+        })
     }
 
-    pub fn update_incremental(&self) -> PyResult<()> {
-        #[allow(clippy::await_holding_lock)]
-        #[allow(deprecated)]
-        Ok(rt()
-            .block_on(async {
+    /// Incrementally update the table snapshot to the latest committed version.
+    ///
+    /// Releases the Python GIL while the async table update runs.
+    pub fn update_incremental(&self, py: Python) -> PyResult<()> {
+        py.detach(|| {
+            // `DeltaTable::update_incremental` mutates the cached table in place, and the
+            // guard must live until the async update finishes.
+            #[allow(clippy::await_holding_lock)]
+            #[allow(deprecated)]
+            rt().block_on(async {
                 let mut table = self
                     ._table
                     .lock()
                     .map_err(|e| DeltaTableError::Generic(e.to_string()))?;
                 (*table).update_incremental(None).await
             })
-            .map_err(PythonError::from)?)
+            .map_err(PythonError::from)
+            .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (schema, partition_filters=None))]
@@ -1454,6 +1523,7 @@ impl RawDeltaTable {
         let log_store = self.log_store()?;
         let adds: Vec<_> = rt()
             .block_on(async {
+                #[allow(deprecated)]
                 state
                     .file_views_by_partitions(&log_store, &converted_filters)
                     .try_collect()
@@ -1534,6 +1604,7 @@ impl RawDeltaTable {
                     let log_store = self.log_store()?;
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
+                            #[allow(deprecated)]
                             state
                                 .file_views_by_partitions(&log_store, &converted_filters)
                                 .try_collect()
@@ -1576,22 +1647,9 @@ impl RawDeltaTable {
                 predicate: None,
             };
 
-            let mut properties = CommitProperties::default();
-            if let Some(props) = commit_properties {
-                if let Some(metadata) = props.custom_metadata {
-                    let json_metadata: Map<String, Value> =
-                        metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-                    properties = properties.with_metadata(json_metadata);
-                };
-
-                if let Some(max_retries) = props.max_commit_retries {
-                    properties = properties.with_max_retries(max_retries);
-                };
-            }
-
-            if let Some(post_commit_hook_props) = post_commithook_properties {
-                properties = set_post_commithook_properties(properties, post_commit_hook_props)
-            }
+            let properties =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+                    .unwrap_or_default();
 
             rt().block_on(
                 CommitBuilder::from(properties)
@@ -1980,13 +2038,18 @@ impl RawDeltaTable {
     /// Get the latest transaction version for the given application ID.
     ///
     /// Returns `None` if the application ID is not found.
-    pub fn transaction_version(&self, app_id: String) -> PyResult<Option<i64>> {
-        // NOTE: this will simplify once we have moved logstore onto state.
-        let log_store = self.log_store()?;
-        let snapshot = self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
-        Ok(rt()
-            .block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
-            .map_err(PythonError::from)?)
+    ///
+    /// Releases the Python GIL while the async transaction lookup runs.
+    pub fn transaction_version(&self, py: Python, app_id: String) -> PyResult<Option<i64>> {
+        py.detach(|| {
+            // NOTE: this will simplify once we have moved logstore onto state.
+            let log_store = self.log_store()?;
+            let snapshot =
+                self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.clone()))?;
+            rt().block_on(snapshot.transaction_version(log_store.as_ref(), app_id))
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })
     }
 
     #[pyo3(signature = (field_name, metadata, commit_properties=None, post_commithook_properties=None))]
@@ -2234,7 +2297,7 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
         properties = properties.set_write_batch_size(batch_size);
     }
     if let Some(row_group_size) = max_row_group_size {
-        properties = properties.set_max_row_group_size(row_group_size);
+        properties = properties.set_max_row_group_row_count(Some(row_group_size));
     }
     properties = properties.set_statistics_truncate_length(statistics_truncate_length);
 
@@ -2356,9 +2419,7 @@ fn maybe_create_commit_properties(
 
     if let Some(commit_props) = maybe_commit_properties {
         if let Some(metadata) = commit_props.custom_metadata {
-            let json_metadata: Map<String, Value> =
-                metadata.into_iter().map(|(k, v)| (k, v.into())).collect();
-            commit_properties = commit_properties.with_metadata(json_metadata);
+            commit_properties = commit_properties.with_metadata(metadata.into_inner());
         };
 
         if let Some(max_retries) = commit_props.max_commit_retries {
@@ -2395,9 +2456,19 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
         Double(val) => val.into_py_any(py)?,
         Timestamp(_) => {
             // We need to manually append 'Z' add to end so that pyarrow can cast the
-            // scalar value to pa.timestamp("us","UTC")
+            // scalar value to pa.timestamp("us","UTC") or pa.timestamp("ns", "UTC")
             let value = value.serialize();
             format!("{value}Z").into_py_any(py)?
+        }
+        #[cfg(feature = "nanosecond-timestamps")]
+        TimestampNanos(_) => {
+            let value = value.serialize();
+            format!("{value}Z").into_py_any(py)?
+        }
+        #[cfg(feature = "nanosecond-timestamps")]
+        TimestampNanosNtz(_) => {
+            let value = value.serialize();
+            value.into_py_any(py)?
         }
         TimestampNtz(_) => {
             let value = value.serialize();
@@ -2494,7 +2565,12 @@ fn filestats_to_expression_next<'py>(
     // NOTE: null_counts should always return a struct scalar.
     if let Some(Scalar::Struct(data)) = file_info.null_counts() {
         for (field, value) in data.fields().iter().zip(data.values().iter()) {
+            let is_opaque_container_field = schema
+                .field_with_name(field.name())
+                .map(|field| is_opaque_container_arrow_type(field.data_type()))
+                .unwrap_or(false);
             if stats_columns.contains(field.name())
+                && !is_opaque_container_field
                 && let Scalar::Long(val) = value
             {
                 if *val == 0 {
@@ -2574,6 +2650,16 @@ fn filestats_to_expression_next<'py>(
             .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
             .transpose()
     }
+}
+
+fn is_opaque_container_arrow_type(data_type: &ArrowDataType) -> bool {
+    matches!(
+        data_type,
+        ArrowDataType::List(_)
+            | ArrowDataType::LargeList(_)
+            | ArrowDataType::FixedSizeList(_, _)
+            | ArrowDataType::Map(_, _)
+    )
 }
 
 #[pyfunction]
@@ -2714,11 +2800,117 @@ impl From<&PyTransaction> for Transaction {
     }
 }
 
-#[derive(FromPyObject)]
+#[derive(Debug)]
+struct PyCustomMetadata(Map<String, Value>);
+
+impl PyCustomMetadata {
+    fn into_inner(self) -> Map<String, Value> {
+        self.0
+    }
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyCustomMetadata {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        let py = obj.py();
+        let mapping = obj.cast::<PyMapping>().map_err(|_| {
+            PyValueError::new_err("CommitProperties.custom_metadata must be a mapping")
+        })?;
+        let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
+        let kwargs = [("allow_nan", false)].into_py_dict(py)?;
+        let mut metadata = Map::new();
+
+        for item in mapping.items()? {
+            let item = item.cast::<PyTuple>()?;
+            let key = item.get_item(0)?;
+            let value = item.get_item(1)?;
+            let key = key.extract::<String>().map_err(|_| {
+                PyValueError::new_err("CommitProperties.custom_metadata keys must be strings")
+            })?;
+            let value = py_to_json_metadata_value(&json_dumps, &kwargs, &value, &key)?;
+            validate_reserved_commit_metadata(&key, &value)?;
+            metadata.insert(key, value);
+        }
+
+        Ok(Self(metadata))
+    }
+}
+
+fn py_to_json_metadata_value(
+    json_dumps: &Bound<'_, PyAny>,
+    kwargs: &Bound<'_, PyDict>,
+    value: &Bound<'_, PyAny>,
+    key: &str,
+) -> PyResult<Value> {
+    let value_json: String = json_dumps
+        .call((value,), Some(kwargs))
+        .and_then(|json| json.extract())
+        .map_err(|err| {
+            PyValueError::new_err(format!(
+                "CommitProperties.custom_metadata value for '{key}' must be JSON-serializable: {err}"
+            ))
+        })?;
+
+    serde_json::from_str(&value_json).map_err(|err| {
+        PyValueError::new_err(format!(
+            "CommitProperties.custom_metadata value for '{key}' must be valid JSON: {err}"
+        ))
+    })
+}
+
+fn validate_reserved_commit_metadata(key: &str, value: &Value) -> PyResult<()> {
+    // Keep this match aligned with RESERVED_COMMIT_INFO_KEYS in core transaction metadata
+    // normalization. Python raises ValueError before commit construction, while core
+    // normalization keeps Rust callers compatible by logging and dropping invalid reserved data.
+    match key {
+        "timestamp" | "operation" | "engineInfo" => Err(PyValueError::new_err(format!(
+            "CommitProperties.custom_metadata key '{key}' is generated by delta-rs and cannot be set"
+        ))),
+        "operationParameters" if !value.is_object() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['operationParameters'] must be a JSON object",
+        )),
+        "readVersion" if value.as_u64().is_none() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['readVersion'] must be a non-negative integer",
+        )),
+        "userId" | "userName" | "userMetadata" if !value.is_string() => Err(PyValueError::new_err(
+            format!("CommitProperties.custom_metadata['{key}'] must be a string"),
+        )),
+        "isolationLevel" => {
+            let valid = value
+                .as_str()
+                .is_some_and(|value| value.parse::<IsolationLevel>().is_ok());
+            if valid {
+                Ok(())
+            } else {
+                Err(PyValueError::new_err(
+                    "CommitProperties.custom_metadata['isolationLevel'] must be a valid IsolationLevel string",
+                ))
+            }
+        }
+        "isBlindAppend" if !value.is_boolean() => Err(PyValueError::new_err(
+            "CommitProperties.custom_metadata['isBlindAppend'] must be a boolean",
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub struct PyCommitProperties {
-    custom_metadata: Option<HashMap<String, String>>,
+    custom_metadata: Option<PyCustomMetadata>,
     max_commit_retries: Option<usize>,
     app_transactions: Option<Vec<PyTransaction>>,
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyCommitProperties {
+    type Error = PyErr;
+
+    fn extract(obj: Borrowed<'a, 'py, PyAny>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            custom_metadata: obj.getattr("custom_metadata")?.extract()?,
+            max_commit_retries: obj.getattr("max_commit_retries")?.extract()?,
+            app_transactions: obj.getattr("app_transactions")?.extract()?,
+        })
+    }
 }
 
 #[pyfunction]
@@ -3023,6 +3215,13 @@ fn convert_to_deltalake(
     })
 }
 
+/// Enable or disable casting nanosecond timestamps to microseconds.
+#[cfg(feature = "nanosecond-timestamps")]
+#[pyfunction]
+fn _set_cast_nanos_timestamps_to_micros(cast: bool) {
+    deltalake::schema::cast::set_cast_nanos_timestamps_to_micros(cast);
+}
+
 #[pymodule(gil_used = true)]
 // module name need to match project name
 fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -3034,6 +3233,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     deltalake_mount::register_handlers(None);
     deltalake::lakefs::register_handlers(None);
     deltalake::unity_catalog::register_handlers(None);
+    deltalake::opendal::register_handlers(None);
 
     init_client_version(format!("py-{}", env!("CARGO_PKG_VERSION")).as_str());
 
@@ -3061,6 +3261,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;
+    m.add_class::<schema::VariantType>()?;
     m.add_class::<schema::ArrayType>()?;
     m.add_class::<schema::MapType>()?;
     m.add_class::<schema::Field>()?;
@@ -3070,6 +3271,22 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<filesystem::ObjectInputFile>()?;
     m.add_class::<filesystem::ObjectOutputStream>()?;
     m.add_class::<features::TableFeatures>()?;
+
+    m.add(
+        "_NANOSECOND_TIMESTAMPS",
+        cfg!(feature = "nanosecond-timestamps"),
+    )?;
+    #[cfg(feature = "nanosecond-timestamps")]
+    {
+        // Default is casting happens, since nanosecond timestamps will be
+        // disabled at runtime by default as an experimental feature.
+        _set_cast_nanos_timestamps_to_micros(true);
+        m.add_function(pyo3::wrap_pyfunction!(
+            _set_cast_nanos_timestamps_to_micros,
+            m
+        )?)?;
+    }
+
     Ok(())
 }
 

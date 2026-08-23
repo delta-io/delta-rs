@@ -25,10 +25,12 @@
 use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion::{
-    execution::{context::QueryPlanner, session_state::SessionState},
+    catalog::Session,
+    execution::context::QueryPlanner,
     physical_plan::ExecutionPlan,
     physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner},
 };
@@ -58,6 +60,10 @@ static DELTA_PLANNER: LazyLock<Arc<DeltaPlanner>> = LazyLock::new(|| Arc::new(De
 pub struct DeltaPlanner;
 
 impl DeltaPlanner {
+    /// Return the shared, lazily-initialized [`DeltaPlanner`] instance.
+    ///
+    /// The planner is stateless, so a single cached instance is reused rather than
+    /// allocating a new one per query.
     pub fn new() -> Arc<Self> {
         DELTA_PLANNER.clone()
     }
@@ -68,20 +74,21 @@ impl QueryPlanner for DeltaPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        session_state: &SessionState,
+        session: &dyn Session,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let planner = Arc::new(Box::new(DefaultPhysicalPlanner::with_extension_planners(
             vec![DeltaExtensionPlanner::new()],
         )));
-        planner
-            .create_physical_plan(logical_plan, session_state)
-            .await
+        planner.create_physical_plan(logical_plan, session).await
     }
 }
 
+/// Extension [`PhysicalPlanner`](datafusion::physical_planner::PhysicalPlanner) that knows
+/// how to lower delta-rs custom logical nodes into executable physical plans.
 pub struct DeltaExtensionPlanner;
 
 impl DeltaExtensionPlanner {
+    /// Construct a new extension planner.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {})
     }
@@ -95,7 +102,8 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         for ext_planner in DELTA_EXTENSION_PLANNERS.iter() {
             if let Some(plan) = ext_planner
@@ -105,6 +113,7 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
                     logical_inputs,
                     physical_inputs,
                     session_state,
+                    planning_ctx,
                 )
                 .await?
             {

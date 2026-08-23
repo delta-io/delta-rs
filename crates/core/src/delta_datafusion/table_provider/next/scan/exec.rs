@@ -3,7 +3,6 @@
 //! This module implements [`DeltaScanExec`], the core execution plan that reads Parquet files
 //! and applies Delta Lake protocol transformations to produce logical table data.
 
-use std::any::Any;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,35 +10,41 @@ use std::task::{Context, Poll};
 
 use arrow::array::{RecordBatch, StringArray};
 use arrow::compute::filter_record_batch;
-use arrow::datatypes::{SchemaRef, UInt16Type};
+use arrow::datatypes::{FieldRef, Schema, SchemaRef, UInt16Type};
 use arrow_array::StringViewArray;
-use arrow_array::{Array, BooleanArray};
+use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
 use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{
     ColumnStatistics, HashMap, internal_datafusion_err, internal_err, plan_err,
 };
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::EquivalenceProperties;
+use datafusion::physical_expr::expressions::Column;
+use datafusion::physical_expr::utils::collect_columns;
+use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
 };
-use datafusion_physical_expr_adapter::{
-    DefaultPhysicalExprAdapterFactory, PhysicalExprAdapterFactory,
-};
+use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::{Stream, StreamExt};
 
+use super::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use super::plan::KernelScanPlan;
 use crate::delta_datafusion::file_id::file_id_field;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
+
+const DELTA_MATERIALIZED_PUSHDOWN_SENTINEL: &str =
+    "__delta_rs_unpushable_delta_materialized_filter";
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct DvMaskResult {
@@ -112,6 +117,8 @@ pub struct DeltaScanExec {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// File id column name carried by the input batches for per file correlation.
@@ -135,6 +142,9 @@ impl DisplayAs for DeltaScanExec {
                 if let Some(file_id_column) = &self.file_id_column {
                     write!(f, ": file_id_column={file_id_column}")?;
                 }
+                if let Some(row_index_field) = self.scan_plan.contract.retained_row_index_field() {
+                    write!(f, ": row_index_column={}", row_index_field.name())?;
+                }
                 Ok(())
             }
         }
@@ -147,6 +157,7 @@ impl DeltaScanExec {
         input: Arc<dyn ExecutionPlan>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
         selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        public_file_ids: Arc<super::PublicFileIdMap>,
         partition_stats: HashMap<String, ColumnStatistics>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
@@ -155,9 +166,8 @@ impl DeltaScanExec {
             .contract
             .retain_file_id
             .then(|| scan_plan.contract.file_id_field.name().to_owned());
-        let output_schema = scan_plan.effective_schema(file_id_column.is_some());
         let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(output_schema),
+            EquivalenceProperties::new(Arc::clone(&scan_plan.contract.output_schema)),
             input.properties().partitioning.clone(),
             input.properties().emission_type,
             input.properties().boundedness,
@@ -167,6 +177,7 @@ impl DeltaScanExec {
             input,
             transforms,
             selection_vectors,
+            public_file_ids,
             partition_stats,
             metrics,
             input_file_id_column,
@@ -233,15 +244,40 @@ impl DeltaScanExec {
         stats.column_statistics = new_stats;
         Ok(stats)
     }
+
+    /// The default physical expr adapter rewrites missing nullable columns to null literals.
+    /// That rewrite supports schema evolution. Delta materialized columns live above the
+    /// Parquet child, including partition values, file id, and row index. Dynamic filters
+    /// on those columns must stay bound to this exec's output schema; rewriting them
+    /// against the Parquet child can turn them into null literals and drop rows.
+    fn references_delta_materialized_column(&self, filter: &Arc<dyn PhysicalExpr>) -> bool {
+        let input_schema = self.input.schema();
+        collect_columns(filter).iter().any(|column| {
+            if self.file_id_column.as_deref() == Some(column.name()) {
+                return true;
+            }
+            if self
+                .scan_plan
+                .contract
+                .retained_row_index_field()
+                .as_ref()
+                .is_some_and(|field| field.name() == column.name())
+            {
+                return true;
+            }
+            self.scan_plan
+                .contract
+                .result_schema
+                .field_with_name(column.name())
+                .is_ok()
+                && input_schema.field_with_name(column.name()).is_err()
+        })
+    }
 }
 
 impl ExecutionPlan for DeltaScanExec {
     fn name(&self) -> &'static str {
         "DeltaScanExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -250,6 +286,15 @@ impl ExecutionPlan for DeltaScanExec {
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
+    }
+
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        if self.scan_plan.contract.retained_row_index_field().is_some() {
+            // Retained row indexes depend on one stream seeing each file's rows.
+            vec![Distribution::SinglePartition]
+        } else {
+            vec![Distribution::UnspecifiedDistribution]
+        }
     }
 
     // TODO: setting this will fail certain tests, but why
@@ -269,6 +314,7 @@ impl ExecutionPlan for DeltaScanExec {
             children[0].clone(),
             self.transforms.clone(),
             self.selection_vectors.clone(),
+            self.public_file_ids.clone(),
             self.partition_stats.clone(),
             self.metrics.clone(),
         )))
@@ -279,6 +325,12 @@ impl ExecutionPlan for DeltaScanExec {
         target_partitions: usize,
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if self.scan_plan.contract.retained_row_index_field().is_some() {
+            // Each DeltaScanStream keeps row ordinal counters for one execution partition.
+            // Repartitioning can split one file across streams and break ordinal contiguity.
+            return Ok(None);
+        }
+
         if let Some(input) = self.input.repartitioned(target_partitions, config)? {
             Ok(Some(Arc::new(Self {
                 input,
@@ -294,6 +346,17 @@ impl ExecutionPlan for DeltaScanExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        // Normal planning enforces this through EnforceDistribution. Keep this check for
+        // callers that build DeltaScanExec directly or replace its child plan.
+        if self.scan_plan.contract.retained_row_index_field().is_some() {
+            let input_partition_count = self.input.properties().partitioning.partition_count();
+            if input_partition_count > 1 {
+                return plan_err!(
+                    "DeltaScanExec retained row indexes require a single input partition, got {input_partition_count}"
+                );
+            }
+        }
+
         Ok(Box::pin(DeltaScanStream {
             scan_plan: Arc::clone(&self.scan_plan),
             kernel_type: Arc::clone(self.scan_plan.scan.logical_schema()).into(),
@@ -301,8 +364,11 @@ impl ExecutionPlan for DeltaScanExec {
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             transforms: Arc::clone(&self.transforms),
             selection_vectors: Arc::clone(&self.selection_vectors),
+            public_file_ids: Arc::clone(&self.public_file_ids),
             input_file_id_column: self.input_file_id_column.clone(),
             file_id_column: self.file_id_column.clone(),
+            row_index_field: self.scan_plan.contract.retained_row_index_field(),
+            row_index_by_file: HashMap::new(),
             pending: VecDeque::new(),
             schema_adapter: super::SchemaAdapter::new(Arc::clone(
                 &self.scan_plan.contract.result_schema,
@@ -333,10 +399,21 @@ impl ExecutionPlan for DeltaScanExec {
         Some(Arc::new(new_plan))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input
-            .partition_statistics(partition)
-            .and_then(|stats| self.map_statistics(stats))
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        // We remap the child's column statistics onto the logical output schema in
+        // `map_statistics`, so we need the child's statistics resolved.
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        let stats = input_stats.first().ok_or_else(|| {
+            internal_datafusion_err!("DeltaScanExec expects statistics for exactly one child")
+        })?;
+        self.map_statistics(Statistics::clone(stats)).map(Arc::new)
     }
 
     fn gather_filters_for_pushdown(
@@ -360,7 +437,7 @@ impl ExecutionPlan for DeltaScanExec {
             ));
         }
 
-        let adapter_factory = DefaultPhysicalExprAdapterFactory {};
+        let adapter_factory = DeltaPhysicalExprAdapterFactory;
         let adapted_filters = adapter_factory
             .create(
                 Arc::clone(&self.scan_plan.contract.result_schema),
@@ -369,7 +446,19 @@ impl ExecutionPlan for DeltaScanExec {
             .and_then(|adapter| {
                 parent_filters
                     .iter()
-                    .map(|filter| adapter.rewrite(Arc::clone(filter)))
+                    .map(|filter| {
+                        if self.references_delta_materialized_column(filter) {
+                            // DataFusion has no public API for mixed parent filter support.
+                            // Pass an impossible child column to `from_children`; DataFusion
+                            // reports this parent filter as unsupported.
+                            Ok(Arc::new(Column::new(
+                                DELTA_MATERIALIZED_PUSHDOWN_SENTINEL,
+                                usize::MAX,
+                            )) as Arc<dyn PhysicalExpr>)
+                        } else {
+                            adapter.rewrite(Arc::clone(filter))
+                        }
+                    })
                     .collect::<Result<Vec<_>>>()
             });
 
@@ -380,6 +469,17 @@ impl ExecutionPlan for DeltaScanExec {
                 &self.children(),
             )),
         }
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Apply expressions to the input execution plan
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -407,10 +507,19 @@ struct DeltaScanStream {
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
     selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Public file paths keyed by compact scan file id.
+    public_file_ids: Arc<super::PublicFileIdMap>,
     /// File id column name carried by the input batches for per file correlation.
     input_file_id_column: String,
     /// User-visible file-id column name when projected in the output.
     file_id_column: Option<String>,
+    /// Row index field included in projected output.
+    row_index_field: Option<FieldRef>,
+    /// Per file ordinal state for this execution partition.
+    ///
+    /// `DataSourceExec` assigns whole `PartitionedFile`s to file groups. Each physical file has
+    /// one scan stream partition owner.
+    row_index_by_file: HashMap<String, u64>,
     pending: VecDeque<RecordBatch>,
     /// Cached schema adapter for efficient batch adaptation across batches
     schema_adapter: super::SchemaAdapter,
@@ -463,7 +572,7 @@ impl DeltaScanStream {
             batch
         };
 
-        let file_id_col = batch.remove_column(file_id_idx);
+        batch.remove_column(file_id_idx);
 
         let result = if let Some(transform) = self.transforms.get(&file_id) {
             let evaluator = ARROW_HANDLER
@@ -481,11 +590,15 @@ impl DeltaScanStream {
             batch
         };
 
-        if let Some(file_id_column) = &self.file_id_column {
+        let result = if let Some(file_id_column) = &self.file_id_column {
+            let public_file_id = super::public_file_id(&self.public_file_ids, &file_id)?;
+            let file_id_field = file_id_field(Some(file_id_column));
+            let file_id_col =
+                super::file_id_array_for_value(&file_id_field, public_file_id, result.num_rows())?;
             super::finalize_transformed_batch(
                 result,
                 &self.scan_plan,
-                Some((file_id_col, file_id_field(Some(file_id_column)))),
+                Some((file_id_col, file_id_field)),
                 &mut self.schema_adapter,
             )
         } else {
@@ -495,7 +608,46 @@ impl DeltaScanStream {
                 None,
                 &mut self.schema_adapter,
             )
-        }
+        }?;
+
+        self.append_row_index(result, &file_id)
+    }
+
+    fn append_row_index(&mut self, batch: RecordBatch, file_id: &str) -> Result<RecordBatch> {
+        let Some(row_index_field) = self.row_index_field.clone() else {
+            return Ok(batch);
+        };
+
+        let row_count = u64::try_from(batch.num_rows()).map_err(|_| {
+            internal_datafusion_err!("batch row count does not fit u64 while assigning row indexes")
+        })?;
+        let next_row_index = self
+            .row_index_by_file
+            .entry(file_id.to_string())
+            .or_default();
+        let end = next_row_index.checked_add(row_count).ok_or_else(|| {
+            internal_datafusion_err!(
+                "row index overflow while assigning row indexes for file '{file_id}'"
+            )
+        })?;
+
+        let values = if row_count == 0 {
+            Vec::new()
+        } else {
+            ((*next_row_index + 1)..=end).collect()
+        };
+        *next_row_index = end;
+
+        let row_index: ArrayRef = Arc::new(UInt64Array::from(values));
+        let mut columns = batch.columns().to_vec();
+        columns.push(row_index);
+        let mut fields = batch.schema().fields().to_vec();
+        fields.push(row_index_field);
+
+        Ok(RecordBatch::try_new(
+            Arc::new(Schema::new(fields)),
+            columns,
+        )?)
     }
 }
 
@@ -542,8 +694,7 @@ impl Stream for DeltaScanStream {
 
 impl RecordBatchStream for DeltaScanStream {
     fn schema(&self) -> SchemaRef {
-        self.scan_plan
-            .effective_schema(self.file_id_column.is_some())
+        Arc::clone(&self.scan_plan.contract.output_schema)
     }
 }
 
@@ -655,15 +806,22 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::AsArray;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Schema, UInt64Type};
     use arrow_array::Array;
     use arrow_array::ArrayAccessor;
     use datafusion::{
         common::{ToDFSchema, stats::Precision},
         datasource::TableProvider,
+        logical_expr::Operator,
+        physical_expr::expressions::{
+            BinaryExpr, Column, DynamicFilterPhysicalExpr, lit as physical_lit,
+        },
+        physical_expr::{Distribution, Partitioning},
         physical_plan::{
-            collect, collect_partitioned,
+            PhysicalExpr, collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
+            repartition::RepartitionExec,
+            statistics::StatisticsContext,
         },
         prelude::{col, lit},
         scalar::ScalarValue,
@@ -713,7 +871,7 @@ mod tests {
             .scan(&session.state(), None, &[col("letter").eq(lit("b"))], None)
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        let downcast = scan.downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some());
         assert_eq!(downcast.unwrap().file_id_column.as_deref(), Some("file_id"));
 
@@ -790,7 +948,7 @@ mod tests {
             .scan(&session.state(), Some(&vec![id_idx]), &[], None)
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        let downcast = scan.downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some());
         assert!(downcast.unwrap().file_id_column.is_none());
 
@@ -825,7 +983,6 @@ mod tests {
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
-            .as_any()
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
 
@@ -853,6 +1010,197 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_gather_filters_for_pushdown_rejects_delta_materialized_dynamic_filters()
+    -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let letter_idx = exec.schema().index_of("letter")?;
+        assert!(exec.schema().field_with_name("letter").is_ok());
+        assert!(exec.input.schema().field_with_name("letter").is_err());
+
+        let letter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("letter", letter_idx));
+        let predicate: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&letter),
+            Operator::Eq,
+            physical_lit("a"),
+        ));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(vec![letter], predicate));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_rejects_mixed_delta_materialized_dynamic_filters()
+    -> TestResult {
+        let table = open_fs_path("../../dat/v0.0.3/reader_tests/generated/multi_partitioned/delta");
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let letter_idx = exec.schema().index_of("letter")?;
+        let number_idx = exec.schema().index_of("number")?;
+        assert!(exec.schema().field_with_name("letter").is_ok());
+        assert!(exec.schema().field_with_name("number").is_ok());
+        assert!(exec.input.schema().field_with_name("letter").is_err());
+        assert!(exec.input.schema().field_with_name("number").is_ok());
+
+        let letter: Arc<dyn PhysicalExpr> = Arc::new(Column::new("letter", letter_idx));
+        let number: Arc<dyn PhysicalExpr> = Arc::new(Column::new("number", number_idx));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![letter, number],
+            physical_lit(true),
+        ));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_rejects_file_id_filters() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = Arc::new(create_session().into_inner());
+        let id_idx = provider.schema().index_of("id")?;
+
+        let scan = provider
+            .scan(
+                &session.state(),
+                Some(&vec![id_idx]),
+                &[col("file_id").eq(lit("file:///tmp/part-00000.parquet"))],
+                None,
+            )
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let file_id_idx = exec.schema().index_of("file_id")?;
+        let file_id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("file_id", file_id_idx));
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&file_id),
+            Operator::Eq,
+            physical_lit("file:///tmp/part-00000.parquet"),
+        ));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_keeps_data_filter_when_file_id_filter_is_present()
+    -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().with_file_column("file_id").await?;
+        let session = Arc::new(create_session().into_inner());
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let file_id_idx = exec.schema().index_of("file_id")?;
+        let id_idx = exec.schema().index_of("id")?;
+        assert!(exec.input.schema().field_with_name("id").is_ok());
+        let file_id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("file_id", file_id_idx));
+        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", id_idx));
+        let file_id_filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            file_id,
+            Operator::Eq,
+            physical_lit("file:///tmp/part-00000.parquet"),
+        ));
+        let id_filter: Arc<dyn PhysicalExpr> =
+            Arc::new(DynamicFilterPhysicalExpr::new(vec![id], physical_lit(true)));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![file_id_filter, id_filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 2);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
+        assert!(matches!(child_filters[0][1].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gather_filters_for_pushdown_keeps_parquet_dynamic_filters() -> TestResult {
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let id_idx = exec.schema().index_of("id")?;
+        assert!(exec.schema().field_with_name("id").is_ok());
+        assert!(exec.input.schema().field_with_name("id").is_ok());
+
+        let data: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", id_idx));
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![data],
+            physical_lit(true),
+        ));
+
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
+
+        let child_filters = description.parent_filters();
+        assert_eq!(child_filters.len(), 1);
+        assert_eq!(child_filters[0].len(), 1);
+        assert!(matches!(child_filters[0][0].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_gather_filters_for_pushdown_skips_column_mapping_parent_filters() -> TestResult {
         let mut table = open_fs_path("../test/tests/data/table_with_column_mapping");
         table.load().await?;
@@ -861,7 +1209,6 @@ mod tests {
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
-            .as_any()
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
 
@@ -919,7 +1266,7 @@ mod tests {
             .scan(&session.state(), None, &[col("letter").eq(lit("b"))], None)
             .await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        let downcast = scan.downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some());
         assert!(downcast.unwrap().file_id_column.is_none());
 
@@ -1069,10 +1416,17 @@ mod tests {
         assert!(batches[0].schema().column_with_name("filename").is_some());
 
         // Verify each group has a valid parquet filename
-        let filename_col = batches[0]
-            .column_by_name("filename")
-            .unwrap()
-            .as_string::<i32>();
+        //
+        // DataFusion 55 changed `reverse()`'s signature from
+        // `Signature::uniform(1, vec![Utf8View, Utf8, LargeUtf8])` to
+        // `Signature::coercible(Native(logical_string()))` (apache/datafusion#23930).
+        // The old uniform signature widened our dictionary-encoded `file_id` column to
+        // `Utf8View` (first entry in the list); the new coercible signature preserves the
+        // origin string type instead, so this expression now yields `Utf8` rather than
+        // `Utf8View`. Normalize before asserting so the test is encoding-agnostic.
+        let filename_raw = batches[0].column_by_name("filename").unwrap();
+        let filename_flat = arrow::compute::cast(filename_raw, &DataType::Utf8View)?;
+        let filename_col = filename_flat.as_string_view();
 
         for i in 0..filename_col.len() {
             let filename = filename_col.value(i);
@@ -1137,7 +1491,7 @@ mod tests {
         // for scans without prodicates, we gather only top level statistic
         // and omit collecting column level statistics
         let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(5));
         assert_eq!(statistics.total_byte_size, Precision::Inexact(3240));
         for col_stat in statistics.column_statistics.iter() {
@@ -1156,7 +1510,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, field) in statistics
             .column_statistics
             .iter()
@@ -1196,7 +1550,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(
             statistics.column_statistics.len(),
             provider.schema().fields().len()
@@ -1228,7 +1582,7 @@ mod tests {
         let scan = provider
             .scan(&session.state(), None, &predicates, None)
             .await?;
-        let statistics = scan.partition_statistics(None)?;
+        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
         for (col_stat, _field) in statistics
             .column_statistics
             .iter()
@@ -1259,7 +1613,7 @@ mod tests {
 
         let scan = provider.scan(&session.state(), None, &[], None).await?;
 
-        let downcast = scan.as_any().downcast_ref::<DeltaScanExec>();
+        let downcast = scan.downcast_ref::<DeltaScanExec>();
         assert!(downcast.is_some(), "Expected DeltaScanExec for DV test");
 
         let batches = collect(scan, session.task_ctx()).await?;
@@ -1289,7 +1643,33 @@ mod tests {
 
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
-            .as_any()
+            .downcast_ref::<DeltaScanExec>()
+            .expect("Expected DeltaScanExec");
+
+        let kernel_type = Arc::clone(exec.scan_plan.scan.logical_schema()).into();
+
+        let mut scan_plan = exec.scan_plan.as_ref().clone();
+        scan_plan.contract.result_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        scan_plan.contract.output_schema = Arc::clone(&scan_plan.contract.result_schema);
+        scan_plan.contract.result_projection = None;
+        scan_plan.parquet_read_schema = Arc::clone(&scan_plan.contract.result_schema);
+
+        Ok((kernel_type, Arc::new(scan_plan)))
+    }
+
+    async fn int32_scan_plan() -> TestResult<(KernelDataType, Arc<KernelScanPlan>)> {
+        use arrow::datatypes::{Field, Schema};
+
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
             .downcast_ref::<DeltaScanExec>()
             .expect("Expected DeltaScanExec");
 
@@ -1367,6 +1747,22 @@ mod tests {
             .map(|b| b.schema())
             .unwrap_or_else(|| Arc::clone(&scan_plan.contract.output_schema));
         let input_file_id_column = scan_plan.contract.file_id_field.name().clone();
+        let mut public_file_ids = super::super::PublicFileIdMap::default();
+        for selection_vector in selection_vectors.iter() {
+            public_file_ids.insert(
+                selection_vector.key().clone(),
+                selection_vector.key().clone(),
+            );
+        }
+        for batch in &input_batches {
+            if let Ok(file_id_idx) = file_id_column_idx(batch, &input_file_id_column) {
+                for (file_id, _) in
+                    split_by_file_id_runs(batch, file_id_idx).expect("valid test file ids")
+                {
+                    public_file_ids.entry(file_id.clone()).or_insert(file_id);
+                }
+            }
+        }
 
         let input = Box::pin(RecordBatchStreamAdapter::new(
             input_schema,
@@ -1375,6 +1771,7 @@ mod tests {
 
         let schema_adapter =
             super::super::SchemaAdapter::new(Arc::clone(&scan_plan.contract.result_schema));
+        let row_index_field = scan_plan.contract.retained_row_index_field();
         DeltaScanStream {
             scan_plan,
             kernel_type,
@@ -1382,11 +1779,188 @@ mod tests {
             baseline_metrics: BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
             transforms: Arc::new(HashMap::new()),
             selection_vectors,
+            public_file_ids: Arc::new(public_file_ids),
             input_file_id_column,
             file_id_column,
+            row_index_field,
+            row_index_by_file: HashMap::new(),
             pending: VecDeque::new(),
             schema_adapter,
         }
+    }
+
+    fn retain_row_index(scan_plan: Arc<KernelScanPlan>, column: &str) -> Arc<KernelScanPlan> {
+        let mut scan_plan = scan_plan.as_ref().clone();
+        let row_index_field = Arc::new(Field::new(column, DataType::UInt64, false));
+        let mut fields = scan_plan.contract.result_schema.fields().to_vec();
+        // Keep the same row index field order as ProjectedScanContract::try_new.
+        fields.push(row_index_field.clone());
+        scan_plan.contract.output_schema = Arc::new(Schema::new(fields));
+        scan_plan.contract.row_index_field = Some(row_index_field);
+        scan_plan.contract.retain_row_index = true;
+        Arc::new(scan_plan)
+    }
+
+    fn row_ordinals(batch: &RecordBatch, column: &str) -> Vec<u64> {
+        batch
+            .column_by_name(column)
+            .expect("row ordinal column")
+            .as_primitive::<UInt64Type>()
+            .values()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn test_required_input_distribution_tracks_retained_row_index_contract() -> TestResult {
+        let (_kernel_type, scan_plan) = int32_scan_plan().await?;
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let distribution = exec.required_input_distribution();
+        assert!(
+            matches!(
+                distribution.as_slice(),
+                [Distribution::UnspecifiedDistribution]
+            ),
+            "unexpected distribution: {distribution:?}"
+        );
+
+        let retained_exec = DeltaScanExec::new(
+            retain_row_index(scan_plan, "row_ordinal"),
+            Arc::clone(&exec.input),
+            Arc::clone(&exec.transforms),
+            Arc::clone(&exec.selection_vectors),
+            Arc::clone(&exec.public_file_ids),
+            exec.partition_stats.clone(),
+            exec.metrics.clone(),
+        );
+
+        let distribution = retained_exec.required_input_distribution();
+        assert!(
+            matches!(distribution.as_slice(), [Distribution::SinglePartition]),
+            "unexpected distribution: {distribution:?}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_retained_row_index_execute_rejects_multi_partition_child() -> TestResult {
+        let (_kernel_type, scan_plan) = int32_scan_plan().await?;
+        let table = TestTables::Simple.table_builder()?.load().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("expected DeltaScanExec");
+
+        let repartitioned_input = Arc::new(RepartitionExec::try_new(
+            Arc::clone(&exec.input),
+            Partitioning::RoundRobinBatch(2),
+        )?);
+
+        let retained_exec = DeltaScanExec::new(
+            retain_row_index(scan_plan, "row_ordinal"),
+            repartitioned_input,
+            Arc::clone(&exec.transforms),
+            Arc::clone(&exec.selection_vectors),
+            Arc::clone(&exec.public_file_ids),
+            exec.partition_stats.clone(),
+            exec.metrics.clone(),
+        );
+
+        let err = match retained_exec.execute(0, session.task_ctx()) {
+            Ok(_) => panic!("retained row-index scans must reject multi-partition children"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("retained row indexes require a single input partition"),
+            "unexpected error: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_appends_row_ordinals_from_scan_contract() -> TestResult {
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
+        let scan_plan = retain_row_index(scan_plan, "row_ordinal");
+        let batch = value_and_file_id_batch(&[10, 11], &[Some("f1"), Some("f1")], false)?;
+
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            Arc::new(DashMap::new()),
+            Vec::new(),
+            None,
+        );
+
+        assert!(stream.schema().column_with_name("row_ordinal").is_some());
+        let outputs = stream.batch_project(batch)?;
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(row_ordinals(&outputs[0], "row_ordinal"), vec![1, 2]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_resets_row_ordinals_per_file() -> TestResult {
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
+        let scan_plan = retain_row_index(scan_plan, "row_ordinal");
+        let batch = value_and_file_id_batch(
+            &[10, 11, 20, 21],
+            &[Some("f1"), Some("f1"), Some("f2"), Some("f2")],
+            false,
+        )?;
+
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            Arc::new(DashMap::new()),
+            Vec::new(),
+            None,
+        );
+
+        let outputs = stream.batch_project(batch)?;
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(row_ordinals(&outputs[0], "row_ordinal"), vec![1, 2]);
+        assert_eq!(row_ordinals(&outputs[1], "row_ordinal"), vec![1, 2]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_next_continues_row_ordinals_across_batches_for_same_file() -> TestResult {
+        use futures::StreamExt;
+
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
+        let scan_plan = retain_row_index(scan_plan, "row_ordinal");
+        let first = value_and_file_id_batch(&[10, 11], &[Some("f1"), Some("f1")], false)?;
+        let second = value_and_file_id_batch(&[12, 13], &[Some("f1"), Some("f1")], false)?;
+
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            Arc::new(DashMap::new()),
+            vec![first, second],
+            None,
+        );
+
+        let batch1 = stream.next().await.transpose()?.expect("first batch");
+        let batch2 = stream.next().await.transpose()?.expect("second batch");
+        assert!(stream.next().await.is_none());
+        assert_eq!(row_ordinals(&batch1, "row_ordinal"), vec![1, 2]);
+        assert_eq!(row_ordinals(&batch2, "row_ordinal"), vec![3, 4]);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -1501,30 +2075,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_batch_project_empty_batch_uses_result_schema_wo_file_id() -> TestResult {
-        use arrow::datatypes::Schema;
-
-        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
-        let mut scan_plan = scan_plan.as_ref().clone();
-
-        // set any fake schema different to result_schema and no desired file_id
-        let output_schema = Arc::new(Schema::empty());
-        scan_plan.contract.output_schema = output_schema.clone();
+    async fn test_batch_project_empty_batch_uses_contract_output_schema_without_metadata()
+    -> TestResult {
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
         let mut stream = test_scan_stream(
-            Arc::new(scan_plan),
+            Arc::clone(&scan_plan),
             kernel_type,
             Arc::new(DashMap::new()),
             Vec::new(),
             None,
         );
-        let batches = stream.batch_project(RecordBatch::new_empty(output_schema))?;
+        let batches = stream.batch_project(RecordBatch::new_empty(Arc::clone(
+            &scan_plan.contract.output_schema,
+        )))?;
         let columns = batches[0].columns();
 
-        // test for original result_schema which does contain expected projection
-        // without files in this case
+        assert_eq!(batches[0].schema(), scan_plan.contract.output_schema);
         assert_eq!(columns.len(), 1);
         assert_eq!(columns[0].data_type(), &DataType::Int32);
         assert!(columns[0].is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_empty_batch_uses_contract_output_schema_with_row_index()
+    -> TestResult {
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
+        let scan_plan = retain_row_index(scan_plan, "row_ordinal");
+        let mut stream = test_scan_stream(
+            Arc::clone(&scan_plan),
+            kernel_type,
+            Arc::new(DashMap::new()),
+            Vec::new(),
+            None,
+        );
+
+        let batches = stream.batch_project(RecordBatch::new_empty(Arc::clone(
+            &scan_plan.contract.output_schema,
+        )))?;
+
+        assert_eq!(batches[0].schema(), scan_plan.contract.output_schema);
+        let schema = batches[0].schema();
+        let row_ordinal = schema
+            .column_with_name("row_ordinal")
+            .expect("row ordinal column")
+            .1;
+        assert_eq!(row_ordinal.data_type(), &DataType::UInt64);
+        assert_eq!(batches[0].num_rows(), 0);
         Ok(())
     }
 
@@ -1665,6 +2262,47 @@ mod tests {
 
         assert_eq!(file_id1, "f1");
         assert_eq!(file_id2, "f2");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_poll_next_rematerializes_public_file_ids_across_batches() -> TestResult {
+        use futures::StreamExt;
+
+        let (kernel_type, scan_plan) = int32_scan_plan().await?;
+        let first = value_and_file_id_batch(&[10, 11], &[Some("0"), Some("0")], false)?;
+        let second = value_and_file_id_batch(&[12, 13], &[Some("0"), Some("0")], false)?;
+        let public_file_id = "file:///table/very/long/path/part-00000.parquet";
+
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            Arc::new(DashMap::new()),
+            vec![first, second],
+            Some("file_id".to_string()),
+        );
+        stream.public_file_ids = Arc::new(
+            [("0".to_string(), public_file_id.to_string())]
+                .into_iter()
+                .collect(),
+        );
+
+        let batch1 = stream.next().await.transpose()?.expect("first batch");
+        let batch2 = stream.next().await.transpose()?.expect("second batch");
+        assert!(stream.next().await.is_none());
+
+        for batch in [batch1, batch2] {
+            let file_id = batch
+                .column_by_name("file_id")
+                .expect("file_id column")
+                .as_dictionary::<UInt16Type>()
+                .downcast_dict::<StringArray>()
+                .unwrap();
+            assert_eq!(file_id.len(), 2);
+            assert_eq!(file_id.value(0), public_file_id);
+            assert_eq!(file_id.value(1), public_file_id);
+        }
 
         Ok(())
     }

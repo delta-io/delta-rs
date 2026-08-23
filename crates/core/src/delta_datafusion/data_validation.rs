@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -17,9 +16,8 @@ use datafusion::common::{
 };
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::{
-    RecordBatchStream, SendableRecordBatchStream, SessionState, TaskContext,
-};
+use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     ColumnarValue, ExprSchemable as _, LogicalPlan, Operator, UserDefinedLogicalNode,
@@ -29,6 +27,7 @@ use datafusion::optimizer::simplify_expressions::simplify_predicates;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
 };
@@ -45,7 +44,9 @@ use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
 use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
-use crate::delta_datafusion::expr::parse_predicate_expression;
+use crate::delta_datafusion::expr::{
+    parse_generated_column_expression, parse_predicate_expression,
+};
 use crate::delta_datafusion::table_provider::simplify_expr;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::{Constraint, GeneratedColumn};
@@ -75,6 +76,7 @@ impl PartialOrd for DataValidation {
 }
 
 impl DataValidation {
+    #[allow(dead_code)]
     pub(crate) fn try_new(
         input: LogicalPlan,
         validations: impl IntoIterator<Item = Expr>,
@@ -116,6 +118,7 @@ impl DataValidation {
 ///
 /// This is used to update the schema of the data after validation to
 /// reflect the non-nullability of these columns.
+#[allow(dead_code)]
 struct NotNullExtractor {
     non_nullable_columns: Vec<ColumnName>,
 }
@@ -213,8 +216,9 @@ impl ExtensionPlanner for DataValidationExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        session_state: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>, DataFusionError> {
         if let Some(node) = node.as_any().downcast_ref::<DataValidation>() {
             if physical_inputs.len() != 1 {
                 return plan_err!(
@@ -333,7 +337,7 @@ pub(crate) fn generated_columns_to_exprs<'a>(
     generated_columns
         .into_iter()
         .map(|gen_col| {
-            let expr = parse_predicate_expression(df_schema, &gen_col.generation_expr, session)?;
+            let expr = parse_generated_column_expression(df_schema, gen_col, session)?;
             let col_expr = col(&gen_col.name);
             let validation_expr = binary_expr(col_expr, Operator::IsNotDistinctFrom, expr);
             Ok::<_, DataFusionError>(validation_expr)
@@ -442,10 +446,6 @@ impl DisplayAs for DataValidationExec {
 }
 
 impl ExecutionPlan for DataValidationExec {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "DataValidationExec"
     }
@@ -487,8 +487,20 @@ impl ExecutionPlan for DataValidationExec {
         )))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        self.input.partition_statistics(partition)
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
+        &self,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
+    ) -> Result<Arc<Statistics>> {
+        input_stats.first().map(Arc::clone).ok_or_else(|| {
+            DataFusionError::Internal(
+                "DataValidationExec expects statistics for exactly one child".to_string(),
+            )
+        })
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -535,6 +547,17 @@ impl ExecutionPlan for DataValidationExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         FilterDescription::from_children(parent_filters, &self.children())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -720,6 +743,7 @@ fn collect_non_nullable_fields_recursive(
 /// ];
 /// let new_schema = make_fields_non_nullable(schema.as_ref(), &paths);
 /// ```
+#[allow(dead_code)]
 pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) -> Schema {
     // Convert ColumnName paths to Vec<String> for easier comparison
     let target_paths: HashSet<Vec<String>> = paths
@@ -741,6 +765,7 @@ pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) ->
 }
 
 /// Recursively make fields non-nullable based on target paths.
+#[allow(dead_code)]
 fn make_fields_non_nullable_recursive(
     field: &arrow_schema::Field,
     current_path: Vec<String>,
@@ -1180,10 +1205,7 @@ mod tests {
             DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
 
         // Check that maintains_input_order returns true
-        let downcast = validated_exec
-            .as_any()
-            .downcast_ref::<DataValidationExec>()
-            .unwrap();
+        let downcast = validated_exec.downcast_ref::<DataValidationExec>().unwrap();
         assert_eq!(downcast.maintains_input_order(), vec![true]);
 
         Ok(())
@@ -1227,12 +1249,7 @@ mod tests {
 
         // Create new plan with different child
         let new_exec = validated_exec.with_new_children(vec![memory_exec2])?;
-        assert!(
-            new_exec
-                .as_any()
-                .downcast_ref::<DataValidationExec>()
-                .is_some()
-        );
+        assert!(new_exec.downcast_ref::<DataValidationExec>().is_some());
 
         Ok(())
     }

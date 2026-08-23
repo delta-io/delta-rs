@@ -1,15 +1,17 @@
-use std::cmp::min;
 use std::ops::Not;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, ops::AddAssign};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::AddAssign,
+};
 
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
-use parquet::basic::LogicalType;
 use parquet::basic::Type;
+use parquet::basic::{ConvertedType, DecimalType, IntType, LogicalType, TimestampType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -164,7 +166,32 @@ fn stats_from_metadata(
     } else if num_indexed_cols == DataSkippingNumIndexedCols::AllColumns {
         (0..schema_descriptor.num_columns()).collect::<Vec<_>>()
     } else if let DataSkippingNumIndexedCols::NumColumns(n_cols) = num_indexed_cols {
-        (0..min(n_cols as usize, schema_descriptor.num_columns())).collect::<Vec<_>>()
+        // The `delta.dataSkippingNumIndexedCols` budget is consumed by distinct
+        // top-level fields, not by parquet leaf columns. A single top-level
+        // column with many nested fields therefore takes one slot, not N.
+        // Partition columns do not consume a slot.
+        let limit = n_cols as usize;
+        let mut admitted: HashSet<String> = HashSet::new();
+        let mut admitted_count: usize = 0;
+        let mut idxs: Vec<usize> = Vec::new();
+        for (idx, col) in schema_descriptor.columns().iter().enumerate() {
+            let top = match col.path().parts().first() {
+                Some(t) => t.clone(),
+                None => continue,
+            };
+            if partition_values.contains_key(&top) {
+                continue;
+            }
+            if !admitted.contains(&top) {
+                if admitted_count >= limit {
+                    break;
+                }
+                admitted.insert(top);
+                admitted_count += 1;
+            }
+            idxs.push(idx);
+        }
+        idxs
     } else {
         return Err(DeltaWriterError::DeltaTable(DeltaTableError::Generic(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
@@ -177,7 +204,8 @@ fn stats_from_metadata(
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
-        // Do not include partition columns in statistics
+        // Do not include partition columns in statistics (still relevant for
+        // the `AllColumns` and explicit `stats_columns` branches).
         if partition_values.contains_key(&column_path_parts[0]) {
             continue;
         }
@@ -196,7 +224,10 @@ fn stats_from_metadata(
                         );
                         None
                     } else {
-                        Some(AggregatedStats::from((s, column_descr.logical_type_ref())))
+                        let logical_type = column_descr
+                            .logical_type_ref()
+                            .or(converted_to_logical_type(column_descr.converted_type()));
+                        Some(AggregatedStats::from((s, logical_type)))
                     }
                 })
             })
@@ -238,6 +269,7 @@ enum StatsScalar {
     Float64(f64),
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
+    TimestampNtz(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
     // Scale is stored to handle scale=0 serialization correctly
     Decimal { value: f64, scale: i32 },
@@ -270,22 +302,19 @@ impl StatsScalar {
                 let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
-            (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+            (Statistics::Int32(v), Some(LogicalType::Decimal(decimal_type))) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
                     value: val,
-                    scale: *scale,
+                    scale: decimal_type.scale,
                 })
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
-            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
-                // For now, we assume timestamps are adjusted to UTC. Non-UTC timestamps
-                // are behind a feature gate in Delta:
-                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
+            (Statistics::Int64(v), Some(LogicalType::Timestamp(timestamp_type))) => {
                 let v = get_stat!(v);
-                let timestamp = match unit {
+                let timestamp = match timestamp_type.unit {
                     TimeUnit::MILLIS => chrono::DateTime::from_timestamp_millis(v),
                     TimeUnit::MICROS => chrono::DateTime::from_timestamp_micros(v),
                     TimeUnit::NANOS => {
@@ -298,14 +327,18 @@ impl StatsScalar {
                     debug_value: v.to_string(),
                     logical_type: logical_type.cloned(),
                 })?;
-                Ok(Self::Timestamp(timestamp.naive_utc()))
+                if timestamp_type.is_adjusted_to_u_t_c {
+                    Ok(Self::Timestamp(timestamp.naive_utc()))
+                } else {
+                    Ok(Self::TimestampNtz(timestamp.naive_utc()))
+                }
             }
-            (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+            (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
                     value: val,
-                    scale: *scale,
+                    scale: decimal_type.scale,
                 })
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
@@ -334,7 +367,7 @@ impl StatsScalar {
                     }),
                 }
             }
-            (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal { scale, precision })) => {
+            (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal(decimal_type))) => {
                 let val = if use_min {
                     v.min_bytes_opt()
                 } else {
@@ -347,17 +380,18 @@ impl StatsScalar {
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
-                        logical_type: Some(LogicalType::Decimal {
-                            scale: *scale,
-                            precision: *precision,
-                        }),
+                        logical_type: Some(LogicalType::Decimal(DecimalType {
+                            scale: decimal_type.scale,
+                            precision: decimal_type.precision,
+                        })),
                     });
                 };
 
-                let mut val = val / 10.0_f64.powi(*scale);
+                let mut val = val / 10.0_f64.powi(decimal_type.scale);
 
                 if val.is_normal()
-                    && (val.trunc() as i128).to_string().len() > (precision - scale) as usize
+                    && (val.trunc() as i128).to_string().len()
+                        > (decimal_type.precision - decimal_type.scale) as usize
                 {
                     // For normal values with integer parts that get rounded to a number beyond
                     // the precision - scale range take the next smaller (by magnitude) value
@@ -366,7 +400,7 @@ impl StatsScalar {
 
                 Ok(Self::Decimal {
                     value: val,
-                    scale: *scale,
+                    scale: decimal_type.scale,
                 })
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
@@ -422,6 +456,9 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
                 serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::TimestampNtz(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
             }
             StatsScalar::Decimal { value, scale } => {
                 // For scale=0, serialize as integer since serde_json would otherwise
@@ -502,44 +539,6 @@ impl AddAssign for AggregatedStats {
     }
 }
 
-/// For a list field, we don't want the inner field names. We need to chuck out
-/// the list and items fields from the path, but also need to handle the
-/// peculiar case where the user named the list field "list" or "item".
-///
-/// NOTE: As of delta_kernel 0.3.1 the name switched from `item` to `element` to line up with the
-/// parquet spec, see
-/// [here](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists)
-///
-/// For example:
-///
-/// * ["some_nested_list", "list", "item", "list", "item"] -> "some_nested_list"
-/// * ["some_list", "list", "item"] -> "some_list"
-/// * ["list", "list", "item"] -> "list"
-/// * ["item", "list", "item"] -> "item"
-fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
-    let max_rep_levels = column_descr.max_rep_level();
-    let column_path_parts = column_descr.path().parts();
-
-    // If there are more nested names, we can't handle them yet.
-    if column_path_parts.len() > (2 * max_rep_levels + 1) as usize {
-        return None;
-    }
-
-    let mut column_path_parts = column_path_parts.to_vec();
-    let mut items_seen = 0;
-    let mut lists_seen = 0;
-    while let Some(part) = column_path_parts.pop() {
-        match (part.as_str(), lists_seen, items_seen) {
-            ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
-            ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
-            ("list", _, _) => lists_seen += 1,
-            ("element", _, _) => items_seen += 1,
-            (other, _, _) => return Some(other.to_string()),
-        }
-    }
-    None
-}
-
 fn apply_min_max_for_column(
     statistics: AggregatedStats,
     column_descr: Arc<ColumnDescriptor>,
@@ -548,14 +547,8 @@ fn apply_min_max_for_column(
     max_values: &mut HashMap<String, ColumnValueStat>,
     null_counts: &mut HashMap<String, ColumnCountStat>,
 ) -> Result<(), DeltaWriterError> {
-    // Special handling for list column
+    // Repeated leaf null counts describe nested values only.
     if column_descr.max_rep_level() > 0 {
-        let key = get_list_field_name(&column_descr);
-
-        if let Some(key) = key {
-            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
-        }
-
         return Ok(());
     }
 
@@ -625,6 +618,21 @@ fn apply_min_max_for_column(
     }
 }
 
+/// Map the old (old!) [parquet::basic::ConvertedType] into the more modern
+/// [parquet::basic::LogicalType]
+///
+/// Because this is a legacy format helper function, ro types which might not be easy to convert
+/// from one struct to the other, it will just return `None`
+fn converted_to_logical_type(converted: ConvertedType) -> Option<&'static LogicalType> {
+    match converted {
+        ConvertedType::UTF8 => Some(&LogicalType::String),
+        ConvertedType::DATE => Some(&LogicalType::Date),
+        ConvertedType::JSON => Some(&LogicalType::Json),
+        ConvertedType::BSON => Some(&LogicalType::Bson),
+        _others => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::utils::record_batch_from_message;
@@ -661,42 +669,42 @@ mod tests {
         let cases = &[
             (
                 simple_parquet_stat!(Statistics::Boolean, true),
-                Some(LogicalType::Integer {
+                Some(LogicalType::Integer(IntType {
                     bit_width: 1,
                     is_signed: true,
-                }),
+                })),
                 Value::Bool(true),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1),
-                Some(LogicalType::Integer {
+                Some(LogicalType::Integer(IntType {
                     bit_width: 32,
                     is_signed: true,
-                }),
+                })),
                 Value::from(1),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 3,
                     precision: 4,
-                }),
+                })),
                 Value::from(1.234),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: -1,
                     precision: 4,
-                }),
+                })),
                 Value::from(12340.0),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 0,
                     precision: 4,
-                }),
+                })),
                 Value::from(1234),
             ),
             (
@@ -706,50 +714,50 @@ mod tests {
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::NANOS,
-                }),
+                })),
                 Value::from("2022-01-01T12:34:56.789123456Z"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123),
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::MICROS,
-                }),
+                })),
                 Value::from("2022-01-01T12:34:56.789123Z"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::MILLIS,
-                }),
+                })),
                 Value::from("2022-01-01T12:34:56.789Z"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 3,
                     precision: 4,
-                }),
+                })),
                 Value::from(1.234),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: -1,
                     precision: 4,
-                }),
+                })),
                 Value::from(12340.0),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 0,
                     precision: 4,
-                }),
+                })),
                 Value::from(1234),
             ),
             (
@@ -772,10 +780,10 @@ mod tests {
                     Statistics::FixedLenByteArray,
                     FixedLenByteArray::from(1243124142314423i128.to_be_bytes().to_vec())
                 ),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 3,
                     precision: 16,
-                }),
+                })),
                 Value::from(1243124142314.423),
             ),
             (
@@ -783,10 +791,10 @@ mod tests {
                     Statistics::FixedLenByteArray,
                     FixedLenByteArray::from(vec![0, 39, 16])
                 ),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 3,
                     precision: 5,
-                }),
+                })),
                 Value::from(10.0),
             ),
             (
@@ -794,10 +802,10 @@ mod tests {
                     Statistics::FixedLenByteArray,
                     FixedLenByteArray::from(1234i128.to_be_bytes().to_vec())
                 ),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 0,
                     precision: 4,
-                }),
+                })),
                 Value::from(1234),
             ),
             (
@@ -807,10 +815,10 @@ mod tests {
                         75, 59, 76, 168, 90, 134, 196, 122, 9, 138, 34, 63, 255, 255, 255, 255
                     ])
                 ),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 6,
                     precision: 38,
-                }),
+                })),
                 Value::from(9.999999999999999e31),
             ),
             (
@@ -820,10 +828,10 @@ mod tests {
                         180, 196, 179, 87, 165, 121, 59, 133, 246, 117, 221, 192, 0, 0, 0, 1
                     ])
                 ),
-                Some(LogicalType::Decimal {
+                Some(LogicalType::Decimal(DecimalType {
                     scale: 6,
                     precision: 38,
-                }),
+                })),
                 Value::from(-9.999999999999999e31),
             ),
             (
@@ -862,7 +870,7 @@ mod tests {
         writer = writer.with_writer_properties(
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
-                .set_max_row_group_size(128)
+                .set_max_row_group_row_count(Some(128))
                 .build(),
         );
 
@@ -875,8 +883,7 @@ mod tests {
         let stats = add[0].get_stats().unwrap().unwrap();
 
         let min_max_keys = vec!["meta", "some_int", "some_string", "some_bool", "uuid"];
-        let mut null_count_keys = vec!["some_list", "some_nested_list"];
-        null_count_keys.extend_from_slice(min_max_keys.as_slice());
+        let null_count_keys = min_max_keys.clone();
 
         assert_eq!(
             min_max_keys.len(),
@@ -975,12 +982,179 @@ mod tests {
                 ("some_int", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_bool", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_string", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
-                ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
-                ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 k => panic!("Key {k:?} should not be present in null_count"),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_repeated_leaf_stats_skip_container_null_counts() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let table_path = temp_dir.path();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "id", "type": "string", "nullable": true, "metadata": {} },
+                {
+                    "name": "b",
+                    "type": {
+                        "type": "array",
+                        "elementType": "integer",
+                        "containsNull": true
+                    },
+                    "nullable": true, "metadata": {}
+                },
+                {
+                    "name": "m",
+                    "type": {
+                        "type": "map",
+                        "keyType": "string",
+                        "valueType": "integer",
+                        "valueContainsNull": true
+                    },
+                    "nullable": true, "metadata": {}
+                }
+            ]
+        });
+        create_temp_table_with_schema(table_path, &schema);
+
+        let table_uri = Url::from_directory_path(table_path).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer = writer.with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        );
+
+        let arrow_schema = writer.arrow_schema();
+        let rows = [
+            json!({
+                "id": "with_null_element",
+                "b": [1, null, 2],
+                "m": {"a": 1, "b": null},
+            }),
+            json!({
+                "id": "empty",
+                "b": [],
+                "m": {},
+            }),
+        ];
+        let batch = record_batch_from_message(arrow_schema, rows.as_slice()).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let add = writer.flush().await.unwrap();
+        assert_eq!(add.len(), 1);
+        let stats = add[0].get_stats().unwrap().unwrap();
+
+        assert!(
+            !stats.null_count.contains_key("b"),
+            "writer copied list element null counts into list nullCount: {:?}",
+            stats.null_count
+        );
+        assert!(
+            !stats.null_count.contains_key("m"),
+            "writer copied map value null counts into map nullCount: {:?}",
+            stats.null_count
+        );
+        assert_eq!(
+            Some(&ColumnCountStat::Value(0)),
+            stats.null_count.get("id"),
+            "writer kept scalar null counts"
+        );
+    }
+
+    // Regression test for delta-io/delta-rs#3172: leaves under a nested
+    // top-level field used to consume the `delta.dataSkippingNumIndexedCols`
+    // budget one-by-one, starving later top-level columns of stats. After the
+    // fix the budget is counted per distinct top-level field, so every
+    // top-level column up to the limit gets stats.
+    #[tokio::test]
+    async fn test_nested_fields_do_not_consume_stats_budget() {
+        use crate::kernel::{DataType as DeltaDataType, PrimitiveType, StructField, StructType};
+
+        // 5 top-level columns, 8 parquet leaves total ("1", nested.{2,3,4,5},
+        // year, month, day). With `dataSkippingNumIndexedCols=5` the
+        // leaf-counted implementation would burn the budget on "1" plus the
+        // four `nested.*` leaves, dropping year/month/day. With the
+        // top-level-counted budget all five top-level columns are admitted.
+        let nested = StructType::try_new([
+            StructField::nullable("2", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("3", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("4", DeltaDataType::Primitive(PrimitiveType::Long)),
+            StructField::nullable("5", DeltaDataType::Primitive(PrimitiveType::Long)),
+        ])
+        .unwrap();
+        let configuration: HashMap<String, Option<String>> = [(
+            "delta.dataSkippingNumIndexedCols".to_string(),
+            Some("5".to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::nullable("1", DeltaDataType::Primitive(PrimitiveType::String)),
+                StructField::nullable("nested", DeltaDataType::Struct(Box::new(nested))),
+                StructField::nullable("year", DeltaDataType::Primitive(PrimitiveType::Long)),
+                StructField::nullable("month", DeltaDataType::Primitive(PrimitiveType::Long)),
+                StructField::nullable("day", DeltaDataType::Primitive(PrimitiveType::Long)),
+            ])
+            .with_configuration(configuration)
+            .await
+            .unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let arrow_schema = writer.arrow_schema();
+        let rows = vec![json!({
+            "1": "foo",
+            "nested": {"2": 100, "3": 200, "4": 300, "5": 400},
+            "year": 2024,
+            "month": 12,
+            "day": 1
+        })];
+        let batch = record_batch_from_message(arrow_schema, rows.as_slice()).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let add = writer.flush().await.unwrap();
+        assert_eq!(add.len(), 1);
+        let stats = add[0].get_stats().unwrap().unwrap();
+
+        // Every top-level non-partition column should have min/max/nullCount.
+        for key in ["1", "year", "month", "day"] {
+            assert!(
+                stats.min_values.contains_key(key),
+                "min_values missing top-level column {key:?}: {:?}",
+                stats.min_values.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                stats.max_values.contains_key(key),
+                "max_values missing top-level column {key:?}: {:?}",
+                stats.max_values.keys().collect::<Vec<_>>()
+            );
+            assert!(
+                stats.null_count.contains_key(key),
+                "null_count missing top-level column {key:?}: {:?}",
+                stats.null_count.keys().collect::<Vec<_>>()
+            );
+        }
+
+        // The nested struct's leaves should still produce per-field stats
+        // under the "nested" key (one top-level slot, all leaves admitted).
+        let nested_min = stats
+            .min_values
+            .get("nested")
+            .and_then(ColumnValueStat::as_column)
+            .expect("nested entry should be a column map");
+        for key in ["2", "3", "4", "5"] {
+            assert!(
+                nested_min.contains_key(key),
+                "nested.{key} missing from min_values"
+            );
         }
     }
 
@@ -1001,6 +1175,37 @@ mod tests {
         std::fs::write(
             log_path.join("00000000000000000000.json"),
             V0_COMMIT.as_str(),
+        )
+        .unwrap();
+    }
+
+    fn create_temp_table_with_schema(table_path: &Path, schema: &Value) {
+        let log_path = table_path.join("_delta_log");
+        let schema_string = serde_json::to_string(schema).unwrap();
+        let jsons = [
+            json!({
+                "protocol":{"minReaderVersion":1,"minWriterVersion":2}
+            }),
+            json!({
+                "metaData": {
+                    "id": "22ef18ba-191c-4c36-a606-3dad5cdf3830",
+                    "format": {
+                        "provider": "parquet", "options": {}
+                    },
+                    "schemaString": schema_string,
+                    "partitionColumns": [], "configuration": {}, "createdTime": 1564524294376i64
+                }
+            }),
+        ];
+
+        std::fs::create_dir(log_path.as_path()).unwrap();
+        std::fs::write(
+            log_path.join("00000000000000000000.json"),
+            jsons
+                .iter()
+                .map(|j| serde_json::to_string(j).unwrap())
+                .collect::<Vec<String>>()
+                .join("\n"),
         )
         .unwrap();
     }

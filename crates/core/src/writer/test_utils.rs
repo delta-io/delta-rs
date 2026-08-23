@@ -12,8 +12,10 @@ use crate::kernel::{
 };
 use crate::operations::create::CreateBuilder;
 use crate::{DeltaTable, DeltaTableBuilder, TableProperty};
+/// Result type for writer unit tests, boxing any error for convenient use with `?`.
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
+/// Return a sample record batch, optionally filtered to a partition and/or containing nulls.
 pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
     let (base_int, base_str, base_mod) = if with_null {
         data_with_null()
@@ -48,6 +50,7 @@ pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
     }
 }
 
+/// Return the Arrow schema matching the columns produced by [`get_record_batch`] for `part`.
 pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
     match part {
         Some(key) if key.contains("/id=") => Arc::new(ArrowSchema::new(vec![Field::new(
@@ -131,6 +134,7 @@ fn data_without_null() -> (Int32Array, StringArray, StringArray) {
     (base_int, base_str, base_mod)
 }
 
+/// Return the canonical sample Delta schema (id, value, modified).
 pub fn get_delta_schema() -> StructType {
     StructType::try_new(vec![
         StructField::new(
@@ -152,6 +156,7 @@ pub fn get_delta_schema() -> StructType {
     .unwrap()
 }
 
+/// Return table metadata for the sample schema with the given partition columns.
 pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     let table_schema = get_delta_schema();
     new_metadata(
@@ -162,6 +167,7 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> Metadata {
     .unwrap()
 }
 
+/// Return a sample record batch that includes a nested struct column.
 pub fn get_record_batch_with_nested_struct() -> RecordBatch {
     let nested_schema = Arc::new(ArrowSchema::new(vec![Field::new(
         "count",
@@ -246,6 +252,7 @@ pub fn get_record_batch_with_nested_struct() -> RecordBatch {
     .unwrap()
 }
 
+/// Return the sample Delta schema extended with a nested struct column.
 pub fn get_delta_schema_with_nested_struct() -> StructType {
     StructType::try_new(vec![
         StructField::new(
@@ -279,6 +286,7 @@ pub fn get_delta_schema_with_nested_struct() -> StructType {
     .unwrap()
 }
 
+/// Create an in-memory table with a single configuration property set.
 pub async fn setup_table_with_configuration(
     key: TableProperty,
     value: Option<impl Into<String>>,
@@ -292,6 +300,7 @@ pub async fn setup_table_with_configuration(
         .expect("Failed to create table")
 }
 
+/// Create an empty, uninitialized table backed by a temporary directory.
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
@@ -302,6 +311,7 @@ pub fn create_bare_table() -> DeltaTable {
         .unwrap()
 }
 
+/// Create and initialize a table at `table_path` with the sample schema and given partitions.
 pub async fn create_initialized_table(table_path: &str, partition_cols: &[String]) -> DeltaTable {
     let table_schema: StructType = get_delta_schema();
     CreateBuilder::new()
@@ -314,6 +324,7 @@ pub async fn create_initialized_table(table_path: &str, partition_cols: &[String
         .unwrap()
 }
 
+/// DataFusion-backed helpers for reading table data back in tests.
 #[cfg(feature = "datafusion")]
 pub mod datafusion {
     use arrow_array::RecordBatch;
@@ -322,6 +333,7 @@ pub mod datafusion {
     use crate::DeltaTable;
     use crate::writer::SaveMode;
 
+    /// Read all rows of `table` into record batches via a DataFusion `SELECT *`.
     pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
         let table =
             DeltaTable::new_with_state(table.log_store.clone(), table.snapshot().unwrap().clone());
@@ -337,6 +349,7 @@ pub mod datafusion {
             .unwrap()
     }
 
+    /// Read `columns` from `table` ordered by those columns, for deterministic assertions.
     pub async fn get_data_sorted(table: &DeltaTable, columns: &str) -> Vec<RecordBatch> {
         let table = DeltaTable::new_with_state(
             table.log_store.clone(),
@@ -354,6 +367,7 @@ pub mod datafusion {
             .unwrap()
     }
 
+    /// Append a single record batch to `table` and return the updated table.
     pub async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
         table
             .write(vec![batch.clone()])

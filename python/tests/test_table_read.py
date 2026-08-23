@@ -1,3 +1,4 @@
+import json
 import multiprocessing
 import os
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
@@ -14,7 +15,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaProtocolError
+from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.query import QueryBuilder
 from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
@@ -561,6 +562,33 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     assert dt.get_add_actions(flatten=True).num_rows == 0
 
 
+@pytest.mark.pyarrow
+def test_get_add_actions_without_files_raises():
+    table_path = "../crates/test/tests/data/simple_table"
+    dt = DeltaTable(table_path, without_files=True)
+
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
+@pytest.mark.pyarrow
+def test_without_files_update_preserves_get_add_actions_error(tmp_path: Path):
+    import pyarrow as pa
+
+    data = pa.table({"id": pa.array([1, 2, 3], type=pa.int64())})
+    write_deltalake(tmp_path, data)
+
+    dt = DeltaTable(tmp_path, without_files=True)
+    assert dt.version() == 0
+
+    write_deltalake(tmp_path, data, mode="append")
+    dt.update_incremental()
+
+    assert dt.version() == 1
+    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
+        dt.get_add_actions(flatten=True)
+
+
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     from urllib.parse import urlparse
 
@@ -1087,8 +1115,6 @@ def test_is_deltatable_with_storage_opts():
         "AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY": "THE_AWS_SECRET_ACCESS_KEY",
         "AWS_ALLOW_HTTP": "true",
-        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
-        "AWS_S3_LOCKING_PROVIDER": "dynamodb",
         "DELTA_DYNAMO_TABLE_NAME": "custom_table_name",
     }
     assert DeltaTable.is_deltatable(table_path, storage_options=storage_options)
@@ -1128,6 +1154,94 @@ def test_read_query_builder():
 
     actual = qb.execute(query).read_all()
     assert expected == actual
+
+
+def test_query_builder_boolean_false_predicate_4490(tmp_path: Path):
+    table = Table(
+        {
+            "id": Array(
+                [1, 2, 3], ArrowField("id", type=DataType.int64(), nullable=True)
+            ),
+            "deprecated": Array(
+                [False, True, False],
+                ArrowField("deprecated", type=DataType.bool(), nullable=True),
+            ),
+            "chemsys": Array(
+                ["Li-O", "Fe-O", "Na-Cl"],
+                ArrowField("chemsys", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, table)
+
+    actual = (
+        QueryBuilder()
+        .register("materials", DeltaTable(tmp_path))
+        .execute(
+            """
+            SELECT chemsys
+            FROM materials
+            WHERE deprecated=false
+            ORDER BY chemsys
+            """
+        )
+        .read_all()
+    )
+    expected = Table(
+        {
+            "chemsys": Array(
+                ["Li-O", "Na-Cl"],
+                ArrowField("chemsys", type=DataType.string_view(), nullable=True),
+            )
+        }
+    )
+    assert actual == expected
+
+
+def test_query_builder_ignores_legacy_boolean_min_max_stats_4490(tmp_path: Path):
+    table = Table(
+        {
+            "id": Array(
+                [1, 2, 3], ArrowField("id", type=DataType.int64(), nullable=True)
+            ),
+            "deprecated": Array(
+                [False, True, False],
+                ArrowField("deprecated", type=DataType.bool(), nullable=True),
+            ),
+        }
+    )
+    write_deltalake(tmp_path, table)
+
+    log_path = tmp_path / "_delta_log" / "00000000000000000000.json"
+    rewritten_lines = []
+    for line in log_path.read_text().splitlines():
+        action = json.loads(line)
+        add = action.get("add")
+        if add and add.get("stats"):
+            stats = json.loads(add["stats"])
+            stats.setdefault("minValues", {})["deprecated"] = True
+            stats.setdefault("maxValues", {})["deprecated"] = True
+            add["stats"] = json.dumps(stats, separators=(",", ":"))
+        rewritten_lines.append(json.dumps(action, separators=(",", ":")))
+    log_path.write_text("\n".join(rewritten_lines) + "\n")
+
+    actual = (
+        QueryBuilder()
+        .register("materials", DeltaTable(tmp_path))
+        .execute(
+            """
+            SELECT id
+            FROM materials
+            WHERE deprecated=false
+            ORDER BY id
+            """
+        )
+        .read_all()
+    )
+    expected = Table(
+        {"id": Array([1, 3], ArrowField("id", type=DataType.int64(), nullable=True))}
+    )
+    assert actual == expected
 
 
 @pytest.mark.pyarrow
@@ -1185,6 +1299,132 @@ def test_read_query_builder_join_multiple_tables(tmp_path):
     assert expected == actual
 
 
+@pytest.mark.pyarrow
+def test_querybuilder_partition_join_issue_4467_dynamic_filter(tmp_path):
+    scenarios = [f"s{i}" for i in range(3)]
+    zones = [f"z{i}" for i in range(2)]
+    rows_per_zone = 5
+    data = _issue_4467_table(scenarios, zones, rows_per_zone)
+
+    left_path = tmp_path / "left"
+    right_path = tmp_path / "right"
+    write_deltalake(left_path, data, partition_by="scenario")
+    write_deltalake(right_path, data, partition_by="scenario")
+
+    filtered_scenarios = scenarios[:2]
+    filtered_zones = zones[:1]
+    scenario_in = ", ".join(repr(scenario) for scenario in filtered_scenarios)
+    zone_in = ", ".join(repr(zone) for zone in filtered_zones)
+    actual = (
+        QueryBuilder()
+        .register("left_tbl", DeltaTable(left_path))
+        .register("right_tbl", DeltaTable(right_path))
+        .execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM left_tbl l
+            INNER JOIN right_tbl r
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            WHERE l.scenario IN ({scenario_in})
+              AND l.price_zone IN ({zone_in})
+            """
+        )
+        .read_all()
+    )
+
+    assert actual["count"].to_pylist() == [
+        len(filtered_scenarios) * len(filtered_zones) * rows_per_zone
+    ]
+
+
+def _issue_4467_table(scenarios, zones, rows_per_zone, *, with_period_type=False):
+    import pyarrow as pa
+
+    scenario_values = []
+    zone_values = []
+    idx_values = []
+    for scenario in scenarios:
+        for zone in zones:
+            scenario_values.extend([scenario] * rows_per_zone)
+            zone_values.extend([zone] * rows_per_zone)
+            idx_values.extend(range(rows_per_zone))
+
+    columns = {
+        "scenario": pa.array(scenario_values, type=pa.string()),
+        "price_zone": pa.array(zone_values, type=pa.string()),
+        "idx": pa.array(idx_values, type=pa.int64()),
+        "val": pa.array(range(len(idx_values)), type=pa.int64()),
+    }
+    if with_period_type:
+        columns["period_type"] = pa.array(["hour"] * len(idx_values), type=pa.string())
+
+    return pa.table(columns)
+
+
+@pytest.mark.parametrize(
+    "join_predicate",
+    [
+        pytest.param(
+            """
+              ON l.scenario = r.scenario
+             AND l.price_zone = r.price_zone
+             AND l.idx = r.idx
+            """,
+            id="case_5_right_filter",
+        ),
+        pytest.param(
+            """
+              ON CAST(l.scenario AS VARCHAR) = CAST(r.scenario AS VARCHAR)
+             AND CAST(l.price_zone AS VARCHAR) = CAST(r.price_zone AS VARCHAR)
+             AND l.idx = r.idx
+            """,
+            id="case_6_cast_right_filter",
+        ),
+    ],
+)
+@pytest.mark.pyarrow
+def test_querybuilder_partition_join_issue_4467_right_filter_cases_5_and_6(
+    tmp_path, join_predicate
+):
+    scenarios = [f"s{i}" for i in range(5)]
+    zones = [f"z{i}" for i in range(3)]
+    rows_per_zone = 100
+    left_path = tmp_path / "left"
+    right_path = tmp_path / "right"
+    write_deltalake(
+        left_path,
+        _issue_4467_table(scenarios, zones, rows_per_zone),
+        partition_by="scenario",
+    )
+    write_deltalake(
+        right_path,
+        _issue_4467_table(scenarios, zones, rows_per_zone, with_period_type=True),
+        partition_by="scenario",
+    )
+
+    zone_in = ", ".join(repr(zone) for zone in zones)
+    actual = (
+        QueryBuilder()
+        .register("left_tbl", DeltaTable(left_path))
+        .register("right_tbl", DeltaTable(right_path))
+        .execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM left_tbl l
+            INNER JOIN right_tbl r
+            {join_predicate}
+            WHERE l.price_zone IN ({zone_in})
+              AND r.period_type = 'hour'
+            """
+        )
+        .read_all()
+    )
+
+    assert actual["count"].to_pylist() == [len(scenarios) * len(zones) * rows_per_zone]
+
+
 def test_deletion_vectors_api_smoke():
     table_path = "../crates/test/tests/data/table-with-dv-small"
     dt = DeltaTable(table_path)
@@ -1229,6 +1469,20 @@ def test_deletion_vectors_without_files_raises():
 
     with pytest.raises(Exception, match="without files"):
         dt.deletion_vectors()
+
+
+@pytest.mark.pyarrow
+def test_read_variant_fixture():
+    table_path = "../crates/test/tests/data/spark-variant-checkpoint"
+    dt = DeltaTable(table_path)
+
+    schema = dt.schema()
+    assert schema.fields[1].name == "v"
+    assert schema.fields[1].type.type == "variant"
+    assert dt.protocol().reader_features == ["variantType-preview"]
+
+    table = dt.to_pyarrow_dataset().to_table()
+    assert table.num_rows == 102
 
 
 def test_read_deletion_vectors():
@@ -1302,3 +1556,27 @@ def test_nested_runtimes(tmp_path):
     con.execute(f"CREATE EXTERNAL TABLE raw_csv STORED AS CSV LOCATION '{csv_path}'")
     df = con.execute("SELECT * FROM raw_csv")
     write_deltalake(tmp_path / "delta", df, mode="overwrite")
+
+
+@pytest.mark.polars
+def test_read_bool_stats_in_polars(tmp_path):
+    """
+    <https://github.com/delta-io/delta-rs/issues/4224>
+    """
+    import polars as pl
+
+    df = pl.DataFrame(
+        {"p": [10, 10, 20, 20], "a": [1, 2, 3, None], "b": [False, False, True, None]}
+    )
+
+    df.write_delta(
+        tmp_path,
+        delta_write_options={"partition_by": "p"},
+    )
+
+    table = DeltaTable(tmp_path)
+    with pl.Config(tbl_cols=-1):
+        pdf = pl.DataFrame(table.get_add_actions(flatten=True))
+        assert pdf.schema["max.b"] is not None, (
+            "The boolean column stats should be there"
+        )

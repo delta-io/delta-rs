@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import warnings
-from collections.abc import Generator, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -57,11 +57,17 @@ if TYPE_CHECKING:
 
 MAX_SUPPORTED_PYARROW_WRITER_VERSION = 7
 NOT_SUPPORTED_PYARROW_WRITER_VERSIONS = [3, 4, 5, 6]
-SUPPORTED_WRITER_FEATURES = {"appendOnly", "invariants", "timestampNtz"}
+SUPPORTED_WRITER_FEATURES = {
+    "appendOnly",
+    "invariants",
+    "timestampNtz",
+    "variantType",
+    "variantType-preview",
+}
 
 MAX_SUPPORTED_READER_VERSION = 3
 NOT_SUPPORTED_READER_VERSION = 2
-SUPPORTED_READER_FEATURES = {"timestampNtz"}
+SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
 
@@ -177,10 +183,10 @@ class DeltaTable:
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
                                 also be considered for optimal performance. Defaults to 4 * number of cpus.
-            skip_stats: If True, skip parsing per-file statistics while opening the table.
-                                Use for workflows that never need file pruning (vacuum, filesystem check, append-only writes).
-                                Any predicated query on this instance will scan every file because the cache has no stats.
-                                Partition pruning is unaffected. Defaults to False.
+            skip_stats: If True, skip parsing file statistics while opening the table.
+                                Use for maintenance and append workflows that do not need file pruning.
+                                Queries with predicates scan each file because the kernel disables statistics and
+                                partition pruning. Defaults to False.
 
         """
         self._storage_options = storage_options
@@ -483,8 +489,9 @@ class DeltaTable:
 
         Returns:
             RecordBatchReader: A reader with two columns:
-                - filepath (str): fully-qualified file URI.
-                - selection_vector (list[bool]): row keep mask where True means keep and False means deleted.
+
+                - ``filepath (str)``: fully-qualified file URI.
+                - ``selection_vector (list[bool])``: row keep mask where True means keep and False means deleted.
 
         Notes:
             Only files that have deletion vectors are returned.
@@ -565,23 +572,14 @@ class DeltaTable:
         Returns:
             list of the commit infos registered in the transaction log
         """
-
-        def _backwards_enumerate(
-            iterable: list[str], start_end: int
-        ) -> Generator[tuple[int, str], None, None]:
-            n = start_end
-            for elem in iterable:
-                yield n, elem
-                n -= 1
-
-        commits = list(self._table.history(limit))
+        latest_version, commits = self._table.history(limit)
         history = []
-        for version, commit_info_raw in _backwards_enumerate(
-            commits, start_end=self._table.get_latest_version()
-        ):
+        version = latest_version
+        for commit_info_raw in commits:
             commit = json.loads(commit_info_raw)
             commit["version"] = version
             history.append(commit)
+            version -= 1
         return history
 
     def count(self) -> int:
@@ -706,7 +704,7 @@ class DeltaTable:
             new_values: a mapping of column name to python datatype.
             predicate: a logical expression.
             writer_properties: Pass writer properties to the Rust parquet writer.
-            error_on_type_mismatch: specify if update will return error if data types are mismatching :default = True
+            error_on_type_mismatch: specify if update returns an error when update expressions fail to cast to target column types :default = True
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
         Returns:
@@ -839,8 +837,12 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> TableMerger:
         """Pass the source data which you want to merge on the target delta table, providing a
-        predicate in SQL query like format. You can also specify on what to do when the underlying data types do not
-        match the underlying table.
+        predicate in SQL query like format.
+
+        MERGE casts update and insert expressions to the target column types. If
+        ``error_on_type_mismatch`` is True, failed casts raise an error. If
+        ``error_on_type_mismatch`` is False, failed casts become null for target columns that allow
+        null values. Target columns that do not allow null values still fail the write constraint check.
 
         Args:
             source: source data
@@ -848,7 +850,7 @@ class DeltaTable:
             source_alias: Alias for the source table
             target_alias: Alias for the target table
             merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
-            error_on_type_mismatch: specify if merge will return error if data types are mismatching :default = True
+            error_on_type_mismatch: specify if merge returns an error when update or insert expressions fail to cast to target column types :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
             streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
                 implicitly disables source table stats to derive an early_pruning_predicate
@@ -902,7 +904,7 @@ class DeltaTable:
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
         """
-        Restores table to a given version or datetime.
+        Restores table to a given version or datetime. See also [``load_as_version``](#deltalake.DeltaTable.load_as_version).
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -913,6 +915,13 @@ class DeltaTable:
 
         Returns:
             the metrics from restore.
+
+        Example:
+            Restore the table to version `1`.
+            ```python
+            dt = DeltaTable(table_path)
+            dt.restore(1)
+            ```
         """
         if isinstance(target, datetime):
             metrics = self._table.restore(
@@ -954,7 +963,7 @@ class DeltaTable:
                 This is for compatibility with systems like Polars that only support the large versions of Arrow types.
                 If `schema` is passed it takes precedence over this option.
 
-         More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
+         More info on [pyarrow dataset ParquetReadOptions](https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html).
 
         Example:
             ``deltalake`` will work with any storage compliant with [pyarrow.fs.FileSystem][pyarrow.fs.FileSystem], however the root of the filesystem has
@@ -1240,9 +1249,13 @@ class DeltaTable:
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
         Returns:
-            A metrics dict. The ``num_deleted_rows`` key is omitted when this library
-            cannot determine the deleted row count without scanning data
-            files.
+            A metrics dict. The ``num_deleted_rows`` key is omitted when this library cannot determine the deleted row count without scanning data files.
+
+        Example:
+            ```python
+            dt = DeltaTable("tmp/my-table")
+            dt.delete("num > 2")
+            ```
         """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
@@ -2033,6 +2046,36 @@ class TableAlterer:
         self.table._table.drop_constraints(
             name,
             raise_if_not_exists,
+            commit_properties,
+            post_commithook_properties,
+        )
+
+    def drop_column_not_null(
+        self,
+        column_name: str,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Drop the ``NOT NULL`` constraint on a column, making it nullable.
+
+        This is the equivalent of ``ALTER TABLE <table> ALTER COLUMN <name> DROP NOT NULL``.
+        Only relaxing a column from non-nullable to nullable is supported.
+
+        Args:
+            column_name: the name of the column to make nullable.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.drop_column_not_null("id")
+            ```
+        """
+        self.table._table.drop_column_not_null(
+            column_name,
             commit_properties,
             post_commithook_properties,
         )

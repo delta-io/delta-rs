@@ -28,6 +28,12 @@ alter the schema as part of an overwrite pass in `schema_mode="overwrite"` or `s
 `schema_mode="overwrite"` will completely overwrite the schema, even if columns are dropped; merge will append the new columns
 and fill missing columns with `null`. `schema_mode="merge"` is also supported on append operations.
 
+When replacing the entire table with `mode="overwrite"` and `schema_mode="overwrite"`,
+you may also provide a different `partition_by` value to replace the table's
+partition columns. This is only supported for full table overwrites. Overwrites
+that use a `predicate` (also known as `replaceWhere`) must keep the existing
+partition columns because they replace only a subset of the table.
+
 ## Overwriting part of the table data using a predicate
 
 !!! note

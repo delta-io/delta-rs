@@ -1,3 +1,4 @@
+import datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -12,6 +13,21 @@ from deltalake.schema import PrimitiveType
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+
+def spark_trunc_gc_schema() -> DeltaSchema:
+    return DeltaSchema(
+        [
+            Field(name="id", type=PrimitiveType("integer"), nullable=False),
+            Field(name="event_date", type=PrimitiveType("date"), nullable=False),
+            Field(
+                name="event_year",
+                type=PrimitiveType("date"),
+                nullable=False,
+                metadata={"delta.generationExpression": "TRUNC(event_date, 'YEAR')"},
+            ),
+        ]
+    )
 
 
 @pytest.fixture
@@ -163,6 +179,57 @@ def test_write_to_table_generating_data(table_with_gc: DeltaTable):
     assert result.schema == expected_data.schema
 
 
+@pytest.mark.pyarrow
+def test_write_to_table_generating_data_with_spark_trunc_gc(tmp_path):
+    import pyarrow as pa
+
+    dt = DeltaTable.create(tmp_path, schema=spark_trunc_gc_schema())
+
+    write_deltalake(
+        dt,
+        mode="append",
+        data=pa.table(
+            {
+                "id": pa.array([1, 2], pa.int32()),
+                "event_date": pa.array(
+                    [datetime.date(2020, 6, 15), datetime.date(2021, 8, 20)],
+                    pa.date32(),
+                ),
+            }
+        ),
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by([("id", "ascending")])
+    assert result.to_pydict() == {
+        "id": [1, 2],
+        "event_date": [datetime.date(2020, 6, 15), datetime.date(2021, 8, 20)],
+        "event_year": [datetime.date(2020, 1, 1), datetime.date(2021, 1, 1)],
+    }
+
+
+@pytest.mark.pyarrow
+def test_write_with_invalid_spark_trunc_gc_to_table(tmp_path):
+    import pyarrow as pa
+
+    dt = DeltaTable.create(tmp_path, schema=spark_trunc_gc_schema())
+
+    with pytest.raises(
+        DeltaError,
+        match="failed validation check",
+    ):
+        write_deltalake(
+            dt,
+            mode="append",
+            data=pa.table(
+                {
+                    "id": pa.array([1], pa.int32()),
+                    "event_date": pa.array([datetime.date(2020, 6, 15)], pa.date32()),
+                    "event_year": pa.array([datetime.date(2020, 6, 15)], pa.date32()),
+                }
+            ),
+        )
+
+
 def test_raise_when_gc_passed_during_schema_evolution(
     tmp_path, data_without_gc, valid_gc_data
 ):
@@ -233,6 +300,37 @@ def test_merge_with_gc(table_with_gc: DeltaTable, data_without_gc):
     )
 
     assert result == expected_data
+
+
+@pytest.mark.pyarrow
+def test_merge_with_spark_trunc_gc(tmp_path):
+    import pyarrow as pa
+
+    dt = DeltaTable.create(tmp_path, schema=spark_trunc_gc_schema())
+    source = pa.table(
+        {
+            "id": pa.array([1, 2], pa.int32()),
+            "event_date": pa.array(
+                [datetime.date(2020, 6, 15), datetime.date(2021, 8, 20)],
+                pa.date32(),
+            ),
+        }
+    )
+
+    (
+        dt.merge(source, predicate="s.id = t.id", source_alias="s", target_alias="t")
+        .when_not_matched_insert(
+            updates={"id": "s.id", "event_date": "s.event_date"},
+        )
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by([("id", "ascending")])
+    assert result.to_pydict() == {
+        "id": [1, 2],
+        "event_date": [datetime.date(2020, 6, 15), datetime.date(2021, 8, 20)],
+        "event_year": [datetime.date(2020, 1, 1), datetime.date(2021, 1, 1)],
+    }
 
 
 def test_merge_with_g_during_schema_evolution(

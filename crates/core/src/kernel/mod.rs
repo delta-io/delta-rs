@@ -10,10 +10,12 @@ use tracing::dispatcher;
 
 pub mod arrow;
 pub mod error;
+/// Core Delta log action models (Add, Remove, Metadata, Protocol, ...) and related types.
 pub mod models;
 pub mod scalars;
+/// Delta and Arrow schema types, conversions, casting and partition handling.
 pub mod schema;
-mod snapshot;
+pub(crate) mod snapshot;
 pub mod transaction;
 
 pub use arrow::engine_ext::StructDataExt;

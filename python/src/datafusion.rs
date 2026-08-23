@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -15,6 +14,7 @@ use deltalake::datafusion::catalog::{Session, TableProvider};
 use deltalake::datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use deltalake::datafusion::datasource::TableType;
 use deltalake::datafusion::execution::object_store::ObjectStoreUrl;
+use deltalake::datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use deltalake::datafusion::logical_expr::{LogicalPlan, TableProviderFilterPushDown};
 use deltalake::datafusion::prelude::Expr;
 use deltalake::delta_datafusion::DeltaScanNext;
@@ -30,7 +30,7 @@ pub(crate) struct LazyTableProvider {
 }
 
 impl LazyTableProvider {
-    /// Build a DeltaTableProvider
+    /// Build a LazyTableProvider
     pub fn try_new(
         schema: Arc<ArrowSchema>,
         batches: Vec<Arc<RwLock<dyn LazyBatchGenerator>>>,
@@ -41,10 +41,6 @@ impl LazyTableProvider {
 
 #[async_trait::async_trait]
 impl TableProvider for LazyTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<ArrowSchema> {
         self.schema.clone()
     }
@@ -76,8 +72,12 @@ impl TableProvider for LazyTableProvider {
         let df_schema: DFSchema = plan.schema().try_into()?;
 
         if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr =
-                create_physical_expr(&filter_expr, &df_schema, &ExecutionProps::new())?;
+            let physical_expr = create_physical_expr(
+                &filter_expr,
+                &df_schema,
+                &ExecutionProps::new(),
+                &PhysicalPlanningContext::default(),
+            )?;
             plan = Arc::new(FilterExec::try_new(physical_expr, plan)?);
         }
 
@@ -93,6 +93,7 @@ impl TableProvider for LazyTableProvider {
                             &Expr::Column(Column::from((table_ref, field))),
                             &df_schema,
                             execution_props,
+                            &PhysicalPlanningContext::default(),
                         )
                         .map(|expr| (expr, field.name().clone()))
                         .map_err(DeltaTableError::from)
@@ -152,10 +153,6 @@ impl TokioDeltaScan {
 
 #[async_trait::async_trait]
 impl TableProvider for TokioDeltaScan {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.inner.schema()
     }
@@ -203,6 +200,7 @@ impl TableProvider for TokioDeltaScan {
 mod tests {
     use super::*;
 
+    use std::any::Any;
     use std::sync::Arc;
 
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -382,7 +380,7 @@ mod tests {
 
         // The plan should include a LimitExec
         // We can verify this by checking that the plan type is correct
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 
     #[tokio::test]
@@ -419,6 +417,6 @@ mod tests {
 
         // The resulting plan should have a chain of operations:
         // GlobalLimitExec -> ProjectionExec -> FilterExec -> LazyMemoryExec
-        assert!(plan.as_any().downcast_ref::<GlobalLimitExec>().is_some());
+        assert!(plan.downcast_ref::<GlobalLimitExec>().is_some());
     }
 }

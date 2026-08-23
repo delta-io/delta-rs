@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use arrow_array::{ArrayRef, BooleanArray};
 use arrow_schema::{DataType as ArrowDataType, SchemaRef as ArrowSchemaRef};
@@ -8,7 +9,9 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::Expr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
-use crate::delta_datafusion::{get_null_of_arrow_type, to_correct_scalar_value};
+use crate::delta_datafusion::{
+    Expression, create_session, get_null_of_arrow_type, to_correct_scalar_value,
+};
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
 
@@ -85,9 +88,10 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        //let expr = logical_expr_to_physical_expr(predicate, &self.schema);
-        let expr = SessionContext::new()
-            .create_physical_expr(predicate, &self.schema.clone().to_dfschema()?)?;
+        let session: SessionContext = create_session().into();
+        let df_schema = Arc::new(self.schema.clone().to_dfschema()?);
+        let resolved = Expression::from(predicate).resolve(&session.state(), df_schema.clone())?;
+        let expr = session.create_physical_expr(resolved, df_schema.as_ref())?;
         let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
         Ok(self
             .inner
@@ -153,11 +157,10 @@ impl PruningStatistics for AddContainer<'_> {
         ScalarValue::iter_to_array(values).ok()
     }
 
-    /// return the number of rows for the named column in each container
-    /// as an `Option<UInt64Array>`.
+    /// return the number of rows in each container as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, _column: &Column) -> Option<ArrayRef> {
+    fn row_counts(&self) -> Option<ArrayRef> {
         let values = self.inner.iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
                 ScalarValue::UInt64(Some(statistics.num_records as u64))
@@ -202,12 +205,11 @@ impl PruningStatistics for EagerSnapshot {
         self.log_data().null_counts(column)
     }
 
-    /// return the number of rows for the named column in each container
-    /// as an `Option<UInt64Array>`.
+    /// return the number of rows in each container as an `Option<UInt64Array>`.
     ///
     /// Note: the returned array must contain `num_containers()` rows
-    fn row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.log_data().row_counts(column)
+    fn row_counts(&self) -> Option<ArrayRef> {
+        self.log_data().row_counts()
     }
 
     // This function is required since DataFusion 35.0, but is implemented as a no-op

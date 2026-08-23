@@ -68,10 +68,14 @@ The following code allows creating the necessary DynamoDB table from the AWS cli
 
 ```sh
 aws dynamodb create-table \
---table-name delta_log \
---attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
---key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
---provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+  --table-name delta_log \
+  --attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
+  --key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST
+
+aws dynamodb update-time-to-live \
+  --table-name delta_log \
+  --time-to-live-specification Enabled=true,AttributeName=expireTime
 ```
 
 You can find additional information in the [Delta Lake documentation](https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup), which also includes recommendations on configuring a time-to-live (TTL) for the table to avoid growing the table indefinitely.

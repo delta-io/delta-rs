@@ -19,6 +19,7 @@ use std::{
 use arrow::array::{Array, ArrayRef, RecordBatch, builder::UInt64Builder};
 use arrow::datatypes::SchemaRef;
 use dashmap::DashSet;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::physical_expr::{Distribution, PhysicalExpr};
@@ -72,10 +73,6 @@ impl ExecutionPlan for MergeBarrierExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.input.schema()
     }
@@ -120,6 +117,17 @@ impl ExecutionPlan for MergeBarrierExec {
             self.survivors.clone(),
             self.file_column.clone(),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 
@@ -435,11 +443,11 @@ impl UserDefinedLogicalNodeCore for MergeBarrier {
     }
 }
 
-pub(crate) fn find_node<T: 'static>(
+pub(crate) fn find_node<T: ExecutionPlan>(
     parent: &Arc<dyn ExecutionPlan>,
 ) -> Option<Arc<dyn ExecutionPlan>> {
     //! Used to locate a Node::<T> after the planner converts the logical node
-    if parent.as_any().downcast_ref::<T>().is_some() {
+    if parent.downcast_ref::<T>().is_some() {
         return Some(parent.to_owned());
     }
 
@@ -471,6 +479,7 @@ mod tests {
     use datafusion::execution::TaskContext;
     use datafusion::physical_expr::expressions::Column;
     use datafusion::physical_plan::ExecutionPlan;
+    #[allow(deprecated)]
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use futures::StreamExt;
     use std::sync::Arc;
@@ -658,6 +667,7 @@ mod tests {
             MergeBarrierExec::new(exec, Arc::new("__delta_rs_path".to_string()), repartition);
 
         let survivors = merge.survivors();
+        #[allow(deprecated)]
         let coalescence = CoalesceBatchesExec::new(Arc::new(merge), 100);
         let mut stream = coalescence.execute(0, task_ctx).unwrap();
         (vec![stream.next().await.unwrap().unwrap()], survivors)

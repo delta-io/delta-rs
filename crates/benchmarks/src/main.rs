@@ -1,22 +1,40 @@
 use std::{
     path::{Path, PathBuf},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 use delta_benchmarks::{
-    merge_case_by_name, merge_case_names, merge_delete, merge_insert, merge_upsert,
-    prepare_source_and_table, register_tpcds_tables, run_smoke_once, tpcds_queries, tpcds_query,
-    MergeOp, MergePerfParams, MergeTestCase, SmokeParams,
+    default_fixture_dir, generate_vacuum_fixture, merge_case_by_name, merge_case_names,
+    merge_delete, merge_insert, merge_noop_heavy_upsert, merge_upsert,
+    open_vacuum_fixture_with_list_latency, prepare_source_and_table, register_tpcds_tables,
+    run_smoke_once, run_vacuum_full_dry_run, tpcds_queries, tpcds_query, MergeOp, MergePerfParams,
+    MergeTestCase, SmokeParams, VacuumFixtureParams, VacuumScanMode,
 };
 use deltalake_core::ensure_table_uri;
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum OpKind {
     Upsert,
+    NoopHeavyUpsert,
     Delete,
     Insert,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum VacuumScanCli {
+    Parallel,
+    Flat,
+}
+
+impl From<VacuumScanCli> for VacuumScanMode {
+    fn from(value: VacuumScanCli) -> Self {
+        match value {
+            VacuumScanCli::Parallel => VacuumScanMode::Parallel,
+            VacuumScanCli::Flat => VacuumScanMode::Flat,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -80,6 +98,60 @@ enum Command {
         #[arg(long, conflicts_with = "list", requires = "case")]
         run: bool,
     },
+
+    /// Generate a multi-level vacuum listing fixture (once) for reuse by benches
+    GenerateVacuumFixture {
+        /// Output directory for the Delta table fixture
+        #[arg(long, default_value_os_t = default_fixture_dir())]
+        out: PathBuf,
+
+        /// Number of day partitions (one commit per day)
+        #[arg(long, default_value_t = VacuumFixtureParams::default().days)]
+        days: usize,
+
+        /// Number of group values per day
+        #[arg(long, default_value_t = VacuumFixtureParams::default().groups)]
+        groups: usize,
+
+        /// Rows per (date, group) partition
+        #[arg(long, default_value_t = VacuumFixtureParams::default().rows_per_partition)]
+        rows_per_partition: usize,
+
+        /// Rebuild even if a fixture already exists at --out
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+
+    /// Dry-run full vacuum against a generated fixture (for profiling / sanity)
+    Vacuum {
+        /// Fixture directory (must already exist unless --generate is set)
+        #[arg(
+            long,
+            env = "VACUUM_BENCH_FIXTURE",
+            default_value_os_t = default_fixture_dir()
+        )]
+        fixture: PathBuf,
+
+        /// Scan strategy
+        #[arg(long, value_enum, default_value_t = VacuumScanCli::Parallel)]
+        scan: VacuumScanCli,
+
+        /// Optional LIST concurrency override (parallel path)
+        #[arg(long)]
+        scan_concurrency: Option<usize>,
+
+        /// Artificial LIST latency in milliseconds (simulates cloud RTT on local FS)
+        #[arg(long, env = "VACUUM_BENCH_LIST_LATENCY_MS", default_value_t = 0)]
+        list_latency_ms: u64,
+
+        /// Generate the default-sized fixture at --fixture if missing
+        #[arg(long, default_value_t = false)]
+        generate: bool,
+
+        /// Number of timed dry-run samples after open (same name as Divan `--sample-count`)
+        #[arg(long = "sample-count", default_value_t = 1)]
+        sample_count: usize,
+    },
 }
 
 #[tokio::main]
@@ -107,11 +179,14 @@ async fn main() -> anyhow::Result<()> {
                 run_merge_case(merge_case, &parquet_dir).await?;
             } else {
                 let op = op.ok_or_else(|| {
-                    anyhow::anyhow!("specify an operation (upsert/delete/insert) or provide --case")
+                    anyhow::anyhow!(
+                        "specify an operation (upsert/noop-heavy-upsert/delete/insert) or provide --case"
+                    )
                 })?;
 
                 let op_fn: MergeOp = match op {
                     OpKind::Upsert => merge_upsert,
+                    OpKind::NoopHeavyUpsert => merge_noop_heavy_upsert,
                     OpKind::Delete => merge_delete,
                     OpKind::Insert => merge_insert,
                 };
@@ -166,6 +241,58 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else {
                 anyhow::bail!("specify --case <id> or --list");
+            }
+        }
+        Command::GenerateVacuumFixture {
+            out,
+            days,
+            groups,
+            rows_per_partition,
+            force,
+        } => {
+            let params = VacuumFixtureParams {
+                days,
+                groups,
+                rows_per_partition,
+            };
+            let start = Instant::now();
+            let path = generate_vacuum_fixture(&out, &params, force).await?;
+            println!(
+                "vacuum_fixture_path={} days={} groups={} partitions_approx={} generate_duration_ms={}",
+                path.display(),
+                params.days,
+                params.groups,
+                params.days.saturating_mul(params.groups),
+                start.elapsed().as_millis()
+            );
+        }
+        Command::Vacuum {
+            fixture,
+            scan,
+            scan_concurrency,
+            list_latency_ms,
+            generate,
+            sample_count,
+        } => {
+            if generate {
+                let params = VacuumFixtureParams::default();
+                generate_vacuum_fixture(&fixture, &params, false).await?;
+            }
+            let list_latency = Duration::from_millis(list_latency_ms);
+            let table = open_vacuum_fixture_with_list_latency(&fixture, list_latency).await?;
+            let mode = VacuumScanMode::from(scan);
+            for i in 0..sample_count {
+                let start = Instant::now();
+                let (_table, metrics) =
+                    run_vacuum_full_dry_run(&table, mode, scan_concurrency).await?;
+                println!(
+                    "sample={} scan={} list_latency_ms={} vacuum_duration_ms={} files_deleted={}",
+                    i,
+                    mode.name(),
+                    list_latency_ms,
+                    start.elapsed().as_millis(),
+                    metrics.files_deleted.len()
+                );
             }
         }
     }
