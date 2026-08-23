@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-core"
-version = "0.28.0"
+version = "1.0.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -15,9 +15,17 @@ rust-version.workspace = true
 features = ["datafusion", "json"]
 
 [dependencies]
-deltalake-derive = { version = "0.28.0", path = "../derive" }
+deltalake-derive = { version = "1", path = "../derive" }
 
 delta_kernel.workspace = true
+delta_kernel_default_engine.workspace = true
+
+# Incompatible dependencies were introduced into our transitives:
+# <https://github.com/dropbox/rust-brotli/issues/256>
+alloc-stdlib = "=0.2.2"
+brotli-decompressor = "=5.0.1"
+##
+
 
 # arrow
 arrow = { workspace = true }
@@ -33,15 +41,17 @@ arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }
 object_store = { workspace = true }
+roaring = "0.11.4"
 
 # datafusion
 datafusion = { workspace = true, optional = true }
+datafusion-datasource = { workspace = true, optional = true }
+datafusion-physical-expr-adapter = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-strum = { workspace = true }
 
 # "stdlib"
 bytes = { workspace = true }
@@ -50,7 +60,7 @@ regex = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true, features = ["serde"] }
-percent-encoding-rfc3986 = {workspace = true}
+percent-encoding-rfc3986 = { workspace = true }
 
 # runtime
 async-trait = { workspace = true }
@@ -68,101 +78,84 @@ tokio = { workspace = true, features = [
 ] }
 
 # caching
-foyer = { version = "0.17.2", optional = true, features = ["serde"] }
-tempfile = { version = "3.19.1", optional = true }
+foyer = { version = "0.22.2", optional = true, features = ["serde"] }
+tempfile = { workspace = true, optional = true }
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
 dashmap = "6"
+dirs = "6.0"
 either = "1.8"
 indexmap = "2.2.1"
 itertools = "0.14"
 parking_lot = "0.12"
 percent-encoding = "2"
+pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
-rand = "0.8"
-maplit = "1"
-sqlparser = { version = "0.56.0" }
-humantime = { version = "2.1.0" }
+rand = "0.10"
+sqlparser = { version = "0.61.0" }
+humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
 [dev-dependencies]
+arrow = { workspace = true, features = ["prettyprint"]}
 criterion = "0.5"
 ctor = "0"
-datatest-stable = "0.2"
 deltalake-test = { path = "../test" }
 dotenvy = "0"
 fs_extra = "1.2.0"
-maplit = "1"
+parquet = { workspace = true, features = ["variant_experimental"] }
 pretty_assertions = "1.2.1"
 pretty_env_logger = "0.5.0"
 rstest = { version = "0.26.1" }
 serial_test = "3"
-tempfile = "3"
+tempfile = { workspace = true }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio-test = "0.4.5"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [features]
 default = ["rustls"]
 datafusion = [
     "dep:datafusion",
+    "datafusion-datasource",
+    "datafusion-physical-expr-adapter",
     "datafusion-proto",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-native-tls = ["delta_kernel/default-engine"]
-rustls = ["delta_kernel/default-engine-rustls"]
-cloud = ["object_store/cloud"]
+native-tls = ["delta_kernel_default_engine/native-tls"]
+rustls = ["delta_kernel_default_engine/rustls"]
+cloud = ["object_store/cloud", "dep:humantime"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
 
+# Experimental support for nanosecond timestamps primitive type
+nanosecond-timestamps = ["delta_kernel/nanosecond-timestamps"]
+
 integration_test = []
 
+# All integration tests are consolidated into two test binaries to keep
+# compile and link time down — see
+# https://matklad.github.io/2021/02/27/delete-cargo-integration-tests.html
+#
+# - `it` holds tests that do not need the datafusion feature.
+# - `it_datafusion` holds everything that does.
+
 [[test]]
-name = "dat"
+name = "it"
+path = "tests/it/main.rs"
+
+[[test]]
+name = "it_datafusion"
+path = "tests/it_datafusion/main.rs"
+required-features = ["datafusion"]
+
+[[bench]]
+name = "json_parsing"
 harness = false
 
-[[test]]
-name = "command_optimize"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_merge"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_restore"
-required-features = ["datafusion"]
-
-[[test]]
-name = "checkpoint_writer"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_filesystem_check"
-required-features = ["datafusion"]
-
-[[test]]
-name = "command_vacuum"
-required-features = ["datafusion"]
-
-[[test]]
-name = "commit_info_format"
-required-features = ["datafusion"]
-
-[[test]]
-name = "integration"
-required-features = ["datafusion"]
-
-[[test]]
-name = "integration_checkpoint"
-required-features = ["datafusion"]
-
-[[test]]
-name = "read_delta_log_test"
-required-features = ["datafusion"]
-
-[[test]]
-name = "read_delta_partitions_test"
-required-features = ["datafusion"]
+[package.metadata.cargo-machete]
+ignored = ["foyer", "alloc-stdlib", "brotli-decompressor"]

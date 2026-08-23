@@ -15,16 +15,24 @@ services:
       - AWS_ACCESS_KEY_ID=deltalake
       - AWS_SECRET_ACCESS_KEY=weloverust
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
+      test: ["CMD", "curl", "-f", "http://localhost:4566/health"]
 
   fake-gcs:
     # Custom image - see fsouza/fake-gcs-server#1164
     image: tustvold/fake-gcs-server
-    command: ["-scheme", "http", "-public-host", "localhost:4443", "-backend", "memory"]
+    command:
+      [
+        "-scheme",
+        "http",
+        "-public-host",
+        "localhost:4443",
+        "-backend",
+        "memory",
+      ]
     ports:
       - 4443:4443
 
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+    image: mcr.microsoft.com/azure-storage/azurite:latest
     ports:
       - 10000:10000

@@ -2,52 +2,56 @@
 //! The CDC module contains private tools for managing CDC files
 //!
 
-use crate::table::config::TablePropertiesExt as _;
-use crate::table::state::DeltaTableState;
 use crate::DeltaResult;
+use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, LogicalPlanExt as _};
+use crate::kernel::EagerSnapshot;
+use crate::table::config::TablePropertiesExt as _;
 
 use datafusion::common::ScalarValue;
+use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
 use datafusion::prelude::*;
 
 pub const CDC_COLUMN_NAME: &str = "_change_type";
 
-/// The CDCTracker is useful for hooking reads/writes in a manner nececessary to create CDC files
+/// The CDCTracker is useful for hooking reads/writes in a manner necessary to create CDC files
 /// associated with commits
 pub(crate) struct CDCTracker {
-    pre_dataframe: DataFrame,
-    post_dataframe: DataFrame,
+    pre_dataframe: LogicalPlan,
+    post_dataframe: LogicalPlan,
 }
 
 impl CDCTracker {
-    ///  construct
-    pub(crate) fn new(pre_dataframe: DataFrame, post_dataframe: DataFrame) -> Self {
+    pub(crate) fn new(pre_dataframe: LogicalPlan, post_dataframe: LogicalPlan) -> Self {
         Self {
             pre_dataframe,
             post_dataframe,
         }
     }
 
-    pub(crate) fn collect(self) -> DeltaResult<DataFrame> {
+    pub(crate) fn collect(self) -> DeltaResult<LogicalPlan> {
         // Collect _all_ the batches for consideration
         let pre_df = self.pre_dataframe;
         let post_df = self.post_dataframe;
 
         // There is certainly a better way to do this other than stupidly cloning data for diffing
         // purposes, but this is the quickest and easiest way to "diff" the two sets of batches
-        let preimage = pre_df.clone().except(post_df.clone())?;
-        let postimage = post_df.except(pre_df)?;
+        let preimage = LogicalPlanBuilder::except(pre_df.clone(), post_df.clone(), true)?;
+        let postimage = LogicalPlanBuilder::except(post_df, pre_df, true)?;
 
-        let preimage = preimage.with_column(
+        let preimage = preimage.into_builder().with_column(
             "_change_type",
             lit(ScalarValue::Utf8(Some("update_preimage".to_string()))),
         )?;
 
-        let postimage = postimage.with_column(
-            "_change_type",
-            lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
-        )?;
+        let postimage = postimage
+            .into_builder()
+            .with_column(
+                "_change_type",
+                lit(ScalarValue::Utf8(Some("update_postimage".to_string()))),
+            )?
+            .build()?;
 
-        let final_df = preimage.union(postimage)?;
+        let final_df = preimage.union(postimage)?.build()?;
         Ok(final_df)
     }
 }
@@ -65,44 +69,44 @@ impl CDCTracker {
 /// > For Writer Version 7, all writers must respect the delta.enableChangeDataFeed configuration flag in
 /// > the metadata of the table only if the feature changeDataFeed exists in the table protocol's
 /// > writerFeatures.
-pub(crate) fn should_write_cdc(snapshot: &DeltaTableState) -> DeltaResult<bool> {
+pub(crate) fn should_write_cdc(snapshot: &EagerSnapshot) -> DeltaResult<bool> {
     if let Some(features) = &snapshot.protocol().writer_features() {
         // Features should only exist at writer version 7 but to avoid cases where
         // the Option<HashSet<T>> can get filled with an empty set, checking for the value
         // explicitly
         if snapshot.protocol().min_writer_version() == 7
-            && !features.contains(&delta_kernel::table_features::WriterFeature::ChangeDataFeed)
+            && !features.contains(&delta_kernel::table_features::TableFeature::ChangeDataFeed)
         {
             // If the writer feature has not been set, then the table should not have CDC written
             // to it. Otherwise fallback to the configured table configuration
             return Ok(false);
         }
     }
-    Ok(snapshot.table_config().enable_change_data_feed())
+    Ok(snapshot.table_properties().enable_change_data_feed())
 }
 
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
-    use super::*;
-    use crate::kernel::{Action, PrimitiveType};
-    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
-    use crate::operations::DeltaOps;
-    use crate::{DeltaTable, TableProperty};
     use arrow::array::{ArrayRef, Int32Array, StructArray};
     use arrow::datatypes::{DataType, Field};
     use arrow_array::RecordBatch;
     use arrow_schema::Schema;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::datasource::{MemTable, TableProvider};
-    use delta_kernel::table_features::WriterFeature;
+    use delta_kernel::table_features::TableFeature;
+
+    use super::*;
+    use crate::kernel::{Action, PrimitiveType};
+    use crate::kernel::{DataType as DeltaDataType, ProtocolInner};
+    use crate::{DeltaTable, TableProperty};
 
     /// A simple test which validates primitive writer version 1 tables should
     /// not write Change Data Files
     #[tokio::test]
     async fn test_should_write_cdc_basic_table() {
-        let mut table = DeltaOps::new_in_memory()
+        let mut table = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -113,17 +117,16 @@ mod tests {
             .await
             .expect("Failed to make a table");
         table.load().await.expect("Failed to reload table");
-        let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
+        let result =
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(!result, "A default table should not create CDC files");
     }
 
-    ///
     /// This test manually creates a table with writer version 4 that has the configuration sets
-    ///
     #[tokio::test]
     async fn test_should_write_cdc_table_with_configuration() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 4).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -137,20 +140,20 @@ mod tests {
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         table.load().await.expect("Failed to reload table");
 
-        let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
+        let result =
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             result,
             "A table with the EnableChangeDataFeed should create CDC files"
         );
     }
 
-    ///
     /// This test creates a writer version 7 table which has a slightly different way of
     /// determining whether CDC files should be written or not.
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_no_writer_feature() {
         let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -163,23 +166,23 @@ mod tests {
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         table.load().await.expect("Failed to reload table");
 
-        let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
+        let result =
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             !result,
             "A v7 table must not write CDC files unless the writer feature is set"
         );
     }
 
-    ///
     /// This test creates a writer version 7 table with a writer table feature enabled for CDC and
     /// therefore should write CDC files
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_with_writer_feature() {
         let protocol = ProtocolInner::new(1, 7)
-            .append_writer_features(vec![WriterFeature::ChangeDataFeed])
+            .append_writer_features(vec![TableFeature::ChangeDataFeed])
             .as_kernel();
         let actions = vec![Action::Protocol(protocol)];
-        let mut table: DeltaTable = DeltaOps::new_in_memory()
+        let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(
                 "value",
@@ -193,7 +196,8 @@ mod tests {
             .expect("failed to make a version 4 table with EnableChangeDataFeed");
         table.load().await.expect("Failed to reload table");
 
-        let result = should_write_cdc(table.snapshot().unwrap()).expect("Failed to use table");
+        let result =
+            should_write_cdc(table.snapshot().unwrap().snapshot()).expect("Failed to use table");
         assert!(
             result,
             "A v7 table must not write CDC files unless the writer feature is set"
@@ -227,12 +231,21 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
         match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
+            Ok(plan) => {
+                let batches = ctx
+                    .execute_logical_plan(plan)
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                let _ = arrow::util::pretty::print_batches(&batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+------------------+",
@@ -308,8 +321,8 @@ mod tests {
             ],
         )
         .unwrap();
-        let _ = arrow::util::pretty::print_batches(&[batch.clone()]);
-        let _ = arrow::util::pretty::print_batches(&[updated_batch.clone()]);
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&batch));
+        let _ = arrow::util::pretty::print_batches(std::slice::from_ref(&updated_batch));
 
         let ctx = SessionContext::new();
         let before = ctx.read_batch(batch).expect("Failed to make DataFrame");
@@ -393,12 +406,21 @@ mod tests {
             Arc::new(MemTable::try_new(schema.clone(), vec![vec![updated_batch]]).unwrap());
         let updated_df = ctx.read_table(table_provider_updated).unwrap();
 
-        let tracker = CDCTracker::new(source_df, updated_df);
+        let tracker = CDCTracker::new(
+            source_df.into_unoptimized_plan(),
+            updated_df.into_unoptimized_plan(),
+        );
 
         match tracker.collect() {
-            Ok(df) => {
-                let batches = &df.collect().await.unwrap();
-                let _ = arrow::util::pretty::print_batches(batches);
+            Ok(plan) => {
+                let batches = ctx
+                    .execute_logical_plan(plan)
+                    .await
+                    .unwrap()
+                    .collect()
+                    .await
+                    .unwrap();
+                let _ = arrow::util::pretty::print_batches(&batches);
                 assert_eq!(batches.len(), 2);
                 assert_batches_sorted_eq! {[
                 "+-------+--------------------------+------------------+",

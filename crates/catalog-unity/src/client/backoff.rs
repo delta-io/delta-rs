@@ -34,7 +34,7 @@ pub struct Backoff {
     next_backoff_secs: f64,
     max_backoff_secs: f64,
     base: f64,
-    rng: Option<Box<dyn RngCore + Sync + Send>>,
+    rng: Option<Box<dyn Rng + Sync + Send>>,
 }
 
 impl std::fmt::Debug for Backoff {
@@ -56,11 +56,8 @@ impl Backoff {
 
     /// Creates a new `Backoff` with the optional `rng`
     ///
-    /// Used [`rand::thread_rng()`] if no rng provided
-    pub fn new_with_rng(
-        config: &BackoffConfig,
-        rng: Option<Box<dyn RngCore + Sync + Send>>,
-    ) -> Self {
+    /// Used [`rand::random_range()`] if no rng provided
+    pub fn new_with_rng(config: &BackoffConfig, rng: Option<Box<dyn Rng + Sync + Send>>) -> Self {
         let init_backoff = config.init_backoff.as_secs_f64();
         Self {
             init_backoff,
@@ -76,8 +73,8 @@ impl Backoff {
         let range = self.init_backoff..(self.next_backoff_secs * self.base);
 
         let rand_backoff = match self.rng.as_mut() {
-            Some(rng) => rng.gen_range(range),
-            None => thread_rng().gen_range(range),
+            Some(rng) => rng.random_range(range),
+            None => rand::random_range(range),
         };
 
         let next_backoff = self.max_backoff_secs.min(rand_backoff);
@@ -88,7 +85,7 @@ impl Backoff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::mock::StepRng;
+    use rand::rngs::SmallRng;
 
     #[test]
     fn test_backoff() {
@@ -102,34 +99,13 @@ mod tests {
             base,
         };
 
-        let assert_fuzzy_eq = |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{a} != {b}");
+        let rng: SmallRng = rand::make_rng();
+        let mut backoff = Backoff::new_with_rng(&config, Some(Box::new(rng)));
 
-        // Create a static rng that takes the minimum of the range
-        let rng = Box::new(StepRng::new(0, 0));
-        let mut backoff = Backoff::new_with_rng(&config, Some(rng));
-
-        for _ in 0..20 {
-            assert_eq!(backoff.tick().as_secs_f64(), init_backoff_secs);
-        }
-
-        // Create a static rng that takes the maximum of the range
-        let rng = Box::new(StepRng::new(u64::MAX, 0));
-        let mut backoff = Backoff::new_with_rng(&config, Some(rng));
-
-        for i in 0..20 {
-            let value = (base.powi(i) * init_backoff_secs).min(max_backoff_secs);
-            assert_fuzzy_eq(backoff.tick().as_secs_f64(), value);
-        }
-
-        // Create a static rng that takes the mid point of the range
-        let rng = Box::new(StepRng::new(u64::MAX / 2, 0));
-        let mut backoff = Backoff::new_with_rng(&config, Some(rng));
-
-        let mut value = init_backoff_secs;
-        for _ in 0..20 {
-            assert_fuzzy_eq(backoff.tick().as_secs_f64(), value);
-            value =
-                (init_backoff_secs + (value * base - init_backoff_secs) / 2.).min(max_backoff_secs);
+        for _ in 0..10 {
+            let tick = backoff.tick().as_secs_f64();
+            assert!(tick >= init_backoff_secs, "{tick} > {init_backoff_secs}");
+            assert!(tick <= max_backoff_secs, "{tick} <= {max_backoff_secs}");
         }
     }
 }

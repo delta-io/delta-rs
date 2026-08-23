@@ -37,8 +37,10 @@ pub enum DataCatalogError {
         key: String,
     },
 
+    /// A request to the underlying catalog service failed.
     #[error("Error in request: {source}")]
     RequestError {
+        /// The underlying transport or service error that caused the request to fail.
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 }
@@ -46,6 +48,7 @@ pub enum DataCatalogError {
 /// Abstractions for data catalog for the Delta table. To add support for new cloud, simply implement this trait.
 #[async_trait::async_trait]
 pub trait DataCatalog: Send + Sync + Debug {
+    /// Error type returned by catalog operations.
     type Error;
 
     /// Get the table storage location from the Data Catalog

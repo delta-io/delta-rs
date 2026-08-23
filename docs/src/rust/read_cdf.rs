@@ -1,19 +1,19 @@
+use url::Url;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-
-    let table = deltalake::open_table("tmp/some-table").await?;
+    let delta_path = Url::from_directory_path("/abs/tmp/some-table").unwrap();
+    let table = deltalake::open_table(delta_path).await?;
     let ctx = SessionContext::new();
-    let ops = DeltaOps(table);
-    let cdf = ops
-        .load_cdf()
+    let cdf = table.scan_cdf()
         .with_starting_version(0)
         .with_ending_version(4)
-        .build()
+        .build(&ctx.state(), None)
         .await?;
 
     let batches = collect_batches(
         cdf.properties().output_partitioning().partition_count(),
-        &cdf,
+        cdf.as_ref(),
         ctx,
     ).await?;
     arrow_cast::pretty::print_batches(&batches)?;
@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn collect_batches(
     num_partitions: usize,
-    stream: &impl ExecutionPlan,
+    stream: &dyn ExecutionPlan,
     ctx: SessionContext,
 ) -> Result<Vec<RecordBatch>, Box<dyn std::error::Error>> {
     let mut batches = vec![];

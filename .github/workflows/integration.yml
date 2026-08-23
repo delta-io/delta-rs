@@ -1,0 +1,162 @@
+name: integration
+
+on:
+  push:
+    branches: [main, "rust-v*"]
+  pull_request:
+    branches: [main, "rust-v*", next, next/*]
+  merge_group:
+
+env:
+  # https://github.com/rust-lang/cargo/issues/10280
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+  # Override RUSTFLAGS to not treat warnings as errors (setup-rust-toolchain sets -D warnings by default)
+  # This allows deprecated methods to be warnings instead of errors
+  RUSTFLAGS: ""
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
+
+jobs:
+  cloud:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: aws
+          - name: azure
+          - name: gcp
+
+    env:
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: deltalake
+      AWS_SECRET_ACCESS_KEY: weloverust
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+      NEXTEST_PROFILE: "ci"
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - uses: ./.github/actions/setup-coverage
+
+      - name: Start emulated services
+        run: docker compose up -d
+
+      - name: Run tests with rustls (default)
+        run: |
+          gmake setup-dat
+          cargo llvm-cov nextest --cargo-profile=ci \
+            --package deltalake-${{ matrix.target.name }} \
+            --features integration_test \
+            --codecov \
+            --output-path codecov.json
+
+      - uses: ./.github/actions/upload-coverage
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  native_tls:
+    name: aws-native-tls
+    runs-on: ubuntu-latest
+    env:
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: deltalake
+      AWS_SECRET_ACCESS_KEY: weloverust
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - uses: ./.github/actions/setup-coverage
+
+      - name: Start emulated services
+        run: docker compose up -d
+
+      - name: Run tests with native-tls
+        run: |
+          gmake setup-dat
+          cargo nextest r --cargo-profile=ci \
+            --package deltalake-aws \
+            --no-default-features \
+            --features integration_test,native-tls
+
+  hdfs:
+    name: Integration Tests (HDFS)
+    runs-on: ubuntu-latest
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - uses: ./.github/actions/setup-coverage
+
+      # Install Java and Hadoop for HDFS integration tests
+      # <https://github.com/actions/setup-java/releases/tag/v5.2.0>
+      - uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Download Hadoop
+        run: |
+          wget -q https://dlcdn.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz
+          tar -xf hadoop-3.4.0.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE/hadoop-3.4.0/bin" >> $GITHUB_PATH
+
+      - name: Run tests with rustls (default)
+        run: |
+          gmake setup-dat
+          cargo llvm-cov nextest --cargo-profile=ci \
+            --features integration_test \
+            --package deltalake-hdfs \
+            --codecov \
+            --output-path codecov.json
+
+      - uses: ./.github/actions/upload-coverage
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  lakefs:
+    name: Integration Tests (LakeFS v1.48)
+    runs-on: ubuntu-latest
+
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - uses: ./.github/actions/setup-coverage
+
+      - name: Download Lakectl
+        run: |
+          wget -q https://github.com/treeverse/lakeFS/releases/download/v1.48.1/lakeFS_1.48.1_Linux_x86_64.tar.gz
+          tar -xf lakeFS_1.48.1_Linux_x86_64.tar.gz -C $GITHUB_WORKSPACE
+          echo "$GITHUB_WORKSPACE" >> $GITHUB_PATH
+
+      - name: Start emulated services
+        run: docker compose -f docker-compose-lakefs.yml up -d
+
+      - name: Run tests
+        run: |
+          gmake setup-dat
+          cargo llvm-cov nextest --cargo-profile=ci \
+            --package deltalake-lakefs \
+            --features integration_test_lakefs \
+            --codecov \
+            --output-path codecov.json
+
+      - uses: ./.github/actions/upload-coverage
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

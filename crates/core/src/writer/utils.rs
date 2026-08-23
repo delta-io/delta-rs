@@ -55,7 +55,7 @@ pub(crate) fn next_data_path(
         "part-{part}-{writer_id}-c000{}.parquet",
         compression_to_str(&compression)
     );
-    prefix.child(file_name)
+    prefix.clone().join(file_name)
 }
 
 /// Convert a vector of json values to a RecordBatch
@@ -75,7 +75,7 @@ pub(crate) fn record_batch_without_partitions(
     record_batch: &RecordBatch,
     partition_columns: &[String],
 ) -> Result<RecordBatch, DeltaWriterError> {
-    let mut non_partition_columns = Vec::new();
+    let mut non_partition_columns = Vec::with_capacity(record_batch.schema().fields().len());
     for (i, field) in record_batch.schema().fields().iter().enumerate() {
         if !partition_columns.contains(field.name()) {
             non_partition_columns.push(i);

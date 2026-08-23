@@ -1,10 +1,12 @@
 //! Constraints and generated column mappings
+use serde::{Deserialize, Serialize};
+
 use crate::kernel::DataType;
 use crate::table::DataCheck;
 use std::any::Any;
 
 /// A constraint in a check constraint
-#[derive(Eq, PartialEq, Debug, Default, Clone)]
+#[derive(Eq, PartialEq, Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Constraint {
     /// The full path to the field.
     pub name: String,
@@ -60,6 +62,7 @@ impl GeneratedColumn {
         }
     }
 
+    /// Returns the SQL expression used to generate this column's values.
     pub fn get_generation_expression(&self) -> &str {
         &self.generation_expr
     }

@@ -9,6 +9,7 @@ from deltalake.schema import (
     PrimitiveType,
     Schema,
     StructType,
+    VariantType,
 )
 
 
@@ -32,6 +33,20 @@ def test_table_schema():
     assert schema.fields[0] == Field(
         "x", ArrayType(PrimitiveType("long"), True), True, {}
     )
+
+
+def test_variant_delta_type():
+    variant_type = VariantType()
+
+    assert variant_type.type == "variant"
+    assert variant_type == VariantType()
+    assert variant_type == VariantType.from_json('"variant"')
+
+    field = Field("v", variant_type, nullable=True)
+    assert field.type == variant_type
+
+    schema = Schema([field])
+    assert schema == Schema.from_json(schema.to_json())
 
 
 @pytest.mark.pyarrow

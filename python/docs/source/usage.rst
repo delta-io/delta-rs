@@ -10,13 +10,13 @@ of the table, and other metadata such as creation time.
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
+    >>> dt = DeltaTable("s3://bucket/test_table/")
     >>> dt.version()
     3
-    >>> dt.files()
-    ['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
-     'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
-     'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+    >>> dt.file_uris()
+    ['s3://bucket/test_table/part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
+     's3://bucket/test_table/part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
+     's3://bucket/test_table/part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 
 
 Loading a Delta Table
@@ -483,8 +483,14 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 Optimizing tables
 ~~~~~~~~~~~~~~~~~
 
-Optimizing a table will perform bin-packing on a Delta Table which merges small files
-into a large file. Bin-packing reduces the number of API calls required for read operations.
+Optimizing a table rewrites files to improve read efficiency.
+Compaction reduces small-file overhead while preserving stable file-order locality
+within each partition by default.
+The ``target_size`` setting is still approximate: optimize plans around it, but
+final Parquet file sizes can differ because encoding and compression happen at
+write time.
+Use z-order when you want an explicit clustering rewrite that intentionally
+trades locality for better data skipping across multiple columns.
 Optimizing will increments the table's version and creates remove actions for optimized files.
 Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
 
@@ -502,7 +508,8 @@ For just file compaction, use the :meth:`TableOptimizer.compact` method:
      'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
      'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
      'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+     'totalFilesSkipped': 0, 'plannerStrategy': 'preserveLocality',
+     'preservedStableOrder': True, 'preserveInsertionOrder': True, 'maxBinSpanFiles': 5}
 
 For improved data skipping, use the :meth:`TableOptimizer.z_order` method. This
 is slower than just file compaction, but can improve performance for queries that
@@ -516,7 +523,8 @@ filter on multiple columns at once.
      'filesAdded': {'min': 2473439, 'max': 2473439, 'avg': 2473439.0, 'totalFiles': 1, 'totalSize': 2473439},
      'filesRemoved': {'min': 325440, 'max': 895702, 'avg': 773810.625, 'totalFiles': 8, 'totalSize': 6190485},
      'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 8,
-     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+     'totalFilesSkipped': 0, 'plannerStrategy': 'zOrder',
+     'preservedStableOrder': False, 'preserveInsertionOrder': False, 'maxBinSpanFiles': 8}
 
 Writing Delta Tables
 --------------------
@@ -554,83 +562,12 @@ alter the schema as part of an overwrite pass in ``schema_mode="overwrite"``.
 Writing to s3
 ~~~~~~~~~~~~~
 
-A locking mechanism is needed to prevent unsafe concurrent writes to a
-delta lake directory when writing to S3. DynamoDB is the only available
-locking provider at the moment in delta-rs. To enable DynamoDB as the
-locking provider, you need to set the **AWS_S3_LOCKING_PROVIDER** to 'dynamodb'
-as a ``storage_options`` or as an environment variable.
+By default "put if absent" semantics are enabled when interacting with S3 and
+S3-like storage providers. Previous versions of the `deltalake` package offered
+integration with DynamoDB which is no longer supported.
 
-Additionally, you must create a DynamoDB table with the name ``delta_log``
-so that it can be automatically recognized by delta-rs. Alternatively, you can
-use a table name of your choice, but you must set the **DELTA_DYNAMO_TABLE_NAME**
-variable to match your chosen table name. The required schema for the DynamoDB
-table is as follows:
-
-.. code-block:: json
-
-
-
-        "Table": {
-            "AttributeDefinitions": [
-                {
-                    "AttributeName": "fileName",
-                    "AttributeType": "S"
-                },
-                {
-                    "AttributeName": "tablePath",
-                    "AttributeType": "S"
-                }
-            ],
-            "TableName": "delta_log",
-            "KeySchema": [
-                {
-                    "AttributeName": "tablePath",
-                    "KeyType": "HASH"
-                },
-                {
-                    "AttributeName": "fileName",
-                    "KeyType": "RANGE"
-                }
-            ],
-        }
-
-Here is an example writing to s3 using this mechanism:
-
-.. code-block:: python
-
-    >>> from deltalake import write_deltalake
-    >>> df = pd.DataFrame({'x': [1, 2, 3]})
-    >>> storage_options = {'AWS_S3_LOCKING_PROVIDER': 'dynamodb', 'DELTA_DYNAMO_TABLE_NAME': 'custom_table_name'}
-    >>> write_deltalake('s3a://path/to/table', df, 'storage_options'= storage_options)
-
-.. note::
-    This locking mechanism is compatible with the one used by Apache Spark. The `tablePath` property,
-    denoting the root url of the delta table itself, is part of the primary key, and all writers
-    intending to write to the same table must match this property precisely. In Spark, S3 URLs
-    are prefixed with `s3a://`, and a table in delta-rs must be configured accordingly.
-
-The following code allows creating the necessary table from the AWS cli:
-
-.. code-block:: sh
-
-        aws dynamodb create-table \
-        --table-name delta_log \
-        --attribute-definitions AttributeName=tablePath,AttributeType=S AttributeName=fileName,AttributeType=S \
-        --key-schema AttributeName=tablePath,KeyType=HASH AttributeName=fileName,KeyType=RANGE \
-        --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
-
-You can find additional information in the `delta-rs-documentation
-https://docs.delta.io/latest/delta-storage.html#multi-cluster-setup`_, which
-also includes recommendations on configuring a time-to-live (TTL) for the table to
-avoid growing the table indefinitely.
-
-https://docs.delta.io/latest/delta-storage.html#production-configuration-s3-multi-cluster
-
-.. note::
-    if for some reason you don't want to use dynamodb as your locking mechanism you can
-    choose to set the `AWS_S3_ALLOW_UNSAFE_RENAME` variable to ``true`` in order to enable
-    S3 unsafe writes.
-
+Users who require coordination with Apache Spark based writer processes should
+remain on older versions of the `deltalake` package.
 
 Updating Delta Tables
 ---------------------
@@ -739,6 +676,10 @@ the clause will remove all files from the table.
     :meth:`DeltaTable.delete` does not delete files from storage but only updates the
     table state to one where the deleted rows are no longer present. See
     `Vacuuming tables`_ for more information.
+
+    Row rewrite deletes include ``num_deleted_rows``. For metadata only
+    full file deletes, ``num_deleted_rows`` is included only when this library can
+    derive a count from file metadata; otherwise the key is omitted.
 
 
 Restoring tables

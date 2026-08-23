@@ -3,13 +3,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deltalake_core::logstore::{
-    default_logstore, logstore_factories, object_store_factories, LogStore, LogStoreFactory,
-    ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    LogStore, LogStoreFactory, ObjectStoreFactory, ObjectStoreRef, StorageConfig,
+    client_options_from_certificate, default_logstore, logstore_factories, object_store_factories,
 };
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use object_store::ObjectStoreScheme;
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use object_store::client::SpawnedReqwestConnector;
-use object_store::ObjectStoreScheme;
 use url::Url;
 
 mod config;
@@ -49,11 +49,18 @@ impl ObjectStoreFactory for AzureFactory {
                 builder.with_http_connector(SpawnedReqwestConnector::new(runtime.get_handle()));
         }
 
+        if let Some(ref cert_config) = config.certificate
+            && let Some(ref path) = cert_config.certificate_path
+        {
+            builder = builder.with_client_options(client_options_from_certificate(path)?);
+        }
+
         let config = config::AzureConfigHelper::try_new(config.raw.as_azure_options())?.build()?;
 
         for (key, value) in config.iter() {
             builder = builder.with_config(*key, value.clone());
         }
+
         let store = builder.build()?;
 
         let (_, path) =

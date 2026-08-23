@@ -4,6 +4,7 @@ search:
 ---
 
 # Writer
+
 ## Write to Delta Tables
 
 ::: deltalake.write_deltalake
@@ -15,6 +16,7 @@ search:
 ::: deltalake.WriterProperties
 
 ## Convert to Delta Tables
+
 ::: deltalake.convert_to_deltalake
 
 

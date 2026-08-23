@@ -8,13 +8,17 @@
 //! defines how to update internal fields based on key-value pairs.
 #[cfg(feature = "cloud")]
 use ::object_store::RetryConfig;
-use object_store::{path::Path, prefix::PrefixStore, ObjectStore};
+use object_store::{ObjectStore, path::Path, prefix::PrefixStore};
 use std::collections::HashMap;
 
-use super::storage::LimitConfig;
-use super::{storage::runtime::RuntimeConfig, IORuntime};
+use super::storage::{CertificateConfig, LimitConfig};
+use super::{IORuntime, storage::runtime::RuntimeConfig};
 use crate::{DeltaResult, DeltaTableError};
 
+/// A configuration type that can be incrementally populated from string key/value pairs.
+///
+/// Implemented by the various storage configuration structs so that options coming from user
+/// input or the environment can be applied generically by key name.
 pub trait TryUpdateKey: Default {
     /// Update an internal field in the configuration.
     ///
@@ -47,6 +51,7 @@ pub struct ParseResult<T: std::fmt::Debug> {
 }
 
 impl<T: std::fmt::Debug> ParseResult<T> {
+    /// Return an error if any key/value pair failed to parse, otherwise `Ok(())`.
     pub fn raise_errors(&self) -> DeltaResult<()> {
         if !self.errors.is_empty() {
             return Err(DeltaTableError::Generic(format!(
@@ -87,6 +92,10 @@ where
     }
 }
 
+/// Resolved configuration for constructing and decorating an object store backend.
+///
+/// Aggregates the optional dedicated IO runtime, retry/limit/certificate settings and the raw
+/// passthrough options used to build the underlying [`ObjectStore`].
 #[derive(Default, Debug, Clone)]
 pub struct StorageConfig {
     /// Runtime configuration.
@@ -95,13 +104,21 @@ pub struct StorageConfig {
     /// dedicated handle.
     pub runtime: Option<IORuntime>,
 
+    /// Retry config for object stores
+    ///
+    /// Configuration for how object store should retry failed requests
     #[cfg(feature = "cloud")]
-    pub retry: ::object_store::RetryConfig,
+    pub retry: RetryConfig,
 
     /// Limit configuration.
     ///
     /// Configuration to limit the number of concurrent requests to the object store.
     pub limit: Option<LimitConfig>,
+
+    /// Certificate configuration.
+    ///
+    /// Configuration for custom TLS root certificates.
+    pub certificate: Option<CertificateConfig>,
 
     /// Properties that are not recognized by the storage configuration.
     ///
@@ -165,6 +182,9 @@ where
         let result = ParseResult::<LimitConfig>::from_iter(result.unparsed);
         config.limit = (!result.is_default).then_some(result.config);
 
+        let result = ParseResult::<CertificateConfig>::from_iter(result.unparsed);
+        config.certificate = (!result.is_default).then_some(result.config);
+
         let remainder = result.unparsed;
 
         #[cfg(feature = "cloud")]
@@ -180,6 +200,7 @@ where
 }
 
 impl StorageConfig {
+    /// Iterate over the raw, unparsed key/value options retained on this config.
     pub fn raw(&self) -> impl Iterator<Item = (&String, &String)> {
         self.raw.iter()
     }
@@ -216,6 +237,10 @@ impl StorageConfig {
         let result = ParseResult::<LimitConfig>::from_iter(remainder);
         result.raise_errors()?;
         props.limit = (!result.is_default).then_some(result.config);
+
+        let result = ParseResult::<CertificateConfig>::from_iter(result.unparsed);
+        result.raise_errors()?;
+        props.certificate = (!result.is_default).then_some(result.config);
         let remainder = result.unparsed;
 
         #[cfg(feature = "cloud")]
@@ -229,48 +254,71 @@ impl StorageConfig {
         Ok(props)
     }
 
-    // Provide an IO Runtime directly
+    /// Attach a dedicated IO [`IORuntime`] used to execute storage operations.
     pub fn with_io_runtime(mut self, rt: IORuntime) -> Self {
         self.runtime = Some(rt);
         self
     }
 }
 
-pub(super) fn try_parse_impl<T: std::fmt::Debug, K, V, I>(
-    options: I,
-) -> DeltaResult<(T, HashMap<String, String>)>
+pub(super) fn try_parse_impl<T, K, V, I>(options: I) -> DeltaResult<(T, HashMap<String, String>)>
 where
     I: IntoIterator<Item = (K, V)>,
     K: AsRef<str> + Into<String>,
     V: AsRef<str> + Into<String>,
-    T: TryUpdateKey,
+    T: TryUpdateKey + std::fmt::Debug,
 {
     let result = ParseResult::from_iter(options);
     result.raise_errors()?;
     Ok((result.config, result.unparsed))
 }
 
+/// Parse a string into a `usize`, returning a descriptive error on failure.
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_usize;
+/// assert_eq!(parse_usize("42").unwrap(), 42);
+/// assert!(parse_usize("not_a_number").is_err());
+/// ```
 pub fn parse_usize(value: &str) -> DeltaResult<usize> {
     value
         .parse::<usize>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as usize")))
 }
 
+/// Parse a string into an `f64`, returning a descriptive error on failure.
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_f64;
+/// assert_eq!(parse_f64("3.14").unwrap(), 3.14);
+/// assert!(parse_f64("not_a_number").is_err());
+/// ```
 pub fn parse_f64(value: &str) -> DeltaResult<f64> {
     value
         .parse::<f64>()
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as f64")))
 }
 
-pub fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
+#[cfg(feature = "cloud")]
+pub(crate) fn parse_duration(value: &str) -> DeltaResult<std::time::Duration> {
     humantime::parse_duration(value)
         .map_err(|_| DeltaTableError::Generic(format!("failed to parse \"{value}\" as Duration")))
 }
 
+/// Parse a string into a `bool`, accepting common truthy spellings (e.g. "1", "true").
+///
+/// ```
+/// use deltalake_core::logstore::config::parse_bool;
+/// assert!(parse_bool("true").unwrap());
+/// assert!(parse_bool("1").unwrap());
+/// assert!(!parse_bool("false").unwrap());
+/// assert!(!parse_bool("0").unwrap());
+/// ```
 pub fn parse_bool(value: &str) -> DeltaResult<bool> {
     Ok(str_is_truthy(value))
 }
 
+/// Parse a configuration value as a plain string (an infallible identity conversion).
 pub fn parse_string(value: &str) -> DeltaResult<String> {
     Ok(value.to_string())
 }
@@ -299,7 +347,7 @@ pub fn str_is_truthy(val: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use maplit::hashmap;
+    #[cfg(feature = "cloud")]
     use std::time::Duration;
 
     // Test retry config parsing
@@ -307,13 +355,13 @@ mod tests {
     #[test]
     fn test_retry_config_from_options() {
         use object_store::RetryConfig;
-        let options = hashmap! {
-            "max_retries".to_string() => "100".to_string() ,
-            "retry_timeout".to_string()  => "300s".to_string() ,
-            "backoff_config.init_backoff".to_string()  => "20s".to_string() ,
-            "backoff_config.max_backoff".to_string()  => "1h".to_string() ,
-            "backoff_config.base".to_string()  =>  "50.0".to_string() ,
-        };
+        let options = HashMap::from([
+            ("max_retries".to_string(), "100".to_string()),
+            ("retry_timeout".to_string(), "300s".to_string()),
+            ("backoff_config.init_backoff".to_string(), "20s".to_string()),
+            ("backoff_config.max_backoff".to_string(), "1h".to_string()),
+            ("backoff_config.base".to_string(), "50.0".to_string()),
+        ]);
         let (retry_config, remainder): (RetryConfig, _) = super::try_parse_impl(options).unwrap();
         assert!(remainder.is_empty());
 
@@ -329,11 +377,11 @@ mod tests {
     #[test]
     fn test_parse_result_handling() {
         use object_store::RetryConfig;
-        let options = hashmap! {
-            "retry_timeout".to_string() => "300s".to_string(),
-            "max_retries".to_string() => "not_a_number".to_string(),
-            "unknown_key".to_string() => "value".to_string(),
-        };
+        let options = HashMap::from([
+            ("retry_timeout".to_string(), "300s".to_string()),
+            ("max_retries".to_string(), "not_a_number".to_string()),
+            ("unknown_key".to_string(), "value".to_string()),
+        ]);
 
         let result: ParseResult<RetryConfig> = options.into_iter().collect();
         println!("result: {result:?}");
@@ -348,11 +396,11 @@ mod tests {
     #[cfg(feature = "cloud")]
     #[test]
     fn test_storage_config_parsing() {
-        let options = hashmap! {
-            "max_retries".to_string() => "5".to_string(),
-            "retry_timeout".to_string() => "10s".to_string(),
-            "unknown_prop".to_string() => "value".to_string(),
-        };
+        let options = HashMap::from([
+            ("max_retries".to_string(), "5".to_string()),
+            ("retry_timeout".to_string(), "10s".to_string()),
+            ("unknown_prop".to_string(), "value".to_string()),
+        ]);
 
         let config = StorageConfig::parse_options(options).unwrap();
         assert_eq!(config.retry.max_retries, 5);
@@ -370,15 +418,19 @@ mod tests {
         assert_eq!(parse_f64("3.14").unwrap(), 3.14);
         assert!(parse_f64("not_a_number").is_err());
 
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert!(parse_duration("invalid").is_err());
-
         assert!(parse_bool("true").unwrap());
         assert!(parse_bool("1").unwrap());
         assert!(!parse_bool("false").unwrap());
         assert!(!parse_bool("0").unwrap());
 
         assert_eq!(parse_string("test").unwrap(), "test");
+    }
+
+    #[cfg(feature = "cloud")]
+    #[test]
+    fn test_parsing_duration() {
+        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
+        assert!(parse_duration("invalid").is_err());
     }
 
     // Test str_is_truthy function

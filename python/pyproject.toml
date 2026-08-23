@@ -6,28 +6,30 @@ build-backend = "maturin"
 name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-license = "MIT"
-requires-python = ">=3.9"
+license = "Apache-2.0"
+requires-python = ">=3.10"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dynamic = ["version"]
 dependencies = ["arro3-core>=0.5.0", "deprecated>=1.2.18"]
 
 [project.optional-dependencies]
 pandas = ["pandas"]
-pyarrow = ["pyarrow>=16"]
+pyarrow = ["pyarrow>=21"]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/"
 repository = "https://github.com/delta-io/delta-rs/tree/main/python/"
 
 [tool.maturin]
+profile = "dev"
 module-name = "deltalake._internal"
 
 [tool.mypy]
@@ -70,20 +72,23 @@ ignore = ["E501", "ANN401", "RUF040"]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "-v -m 'not integration and not benchmark and not no_pyarrow'"
+addopts = "-v -x -m 'not integration and not benchmark and not no_pyarrow'"
 testpaths = ["tests", "deltalake"]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
     "azure: marks tests as integration tests with Azure Blob Store",
+    "benchmark: marks tests as benchmark tests (deselect with '-m \"not benchmark\"')",
     "pandas: marks tests that require pandas",
     "polars: marks tests that require polars",
     "lakefs: marks tests that require lakefs",
     "pyarrow: marks tests that require pyarrow",
     "no_pyarrow: marks tests that test deltalake functionality without pyarrow",
+    "opentelemetry: marks tests that require opentelemetry",
     "unitycatalog_databricks: marks tests that require unitycatalog_databricks",
     "unitycatalog_oss: marks tests that require unitycatalog_oss",
     "pyspark: marks tests that require pyspark",
+    "datafusion: marks tests that require datafusion"
 ]
 
 [tool.coverage.run]
@@ -92,6 +97,7 @@ source = ["deltalake"]
 
 [dependency-groups]
 dev = [
+    "arro3-io",
     "pytest",
     "pytest-benchmark",
     "pytest-cov",
@@ -101,11 +107,14 @@ dev = [
     "mypy==1.10.1",
     "ruff>=0.11.2,<0.11.12",
     "types-deprecated>=1.2.15.20250304",
+    "testcontainers[minio]>=4.13.0",
 ]
+opentelemetry = ["opentelemetry-sdk>=1.20.0", "opentelemetry-api>=1.20.0"]
 polars = ["polars==1.32"]
+datafusion = ["datafusion==53.*"]
 lakefs = ["lakefs==0.8.0"]
 pyspark = [
-    "pyspark",
+    "pyspark==4.0.1",
     "delta-spark",
     "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
@@ -119,4 +128,4 @@ other = [
 ]
 
 [tool.uv]
-default-groups = ["dev", "polars", "lakefs", "docs", "other"]
+default-groups = ["dev", "opentelemetry", "polars", "datafusion", "lakefs", "docs", "other"]

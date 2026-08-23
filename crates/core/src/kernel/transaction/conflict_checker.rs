@@ -4,16 +4,16 @@ use std::collections::HashSet;
 use delta_kernel::table_properties::IsolationLevel;
 
 use super::CommitInfo;
+use crate::DeltaTableError;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
-use crate::kernel::EagerSnapshot;
-use crate::kernel::Transaction;
-use crate::kernel::{Action, Add, Metadata, Protocol, Remove};
-use crate::logstore::{get_actions, LogStore};
+use crate::kernel::{
+    Action, Add, ConflictReadSet, Metadata, Protocol, Remove, Transaction, Version,
+};
+use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
-use crate::DeltaTableError;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -28,17 +28,23 @@ pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
     /// can be caused by INSERT, DELETE, UPDATE, or MERGE operations.
-    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error(
+        "Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation."
+    )]
     ConcurrentAppend,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation read.
     /// Common causes are a DELETE, UPDATE, or MERGE operation that rewrites files.
-    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error(
+        "Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation."
+    )]
     ConcurrentDeleteRead,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation also deletes.
     /// This could be caused by two concurrent compaction operations rewriting the same files.
-    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
+    #[error(
+        "Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data."
+    )]
     ConcurrentDeleteDelete,
 
     /// This exception occurs when a concurrent transaction updates the metadata of a Delta table.
@@ -101,11 +107,11 @@ pub(crate) struct TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
-    pub(crate) read_app_ids: HashSet<String>,
+    read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     actions: &'a [Action],
     /// read [`DeltaTableState`] used for the transaction
-    pub(crate) read_snapshot: &'a EagerSnapshot,
+    read_snapshot: ConflictReadSet<'a>,
     /// Whether the transaction tainted the whole table
     read_whole_table: bool,
 }
@@ -113,7 +119,7 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     #[cfg(feature = "datafusion")]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<String>,
         actions: &'a [Action],
         read_whole_table: bool,
@@ -121,8 +127,9 @@ impl<'a> TransactionInfo<'a> {
         use datafusion::prelude::SessionContext;
 
         let session = SessionContext::new();
+        let log_data = read_snapshot.log_data();
         let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(pred, &session.state()))
+            .map(|pred| log_data.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
 
         let mut read_app_ids = HashSet::<String>::new();
@@ -132,22 +139,19 @@ impl<'a> TransactionInfo<'a> {
             }
         }
 
-        Ok(Self {
-            txn_id: "".into(),
-            read_predicates,
-            read_app_ids,
-            actions,
+        Ok(Self::new(
             read_snapshot,
+            read_predicates,
+            actions,
             read_whole_table,
-        })
+        ))
     }
 
     #[cfg(feature = "datafusion")]
-    #[allow(unused)]
     pub fn new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<Expr>,
-        actions: &'a Vec<Action>,
+        actions: &'a [Action],
         read_whole_table: bool,
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
@@ -168,7 +172,7 @@ impl<'a> TransactionInfo<'a> {
 
     #[cfg(not(feature = "datafusion"))]
     pub fn try_new(
-        read_snapshot: &'a EagerSnapshot,
+        read_snapshot: ConflictReadSet<'a>,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
         read_whole_table: bool,
@@ -203,21 +207,32 @@ impl<'a> TransactionInfo<'a> {
 
         if let Some(predicate) = &self.read_predicates {
             Ok(Either::Left(
-                files_matching_predicate(self.read_snapshot, &[predicate.clone()]).map_err(
-                    |err| CommitConflictError::Predicate {
-                        source: Box::new(err),
-                    },
-                )?,
+                files_matching_predicate(
+                    self.read_snapshot.log_data(),
+                    std::slice::from_ref(predicate),
+                )
+                .map_err(|err| CommitConflictError::Predicate {
+                    source: Box::new(err),
+                })?,
             ))
         } else {
-            Ok(Either::Right(std::iter::empty()))
+            Ok(Either::Right(
+                self.read_snapshot
+                    .log_data()
+                    .into_iter()
+                    .map(|f| f.to_add()),
+            ))
         }
     }
 
     #[cfg(not(feature = "datafusion"))]
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = Add> + '_, CommitConflictError> {
-        Ok(self.read_snapshot.file_actions().unwrap())
+        Ok(self
+            .read_snapshot
+            .log_data()
+            .into_iter()
+            .map(|f| f.to_add()))
     }
 
     /// Whether the whole table was read during the transaction
@@ -236,8 +251,8 @@ pub(crate) struct WinningCommitSummary {
 impl WinningCommitSummary {
     pub async fn try_new(
         log_store: &dyn LogStore,
-        read_version: i64,
-        winning_commit_version: i64,
+        read_version: Version,
+        winning_commit_version: Version,
     ) -> DeltaResult<Self> {
         // NOTE using assert, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);
@@ -245,7 +260,7 @@ impl WinningCommitSummary {
         let commit_log_bytes = log_store.read_commit_entry(winning_commit_version).await?;
         match commit_log_bytes {
             Some(bytes) => {
-                let actions = get_actions(winning_commit_version, bytes).await?;
+                let actions = get_actions(winning_commit_version, &bytes)?; // ← ADD ? HERE
                 let commit_info = actions
                     .iter()
                     .find(|action| matches!(action, Action::CommitInfo(_)))
@@ -364,7 +379,8 @@ impl<'a> ConflictChecker<'a> {
                     op,
                     &transaction_info
                         .read_snapshot
-                        .table_config()
+                        .log_data()
+                        .table_properties()
                         .isolation_level(),
                 ) {
                     Some(IsolationLevel::SnapshotIsolation)
@@ -375,7 +391,8 @@ impl<'a> ConflictChecker<'a> {
             .unwrap_or_else(|| {
                 transaction_info
                     .read_snapshot
-                    .table_config()
+                    .log_data()
+                    .table_properties()
                     .isolation_level()
             });
 
@@ -405,16 +422,24 @@ impl<'a> ConflictChecker<'a> {
         for p in self.winning_commit_summary.protocol() {
             let (win_read, curr_read) = (
                 p.min_reader_version(),
-                self.txn_info.read_snapshot.protocol().min_reader_version(),
+                self.txn_info
+                    .read_snapshot
+                    .log_data()
+                    .protocol()
+                    .min_reader_version(),
             );
             let (win_write, curr_write) = (
                 p.min_writer_version(),
-                self.txn_info.read_snapshot.protocol().min_writer_version(),
+                self.txn_info
+                    .read_snapshot
+                    .log_data()
+                    .protocol()
+                    .min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
-                return Err(CommitConflictError::ProtocolChanged(
-                    format!("required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
-                ));
+                return Err(CommitConflictError::ProtocolChanged(format!(
+                    "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
+                )));
             };
         }
         if !self.winning_commit_summary.protocol().is_empty()
@@ -474,17 +499,16 @@ impl<'a> ConflictChecker<'a> {
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema().map_err(|err| {
-                        CommitConflictError::CorruptedState {
-                            source: Box::new(err),
-                        }
-                    })?;
-                    let partition_columns = &self
+                    let read_snapshot = self.txn_info.read_snapshot.log_data();
+                    let arrow_schema = read_snapshot.read_schema();
+                    let partition_columns = self
                         .txn_info
                         .read_snapshot
+                        .log_data()
                         .metadata()
-                        .partition_columns();
-                    AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
+                        .partition_columns()
+                        .to_vec();
+                    AddContainer::new(&added_files_to_check, &partition_columns, arrow_schema)
                         .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
@@ -524,15 +548,24 @@ impl<'a> ConflictChecker<'a> {
             .read_files()?
             .map(|f| f.path.clone())
             .collect();
-        let deleted_read_overlap = self
+
+        // Only consider removals with data_change = true as conflicts.
+        // Removals with data_change = false (e.g., from OPTIMIZE/compaction)
+        // don't change the logical data, only the physical layout, so they
+        // shouldn't conflict with concurrent read operations.
+        let removed_files_with_data_change: Vec<Remove> = self
             .winning_commit_summary
             .removed_files()
+            .into_iter()
+            .filter(|r| r.data_change)
+            .collect();
+
+        let deleted_read_overlap = removed_files_with_data_change
             .iter()
-            .find(|&f| read_file_path.contains(&f.path))
-            .cloned();
+            .find(|f| read_file_path.contains(&f.path));
+
         if deleted_read_overlap.is_some()
-            || (!self.winning_commit_summary.removed_files().is_empty()
-                && self.txn_info.read_whole_table())
+            || (!removed_files_with_data_change.is_empty() && self.txn_info.read_whole_table())
         {
             Err(CommitConflictError::ConcurrentDeleteRead)
         } else {
@@ -700,14 +733,15 @@ mod tests {
         actions: Vec<Action>,
         read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
-        use object_store::path::Path;
-
         use crate::table::state::DeltaTableState;
+        use object_store::path::Path;
 
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions).await.unwrap();
         let snapshot = state.snapshot();
-        let transaction_info = TransactionInfo::new(snapshot, reads, &actions, read_whole_table);
+        let conflict_read_set = ConflictReadSet::from_log_data_for_test(snapshot.log_data());
+        let transaction_info =
+            TransactionInfo::new(conflict_read_set, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
@@ -716,19 +750,21 @@ mod tests {
         checker.check_conflicts()
     }
 
+    // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     #[tokio::test]
     #[cfg(feature = "datafusion")]
-    // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
-    async fn test_allowed_concurrent_actions() {
-        // append - append
+    async fn test_concurrent_append_append() {
         // append file to table while a concurrent writer also appends a file
         let file1 = simple_add(true, "1", "10").into();
         let file2 = simple_add(true, "1", "10").into();
 
         let result = execute_test(None, None, vec![file1], vec![file2], false).await;
         assert!(result.is_ok());
+    }
 
-        // disjoint delete - read
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_disjoint_delete_read() {
         // the concurrent transaction deletes a file that the current transaction did NOT read
         let file_not_read = simple_add(true, "1", "10");
         let file_read = simple_add(true, "100", "10000").into();
@@ -744,8 +780,11 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
+    }
 
-        // disjoint add - read
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_disjoint_add_read() {
         // concurrently add file, that the current transaction would not have read
         let file_added = simple_add(true, "1", "10").into();
         let file_read = simple_add(true, "100", "10000").into();
@@ -760,29 +799,11 @@ mod tests {
         )
         .await;
         assert!(result.is_ok());
-
-        // TODO enable test once we have isolation level downcast
-        // add / read + no write
-        // transaction would have read file added by concurrent txn, but does not write data,
-        // so no real conflicting change even though data was added
-        // let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
-        // let result = execute_test(
-        //     None,
-        //     Some(col("value").gt(lit::<i32>(5))),
-        //     vec![file_added],
-        //     vec![],
-        //     false,
-        // );
-        // assert!(result.is_ok());
-
-        // TODO disjoint transactions
     }
 
     #[tokio::test]
     #[cfg(feature = "datafusion")]
-    // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
-    async fn test_disallowed_concurrent_actions() {
-        // delete - delete
+    async fn test_concurrent_delete_delete() {
         // remove file from table that has previously been removed
         let removed_file = simple_add(true, "1", "10");
         let removed_file: Action = ActionFactory::remove(&removed_file, true).into();
@@ -798,8 +819,11 @@ mod tests {
             result,
             Err(CommitConflictError::ConcurrentDeleteDelete)
         ));
+    }
 
-        // add / read + write
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_add_conflicts_with_read_and_write() {
         // a file is concurrently added that should have been read by the current transaction
         let file_added = simple_add(true, "1", "10").into();
         let file_should_have_read = simple_add(true, "1", "10").into();
@@ -812,8 +836,11 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
+    }
 
-        // delete / read
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_delete_conflicts_with_read() {
         // transaction reads a file that is removed by concurrent transaction
         let file_read = simple_add(true, "1", "10");
         let mut setup_actions = init_table_actions();
@@ -830,8 +857,11 @@ mod tests {
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)
         ));
+    }
 
-        // schema change
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_metadata_change() {
         // concurrent transactions changes table metadata
         let result = execute_test(
             None,
@@ -842,8 +872,11 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
+    }
 
-        // upgrade / upgrade
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_protocol_upgrade() {
         // current and concurrent transactions change the protocol version
         let result = execute_test(
             None,
@@ -857,8 +890,11 @@ mod tests {
             result,
             Err(CommitConflictError::ProtocolChanged(_))
         ));
+    }
 
-        // taint whole table
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_read_whole_table_disallows_concurrent_append() {
         // `read_whole_table` should disallow any concurrent change, even if the change
         // is disjoint with the earlier filter
         let file_part1 = simple_add(true, "1", "10").into();
@@ -876,8 +912,11 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
+    }
 
-        // taint whole table + concurrent remove
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_read_whole_table_disallows_concurrent_remove() {
         // `read_whole_table` should disallow any concurrent remove actions
         let file_part1 = simple_add(true, "1", "10");
         let file_part2 = simple_add(true, "11", "100").into();
@@ -895,9 +934,346 @@ mod tests {
             result,
             Err(CommitConflictError::ConcurrentDeleteRead)
         ));
+    }
 
-        // TODO "add in part=2 / read from part=1,2 and write to part=1"
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_compaction_remove_does_not_conflict_with_read() {
+        // Concurrent compaction (data_change = false) should NOT conflict with reads
+        // A file is removed by a compaction operation (data_change = false) while being read
+        let file_read = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read.clone().into());
 
-        // TODO conflicting txns
+        // Create a remove action with data_change = false (simulating OPTIMIZE/compaction)
+        let mut compaction_remove = ActionFactory::remove(&file_read, false);
+        compaction_remove.data_change = false;
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(10))),
+            vec![compaction_remove.into()],
+            vec![],
+            false,
+        )
+        .await;
+        // Should succeed because data_change = false means it's just a physical reorganization
+        assert!(
+            result.is_ok(),
+            "Compaction with data_change=false should not conflict with reads"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_data_delete_conflicts_with_read() {
+        // Delete with data_change = true should still conflict with reads
+        let file_read = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read.clone().into());
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(10))),
+            vec![ActionFactory::remove(&file_read, true).into()],
+            vec![],
+            false,
+        )
+        .await;
+        // Should fail because data_change = true means logical data was removed
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteRead)),
+            "Delete with data_change=true should conflict with reads"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_compaction_does_not_conflict_with_whole_table_read() {
+        // Concurrent compaction with read_whole_table and data_change = false
+        let file_part1 = simple_add(true, "1", "10");
+        let file_part2 = simple_add(true, "11", "100").into();
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1.clone().into());
+
+        let compaction_remove = ActionFactory::remove(&file_part1, false);
+
+        let result = execute_test(
+            Some(setup_actions),
+            None,
+            vec![compaction_remove.into()],
+            vec![file_part2],
+            true, // read_whole_table
+        )
+        .await;
+        // Should succeed because data_change = false, even with read_whole_table
+        assert!(
+            result.is_ok(),
+            "Compaction with data_change=false should not conflict even with read_whole_table"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_multiple_compaction_removes_do_not_conflict() {
+        // Multiple files removed with data_change = false
+        let file1 = simple_add(true, "1", "10");
+        let file2 = simple_add(true, "11", "20");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file1.clone().into());
+        setup_actions.push(file2.clone().into());
+
+        let mut remove1 = ActionFactory::remove(&file1, false);
+        remove1.data_change = false;
+        let mut remove2 = ActionFactory::remove(&file2, false);
+        remove2.data_change = false;
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(20))),
+            vec![remove1.into(), remove2.into()],
+            vec![],
+            false,
+        )
+        .await;
+        // Should succeed because both removes have data_change = false
+        assert!(
+            result.is_ok(),
+            "Multiple compaction removes with data_change=false should not conflict"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_mixed_removes_conflict_if_any_data_change() {
+        // Mixed removes - one with data_change = false, one with data_change = true
+        let file1 = simple_add(true, "1", "10");
+        let file2 = simple_add(true, "11", "20");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file1.clone().into());
+        setup_actions.push(file2.clone().into());
+
+        let mut compaction_remove = ActionFactory::remove(&file1, false);
+        compaction_remove.data_change = false;
+        let data_remove = ActionFactory::remove(&file2, true); // data_change = true
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(20))),
+            vec![compaction_remove.into(), data_remove.into()],
+            vec![],
+            false,
+        )
+        .await;
+        // Should fail because one of the removes has data_change = true
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteRead)),
+            "Mixed removes should conflict if any have data_change=true"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_compaction_double_delete_still_conflicts() {
+        // Concurrent double delete with data_change = false
+        // Both transactions try to remove the same file with data_change = false
+        let removed_file = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(removed_file.clone().into());
+
+        let mut remove1 = ActionFactory::remove(&removed_file, false);
+        remove1.data_change = false;
+        let mut remove2 = ActionFactory::remove(&removed_file, false);
+        remove2.data_change = false;
+
+        let result = execute_test(
+            Some(setup_actions),
+            None,
+            vec![remove1.into()],
+            vec![remove2.into()],
+            false,
+        )
+        .await;
+        // Should still fail - even with data_change = false, can't delete the same file twice
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
+            "Concurrent double delete should conflict even with data_change=false"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_disjoint_partitions_add_and_write() {
+        // Test for: "add in part=2 / read from part=1,2 and write to part=1"
+        // Transaction reads from partitions 1 and 2, concurrent txn adds to partition 2,
+        // and current txn writes to partition 1.
+        // This should succeed because the write is disjoint from the concurrent add.
+
+        let file_part1_existing = simple_add(true, "1", "10");
+        let file_part2_added = simple_add(true, "100", "200").into();
+        let file_part1_new = simple_add(true, "5", "15").into();
+
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1_existing.into());
+
+        // Read from both partitions (value <= 200 covers both ranges)
+        // Concurrent adds file with value 100-200
+        // Current transaction adds file with value 5-15
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(200))),
+            vec![file_part2_added],
+            vec![file_part1_new],
+            false,
+        )
+        .await;
+
+        // This should fail with ConcurrentAppend because the predicate matches the added file
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentAppend)),
+            "Adding file matching read predicate should conflict"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_disjoint_partitions_read_write_different_ranges() {
+        // Test disjoint partitions: read from one range, concurrent write to different range
+        let file_part1 = simple_add(true, "1", "10");
+        let file_part2_added = simple_add(true, "100", "200").into();
+        let file_part1_new = simple_add(true, "5", "15").into();
+
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1.into());
+
+        // Read only from partition 1 (value <= 50)
+        // Concurrent adds to partition 2 (value 100-200)
+        // Current transaction adds to partition 1
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(50))),
+            vec![file_part2_added],
+            vec![file_part1_new],
+            false,
+        )
+        .await;
+
+        // This should succeed because the concurrent add is outside the read predicate
+        assert!(
+            result.is_ok(),
+            "Disjoint partition writes should not conflict"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_conflicting_app_transactions() {
+        // Test for conflicting application transactions (e.g., duplicate streaming queries)
+        let file1 = simple_add(true, "1", "10").into();
+
+        let app_id = "streaming_query_1".to_string();
+        let txn_action = Action::Txn(Transaction {
+            app_id: app_id.clone(),
+            version: 1,
+            last_updated: None,
+        });
+
+        // Current transaction depends on app_id
+        let current_actions = vec![txn_action.clone()];
+
+        // Concurrent transaction also updates the same app_id
+        let concurrent_actions = vec![txn_action, file1];
+
+        let result = execute_test(None, None, concurrent_actions, current_actions, false).await;
+
+        // Should fail because both transactions use the same app_id
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentTransaction)),
+            "Conflicting app transactions should fail"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_non_conflicting_different_app_transactions() {
+        // Test non-conflicting application transactions with different app_ids
+        let file1 = simple_add(true, "1", "10").into();
+
+        let app_id1 = "streaming_query_1".to_string();
+        let app_id2 = "streaming_query_2".to_string();
+
+        let txn_action1 = Action::Txn(Transaction {
+            app_id: app_id1,
+            version: 1,
+            last_updated: None,
+        });
+
+        let txn_action2 = Action::Txn(Transaction {
+            app_id: app_id2,
+            version: 1,
+            last_updated: None,
+        });
+
+        // Current transaction depends on app_id1
+        let current_actions = vec![txn_action1];
+
+        // Concurrent transaction updates app_id2
+        let concurrent_actions = vec![txn_action2, file1];
+
+        let result = execute_test(None, None, concurrent_actions, current_actions, false).await;
+
+        // Should succeed because different app_ids don't conflict
+        assert!(
+            result.is_ok(),
+            "Non-conflicting app transactions should succeed"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_replace_where_initial_empty_conflicts_on_concurrent_add() {
+        // Empty predicate read, concurrent add within predicate, then current write -> conflicts
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(simple_add(true, "1", "1").into());
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").gt_eq(lit::<i32>(2))), // no files read
+            vec![simple_add(true, "3", "3").into()], // concurrent add matches predicate
+            vec![simple_add(true, "2", "2").into()],
+            false,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(CommitConflictError::ConcurrentAppend)),
+            "ReplaceWhere-style empty read should conflict when a matching row is concurrently added"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_replace_where_disjoint_empty_allows_commit() {
+        // Empty predicate read, concurrent add outside predicate, then current write -> allowed
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(simple_add(true, "1", "1").into());
+
+        let result = execute_test(
+            Some(setup_actions),
+            Some(
+                col("value")
+                    .gt(lit::<i32>(1))
+                    .and(col("value").lt_eq(lit::<i32>(3))),
+            ), // empty read
+            vec![simple_add(true, "5", "5").into()], // disjoint from read predicate
+            vec![simple_add(true, "2", "2").into()],
+            false,
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Disjoint replaceWhere-style transactions with empty reads should succeed"
+        );
     }
 }

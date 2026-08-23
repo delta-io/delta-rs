@@ -1,20 +1,20 @@
 //! Abstractions and implementations for writing data to delta tables
 
-use arrow::{datatypes::SchemaRef, error::ArrowError};
+use arrow::{datatypes::FieldRef, datatypes::SchemaRef, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
 
-use crate::errors::DeltaTableError;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{Action, Add};
-use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
+use crate::errors::{ColumnMappingOperation, DeltaTableError};
+use crate::kernel::schema::symmetric_differences;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{Action, Add, Version};
+use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
-pub use stats::create_add;
 
 pub mod json;
 pub mod record_batch;
@@ -24,6 +24,25 @@ pub mod utils;
 #[cfg(test)]
 pub mod test_utils;
 
+pub(crate) fn ensure_legacy_writer_supports_table(
+    table: &DeltaTable,
+    operation: &str,
+) -> Result<(), DeltaTableError> {
+    if table
+        .snapshot()?
+        .table_config()
+        .column_mapping_mode
+        .is_some_and(|mode| mode != delta_kernel::table_features::ColumnMappingMode::None)
+    {
+        return Err(DeltaTableError::unsupported_column_mapping(
+            ColumnMappingOperation::Write,
+            operation,
+        ));
+    }
+
+    Ok(())
+}
+
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum DeltaWriterError {
@@ -32,7 +51,7 @@ pub(crate) enum DeltaWriterError {
     MissingPartitionColumn(String),
 
     /// The Arrow RecordBatch schema does not match the expected schema.
-    #[error("Arrow RecordBatch schema does not match: RecordBatch schema: {record_batch_schema}, {expected_schema}")]
+    #[error("{}", format_schema_mismatch(record_batch_schema, expected_schema))]
     SchemaMismatch {
         /// The record batch schema.
         record_batch_schema: SchemaRef,
@@ -124,6 +143,28 @@ impl From<DeltaWriterError> for DeltaTableError {
     }
 }
 
+fn format_schema_mismatch(record_batch_schema: &SchemaRef, expected_schema: &SchemaRef) -> String {
+    // We can safely assume this will succeed since we already know the schemas are different
+    let differences = symmetric_differences(record_batch_schema, expected_schema).unwrap();
+
+    let (expected_fields, different_fields): (Vec<&FieldRef>, Vec<&FieldRef>) =
+        differences.iter().partition(|f| {
+            expected_schema
+                .field_with_name(f.name())
+                .is_ok_and(|e| e == f.as_ref()) // It possible the types are mismatch given the names matches
+        });
+
+    match (differences.is_empty(), expected_fields.is_empty()) {
+        (true, _) => "Arrow RecordBatch schema is in the wrong order".to_string(),
+        (false, false) => format!(
+            "Arrow RecordBatch schema does not match: Missing fields: {expected_fields:?} and Found fields {different_fields:?}"
+        ),
+        (false, true) => {
+            format!("Arrow RecordBatch schema does not match: Found extra fields {differences:?}")
+        }
+    }
+}
+
 /// Write mode for the [DeltaWriter]
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum WriteMode {
@@ -150,9 +191,12 @@ pub trait DeltaWriter<T> {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
+    async fn flush_and_commit(
+        &mut self,
+        table: &mut DeltaTable,
+    ) -> Result<Version, DeltaTableError> {
         let adds: Vec<_> = self.flush().await?.drain(..).map(Action::Add).collect();
-        flush_and_commit(adds, table).await
+        flush_and_commit(adds, table, None).await
     }
 }
 
@@ -160,9 +204,10 @@ pub trait DeltaWriter<T> {
 pub(crate) async fn flush_and_commit(
     adds: Vec<Action>,
     table: &mut DeltaTable,
-) -> Result<i64, DeltaTableError> {
+    commit_properties: Option<CommitProperties>,
+) -> Result<Version, DeltaTableError> {
     let snapshot = table.snapshot()?;
-    let partition_cols = snapshot.metadata().partition_columns().clone();
+    let partition_cols: Vec<String> = snapshot.metadata().partition_columns().into();
     let partition_by = if !partition_cols.is_empty() {
         Some(partition_cols)
     } else {
@@ -174,11 +219,139 @@ pub(crate) async fn flush_and_commit(
         predicate: None,
     };
 
-    let version = CommitBuilder::from(CommitProperties::default())
+    let finalized = CommitBuilder::from(commit_properties.unwrap_or_default())
         .with_actions(adds)
         .build(Some(snapshot), table.log_store.clone(), operation)
-        .await?
-        .version();
-    table.update().await?;
-    Ok(version)
+        .await?;
+    table.state = Some(finalized.snapshot());
+    Ok(finalized.version())
+}
+
+#[cfg(test)]
+mod tests {
+    use delta_kernel::schema::DataType;
+
+    use super::*;
+    use crate::DeltaResult;
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
+    use pretty_assertions::assert_ne;
+    use std::sync::Arc;
+
+    /// This test doesn't have a great way to _validate_ that logs are not cleaned up as part of
+    /// the second commit.
+    ///
+    /// Instead I just added some prints in the [PostCommit] logic to validate that the property
+    /// was getting pulled through correctly in the non-default case.
+    ///
+    /// The _ideal_ testing scenario would probably be to propagate metrics out of
+    /// [flush_and_commit] but that's an API change we isn't desirable at the moment
+    #[tokio::test]
+    async fn test_flush_and_commit() -> DeltaResult<()> {
+        let mut table = DeltaTable::new_in_memory()
+            .create()
+            .with_table_name("my_table")
+            .with_column(
+                "id",
+                DataType::Primitive(delta_kernel::schema::PrimitiveType::Long),
+                true,
+                None,
+            )
+            .with_configuration_property(
+                crate::TableProperty::LogRetentionDuration,
+                Some("interval 0 days"),
+            )
+            .await?;
+
+        let add = Add::default();
+        let actions = vec![Action::Add(add)];
+        let first_version = flush_and_commit(actions, &mut table, None).await?;
+
+        let add = Add::default();
+        let actions = vec![Action::Add(add)];
+
+        let properties = CommitProperties::default().with_cleanup_expired_logs(Some(false));
+        let second_version = flush_and_commit(actions, &mut table, Some(properties)).await?;
+        assert_ne!(
+            second_version, first_version,
+            "flush_and_commit did not create a version apparently?"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_different_order() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field2", ArrowDataType::Utf8, true),
+            Field::new("field1", ArrowDataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+        assert_eq!(
+            format_message,
+            "Arrow RecordBatch schema is in the wrong order".to_string()
+        );
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_completely_different() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field3", ArrowDataType::Utf8, true),
+            Field::new("field4", ArrowDataType::Int32, false),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+
+        let (missing_section, found_section) = format_message
+            .split_once(" and Found fields ")
+            .expect("Message should contain ' and Found fields '");
+
+        assert!(
+            missing_section.contains("field1"),
+            "field1 should be in missing fields"
+        );
+        assert!(
+            missing_section.contains("field2"),
+            "field2 should be in missing fields"
+        );
+        assert!(
+            found_section.contains("field3"),
+            "field3 should be in found fields"
+        );
+        assert!(
+            found_section.contains("field4"),
+            "field4 should be in found fields"
+        );
+    }
+
+    #[test]
+    fn test_schema_mismatch_message_extra_field() {
+        let new_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+            Field::new("field3", ArrowDataType::Utf8, true),
+        ]));
+
+        let existing_schema = Arc::new(Schema::new(vec![
+            Field::new("field1", ArrowDataType::Int32, false),
+            Field::new("field2", ArrowDataType::Utf8, true),
+        ]));
+
+        let format_message = format_schema_mismatch(&new_schema, &existing_schema);
+
+        let extra_field = vec![Field::new("field3", ArrowDataType::Utf8, true)];
+
+        let expected =
+            format!("Arrow RecordBatch schema does not match: Found extra fields {extra_field:?}");
+        assert_eq!(format_message, expected);
+    }
 }

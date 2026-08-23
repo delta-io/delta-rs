@@ -1,34 +1,29 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use arrow_schema::{Schema, SchemaRef};
-use async_trait::async_trait;
-use datafusion::catalog::Session;
-use datafusion::catalog::TableProvider;
-use datafusion::common::{exec_datafusion_err, Column, DFSchema, Result as DataFusionResult};
-use datafusion::execution::SessionState;
+use arrow::datatypes::{Schema, SchemaRef};
+use datafusion::catalog::{Session, TableProvider};
+use datafusion::common::{Column, DFSchema, Result as DataFusionResult};
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::ExecutionPlan;
 
-use crate::DeltaTableError;
 use crate::{
-    delta_datafusion::DataFusionMixins, operations::load_cdf::CdfLoadBuilder, DeltaResult,
+    DeltaResult, DeltaTableError, delta_datafusion::DataFusionMixins,
+    operations::load_cdf::CdfLoadBuilder,
 };
 
 use super::ADD_PARTITION_SCHEMA;
 
-fn session_state_from_session(session: &dyn Session) -> DataFusionResult<&SessionState> {
-    session
-        .as_any()
-        .downcast_ref::<SessionState>()
-        .ok_or_else(|| exec_datafusion_err!("Failed to downcast Session to SessionState"))
-}
-
+/// A DataFusion [`TableProvider`](datafusion::catalog::TableProvider) that exposes a Delta
+/// table's Change Data Feed (CDF) as a queryable relation.
+///
+/// Wraps a [`CdfLoadBuilder`] together with the resolved output schema so the CDF stream
+/// (insertions, updates and deletions across versions) can be scanned through the normal
+/// DataFusion planning machinery.
 #[derive(Debug)]
 pub struct DeltaCdfTableProvider {
     cdf_builder: CdfLoadBuilder,
@@ -38,7 +33,15 @@ pub struct DeltaCdfTableProvider {
 impl DeltaCdfTableProvider {
     /// Build a DeltaCDFTableProvider
     pub fn try_new(cdf_builder: CdfLoadBuilder) -> DeltaResult<Self> {
-        let mut fields = cdf_builder.snapshot.input_schema()?.fields().to_vec();
+        let mut fields = cdf_builder
+            .snapshot
+            .as_ref()
+            .ok_or(DeltaTableError::generic(
+                "expected initialized snapshot for DeltaCdfTableProvider",
+            ))?
+            .input_schema()
+            .fields()
+            .to_vec();
         for f in ADD_PARTITION_SCHEMA.clone() {
             fields.push(f.into());
         }
@@ -49,12 +52,8 @@ impl DeltaCdfTableProvider {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TableProvider for DeltaCdfTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
@@ -70,18 +69,19 @@ impl TableProvider for DeltaCdfTableProvider {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let session_state = session_state_from_session(session)?;
         let schema: DFSchema = self.schema().try_into()?;
 
         let mut plan = if let Some(filter_expr) = conjunction(filters.iter().cloned()) {
-            let physical_expr = session.create_physical_expr(filter_expr, &schema)?;
+            let physical_expr = session.create_physical_expr(filter_expr.clone(), &schema)?;
             let plan = self
                 .cdf_builder
-                .build(session_state, Some(&physical_expr))
+                .clone()
+                .with_partition_pruning_filter(filter_expr)
+                .build(session, Some(&physical_expr))
                 .await?;
             Arc::new(FilterExec::try_new(physical_expr, plan)?)
         } else {
-            self.cdf_builder.build(session_state, None).await?
+            self.cdf_builder.build(session, None).await?
         };
 
         let df_schema: DFSchema = plan.schema().try_into()?;

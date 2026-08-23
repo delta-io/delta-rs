@@ -6,12 +6,13 @@ use std::sync::Arc;
 use bytes::Bytes;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::kernel::{Action, Add, Remove, StructType};
+use deltalake_core::logstore::object_store::ObjectStoreExt as _;
 use deltalake_core::logstore::LogStore;
 use deltalake_core::operations::create::CreateBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
 use deltalake_core::DeltaTable;
 use deltalake_core::DeltaTableBuilder;
-use deltalake_core::{ObjectStore, Path};
+use deltalake_core::{ensure_table_uri, Path};
 use tempfile::TempDir;
 
 pub mod acceptance;
@@ -60,7 +61,9 @@ impl TestContext {
     fn new_storage(&self) -> Arc<dyn LogStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
-        DeltaTableBuilder::from_uri(uri)
+        let table_url = ensure_table_uri(&uri).unwrap();
+        DeltaTableBuilder::from_url(table_url)
+            .unwrap()
             .with_storage_options(config)
             .build_storage()
             .unwrap()
@@ -81,8 +84,8 @@ impl TestContext {
             .with_log_store(log_store)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
-            .with_columns(schema.fields().cloned())
             .with_partition_columns(p)
+            .with_columns(schema.fields().cloned())
             .await
             .unwrap()
     }
@@ -148,7 +151,7 @@ pub async fn add_file(
             .build(Some(snapshot), table.log_store(), operation)
             .await
             .unwrap();
-        table.update().await.unwrap();
+        table.update_state().await.unwrap();
     }
 }
 
@@ -184,5 +187,5 @@ pub async fn remove_file(
         .build(Some(snapshot), table.log_store(), operation)
         .await
         .unwrap();
-    table.update().await.unwrap();
+    table.update_state().await.unwrap();
 }

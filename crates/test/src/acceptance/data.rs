@@ -1,6 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use arrow_array::{Array, RecordBatch};
+use arrow_cast::pretty::pretty_format_batches;
 use arrow_ord::sort::{lexsort_to_indices, SortColumn};
 use arrow_schema::{DataType, Schema};
 use arrow_select::{concat::concat_batches, take::take};
@@ -8,6 +9,7 @@ use delta_kernel::DeltaResult;
 use futures::{stream::TryStreamExt, StreamExt};
 use object_store::{local::LocalFileSystem, ObjectStore};
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use pretty_assertions::assert_eq;
 
 use super::TestCaseInfo;
 use crate::TestResult;
@@ -72,10 +74,6 @@ fn assert_schema_fields_match(schema: &Schema, golden: &Schema) {
             "Field names don't match"
         );
         assert!(
-            schema_field.dict_id() == golden_field.dict_id(),
-            "Field dict_id doesn't match"
-        );
-        assert!(
             schema_field.dict_is_ordered() == golden_field.dict_is_ordered(),
             "Field dict_is_ordered doesn't match"
         );
@@ -126,5 +124,18 @@ pub async fn assert_scan_data(
         "Didn't have same number of rows"
     );
 
+    Ok(())
+}
+
+pub fn assert_data_matches(actual: &[RecordBatch], expected: &[RecordBatch]) -> TestResult<()> {
+    let actual = concat_batches(actual[0].schema_ref(), actual.iter())?;
+    let actual = sort_record_batch(actual)?;
+    let actuat_str = pretty_format_batches(&[actual])?.to_string();
+
+    let expected = concat_batches(expected[0].schema_ref(), expected.iter())?;
+    let expected = sort_record_batch(expected)?;
+    let expected_str = pretty_format_batches(&[expected])?.to_string();
+
+    assert_eq!(actuat_str, expected_str, "Data batches do not match");
     Ok(())
 }

@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-aws"
-version = "0.11.0"
+version = "1.0.0"
 authors.workspace = true
 keywords.workspace = true
 readme.workspace = true
@@ -13,65 +13,56 @@ rust-version.workspace = true
 
 [dependencies]
 # path dependencies
-deltalake-core = { version = "0.28.0", path = "../core" , features = ["cloud"]}
+deltalake-core = { version = "1.0", path = "../core" , default-features = false, features = ["cloud"]}
 
 # workspace dependencies
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+time = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 object_store = { workspace = true, features = ["aws"] }
-regex = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
+typed-builder = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 
 # crates.io dependencies
-aws-smithy-runtime-api = { version = "1.7" }
-aws-smithy-runtime = { version = "1.7", optional = true }
+aws-smithy-runtime-api = { version = "1.11" }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
-aws-config = { version = "1.5", default-features = false, features = [
+aws-config = { version = "1.8", features = [
     "behavior-version-latest",
     "rt-tokio",
     "credentials-process",
-    "sso",
 ] }
-aws-sdk-sso = { version = "=1.72.0"}
-aws-sdk-ssooidc = { version = "=1.73.0"}
-aws-sdk-dynamodb = { version = "=1.79.0", default-features = false, features = [
+aws-sdk-sts = { version = "1.101.0", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
 ] }
-aws-sdk-sts = { version = "=1.73.0", default-features = false, features = [
-    "behavior-version-latest",
-    "rt-tokio",
-] }
-backon = { version = "1", default-features = false, features = ["tokio-sleep"] }
-hyper-tls = { version = "0.5", optional = true }
-maplit = "1"
 
 [dev-dependencies]
-deltalake-core = { path = "../core" }
 chrono = { workspace = true }
-serial_test = "3"
+deltalake-core = { path = "../core" }
 deltalake-test = { path = "../test" }
 pretty_env_logger = "0.5.0"
-rand = "0.8"
+pretty_assertions = "1"
+rand = "0.10"
 serde_json = { workspace = true }
+serial_test = "3"
 
 [features]
 default = ["rustls"]
 integration_test = []
 native-tls = [
+    "deltalake-core/native-tls",
     "aws-config/client-hyper",
-    "aws-smithy-runtime/connector-hyper-0-14-x",
-    "hyper-tls",
 ]
 rustls = [
+    "deltalake-core/rustls",
     "aws-config/client-hyper",
-    "aws-config/rustls",
-    "aws-sdk-dynamodb/rustls",
-    "aws-sdk-sts/rustls",
+    "aws-sdk-sts/default-https-client",
 ]
+
+[package.metadata.cargo-machete]
+ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "time"]

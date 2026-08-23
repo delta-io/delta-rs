@@ -5,6 +5,7 @@ The `data` parameter will accept a Pandas DataFrame, a PyArrow Table, or
 an iterator of PyArrow Record Batches.
 
 ``` python
+>>> import pandas as pd
 >>> from deltalake import write_deltalake
 >>> df = pd.DataFrame({'x': [1, 2, 3]})
 >>> write_deltalake('path/to/table', df)
@@ -27,32 +28,11 @@ alter the schema as part of an overwrite pass in `schema_mode="overwrite"` or `s
 `schema_mode="overwrite"` will completely overwrite the schema, even if columns are dropped; merge will append the new columns
 and fill missing columns with `null`. `schema_mode="merge"` is also supported on append operations.
 
-## Overwriting a partition
-
-You can overwrite a specific partition by using `mode="overwrite"`
-together with `partition_filters`. This will remove all files within the
-matching partition and insert your data as new files. This can only be
-done on one partition at a time. All the input data must belong to
-that partition or else the method will raise an error.
-
-``` python
->>> from deltalake import write_deltalake
->>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
->>> write_deltalake('path/to/table', df, partition_by=['y'])
-
->>> table = DeltaTable('path/to/table')
->>> df2 = pd.DataFrame({'x': [100], 'y': ['b']})
->>> write_deltalake(table, df2, partition_filters=[('y', '=', 'b')], mode="overwrite")
-
->>> table.to_pandas()
-     x  y
-0    1  a
-1    2  a
-2  100  b
-```
-
-This method could also be used to insert a new partition if one doesn't
-already exist, making this operation idempotent.
+When replacing the entire table with `mode="overwrite"` and `schema_mode="overwrite"`,
+you may also provide a different `partition_by` value to replace the table's
+partition columns. This is only supported for full table overwrites. Overwrites
+that use a `predicate` (also known as `replaceWhere`) must keep the existing
+partition columns because they replace only a subset of the table.
 
 ## Overwriting part of the table data using a predicate
 
@@ -64,7 +44,9 @@ When you don’t specify the `predicate`, the overwrite save mode will replace
 the entire table. Instead of replacing the entire table (which is costly!), you
 may want to overwrite only the specific parts of the table that should be
 changed. In this case, you can use a `predicate` to overwrite only the relevant
-records or partitions.
+records or partitions. If the predicate and source data being written contain 
+partitions that do not exist in the target table, they will be added to the 
+target table.
 
 !!! note
 

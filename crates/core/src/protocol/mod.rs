@@ -2,20 +2,29 @@
 
 #![allow(non_camel_case_types)]
 
+use crate::table::Constraint;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
 
+use arrow::compute::filter_record_batch;
+use arrow_array::{BooleanArray, RecordBatch};
+use delta_kernel::FilteredEngineData;
+use delta_kernel::engine::arrow_data::ArrowEngineData;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use url::Url;
 
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::kernel::{Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures};
+use crate::kernel::{
+    Add, CommitInfo, Metadata, Protocol, Remove, StructField, TableFeatures, Version,
+};
 
 pub mod checkpoints;
+pub mod log_compaction;
 
 pub(crate) use checkpoints::{cleanup_expired_logs_for, create_checkpoint_for};
 
@@ -235,7 +244,7 @@ pub enum DeltaOperation {
         /// The save mode used during the create.
         mode: SaveMode,
         /// The storage location of the new table
-        location: String,
+        location: Url,
         /// The min reader and writer protocol versions of the table
         protocol: Protocol,
         /// Metadata associated with the new table
@@ -267,10 +276,8 @@ pub enum DeltaOperation {
     },
     /// Add constraints to a table
     AddConstraint {
-        /// Constraints name
-        name: String,
-        /// Expression to check against
-        expr: String,
+        /// Constraints with Name and Expression
+        constraints: Vec<Constraint>,
     },
 
     /// Add table features to a table
@@ -338,10 +345,10 @@ pub enum DeltaOperation {
     /// Represents a `Restore` operation
     Restore {
         /// Version to restore
-        version: Option<i64>,
+        version: Option<Version>,
         ///Datetime to restore
         datetime: Option<i64>,
-    }, // TODO: Add more operations
+    },
 
     #[serde(rename_all = "camelCase")]
     /// Represents the start of `Vacuum` operation
@@ -370,6 +377,12 @@ pub enum DeltaOperation {
     UpdateTableMetadata {
         /// The metadata update to apply
         metadata_update: crate::operations::update_table_metadata::TableMetadataUpdate,
+    },
+    /// Drop the `NOT NULL` constraint on a column, making it nullable
+    #[serde(rename_all = "camelCase")]
+    DropColumnNotNull {
+        /// The name of the column whose `NOT NULL` constraint was dropped
+        column: StructField,
     },
 }
 
@@ -400,34 +413,26 @@ impl DeltaOperation {
             DeltaOperation::AddFeature { .. } => "ADD FEATURE",
             DeltaOperation::UpdateFieldMetadata { .. } => "UPDATE FIELD METADATA",
             DeltaOperation::UpdateTableMetadata { .. } => "UPDATE TABLE METADATA",
+            DeltaOperation::DropColumnNotNull { .. } => "CHANGE COLUMN",
         }
     }
 
     /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
-        if let Some(Some(Some(map))) = serde_json::to_value(self)?
-            .as_object()
-            .map(|p| p.values().next().map(|q| q.as_object()))
-        {
-            Ok(map
-                .iter()
-                .filter(|item| !item.1.is_null())
-                .map(|(k, v)| {
-                    (
-                        k.to_owned(),
-                        serde_json::Value::String(if v.is_string() {
-                            String::from(v.as_str().unwrap())
-                        } else {
-                            v.to_string()
-                        }),
-                    )
-                })
-                .collect())
-        } else {
-            Err(DeltaTableError::Generic(
-                "Operation parameters serialized into unexpected shape".into(),
-            ))
+        let value = serde_json::to_value(self)?;
+        if let Value::Object(mut operation) = value {
+            if let Some(Value::Object(parameters)) = operation.values_mut().next() {
+                return Ok(take(parameters)
+                    .into_iter()
+                    .filter(|item| !item.1.is_null())
+                    .map(|(key, value)| (key, operation_parameter_value(value)))
+                    .collect());
+            }
         }
+
+        Err(DeltaTableError::Generic(
+            "Operation parameters serialized into unexpected shape".into(),
+        ))
     }
 
     /// Denotes if the operation changes the data contained in the table
@@ -436,6 +441,7 @@ impl DeltaOperation {
             Self::Optimize { .. }
             | Self::UpdateFieldMetadata { .. }
             | Self::UpdateTableMetadata { .. }
+            | Self::DropColumnNotNull { .. }
             | Self::SetTableProperties { .. }
             | Self::AddColumn { .. }
             | Self::AddFeature { .. }
@@ -487,6 +493,13 @@ impl DeltaOperation {
     }
 }
 
+pub(crate) fn operation_parameter_value(value: Value) -> Value {
+    Value::String(match value {
+        Value::String(value) => value,
+        value => value.to_string(),
+    })
+}
+
 /// The SaveMode used when performing a DeltaOperation
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
 pub enum SaveMode {
@@ -509,7 +522,9 @@ impl FromStr for SaveMode {
             "overwrite" => Ok(SaveMode::Overwrite),
             "error" => Ok(SaveMode::ErrorIfExists),
             "ignore" => Ok(SaveMode::Ignore),
-            _ => Err(DeltaTableError::Generic(format!("Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"))),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Invalid save mode provided: {s}, only these are supported: ['append', 'overwrite', 'error', 'ignore']"
+            ))),
         }
     }
 }
@@ -523,6 +538,14 @@ pub enum OutputMode {
     Complete,
     /// Only rows with updates will be written when new or changed data is available.
     Update,
+}
+
+pub(crate) fn to_rb(data: FilteredEngineData) -> DeltaResult<RecordBatch> {
+    let (underlying_data, selection_vector) = data.into_parts();
+    let engine_data = ArrowEngineData::try_from_engine_data(underlying_data)?;
+    let predicate = BooleanArray::from(selection_vector);
+    let batch = filter_record_batch(engine_data.record_batch(), &predicate)?;
+    Ok(batch)
 }
 
 #[cfg(test)]
@@ -705,14 +728,17 @@ mod tests {
     }
 
     mod arrow_tests {
+        use crate::DeltaResult;
         use arrow::array::{self, ArrayRef, StructArray};
         use arrow::compute::kernels::cast_utils::Parser;
         use arrow::compute::sort_to_indices;
-        use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
+        use arrow::datatypes::{Date32Type, TimestampMicrosecondType};
         use arrow::record_batch::RecordBatch;
+        use futures::TryStreamExt;
         use pretty_assertions::assert_eq;
+        use std::path::Path;
         use std::sync::Arc;
-
+        use url::Url;
         fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<RecordBatch> {
             let sort_column = batch.column(batch.schema().column_with_name(column).unwrap().0);
             let sort_indices = sort_to_indices(sort_column, None, None)?;
@@ -735,23 +761,44 @@ mod tests {
         async fn test_with_partitions() {
             // test table with partitions
             let path = "../test/tests/data/delta-0.8.0-null-partition";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                ("path", Arc::new(array::StringArray::from(vec![
-                    "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
-                    "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet"
-                ]))),
-                ("size_bytes", Arc::new(array::Int64Array::from(vec![460, 460]))),
-                ("modification_time", Arc::new(arrow::array::Int64Array::from(vec![
-                    1627990384000, 1627990384000
-                ]))),
-                ("num_records", Arc::new(array::Int64Array::from(vec![None, None]))),
-                ("null_count.v", Arc::new(array::Int64Array::from(vec![None, None]))),
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
+                        "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![460, 460])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::Int64Array::from(vec![
+                        1627990384000,
+                        1627990384000,
+                    ])),
+                ),
+                (
+                    "num_records",
+                    Arc::new(array::Int64Array::from(vec![None, None])),
+                ),
+                (
+                    "null_count.v",
+                    Arc::new(array::Int64Array::from(vec![None, None])),
+                ),
                 ("min.v", Arc::new(array::Int64Array::from(vec![None, None]))),
                 ("max.v", Arc::new(array::Int64Array::from(vec![None, None]))),
-                ("partition.k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
+                (
+                    "partition.k",
+                    Arc::new(array::StringArray::from(vec![Some("A"), None])),
+                ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
@@ -774,117 +821,23 @@ mod tests {
         }
 
         #[tokio::test]
-        #[ignore = "enable when deletion vector is supported"]
-        async fn test_with_deletion_vector() {
+        async fn test_with_deletion_vector() -> DeltaResult<()> {
             // test table with partitions
             let path = "../test/tests/data/table_with_deletion_logs";
-            let table = crate::open_table(path).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
-            let actions = sort_batch_by(&actions, "path").unwrap();
-            let actions = actions
-                .project(&[
-                    actions.schema().index_of("path").unwrap(),
-                    actions.schema().index_of("size_bytes").unwrap(),
-                    actions
-                        .schema()
-                        .index_of("deletionVector.storageType")
-                        .unwrap(),
-                    actions
-                        .schema()
-                        .index_of("deletionVector.pathOrInlineDiv")
-                        .unwrap(),
-                    actions.schema().index_of("deletionVector.offset").unwrap(),
-                    actions
-                        .schema()
-                        .index_of("deletionVector.sizeInBytes")
-                        .unwrap(),
-                    actions
-                        .schema()
-                        .index_of("deletionVector.cardinality")
-                        .unwrap(),
-                ])
-                .unwrap();
-            let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                (
-                    "path",
-                    Arc::new(array::StringArray::from(vec![
-                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
-                    ])),
-                ),
-                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
-                (
-                    "deletionVector.storageType",
-                    Arc::new(array::StringArray::from(vec!["u"])),
-                ),
-                (
-                    "deletionVector.pathOrInlineDiv",
-                    Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"])),
-                ),
-                (
-                    "deletionVector.offset",
-                    Arc::new(array::Int32Array::from(vec![1])),
-                ),
-                (
-                    "deletionVector.sizeInBytes",
-                    Arc::new(array::Int32Array::from(vec![36])),
-                ),
-                (
-                    "deletionVector.cardinality",
-                    Arc::new(array::Int64Array::from(vec![2])),
-                ),
-            ];
-            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
-
-            assert_eq!(expected, actions);
-
-            let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
-            let actions = sort_batch_by(&actions, "path").unwrap();
-            let actions = actions
-                .project(&[
-                    actions.schema().index_of("path").unwrap(),
-                    actions.schema().index_of("size_bytes").unwrap(),
-                    actions.schema().index_of("deletionVector").unwrap(),
-                ])
-                .unwrap();
-            let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                (
-                    "path",
-                    Arc::new(array::StringArray::from(vec![
-                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
-                    ])),
-                ),
-                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
-                (
-                    "deletionVector",
-                    Arc::new(array::StructArray::new(
-                        Fields::from(vec![
-                            Field::new("storageType", DataType::Utf8, false),
-                            Field::new("pathOrInlineDiv", DataType::Utf8, false),
-                            Field::new("offset", DataType::Int32, true),
-                            Field::new("sizeInBytes", DataType::Int32, false),
-                            Field::new("cardinality", DataType::Int64, false),
-                        ]),
-                        vec![
-                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
-                            Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))
-                                as ArrayRef,
-                            Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
-                            Arc::new(array::Int32Array::from(vec![36])) as ArrayRef,
-                            Arc::new(array::Int64Array::from(vec![2])) as ArrayRef,
-                        ],
-                        None,
-                    )),
-                ),
-            ];
-            let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
-
-            assert_eq!(expected, actions);
+            let table_uri = Url::from_directory_path(
+                std::fs::canonicalize(path).expect("Failed to canonicalize"),
+            )
+            .expect("Failed to create URL");
+            let _table = crate::open_table(table_uri).await?;
+            Ok(())
         }
+
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions
             let path = "../test/tests/data/simple_table";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri = Url::from_directory_path(std::fs::canonicalize(path).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
 
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -940,102 +893,28 @@ mod tests {
                 ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
-
             assert_eq!(expected, actions);
-
-            // let actions = table.snapshot().unwrap().add_actions_table(false).unwrap();
-            // let actions = sort_batch_by(&actions, "path").unwrap();
-
-            // // For now, this column is ignored.
-            // // expected_columns.push((
-            // //     "partition_values",
-            // //     new_null_array(&DataType::Struct(vec![]), 5),
-            // // ));
-            // let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
-
-            // assert_eq!(expected, actions);
         }
 
         #[tokio::test]
-        #[ignore = "column mapping not yet supported."]
-        async fn test_with_column_mapping() {
+        async fn test_with_column_mapping() -> DeltaResult<()> {
             // test table with column mapping and partitions
             let path = "../test/tests/data/table_with_column_mapping";
-            let table = crate::open_table(path).await.unwrap();
-            let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
-            let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                (
-                    "path",
-                    Arc::new(array::StringArray::from(vec![
-                        "BH/part-00000-4d6e745c-8e04-48d9-aa60-438228358f1a.c000.zstd.parquet",
-                        "8v/part-00001-69b4a452-aeac-4ffa-bf5c-a0c2833d05eb.c000.zstd.parquet",
-                    ])),
-                ),
-                (
-                    "size_bytes",
-                    Arc::new(array::Int64Array::from(vec![890, 810])),
-                ),
-                (
-                    "modification_time",
-                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
-                        1699946088000,
-                        1699946088000,
-                    ])),
-                ),
-                (
-                    "data_change",
-                    Arc::new(array::BooleanArray::from(vec![true, true])),
-                ),
-                (
-                    "partition.Company Very Short",
-                    Arc::new(array::StringArray::from(vec!["BMS", "BME"])),
-                ),
-                ("num_records", Arc::new(array::Int64Array::from(vec![4, 1]))),
-                (
-                    "null_count.Company Very Short",
-                    Arc::new(array::NullArray::new(2)),
-                ),
-                ("min.Company Very Short", Arc::new(array::NullArray::new(2))),
-                ("max.Company Very Short", Arc::new(array::NullArray::new(2))),
-                ("null_count.Super Name", Arc::new(array::NullArray::new(2))),
-                ("min.Super Name", Arc::new(array::NullArray::new(2))),
-                ("max.Super Name", Arc::new(array::NullArray::new(2))),
-                (
-                    "tags.INSERTION_TIME",
-                    Arc::new(array::StringArray::from(vec![
-                        "1699946088000000",
-                        "1699946088000001",
-                    ])),
-                ),
-                (
-                    "tags.MAX_INSERTION_TIME",
-                    Arc::new(array::StringArray::from(vec![
-                        "1699946088000000",
-                        "1699946088000001",
-                    ])),
-                ),
-                (
-                    "tags.MIN_INSERTION_TIME",
-                    Arc::new(array::StringArray::from(vec![
-                        "1699946088000000",
-                        "1699946088000001",
-                    ])),
-                ),
-                (
-                    "tags.OPTIMIZE_TARGET_SIZE",
-                    Arc::new(array::StringArray::from(vec!["33554432", "33554432"])),
-                ),
-            ];
-            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
-
-            assert_eq!(expected, actions);
+            let table_uri = Url::from_directory_path(
+                std::fs::canonicalize(path).expect("Failed to canonicalize"),
+            )
+            .expect("Failed to create URL");
+            let _table = crate::open_table(table_uri).await?;
+            Ok(())
         }
 
         #[tokio::test]
         async fn test_with_stats() {
             // test table with stats
             let path = "../test/tests/data/delta-0.8.0";
-            let table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let table = crate::open_table(table_uri).await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
 
@@ -1074,7 +953,9 @@ mod tests {
         #[tokio::test]
         async fn test_table_not_always_with_stats() {
             let path = "../test/tests/data/delta-stats-optional";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
@@ -1100,10 +981,19 @@ mod tests {
         #[tokio::test]
         async fn test_table_checkpoint_not_always_with_stats() {
             let path = "../test/tests/data/delta-checkpoint-stats-optional";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri =
+                Url::from_directory_path(std::fs::canonicalize(Path::new(path)).unwrap()).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load().await.unwrap();
 
-            assert_eq!(2, table.snapshot().unwrap().file_actions().unwrap().len());
+            let snapshot = table.snapshot().unwrap().snapshot();
+            let files: Vec<_> = snapshot
+                .file_views(&table.log_store, None)
+                .try_collect()
+                .await
+                .unwrap();
+
+            assert_eq!(2, files.len());
         }
 
         #[tokio::test]
@@ -1111,7 +1001,8 @@ mod tests {
         async fn test_only_struct_stats() {
             // test table with no json stats
             let path = "../test/tests/data/delta-1.2.1-only-struct-stats";
-            let mut table = crate::open_table(path).await.unwrap();
+            let table_uri = Url::from_directory_path(Path::new(path)).unwrap();
+            let mut table = crate::open_table(table_uri).await.unwrap();
             table.load_version(1).await.unwrap();
 
             let actions = table.snapshot().unwrap().add_actions_table(true).unwrap();

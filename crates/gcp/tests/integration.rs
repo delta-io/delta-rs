@@ -1,7 +1,7 @@
 #![cfg(feature = "integration_test")]
 
 use deltalake_test::read::read_table_paths;
-use deltalake_test::{test_concurrent_writes, test_read_tables, IntegrationContext, TestResult};
+use deltalake_test::{IntegrationContext, TestResult, test_concurrent_writes, test_read_tables};
 use serial_test::serial;
 
 mod context;

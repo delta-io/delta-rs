@@ -1,6 +1,7 @@
 import pickle
 import urllib
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 import pytest
 
@@ -20,12 +21,21 @@ except ImportError:
     pass
 
 
+SIMPLE_TABLE_FILES = [
+    "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+    "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+    "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+    "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+    "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+]
+
+
 @pytest.mark.pyarrow
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_files(s3_localstack):
-    table_path = "s3://deltars/simple"
+def test_read_files(s3_localstack, s3_localstack_simple_table_uri):
+    table_path = s3_localstack_simple_table_uri
     handler = DeltaStorageHandler(table_path)
     dt = DeltaTable(table_path)
     files = dt.file_uris()
@@ -42,8 +52,8 @@ def test_read_files(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_file_info(s3_localstack):
-    table_path = "s3://deltars/simple"
+def test_read_file_info(s3_localstack, s3_localstack_simple_table_uri):
+    table_path = s3_localstack_simple_table_uri
     handler = DeltaStorageHandler(table_path)
     meta = handler.get_file_info(
         ["part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet"]
@@ -56,11 +66,13 @@ def test_read_file_info(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
+def test_s3_authenticated_read_write(
+    s3_localstack_bucket_root_uri, s3_localstack_creds, monkeypatch
+):
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
-        "s3://deltars/",
+        s3_localstack_bucket_root_uri,
         options={
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
@@ -83,21 +95,12 @@ def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_read_simple_table_from_remote(s3_localstack):
-    table_path = "s3://deltars/simple"
+def test_read_simple_table_from_remote(s3_localstack, s3_localstack_simple_table_uri):
+    table_path = f"{s3_localstack_simple_table_uri}/"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
 
-    expected_files = [
-        "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
-        "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
-        "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
-        "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
-        "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-    ]
-
-    assert dt.files() == expected_files
-    assert dt.file_uris() == [table_path + "/" + path for path in expected_files]
+    assert dt.file_uris() == [table_path + path for path in SIMPLE_TABLE_FILES]
 
 
 @pytest.mark.pyarrow
@@ -107,8 +110,13 @@ def test_read_simple_table_from_remote(s3_localstack):
 @pytest.mark.skip(
     reason="Temporarily disabled until we can resolve https://github.com/delta-io/delta-rs/pull/2120#issuecomment-1912367573"
 )
-def test_roundtrip_s3_env(s3_localstack, sample_data_pyarrow: "pa.Table", monkeypatch):
-    table_path = "s3://deltars/roundtrip"
+def test_roundtrip_s3_env(
+    s3_localstack,
+    s3_localstack_bucket_root_uri,
+    sample_data_pyarrow: "pa.Table",
+    monkeypatch,
+):
+    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip/{uuid4()}"
 
     # Create new table with path
     with pytest.raises(DeltaProtocolError, match="Atomic rename requires a LockClient"):
@@ -136,8 +144,10 @@ def test_roundtrip_s3_env(s3_localstack, sample_data_pyarrow: "pa.Table", monkey
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table"):
-    table_path = "s3://deltars/roundtrip2"
+def test_roundtrip_s3_direct(
+    s3_localstack_bucket_root_uri, s3_localstack_creds, sample_data_pyarrow: "pa.Table"
+):
+    table_path = f"{s3_localstack_bucket_root_uri}/roundtrip2/{uuid4()}"
 
     # Fails without any credentials
     with pytest.raises(Exception):
@@ -178,9 +188,9 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data_pyarrow: "pa.Table
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip"
+    table_path = f"abfs://deltars/roundtrip/{uuid4()}"
 
     # Create new table with path
     write_deltalake(table_path, sample_data_pyarrow)
@@ -201,9 +211,9 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip2"
+    table_path = f"abfs://deltars/roundtrip2/{uuid4()}"
 
     # Can pass storage_options in directly
     write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_creds)
@@ -224,9 +234,9 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data_pyarrow: "pa.Table"):
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table"):
-    table_path = "abfs://deltars/roundtrip3"
+    table_path = f"abfs://deltars/roundtrip3/{uuid4()}"
     write_deltalake(table_path, sample_data_pyarrow, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
     table = dt.to_pyarrow_table()
@@ -237,11 +247,11 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data_pyarrow: "pa.Table")
 @pytest.mark.pyarrow
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=60, method="thread")
+@pytest.mark.timeout(timeout=10, method="thread")
 def test_roundtrip_azure_decoded_sas(
     azurite_sas_creds, sample_data_pyarrow: "pa.Table"
 ):
-    table_path = "abfs://deltars/roundtrip4"
+    table_path = f"abfs://deltars/roundtrip4/{uuid4()}"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
         azurite_sas_creds["SAS_TOKEN"]
     )

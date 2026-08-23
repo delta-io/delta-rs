@@ -1,23 +1,25 @@
 use std::collections::HashMap;
 
-use arrow_array::*;
+use arrow::array::AsArray as _;
+use arrow::datatypes::{Int32Type, Int64Type};
 use chrono::Utc;
 use delta_kernel::schema::{DataType, PrimitiveType};
-use delta_kernel::table_features::{ReaderFeature, WriterFeature};
+use delta_kernel::table_features::TableFeature;
 use itertools::Itertools;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde_json::json;
 
-use super::{get_parquet_bytes, DataFactory, FileStats};
-use crate::kernel::arrow::extract::{self as ex};
+use super::{DataFactory, FileStats, get_parquet_bytes};
 use crate::kernel::transaction::PROTOCOL;
-use crate::kernel::{partitions_schema, ProtocolInner};
 use crate::kernel::{Add, Metadata, Protocol, Remove, StructType};
+use crate::kernel::{ProtocolInner, partitions_schema};
 
+/// Factory for constructing Delta log actions (`Add`, `Remove`, `Protocol`, `Metadata`) in tests.
 pub struct ActionFactory;
 
 impl ActionFactory {
+    /// Build an `Add` action directly from object metadata and pre-computed statistics.
     pub fn add_raw(
         meta: ObjectMeta,
         stats: FileStats,
@@ -39,6 +41,7 @@ impl ActionFactory {
         }
     }
 
+    /// Build an `Add` action by generating a random data file for `schema` within `bounds`.
     pub fn add(
         schema: &StructType,
         bounds: HashMap<&str, (&str, &str)>,
@@ -53,16 +56,21 @@ impl ActionFactory {
                 .map(|f| {
                     let value = match f.data_type() {
                         DataType::Primitive(PrimitiveType::String) => {
-                            let arr =
-                                ex::extract_and_cast::<StringArray>(&batch, f.name()).unwrap();
+                            let arr = batch.column_by_name(f.name()).unwrap().as_string::<i32>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Integer) => {
-                            let arr = ex::extract_and_cast::<Int32Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int32Type>();
                             Some(arr.value(0).to_string())
                         }
                         DataType::Primitive(PrimitiveType::Long) => {
-                            let arr = ex::extract_and_cast::<Int64Array>(&batch, f.name()).unwrap();
+                            let arr = batch
+                                .column_by_name(f.name())
+                                .unwrap()
+                                .as_primitive::<Int64Type>();
                             Some(arr.value(0).to_string())
                         }
                         _ => unimplemented!(),
@@ -74,12 +82,13 @@ impl ActionFactory {
             HashMap::new()
         };
 
-        let data_schema = StructType::new(
+        let data_schema = StructType::try_new(
             schema
                 .fields()
                 .filter(|f| !partition_columns.contains(f.name()))
                 .cloned(),
-        );
+        )
+        .unwrap();
 
         let batch = DataFactory::record_batch(&data_schema, 10, &bounds).unwrap();
         let stats = DataFactory::file_stats(&batch).unwrap();
@@ -95,15 +104,17 @@ impl ActionFactory {
         ActionFactory::add_raw(meta, stats, partition_values, data_change)
     }
 
+    /// Build a `Remove` action that tombstones the given `Add`.
     pub fn remove(add: &Add, data_change: bool) -> Remove {
         add_as_remove(add, data_change)
     }
 
+    /// Build a `Protocol` action, defaulting reader/writer versions when not specified.
     pub fn protocol(
         max_reader: Option<i32>,
         max_writer: Option<i32>,
-        reader_features: Option<impl IntoIterator<Item = ReaderFeature>>,
-        writer_features: Option<impl IntoIterator<Item = WriterFeature>>,
+        reader_features: Option<impl IntoIterator<Item = TableFeature>>,
+        writer_features: Option<impl IntoIterator<Item = TableFeature>>,
     ) -> Protocol {
         ProtocolInner {
             min_reader_version: max_reader.unwrap_or(PROTOCOL.default_reader_version()),
@@ -114,6 +125,7 @@ impl ActionFactory {
         .as_kernel()
     }
 
+    /// Build a `Metadata` action for the given schema, partition columns and configuration.
     pub fn metadata(
         schema: &StructType,
         partition_columns: Option<impl IntoIterator<Item = impl ToString>>,
@@ -135,6 +147,7 @@ impl ActionFactory {
     }
 }
 
+/// Convert an `Add` action into the corresponding `Remove` (tombstone) action.
 pub fn add_as_remove(add: &Add, data_change: bool) -> Remove {
     Remove {
         path: add.path.clone(),

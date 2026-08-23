@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' | tr -d '-' )
+PROFILE ?= dev
 
 .PHONY: setup
 setup: ## Setup the requirements
@@ -8,14 +9,19 @@ setup: ## Setup the requirements
 	uv sync --no-install-project --all-extras
 
 .PHONY: build
-build: setup ## Build Python binding of delta-rs
-	$(info --- Build Python binding ---)
-	uvx --from 'maturin[zig]' maturin build $(MATURIN_EXTRA_ARGS)
+build: setup ## Build Python binding of delta-rs (default: PROFILE=dev, override with PROFILE=ci|python-release)
+	$(info --- Build Python binding with profile: $(PROFILE) ---)
+	uvx --from 'maturin[zig]' maturin build --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
+
+.PHONY: build-release
+build-release: setup ## Build Python wheel for release (uses python-release profile - maximum optimization)
+	$(info --- Build Python wheel with python-release profile ---)
+	uvx --from 'maturin[zig]' maturin build --profile python-release $(MATURIN_EXTRA_ARGS)
 
 .PHONY: develop
-develop: setup ## Install Python binding of delta-rs
-	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop $(MATURIN_EXTRA_ARGS)
+develop: setup ## Install Python binding of delta-rs (default: PROFILE=dev, override with PROFILE=ci|python-release)
+	$(info --- Develop with Python binding with profile: $(PROFILE) ---)
+	uvx --from 'maturin[zig]' maturin develop --uv --profile $(PROFILE) $(MATURIN_EXTRA_ARGS)
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
@@ -29,7 +35,7 @@ install: build ## Install Python binding of delta-rs
 develop-pyspark:
 	uv sync --all-extras --group pyspark --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --extras=pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --uv --extras=pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
@@ -38,6 +44,9 @@ format: ## Format the code
 	$(info --- Python format ---)
 	uv run --no-sync ruff check . --fix
 	uv run --no-sync ruff format .
+
+.PHONY: check
+check: check-rust check-python ## Run all checks for formatting, etc.
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust

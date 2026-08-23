@@ -2,13 +2,16 @@ use deltalake::kernel::TableFeatures as KernelTableFeatures;
 use pyo3::pyclass;
 
 /// High level table features
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Clone, PartialEq)]
 pub enum TableFeatures {
     /// Mapping of one column to another
     ColumnMapping,
     /// Deletion vectors for merge, update, delete
     DeletionVectors,
+    #[cfg(feature = "nanosecond-timestamps")]
+    /// nanosecond-resolution timestamps
+    TimestampNanos,
     /// timestamps without timezone support
     TimestampWithoutTimezone,
     /// version 2 of checkpointing
@@ -31,6 +34,10 @@ pub enum TableFeatures {
     DomainMetadata,
     /// Iceberg compatibility support
     IcebergCompatV1,
+    /// Variant type support
+    VariantType,
+    /// Preview variant type support
+    VariantTypePreview,
 }
 
 impl From<TableFeatures> for KernelTableFeatures {
@@ -38,6 +45,8 @@ impl From<TableFeatures> for KernelTableFeatures {
         match value {
             TableFeatures::ColumnMapping => KernelTableFeatures::ColumnMapping,
             TableFeatures::DeletionVectors => KernelTableFeatures::DeletionVectors,
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeatures::TimestampNanos => KernelTableFeatures::TimestampNanos,
             TableFeatures::TimestampWithoutTimezone => {
                 KernelTableFeatures::TimestampWithoutTimezone
             }
@@ -51,6 +60,8 @@ impl From<TableFeatures> for KernelTableFeatures {
             TableFeatures::RowTracking => KernelTableFeatures::RowTracking,
             TableFeatures::DomainMetadata => KernelTableFeatures::DomainMetadata,
             TableFeatures::IcebergCompatV1 => KernelTableFeatures::IcebergCompatV1,
+            TableFeatures::VariantType => KernelTableFeatures::VariantType,
+            TableFeatures::VariantTypePreview => KernelTableFeatures::VariantTypePreview,
         }
     }
 }

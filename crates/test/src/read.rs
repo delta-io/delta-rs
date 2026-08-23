@@ -1,4 +1,5 @@
 use deltalake_core::DeltaTableBuilder;
+use futures::TryStreamExt as _;
 use object_store::path::Path;
 
 use crate::utils::{IntegrationContext, TestResult, TestTables};
@@ -34,8 +35,11 @@ pub async fn read_table_paths(
 }
 
 async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
+    use futures::stream::TryStreamExt;
+
     let table_uri = integration.uri_for_table(TestTables::Simple);
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table_url = url::Url::parse(&table_uri)?;
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;
@@ -44,40 +48,48 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
     assert_eq!(
-        snapshot.file_paths_iter().collect::<Vec<_>>(),
+        snapshot
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .iter()
+            .map(|lfv| lfv.path().to_string())
+            .collect::<Vec<_>>(),
         vec![
-            Path::from("part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet"),
-            Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
-            Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
-            Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
-            Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
+            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 31);
-    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
-        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-        deletion_timestamp: Some(1587968596250),
-        data_change: true,
-        extended_file_metadata: None,
-        deletion_vector: None,
-        base_row_id: None,
-        default_row_commit_version: None,
-        size: None,
-        partition_values: Some(Default::default()),
-        tags: Some(Default::default()),
-    }));
+    let paths = tombstones
+        .iter()
+        .map(|tombstone| tombstone.path().to_string())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(
+        &"part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string()
+    ));
+    let deletion_ts = tombstones
+        .iter()
+        .map(|tombstone| tombstone.deletion_timestamp())
+        .collect::<Vec<_>>();
+    assert!(deletion_ts.contains(&Some(1587968596250)));
 
     Ok(())
 }
 
 async fn read_simple_table_with_version(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Simple);
+    let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .with_version(3)
         .load()
@@ -87,41 +99,49 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     assert_eq!(snapshot.protocol().min_writer_version(), 2);
     assert_eq!(snapshot.protocol().min_reader_version(), 1);
     assert_eq!(
-        snapshot.file_paths_iter().collect::<Vec<_>>(),
+        snapshot
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .iter()
+            .map(|lfv| lfv.path().to_string())
+            .collect::<Vec<_>>(),
         vec![
-            Path::from("part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet"),
-            Path::from("part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet"),
-            Path::from("part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet"),
-            Path::from("part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet"),
-            Path::from("part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet"),
-            Path::from("part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet"),
+            "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
+            "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
+            "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+            "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
     );
     let tombstones = snapshot
         .all_tombstones(&table.log_store())
-        .await?
-        .collect::<Vec<_>>();
+        .try_collect::<Vec<_>>()
+        .await?;
     assert_eq!(tombstones.len(), 29);
-    assert!(tombstones.contains(&deltalake_core::kernel::Remove {
-        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-        deletion_timestamp: Some(1587968596250),
-        data_change: true,
-        tags: Some(Default::default()),
-        partition_values: Some(Default::default()),
-        base_row_id: None,
-        default_row_commit_version: None,
-        size: None,
-        deletion_vector: None,
-        extended_file_metadata: None,
-    }));
+    let paths = tombstones
+        .iter()
+        .map(|tombstone| tombstone.path().to_string())
+        .collect::<Vec<_>>();
+    assert!(paths.contains(
+        &"part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string()
+    ));
+    let deletion_ts = tombstones
+        .iter()
+        .map(|tombstone| tombstone.deletion_timestamp())
+        .collect::<Vec<_>>();
+    assert!(deletion_ts.contains(&Some(1587968596250)));
 
     Ok(())
 }
 
 pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Golden);
+    let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await
@@ -136,8 +156,9 @@ pub async fn read_golden(integration: &IntegrationContext) -> TestResult {
 
 async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
     let table_uri = format!("{}/{root_path}", integration.root_uri());
+    let table_url = url::Url::parse(&table_uri)?;
 
-    let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+    let storage = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build_storage()?
         .object_store(None);
@@ -157,14 +178,15 @@ async fn verify_store(integration: &IntegrationContext, root_path: &str) -> Test
 
 async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
     let table_uri = format!("{}/{root_path}", integration.root_uri());
+    let table_url = url::Url::parse(&table_uri)?;
 
-    let table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .load()
         .await?;
     let snapshot = table.snapshot()?;
     assert_eq!(snapshot.version(), 0);
-    assert_eq!(snapshot.file_paths_iter().count(), 2);
+    assert_eq!(snapshot.log_data().num_files(), 2);
 
     Ok(())
 }

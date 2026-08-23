@@ -15,10 +15,10 @@ from deltalake import DeltaTable
 dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 dt.version()
 3
-dt.files()
-['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
- 'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
- 'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+dt.file_uris()
+['s3://bucket/table/part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
+ 's3://bucket/table/part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
+ 's3://bucket/table/part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 ```
 
 See the [user guide](https://delta-io.github.io/delta-rs/usage/installation/) for more examples.
@@ -35,8 +35,35 @@ poetry add deltalake
 ```
 
 NOTE: official binary wheels are linked against openssl statically for remote
-objection store communication. Please file Github issue to request for critical
+object store communication. Please file a Github issue to request a critical
 openssl upgrade.
+
+## Tracing and Observability
+
+Delta-rs supports OpenTelemetry tracing for performance analysis and debugging.
+
+### Basic Example
+
+```python
+import os
+import deltalake
+from deltalake import write_deltalake, DeltaTable
+
+# Enable logging to see trace output in stdout
+os.environ["RUST_LOG"] = "deltalake=debug"
+
+# Initialize tracing (uses default HTTP endpoint or OTEL_EXPORTER_OTLP_ENDPOINT env var)
+# For authentication, set OTEL_EXPORTER_OTLP_HEADERS="x-honeycomb-team=your-api-key"
+# The HTTP exporter automatically reads OTEL_EXPORTER_OTLP_HEADERS for API keys
+deltalake.init_tracing()
+
+# All Delta operations are now traced
+write_deltalake("my_table", data)
+dt = DeltaTable("my_table")
+df = dt.to_pandas()
+```
+
+When you run this code, you'll see trace information in stdout showing operation timings and execution flow.
 
 ## Build custom wheels
 
@@ -47,6 +74,7 @@ To compile the package, you will need the Rust compiler and [maturin](https://gi
 
 ```sh
 curl https://sh.rustup.rs -sSf | sh -s
+```
 
 Then you can build wheels for your own platform like so:
 

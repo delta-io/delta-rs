@@ -1,20 +1,20 @@
 //! Utility functions to determine early filters for file/partition pruning
-use datafusion::functions_aggregate::expr_fn::{max, min};
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use arrow::compute::concat_batches;
+use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
-use datafusion::execution::context::SessionState;
+use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{lit, Aggregate, BinaryExpr, LogicalPlan, Operator};
-use datafusion::logical_expr::{Between, Expr};
-
+use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
+use datafusion::physical_plan::ExecutionPlan;
 use either::{Left, Right};
-
+use futures::TryStreamExt as _;
 use itertools::Itertools;
 
-use crate::delta_datafusion::execute_plan_to_batch;
-use crate::table::state::DeltaTableState;
+use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, DeltaTableError};
 
 #[derive(Debug)]
@@ -30,7 +30,7 @@ impl ReferenceTableCheck {
 }
 
 fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck {
-    let res = match expr {
+    match expr {
         Expr::Alias(alias) => references_table(&alias.expr, table),
         Expr::Column(col) => col
             .relation
@@ -56,8 +56,7 @@ fn references_table(expr: &Expr, table: &TableReference) -> ReferenceTableCheck 
         Expr::IsNull(inner) => references_table(inner, table),
         Expr::Literal(_, _) => ReferenceTableCheck::NoReference,
         _ => ReferenceTableCheck::Unknown,
-    };
-    res
+    }
 }
 
 fn construct_placeholder(
@@ -71,7 +70,7 @@ fn construct_placeholder(
         let placeholder_name = format!("{column_name}_{}", placeholders.len());
         let placeholder = Expr::Placeholder(Placeholder {
             id: placeholder_name.clone(),
-            data_type: None,
+            field: None,
         });
 
         let (left, right, source_expr): (Box<Expr>, Box<Expr>, Expr) = if source_left {
@@ -99,12 +98,12 @@ fn construct_placeholder(
                 let name_min = format!("{column_name}_{}_min", placeholders.len());
                 let placeholder_min = Expr::Placeholder(Placeholder {
                     id: name_min.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let name_max = format!("{column_name}_{}_max", placeholders.len());
                 let placeholder_max = Expr::Placeholder(Placeholder {
                     id: name_max.clone(),
-                    data_type: None,
+                    field: None,
                 });
                 let (source_expr, target_expr) = if source_left {
                     (*binary.left, *binary.right)
@@ -303,7 +302,7 @@ pub(crate) fn generalize_filter(
 
                     let placeholder = Expr::Placeholder(Placeholder {
                         id: placeholder_name.clone(),
-                        data_type: None,
+                        field: None,
                     });
 
                     placeholders.push(PredicatePlaceholder {
@@ -324,8 +323,8 @@ pub(crate) fn generalize_filter(
 
 pub(crate) async fn try_construct_early_filter(
     join_predicate: Expr,
-    table_snapshot: &DeltaTableState,
-    session_state: &SessionState,
+    table_snapshot: &EagerSnapshot,
+    session_state: &dyn Session,
     source: &LogicalPlan,
     source_name: &TableReference,
     target_name: &TableReference,
@@ -338,7 +337,7 @@ pub(crate) async fn try_construct_early_filter(
 
     match generalize_filter(
         join_predicate,
-        partition_columns,
+        &partition_columns.to_vec(),
         source_name,
         target_name,
         &mut placeholders,
@@ -395,6 +394,28 @@ pub(crate) async fn try_construct_early_filter(
         }
     }
 }
+
+async fn execute_plan_to_batch(
+    state: &dyn Session,
+    plan: Arc<dyn ExecutionPlan>,
+) -> DeltaResult<arrow::record_batch::RecordBatch> {
+    let data = futures::future::try_join_all(
+        (0..plan.properties().output_partitioning().partition_count()).map(|p| {
+            let plan_copy = plan.clone();
+            let task_context = state.task_ctx().clone();
+            async move {
+                let batch_stream = plan_copy.execute(p, task_context)?;
+                let schema = batch_stream.schema();
+                let batches = batch_stream.try_collect::<Vec<_>>().await?;
+                datafusion::error::Result::<_>::Ok(concat_batches(&schema, batches.iter())?)
+            }
+        }),
+    )
+    .await?;
+
+    Ok(concat_batches(&plan.schema(), data.iter())?)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::operations::merge::tests::setup_table;
@@ -423,7 +444,7 @@ mod tests {
         let table = setup_table(Some(vec!["id"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -457,7 +478,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -515,7 +536,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -548,7 +569,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -570,7 +591,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -606,7 +627,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source,
             &source_name,
@@ -630,7 +651,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -669,7 +690,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -696,7 +717,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -738,7 +759,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,
@@ -768,7 +789,7 @@ mod tests {
         let table = setup_table(Some(vec!["modified"])).await;
 
         assert_eq!(table.version(), Some(0));
-        assert_eq!(table.snapshot().unwrap().file_paths_iter().count(), 0);
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 0);
 
         let ctx = SessionContext::new();
         let batch = RecordBatch::try_new(
@@ -810,7 +831,7 @@ mod tests {
 
         let pred = try_construct_early_filter(
             join_predicate,
-            table.snapshot().unwrap(),
+            table.snapshot().unwrap().snapshot(),
             &ctx.state(),
             &source_plan,
             &source_name,

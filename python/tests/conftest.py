@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import pathlib
 import subprocess
@@ -5,16 +7,38 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from time import sleep
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generator
 
 import pytest
 from arro3.core import Array, DataType, Field, Schema, Table
 from azure.storage import blob
 
-from deltalake import DeltaTable, WriterProperties, write_deltalake
+from deltalake import (
+    DeltaTable,
+    WriterProperties,
+    _disable_nanosecond_timestamps,
+    enable_nanosecond_timestamps,
+    write_deltalake,
+)
+from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
 if TYPE_CHECKING:
     import pyarrow as pa
+    from minio import Minio
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    if os.environ.get("DELTALAKE_RUN_DATAFUSION_TESTS") == "1":
+        return
+
+    skip = pytest.mark.skip(
+        reason="DataFusion Python integration tests require matching datafusion wheels; disabled by default."
+    )
+    for item in items:
+        if "datafusion" in item.keywords:
+            item.add_marker(skip)
 
 
 def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
@@ -34,9 +58,16 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
         sleep(spacing)
 
 
+def _s3_bucket_name(worker_id: str) -> str:
+    if worker_id == "master":
+        return "deltars"
+    return f"deltars-{worker_id}"
+
+
 @pytest.fixture(scope="session")
-def s3_localstack_creds():
+def s3_localstack_creds(worker_id: str):
     endpoint_url = "http://localhost:4566"
+    bucket_name = _s3_bucket_name(worker_id)
 
     config = dict(
         AWS_REGION="us-east-1",
@@ -54,7 +85,7 @@ def s3_localstack_creds():
             "s3api",
             "create-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -64,7 +95,7 @@ def s3_localstack_creds():
             "sync",
             "--quiet",
             "../crates/test/tests/data/simple_table",
-            "s3://deltars/simple",
+            f"s3://{bucket_name}/simple",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -87,7 +118,7 @@ def s3_localstack_creds():
             "rm",
             "--quiet",
             "--recursive",
-            "s3://deltars",
+            f"s3://{bucket_name}",
             "--endpoint-url",
             endpoint_url,
         ],
@@ -96,7 +127,7 @@ def s3_localstack_creds():
             "s3api",
             "delete-bucket",
             "--bucket",
-            "deltars",
+            bucket_name,
             "--endpoint-url",
             endpoint_url,
         ],
@@ -114,9 +145,26 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
 
 
 @pytest.fixture(scope="session")
+def s3_localstack_bucket_name(worker_id: str):
+    return _s3_bucket_name(worker_id)
+
+
+@pytest.fixture()
+def s3_localstack_bucket_root_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}"
+
+
+@pytest.fixture()
+def s3_localstack_simple_table_uri(s3_localstack_creds, s3_localstack_bucket_name):
+    return f"s3://{s3_localstack_bucket_name}/simple"
+
+
+@pytest.fixture(scope="session")
 def azurite_creds():
     # These are the well-known values
     # https://learn.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#well-known-storage-account-and-key
+    import azure.core
+
     account_name = "devstoreaccount1"
     config = dict(
         AZURE_STORAGE_ACCOUNT_NAME=account_name,
@@ -137,14 +185,21 @@ def azurite_creds():
     )
     env["AZURE_STORAGE_CONNECTION_STRING"] = conn_str
     wait_till_host_is_available(config["AZURE_STORAGE_ENDPOINT"])
+    container = None
     try:
         blob_client = blob.BlobServiceClient.from_connection_string(conn_str=conn_str)
+        print(blob_client)
         container = blob_client.create_container(
             name=config["AZURE_STORAGE_CONTAINER_NAME"]
         )
+        print(f"Container provisioned: {container}")
+        yield config
+    except azure.core.exceptions.ResourceExistsError:
+        # The container is already created, meh
         yield config
     finally:
-        container.delete_container()
+        if container:
+            container.delete_container()
 
 
 @pytest.fixture()
@@ -183,12 +238,25 @@ def azurite_sas_creds(azurite_creds):
     return creds
 
 
-@pytest.fixture()
-def sample_data_pyarrow() -> "pa.Table":
+@pytest.fixture(
+    params=[{"ns_timestamps": True}, {"ns_timestamps": False}],
+    ids=["base", "with_nanos"],
+)
+def sample_data_pyarrow(request) -> "pa.Table":
+    nanosecond_timestamps = request.param["ns_timestamps"] and _NANOSECOND_TIMESTAMPS
     nrows = 5
     import pyarrow as pa
 
-    return pa.table(
+    extras = {}
+    if nanosecond_timestamps:
+        extras["timestamp_ns"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
+        )
+        extras["timestamp_ns_ntz"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", None)) for i in range(nrows)]
+        )
+
+    table = pa.table(
         {
             "utf8": pa.array([str(x) for x in range(nrows)]),
             "int64": pa.array(list(range(nrows)), pa.int64()),
@@ -204,7 +272,12 @@ def sample_data_pyarrow() -> "pa.Table":
                 [date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]
             ),
             "timestamp": pa.array(
-                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)],
+                type=pa.timestamp("us", "UTC"),
+            ),
+            "timestamp_ntz": pa.array(
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)],
+                type=pa.timestamp("us", None),
             ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
             "list": pa.array(
@@ -214,7 +287,14 @@ def sample_data_pyarrow() -> "pa.Table":
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
+        | extras
     )
+    try:
+        if nanosecond_timestamps:
+            enable_nanosecond_timestamps()
+        yield table
+    finally:
+        _disable_nanosecond_timestamps()
 
 
 @pytest.fixture()
@@ -231,7 +311,7 @@ def sample_table() -> Table:
         {
             "id": Array(
                 ["1", "2", "3", "4", "5"],
-                Field("id", type=DataType.string(), nullable=True),
+                Field("id", type=DataType.string_view(), nullable=True),
             ),
             "price": Array(
                 list(range(nrows)), Field("price", type=DataType.int64(), nullable=True)
@@ -258,7 +338,7 @@ def sample_table_with_spaces_numbers() -> Table:
     nrows = 5
     return Table.from_pydict(
         {
-            "1id": Array(["1", "2", "3", "4", "5"], DataType.string()),
+            "1id": Array(["1", "2", "3", "4", "5"], DataType.string_view()),
             "price": Array(list(range(nrows)), DataType.int64()),
             "sold items": Array(list(range(nrows)), DataType.int32()),
             "deleted": Array(
@@ -268,7 +348,7 @@ def sample_table_with_spaces_numbers() -> Table:
         },
         schema=Schema(
             fields=[
-                Field("1id", type=DataType.string(), nullable=True),
+                Field("1id", type=DataType.string_view(), nullable=True),
                 Field("price", type=DataType.int64(), nullable=True),
                 Field("sold items", type=DataType.int32(), nullable=True),
                 Field("deleted", type=DataType.bool(), nullable=True),
@@ -277,6 +357,58 @@ def sample_table_with_spaces_numbers() -> Table:
     )
 
 
+@pytest.fixture(scope="session")
+def minio_container() -> Generator[tuple[dict, Minio], None, None]:
+    """Start a MinIO test container for S3-compatible object storage."""
+    from testcontainers.minio import MinioContainer
+
+    container = MinioContainer(
+        image="minio/minio:latest",
+        access_key="minioadmin",
+        secret_key="minioadmin",
+    )
+    container.start()
+
+    client = container.get_client()
+
+    container_config = container.get_config()
+
+    config = {
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": container_config["access_key"],
+        "AWS_SECRET_ACCESS_KEY": container_config["secret_key"],
+        "AWS_ENDPOINT_URL": "http://" + container_config["endpoint"],
+        "AWS_ALLOW_HTTP": "TRUE",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }
+
+    yield (config, client)
+
+    container.stop()
+
+
+@pytest.fixture()
+def minio_s3_env(monkeypatch, minio_container):
+    """Set up environment variables for MinIO S3-compatible storage."""
+    for key, value in minio_container.items():
+        monkeypatch.setenv(key, value)
+    return minio_container
+
+
 @pytest.fixture()
 def writer_properties():
     return WriterProperties(compression="GZIP", compression_level=0)
+
+
+@pytest.fixture()
+def nanosecond_timestamps_enabled():
+    from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
+
+    if not _NANOSECOND_TIMESTAMPS:
+        pytest.skip("Rust library built without nanosecond timestamp support")
+
+    enable_nanosecond_timestamps()
+    try:
+        yield
+    finally:
+        _disable_nanosecond_timestamps()
