@@ -10,7 +10,8 @@ use datafusion::error::Result as DataFusionResult;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, ExecutionPlan, PhysicalExpr, RecordBatchStream,
+    ReplaceChildrenOptions, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
 
@@ -123,11 +124,22 @@ impl ExecutionPlan for MetricObserverExec {
         })
     }
 
+    fn replace_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        MetricObserverExec::try_new(self.id.clone(), &children, self.update)
+    }
+
     fn with_new_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
-        MetricObserverExec::try_new(self.id.clone(), &children, self.update)
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -136,12 +148,10 @@ impl ExecutionPlan for MetricObserverExec {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.parent.apply_expressions(expr_rewriter)?;
         Ok(TreeNodeRecursion::Continue)
     }
 }
