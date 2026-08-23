@@ -236,12 +236,12 @@ impl ExecutionPlan for ColumnMappingExec {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.input.apply_expressions(expr_rewriter)?;
+        // This node owns no PhysicalExpr fields. The DataFusion tree walker recurses into
+        // children automatically, so delegating here would double-visit child expressions.
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -680,6 +680,50 @@ mod tests {
         assert_eq!(out.schema().field(0).name(), "col-id");
         assert_eq!(out.schema().field(1).name(), "_change_type");
         assert_eq!(field_id(out.schema().field(1)), None);
+    }
+
+    /// `ColumnMappingExec` owns no `PhysicalExpr` fields, so `apply_expressions` must be a
+    /// no-op that invokes the closure zero times. The DataFusion tree walker recurses into
+    /// children automatically; delegating to `self.input.apply_expressions()` would
+    /// double-visit child expressions and violate the shallow-visit contract documented in
+    /// [`ExecutionPlan::apply_expressions`].
+    #[test]
+    fn apply_expressions_must_not_visit_child_expressions() {
+        use datafusion::physical_plan::PhysicalExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::expressions::lit;
+        use datafusion::physical_plan::filter::FilterExec;
+
+        // Build a FilterExec that owns one predicate expression (lit(true)).
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let predicate: Arc<dyn PhysicalExpr> = lit(true);
+        let filter = Arc::new(FilterExec::try_new(predicate, empty).unwrap());
+
+        // Wrap the FilterExec in a ColumnMappingExec using a minimal single-field schema.
+        let kernel_schema =
+            StructType::try_new([column_mapping_test_field("id", "col-id", 1)]).unwrap();
+        let cm_exec =
+            ColumnMappingExec::try_new(filter, &kernel_schema, ColumnMappingMode::Name).unwrap();
+
+        // Call apply_expressions on the wrapper node only — NOT the whole tree.
+        // A correct shallow implementation visits 0 expressions (this node owns none).
+        // The buggy implementation delegates to the child FilterExec and visits its predicate,
+        // yielding a count of 1.
+        let mut visited = 0usize;
+        cm_exec
+            .apply_expressions(&mut |_expr| {
+                visited += 1;
+                Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+            })
+            .unwrap();
+
+        assert_eq!(
+            visited, 0,
+            "ColumnMappingExec owns no expressions; apply_expressions must be a no-op \
+             (got {visited} visits — the child FilterExec's predicate is being visited \
+             by the wrapper, violating the DataFusion shallow-visit contract)"
+        );
     }
 
     #[test]
