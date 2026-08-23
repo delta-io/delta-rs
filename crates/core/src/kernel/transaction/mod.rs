@@ -505,7 +505,6 @@ impl CommitData {
         bytes: &Bytes,
         num_retries: u64,
     ) -> Result<Bytes, TransactionError> {
-        
         let bytes_str = std::str::from_utf8(bytes.as_ref())
             .expect("Delta log bytes should always be valid UTF-8");
 
@@ -519,10 +518,8 @@ impl CommitData {
 
                 if let Some(commit_info) = action.get_mut("commitInfo") {
                     if let Some(Value::Object(metrics)) = commit_info.get_mut("operationMetrics") {
-                        metrics.insert(
-                            "num_retries".to_string(),
-                            Value::Number(num_retries.into()),
-                        );
+                        metrics
+                            .insert("num_retries".to_string(), Value::Number(num_retries.into()));
                     }
                 }
                 // Serialize just this updated line
@@ -958,7 +955,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                     // Update operationMetrics.numRetries in the serialized bytes
                     let updated_commit_or_bytes = match &commit_or_bytes {
                         CommitOrBytes::LogBytes(bytes) => {
-                            let updated_bytes = CommitData::update_retry_count_in_bytes(bytes, current_retries)?;
+                            let updated_bytes = if current_retries > 0 {
+                                CommitData::update_retry_count_in_bytes(bytes, current_retries)?
+                            } else {
+                                bytes.clone()
+                            };
                             CommitOrBytes::LogBytes(updated_bytes)
                         }
                         CommitOrBytes::TmpCommit(_path) => {
