@@ -37,6 +37,10 @@ const FIELD_NAME_SIZE: &str = "size";
 const FIELD_NAME_MODIFICATION_TIME: &str = "modificationTime";
 const FIELD_NAME_FILE_CONSTANT_VALUES: &str = "fileConstantValues";
 const FIELD_NAME_RAW_PARTITION_VALUES: &str = "partitionValues";
+const FIELD_NAME_TAGS: &str = "tags";
+const FIELD_NAME_BASE_ROW_ID: &str = "baseRowId";
+const FIELD_NAME_DEFAULT_ROW_COMMIT_VERSION: &str = "defaultRowCommitVersion";
+const FIELD_NAME_CLUSTERING_PROVIDER: &str = "clusteringProvider";
 const FIELD_NAME_STATS: &str = "stats";
 const FIELD_NAME_STATS_PARSED: &str = "stats_parsed";
 const FIELD_NAME_PARTITION_VALUES_PARSED: &str = "partitionValues_parsed";
@@ -202,13 +206,44 @@ impl LogicalFileView {
             })
     }
 
-    fn raw_partition_values(&self) -> Option<&MapArray> {
+    fn file_constant_values(&self) -> Option<&StructArray> {
         self.files
             .column_by_name(FIELD_NAME_FILE_CONSTANT_VALUES)
             .and_then(|col| col.as_struct_opt())
-            .and_then(|file_constants| {
-                file_constants.column_by_name(FIELD_NAME_RAW_PARTITION_VALUES)
-            })
+            .filter(|file_constants| file_constants.is_valid(self.index))
+    }
+
+    fn file_constant_map(&self, field_name: &str) -> Option<HashMap<String, Option<String>>> {
+        let values = self
+            .file_constant_values()?
+            .column_by_name(field_name)?
+            .as_map_opt()?;
+        values
+            .is_valid(self.index)
+            .then(|| collect_string_map(&values.value(self.index)))
+            .flatten()
+    }
+
+    fn file_constant_i64(&self, field_name: &str) -> Option<i64> {
+        let values = self
+            .file_constant_values()?
+            .column_by_name(field_name)?
+            .as_primitive_opt::<Int64Type>()?;
+        values
+            .is_valid(self.index)
+            .then(|| values.value(self.index))
+    }
+
+    fn file_constant_string(&self, field_name: &str) -> Option<String> {
+        self.file_constant_values()?
+            .column_by_name(field_name)
+            .and_then(|values| get_string_value(values, self.index))
+            .map(ToString::to_string)
+    }
+
+    fn raw_partition_values(&self) -> Option<&MapArray> {
+        self.file_constant_values()?
+            .column_by_name(FIELD_NAME_RAW_PARTITION_VALUES)
             .and_then(|col| col.as_map_opt())
     }
 
@@ -324,11 +359,12 @@ impl LogicalFileView {
             modification_time: self.modification_time(),
             data_change: true,
             stats: self.stats(),
-            tags: None,
+            tags: self.file_constant_map(FIELD_NAME_TAGS),
             deletion_vector: self.deletion_vector().map(|dv| dv.descriptor()),
-            base_row_id: None,
-            default_row_commit_version: None,
-            clustering_provider: None,
+            base_row_id: self.file_constant_i64(FIELD_NAME_BASE_ROW_ID),
+            default_row_commit_version: self
+                .file_constant_i64(FIELD_NAME_DEFAULT_ROW_COMMIT_VERSION),
+            clustering_provider: self.file_constant_string(FIELD_NAME_CLUSTERING_PROVIDER),
         }
     }
 
