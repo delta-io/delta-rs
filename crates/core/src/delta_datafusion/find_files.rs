@@ -478,7 +478,7 @@ pub(in crate::delta_datafusion) async fn find_files_scan(
 /// columns. Callers must provide a snapshot with materialized `Add` batches.
 /// Use [`scan_memory_table`] with lazy snapshots.
 /// Returns `None` when the snapshot has no `Add` actions.
-pub(crate) fn add_actions_partition_mem_table(
+pub(crate) fn try_materialized_add_actions_partition_mem_table(
     snapshot: &Snapshot,
 ) -> DeltaResult<Option<MemTable>> {
     add_actions_partition_mem_table_from_batches(snapshot.add_actions_partition_batches()?)
@@ -688,12 +688,12 @@ mod tests {
     use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 
     use crate::{
-        DeltaTable, DeltaTableBuilder,
+        DeltaTable, DeltaTableBuilder, TableProperty,
         delta_datafusion::{
             DataFusionMixins as _, DeltaSessionExt as _, create_session, resolve_file_column_name,
             update_datafusion_session,
         },
-        kernel::{EagerSnapshot, Snapshot},
+        kernel::{Action, EagerSnapshot, Snapshot},
         protocol::SaveMode,
         test_utils::{
             TestResult, multibatch_add_actions_for_partition,
@@ -773,6 +773,106 @@ mod tests {
             assert!(!lazy.has_materialized_files_for_test());
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_files_lazy_snapshot_preserves_metadata_rich_adds() -> TestResult {
+        let mut source_add = crate::test_utils::make_test_add(
+            "part=a/metadata-rich.parquet",
+            &[("part", "a")],
+            1_725_000_000_000,
+        );
+        source_add.size = 1234;
+        source_add.stats = Some(
+            serde_json::json!({
+                "numRecords": 7,
+                "minValues": { "id": 1 },
+                "maxValues": { "id": 7 },
+                "nullCount": { "id": 0 }
+            })
+            .to_string(),
+        );
+        source_add.tags = Some(HashMap::from([
+            ("source".to_string(), Some("metadata-rich".to_string())),
+            ("nullable-tag".to_string(), None),
+        ]));
+        source_add.deletion_vector = Some(crate::kernel::DeletionVectorDescriptor {
+            storage_type: crate::kernel::StorageType::Inline,
+            path_or_inline_dv: "AAAA".to_string(),
+            offset: None,
+            size_in_bytes: 0,
+            cardinality: 2,
+        });
+        source_add.base_row_id = Some(41);
+        source_add.default_row_commit_version = Some(3);
+        source_add.clustering_provider = Some("liquid".to_string());
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(vec![
+                StructField::new(
+                    "id".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    false,
+                ),
+                StructField::new(
+                    "part".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+            ])
+            .with_partition_columns(["part"])
+            .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions([Action::Add(source_add.clone())])
+            .await?;
+
+        let log_store = table.log_store();
+        let skip_stats_config = crate::DeltaTableConfig {
+            require_files: false,
+            skip_stats: true,
+            ..Default::default()
+        };
+        let lazy = Snapshot::try_new(log_store.as_ref(), skip_stats_config.clone(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), skip_stats_config, None).await?;
+        let session = create_session().into_inner().state();
+        table.update_datafusion_session(&session)?;
+        session.ensure_log_store_registered(log_store.as_ref())?;
+
+        let predicate = Some(col("part").eq(lit("a")));
+        let lazy_result = find_files(&lazy, log_store.clone(), &session, predicate.clone()).await?;
+        let eager_result = find_files(eager.snapshot(), log_store, &session, predicate).await?;
+
+        assert_eq!(
+            normalized_candidates(&lazy_result),
+            normalized_candidates(&eager_result)
+        );
+        assert_eq!(lazy_result.candidates.len(), 1);
+        let candidate = &lazy_result.candidates[0];
+        assert_eq!(
+            serde_json::to_value(candidate)?,
+            serde_json::to_value(source_add)?
+        );
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_try_materialized_partition_mem_table_rejects_lazy_snapshot() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_partition_columns(["modified"])
+            .await?;
+        let snapshot = lazy_snapshot(&table).await?;
+
+        let error = match try_materialized_add_actions_partition_mem_table(&snapshot) {
+            Ok(_) => panic!("materialized API accepted a lazy snapshot"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, DeltaTableError::NotInitializedWithFiles(_)));
         Ok(())
     }
 
@@ -1255,7 +1355,11 @@ mod tests {
             .create()
             .with_columns(get_delta_schema().fields().cloned())
             .with_partition_columns(["modified"])
+            .await?
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
             .await?;
+        crate::checkpoints::create_checkpoint(&table, None).await?;
         let table = table
             .write(vec![get_record_batch(None, false)])
             .with_save_mode(SaveMode::Append)
@@ -1351,19 +1455,26 @@ mod tests {
             .await?;
 
         let snapshot = lazy_snapshot(&table).await?;
-        let snapshot = Arc::new(snapshot)
-            .ensure_materialized_files(table.log_store().as_ref())
+        assert!(!snapshot.has_materialized_files_for_test());
+        let add_action_batches = snapshot
+            .active_add_batches(
+                table.log_store().as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
             .await?;
-        let add_action_batches = snapshot.add_actions_partition_batches()?;
         assert!(
             add_action_batches.len() > 1,
-            "expected multi-batch partition metadata fixture"
+            "expected more than one lazy replay batch"
         );
 
         let predicate = col("modified").eq(lit("2021-02-02"));
         let matches = scan_memory_table(&snapshot, table.log_store().as_ref(), &predicate).await?;
 
         assert_eq!(matches.len(), expected_matches);
+        assert!(!snapshot.has_materialized_files_for_test());
 
         let match_paths = matches
             .iter()

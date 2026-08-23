@@ -87,5 +87,5 @@ pub async fn scan_files_where_matches(
 }
 
 pub fn add_actions_partition_mem_table(snapshot: &EagerSnapshot) -> DeltaResult<Option<MemTable>> {
-    super::add_actions_partition_mem_table(snapshot.snapshot())
+    super::try_materialized_add_actions_partition_mem_table(snapshot.snapshot())
 }
