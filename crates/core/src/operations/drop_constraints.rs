@@ -7,7 +7,7 @@ use futures::future::BoxFuture;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, MetadataExt, resolve_snapshot};
+use crate::kernel::{Action, EagerSnapshot, MetadataExt, SnapshotMetadataRef, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -75,6 +75,31 @@ impl DropConstraintBuilder {
     }
 }
 
+fn plan_drop_constraint_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    name: &str,
+    raise_if_not_exists: bool,
+) -> DeltaResult<Option<(Vec<Action>, DeltaOperation)>> {
+    let mut metadata = snapshot.metadata.clone();
+    let configuration_key = format!("delta.constraints.{name}");
+
+    if !metadata.configuration().contains_key(&configuration_key) {
+        if raise_if_not_exists {
+            return Err(DeltaTableError::Generic(format!(
+                "Constraint with name '{name}' does not exist."
+            )));
+        }
+        return Ok(None);
+    }
+
+    metadata = metadata.remove_config_key(&configuration_key)?;
+    let operation = DeltaOperation::DropConstraint {
+        name: name.to_string(),
+    };
+
+    Ok(Some((vec![Action::Metadata(metadata)], operation)))
+}
+
 impl std::future::IntoFuture for DropConstraintBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -96,25 +121,17 @@ impl std::future::IntoFuture for DropConstraintBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let mut metadata = snapshot.metadata().clone();
-            let configuration_key = format!("delta.constraints.{name}");
-
-            if !metadata.configuration().contains_key(&configuration_key) {
-                if this.raise_if_not_exists {
-                    return Err(DeltaTableError::Generic(format!(
-                        "Constraint with name '{name}' does not exist."
-                    )));
-                }
+            let Some((actions, operation)) = plan_drop_constraint_actions(
+                snapshot.snapshot().metadata_state(),
+                &name,
+                this.raise_if_not_exists,
+            )?
+            else {
                 return Ok(DeltaTable::new_with_state(
                     this.log_store,
                     DeltaTableState::new(snapshot),
                 ));
-            }
-
-            metadata = metadata.remove_config_key(&configuration_key)?;
-            let operation = DeltaOperation::DropConstraint { name: name.clone() };
-
-            let actions = vec![Action::Metadata(metadata)];
+            };
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_operation_id(operation_id)

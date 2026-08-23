@@ -18,15 +18,18 @@
 //!     .await?;
 //! ````
 
+use futures::future::BoxFuture;
+use futures::prelude::*;
+use itertools::Itertools;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use datafusion::error::Result as DataFusionResult;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::{
     catalog::Session,
     common::{Column, ScalarValue, ToDFSchema as _, exec_datafusion_err},
     error::DataFusionError,
-    execution::context::SessionState,
     logical_expr::{
         ExprSchemable as _, Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
         case, cast, col, lit, try_cast, when,
@@ -35,8 +38,6 @@ use datafusion::{
     physical_planner::{ExtensionPlanner, PhysicalPlanner},
     prelude::Expr,
 };
-use futures::{StreamExt as _, TryStreamExt as _, future::BoxFuture, stream};
-use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
@@ -65,7 +66,7 @@ use crate::{
         resolve_session_state,
     },
     kernel::{
-        Action, EagerSnapshot,
+        Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot,
         transaction::{CommitBuilder, CommitProperties, PROTOCOL},
     },
     table::config::TablePropertiesExt,
@@ -236,7 +237,8 @@ impl ExtensionPlanner for UpdateMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && metric_observer.id.eq(UPDATE_COUNT_ID)
@@ -396,7 +398,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),

@@ -1204,6 +1204,8 @@ async fn build_compaction_plan(
     let mut metrics = Metrics::default();
     let mut planner_stats = PlannerStats::preserve_locality();
     let mut partition_files: HashMap<String, PartitionFileEntry> = HashMap::new();
+    let partition_columns = snapshot.metadata().partition_columns();
+    let table_schema = snapshot.schema();
 
     let predicate = if filters.is_empty() {
         None
@@ -1221,16 +1223,8 @@ async fn build_compaction_plan(
         let file = file?;
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(&file)?;
-        let partition_values = file
-            .partition_values()
-            .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let partition_values =
+            file.full_partition_values(partition_columns, table_schema.as_ref())?;
         let partition_path = partition_values.hive_partition_path();
         let entry = partition_files
             .entry(partition_path)
@@ -1342,6 +1336,7 @@ async fn build_zorder_plan(
     let mut metrics = Metrics::default();
 
     let mut partition_files: HashMap<String, (IndexMap<String, Scalar>, MergeBin)> = HashMap::new();
+    let table_schema = snapshot.schema();
 
     let predicate = if filters.is_empty() {
         None
@@ -1355,16 +1350,7 @@ async fn build_zorder_plan(
     let mut file_stream = snapshot.file_views(log_store, predicate);
     while let Some(file) = file_stream.next().await {
         let file = file?;
-        let partition_values = file
-            .partition_values()
-            .map(|v| {
-                v.fields()
-                    .iter()
-                    .zip(v.values().iter())
-                    .map(|(k, v)| (k.name().to_string(), v.clone()))
-                    .collect::<IndexMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let partition_values = file.full_partition_values(partition_keys, table_schema.as_ref())?;
         metrics.total_considered_files += 1;
         partition_files
             .entry(partition_values.hive_partition_path())
@@ -1373,6 +1359,7 @@ async fn build_zorder_plan(
             .add(file.to_add());
         debug!("partition_files inside the zorder plan: {partition_files:?}");
     }
+    metrics.partitions_optimized = partition_files.len() as u64;
 
     let max_bin_span_files = partition_files
         .values()

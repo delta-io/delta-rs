@@ -45,11 +45,7 @@ jobs:
       - name: Define test matrix
         id: matrix
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
-          else
-            echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
-          fi
+          echo 'os=["ubuntu-latest", "windows-latest", "macos-latest"]' >> "$GITHUB_OUTPUT"
 
   build:
     needs: test-matrix
@@ -80,10 +76,10 @@ jobs:
         run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }}
 
       - name: Spot-check build for native-tls features
-        run: cargo build --profile=ci --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
+        run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
 
       - name: Check no default features (except rustls)
-        run: cargo check --profile=ci --no-default-features --features rustls
+        run: cargo check --profile=ci --package deltalake --no-default-features --features rustls
 
   test:
     name: Unit Tests

@@ -10,7 +10,10 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{EagerSnapshot, MetadataExt as _, ProtocolExt as _, resolve_snapshot};
+use crate::kernel::{
+    Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef,
+    resolve_snapshot,
+};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -77,6 +80,68 @@ impl UpdateFieldMetadataBuilder {
     }
 }
 
+fn plan_update_field_metadata_actions(
+    snapshot: SnapshotMetadataRef<'_>,
+    field_name: &str,
+    metadata_update: HashMap<String, MetadataValue>,
+) -> DeltaResult<(Vec<Action>, DeltaOperation)> {
+    let table_schema = snapshot.table_configuration.logical_schema();
+
+    let Some(field) = table_schema.field(field_name) else {
+        return Err(DeltaTableError::Generic(
+            "No field with the provided name in the schema".to_string(),
+        ));
+    };
+    let mut field = field.clone();
+
+    for key in metadata_update.keys() {
+        if key.starts_with("delta.") {
+            return Err(DeltaTableError::Generic(
+                "Not allowed to modify protected metadata e.g. `delta.columnMapping.id`"
+                    .to_string(),
+            ));
+        }
+    }
+
+    metadata_update.into_iter().for_each(|(key, value)| {
+        field
+            .metadata
+            .entry(key)
+            .and_modify(|meta| {
+                *meta = value.clone();
+            })
+            .or_insert(value);
+    });
+
+    let updated_table_schema =
+        StructType::try_new(table_schema.fields().map(|f| match f.name == field.name {
+            true => field.clone(),
+            false => f.clone(),
+        }))?;
+
+    let mut metadata = snapshot.metadata.clone();
+
+    let current_protocol = snapshot.protocol;
+    let new_protocol = current_protocol
+        .clone()
+        .apply_column_metadata_to_protocol(&updated_table_schema)?
+        .move_table_properties_into_features(metadata.configuration());
+
+    let operation = DeltaOperation::UpdateFieldMetadata {
+        fields: updated_table_schema.fields().cloned().collect_vec(),
+    };
+
+    metadata = metadata.with_schema(&updated_table_schema)?;
+
+    let mut actions = vec![metadata.into()];
+
+    if current_protocol != &new_protocol {
+        actions.push(new_protocol.into())
+    }
+
+    Ok((actions, operation))
+}
+
 impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
     type Output = DeltaResult<DeltaTable>;
 
@@ -92,70 +157,11 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
 
-            let table_schema = snapshot.schema();
-
-            // Check if the field exists in the schema. Otherwise, no need to continue the
-            // operation
-            let Some(field) = table_schema.field(&this.field_name) else {
-                return Err(DeltaTableError::Generic(
-                    "No field with the provided name in the schema".to_string(),
-                ));
-            };
-            let mut field = field.clone();
-
-            // DO NOT MODIFY PROTECTED METADATA.
-            // Since `delta_kernel::schema::ColumnMetadataKey` does not `impl` any parsing (e.g. `std::core::From``) - at the time of implementation -
-            // we hardcode the prefix
-            for key in this.metadata.keys() {
-                if key.starts_with("delta.") {
-                    return Err(DeltaTableError::Generic(
-                        "Not allowed to modify protected metadata e.g. `delta.columnMapping.id`"
-                            .to_string(),
-                    ));
-                }
-            }
-
-            // Get the field to modify - and insert or modify the metadata provided by the user
-            let updating_metadata = this.metadata.clone();
-            updating_metadata.into_iter().for_each(|(key, value)| {
-                field
-                    .metadata
-                    .entry(key)
-                    .and_modify(|meta| {
-                        *meta = value.clone();
-                    })
-                    .or_insert(value);
-            });
-
-            // This feels a little silly but I could not find a better way to modify the StructType
-            // "in place" as of delta-kernel-rs 0.16.0
-            let updated_table_schema = StructType::try_new(table_schema.fields().map(|f| {
-                match f.name == field.name {
-                    // return our modified field instead
-                    true => field.clone(),
-                    false => f.clone(),
-                }
-            }))?;
-
-            let mut metadata = snapshot.metadata().clone();
-
-            let current_protocol = snapshot.protocol();
-            let new_protocol = current_protocol
-                .clone()
-                .apply_column_metadata_to_protocol(&updated_table_schema)?
-                .move_table_properties_into_features(metadata.configuration());
-
-            let operation = DeltaOperation::UpdateFieldMetadata {
-                fields: updated_table_schema.fields().cloned().collect_vec(),
-            };
-
-            metadata = metadata.with_schema(&updated_table_schema)?;
-
-            let mut actions = vec![metadata.into()];
-
-            if current_protocol != &new_protocol {
-                actions.push(new_protocol.into())
-            }
+            let (actions, operation) = plan_update_field_metadata_actions(
+                snapshot.snapshot().metadata_state(),
+                &this.field_name,
+                this.metadata.clone(),
+            )?;
 
             let commit = CommitBuilder::from(this.commit_properties.clone())
                 .with_actions(actions)
@@ -171,5 +177,49 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
                 commit.snapshot(),
             ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::kernel::{DataType, PrimitiveType, StructField};
+    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
+
+    use super::*;
+
+    fn id_field() -> StructField {
+        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
+    }
+
+    fn field_metadata() -> HashMap<String, MetadataValue> {
+        HashMap::from([(
+            "comment".to_string(),
+            MetadataValue::String("identifier".to_string()),
+        )])
+    }
+
+    #[tokio::test]
+    async fn update_field_metadata_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([id_field()])
+            .await?;
+        let log_store = table.log_store().clone();
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        UpdateFieldMetadataBuilder::new(log_store, Some(snapshot.clone()))
+            .with_field_name("id")
+            .with_metadata(field_metadata())
+            .await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
     }
 }

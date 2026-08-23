@@ -871,8 +871,12 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                                 (latest_version - steps) + 1,
                             )
                             .await?;
+                            let conflict_read_set = read_snapshot
+                                .snapshot()
+                                .conflict_read_set(this.log_store.as_ref())
+                                .await?;
                             let transaction_info = TransactionInfo::try_new(
-                                read_snapshot.log_data(),
+                                conflict_read_set,
                                 this.data.operation.read_predicate(),
                                 &this.data.actions,
                                 this.data.operation.read_whole_table(),

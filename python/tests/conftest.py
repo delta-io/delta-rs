@@ -252,6 +252,9 @@ def sample_data_pyarrow(request) -> "pa.Table":
         extras["timestamp_ns"] = pa.array(
             [pa.scalar(i, type=pa.timestamp("ns", "UTC")) for i in range(nrows)]
         )
+        extras["timestamp_ns_ntz"] = pa.array(
+            [pa.scalar(i, type=pa.timestamp("ns", None)) for i in range(nrows)]
+        )
 
     table = pa.table(
         {
@@ -400,7 +403,6 @@ def writer_properties():
 @pytest.fixture()
 def nanosecond_timestamps_enabled():
     from deltalake import _disable_nanosecond_timestamps, enable_nanosecond_timestamps
-    from deltalake._internal import _NANOSECOND_TIMESTAMPS
 
     if not _NANOSECOND_TIMESTAMPS:
         pytest.skip("Rust library built without nanosecond timestamp support")

@@ -25,20 +25,23 @@ use crate::logstore::{
 use crate::partitions::PartitionFilter;
 use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
+mod blind;
 pub mod builder;
 pub mod config;
 pub mod state;
 
 mod columns;
 
+pub use blind::BlindDeltaTable;
+
 // Re-exposing for backwards compatibility
 pub use columns::*;
 
 /// In memory representation of a Delta Table
 ///
-/// A DeltaTable is a purely logical concept that represents a dataset that can ewvolve over time.
+/// A DeltaTable is a purely logical concept that represents a dataset that can evolve over time.
 /// To attain concrete information about a table a snapshot need to be loaded.
-/// Most commonly this is the latest state of the tablem but may also loaded for a specific
+/// Most commonly this is the latest state of the table, but may also loaded for a specific
 /// version or point in time.
 #[derive(Clone)]
 pub struct DeltaTable {

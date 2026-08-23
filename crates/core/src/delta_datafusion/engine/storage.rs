@@ -5,11 +5,11 @@ use dashmap::DashMap;
 use dashmap::mapref::one::Ref;
 use datafusion::execution::TaskContext;
 use datafusion::execution::object_store::{ObjectStoreRegistry, ObjectStoreUrl};
-use delta_kernel::engine::default::executor::tokio::{
+use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
 };
-use delta_kernel::engine::default::filesystem::ObjectStoreStorageHandler;
-use delta_kernel::{DeltaResult, Error as DeltaError, FileMeta, FileSlice, StorageHandler};
+use delta_kernel_default_engine::filesystem::ObjectStoreStorageHandler;
 use itertools::Itertools;
 use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
@@ -107,6 +107,9 @@ impl StorageHandler for DataFusionStorageHandler {
     fn head(&self, _path: &Url) -> DeltaResult<FileMeta> {
         // TODO: Implement atomic copy operation
         Err(delta_kernel::Error::generic("head not implemented"))
+    }
+    fn delete(&self, _: &Url) -> DeltaResult<()> {
+        todo!("delete is not implemented");
     }
 }
 

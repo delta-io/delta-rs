@@ -44,7 +44,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
 use datafusion::optimizer::simplify_expressions::simplify_predicates;
@@ -75,7 +75,9 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, LogicalFileView, resolve_snapshot};
+use crate::kernel::{
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, resolve_snapshot,
+};
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::operations::cdc::CDC_COLUMN_NAME;
@@ -333,6 +335,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 snapshot.clone(),
                 &session,
                 operation_id,
+                this.writer_properties.clone(),
             )
             .await?;
 
@@ -390,7 +393,8 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && (metric_observer.id.eq(SOURCE_COUNT_ID) || metric_observer.id.eq(RESCUED_COUNT_ID))
@@ -424,6 +428,7 @@ async fn execute(
     snapshot: EagerSnapshot,
     session: &dyn Session,
     operation_id: Uuid,
+    writer_properties: Option<WriterProperties>,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics {
@@ -435,10 +440,16 @@ async fn execute(
     let scan_start = Instant::now();
 
     let Some(predicate) = predicate else {
-        // no predicate, so we are just dropping all files.
-        // we also don't need to write cdc actions if we are fropping all files.
-        let full_file =
-            collect_full_file_deletes(snapshot.file_views(log_store.as_ref(), None)).await?;
+        // no predicate means all files match.
+        // cdc actions are not written when table files are removed.
+        let full_file = collect_full_file_deletes(snapshot.snapshot().active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::RawJson,
+            },
+        ))
+        .await?;
         metrics.num_removed_files = full_file.removed_files;
         metrics.num_deleted_rows = full_file.deleted_rows;
         metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
@@ -474,9 +485,13 @@ async fn execute(
                 // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
                 // a file either fully matches or does not. It is therefore safe to treat this as
                 // the authoritative match set for DELETE.
-                collect_full_file_deletes(
-                    snapshot.file_views(log_store.as_ref(), Some(Arc::new(delta_predicate))),
-                )
+                collect_full_file_deletes(snapshot.snapshot().active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: Some(Arc::new(delta_predicate)),
+                        stats: AddStatsPolicy::RawJson,
+                    },
+                ))
                 .await?
             }
             Err(err) => {
@@ -495,7 +510,14 @@ async fn execute(
                 );
                 collect_full_file_deletes(
                     snapshot
-                        .file_views(log_store.as_ref(), None)
+                        .snapshot()
+                        .active_adds(
+                            log_store.as_ref(),
+                            ActiveAddOptions {
+                                predicate: None,
+                                stats: AddStatsPolicy::RawJson,
+                            },
+                        )
                         .try_filter_map(|f| {
                             let matching_paths = Arc::clone(&matching_paths);
                             async move { Ok(matching_paths.contains(f.path_raw()).then_some(f)) }
@@ -528,7 +550,14 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .zip(stream::iter(std::iter::repeat((
             root_url,
             Arc::new(files_scan.files_set()),
@@ -600,6 +629,7 @@ async fn execute(
         Some(operation_id),
         target_file_size,
         write_cdc,
+        writer_properties.clone(),
     )
     .await?;
 
@@ -1062,13 +1092,15 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 3);
 
         let last_commit = table.last_commit().await.unwrap();
         let parameters = last_commit.operation_parameters.clone().unwrap();
         assert_eq!(parameters["predicate"], json!("value = 1"));
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
 
         let expected = vec![
             "+----+-------+------------+",
@@ -1224,9 +1256,10 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, Some(2));
         assert_eq!(metrics.num_copied_rows, 0);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
 
         let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
         assert_eq!(operation_metrics.get("num_deleted_rows"), Some(&json!(2)));
 
         let expected = vec![
@@ -1971,7 +2004,9 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, 0);
-        assert!(metrics.scan_time_ms > 0);
+        assert!(metrics.scan_time_ms <= metrics.execution_time_ms);
+        let operation_metrics = last_delete_operation_metrics(&table).await;
+        assert!(operation_metrics.contains_key("scan_time_ms"));
 
         let expected = [
             "+----+-------+------------+",

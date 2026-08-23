@@ -34,8 +34,8 @@ use crate::delta_datafusion::{
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
-    Action, Add, DeletionVectorDescriptor, EagerSnapshot, Metadata, ProtocolExt as _, Remove,
-    StructType, StructTypeExt,
+    Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
+    Metadata, ProtocolExt as _, Remove, StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -580,7 +580,14 @@ async fn collect_all_existing_files(
 ) -> DeltaResult<MatchedExistingFiles> {
     Ok(MatchedExistingFiles::new(
         snapshot
-            .file_views(log_store.as_ref(), None)
+            .snapshot()
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
             .map_ok(|file| MatchedExistingFile::from(file.to_add()))
             .try_collect()
             .await?,
@@ -595,7 +602,14 @@ async fn collect_matched_existing_files(
     let table_root = Arc::new(snapshot.table_configuration().table_root().clone());
     let valid_files = Arc::new(files_scan.files_set());
     let files = snapshot
-        .file_views(log_store.as_ref(), Some(files_scan.delta_predicate.clone()))
+        .snapshot()
+        .active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: Some(files_scan.delta_predicate.clone()),
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
         .try_filter_map(|file| {
             let table_root = Arc::clone(&table_root);
             let valid_files = Arc::clone(&valid_files);

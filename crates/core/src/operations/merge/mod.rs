@@ -33,7 +33,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow_schema::{DataType, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -44,6 +44,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
@@ -62,7 +63,7 @@ use datafusion::{
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
 use filter::try_construct_early_filter;
-use futures::future::BoxFuture;
+use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::*;
@@ -86,8 +87,11 @@ use crate::delta_datafusion::{
 use crate::delta_datafusion::{Expression, into_expr, maybe_into_expr};
 use crate::kernel::schema::cast::{merge_arrow_field, merge_arrow_schema};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
-use crate::kernel::{Action, EagerSnapshot, StructTypeExt, new_metadata, resolve_snapshot};
-use crate::logstore::LogStoreRef;
+use crate::kernel::{
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
+    resolve_snapshot,
+};
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
 use crate::operations::write::WriterStatsConfig;
@@ -716,7 +720,8 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
             if metric_observer.id.eq(SOURCE_COUNT_ID) {
@@ -793,7 +798,12 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             let schema = validation.input.schema();
             return Ok(Some(Arc::new(MergeValidationExec::new(
                 physical_inputs.first().unwrap().clone(),
-                planner.create_physical_expr(&validation.file_expr, schema, session_state)?,
+                planner.create_physical_expr(
+                    &validation.file_expr,
+                    schema,
+                    session_state,
+                    planning_ctx,
+                )?,
                 Arc::clone(&validation.file_column),
                 Arc::clone(&validation.row_ordinal_column),
             ))));
@@ -807,7 +817,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
-                planner.create_physical_expr(&barrier.expr, schema, session_state)?,
+                planner.create_physical_expr(&barrier.expr, schema, session_state, planning_ctx)?,
             ))));
         }
 
@@ -819,6 +829,32 @@ const DUPLICATE_MATCH_MARKER_COLUMNS: &[&str] = &[
     TARGET_ROW_ORDINAL_IN_FILE_COLUMN,
     TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
 ];
+
+fn build_merge_barrier_validation_plan(
+    input: LogicalPlan,
+    state: &SessionState,
+    ops: &[(
+        HashMap<Column, Expr>,
+        OperationType,
+        MatchParticipationClass,
+    )],
+    file_column: Arc<String>,
+    needs_duplicate_match_validation: bool,
+) -> DataFusionResult<LogicalPlan> {
+    let merge_barrier = LogicalPlan::Extension(Extension {
+        node: Arc::new(MergeBarrier {
+            input,
+            expr: col(file_column.as_str()),
+            file_column: Arc::clone(&file_column),
+        }),
+    });
+
+    if needs_duplicate_match_validation {
+        build_duplicate_match_validation_plan(merge_barrier, state, ops, file_column)
+    } else {
+        Ok(merge_barrier)
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(operation = "merge", version = snapshot.version(), table_uri = %log_store.root_url()))]
@@ -1474,28 +1510,20 @@ async fn execute(
             .build()?
     };
 
-    let new_columns = if !match_operations.is_empty() {
-        build_duplicate_match_validation_plan(new_columns, &state, &ops, Arc::clone(&file_column))?
-    } else {
-        new_columns
-    };
-
-    let distribute_expr = col(file_column.as_str());
-
-    let merge_barrier = LogicalPlan::Extension(Extension {
-        node: Arc::new(MergeBarrier {
-            input: new_columns.clone(),
-            expr: distribute_expr,
-            file_column: Arc::clone(&file_column),
-        }),
-    });
+    let merge_output = build_merge_barrier_validation_plan(
+        new_columns,
+        &state,
+        &ops,
+        Arc::clone(&file_column),
+        needs_duplicate_match_validation,
+    )?;
 
     // We should observe the metrics before we union the merge plan with the cdf_merge plan
     // so that we get the metrics only for the merge plan.
     let operation_count = LogicalPlan::Extension(Extension {
         node: Arc::new(MetricObserver {
             id: OUTPUT_COUNT_ID.into(),
-            input: merge_barrier,
+            input: merge_output,
             enable_pushdown: false,
         }),
     });
@@ -1519,13 +1547,17 @@ async fn execute(
                 "__delta_rs_update_expanded",
                 when(
                     col(CDC_COLUMN_NAME).eq(lit("update")),
+                    // `new_list` takes the *element* type, not the list type. DataFusion 54
+                    // ignored this argument for non-empty values; 55 casts the values to it
+                    // (apache/datafusion `ScalarValue::new_list`), so passing a list type here
+                    // yields List(List(Utf8)) and unnest leaves a list behind.
                     lit(ScalarValue::List(ScalarValue::new_list(
                         &[
                             ScalarValue::Utf8(Some("update_preimage".into())),
                             ScalarValue::Utf8(Some("update_postimage".into())),
                         ],
-                        &DataType::List(Field::new("element", DataType::Utf8, false).into()),
-                        true,
+                        &DataType::Utf8,
+                        false,
                     ))),
                 )
                 .end()?,
@@ -1605,12 +1637,19 @@ async fn execute(
 
     let table_root = snapshot.table_configuration().table_root().clone();
 
-    for action in snapshot.log_data() {
-        let log_path = action.path_raw();
-
-        if should_remove_rewritten_file(&survivors, log_path, &table_root)? {
-            metrics.num_target_files_removed += 1;
-            actions.push(action.remove_action(true).into());
+    {
+        let mut active_adds = snapshot.snapshot().active_adds(
+            log_store.as_ref(),
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        );
+        while let Some(action) = active_adds.try_next().await? {
+            if should_remove_rewritten_file(&survivors, action.path_raw(), &table_root)? {
+                metrics.num_target_files_removed += 1;
+                actions.push(action.remove_action(true).into());
+            }
         }
     }
 
@@ -1648,31 +1687,31 @@ async fn execute(
         TARGET_FILES_SKIPPED_METRIC,
         TARGET_FILES_PRUNED_METRIC_LEGACY,
     ];
-    metrics.num_target_files_skipped_during_scan = get_metric_any_or(
-        &scan_count_metrics,
-        &target_files_skipped_metric_names,
-        || {
-            let total_files = snapshot.log_data().num_files();
-            let (derived, impossible_state) =
-                derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
-            if impossible_state {
-                warn!(
-                    %operation_id,
-                    total_files,
-                    scanned_files = metrics.num_target_files_scanned,
-                    metric_names = ?target_files_skipped_metric_names,
-                    "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
-                );
-            }
+    metrics.num_target_files_skipped_during_scan = if let Some(metric) =
+        get_metric_any(&scan_count_metrics, &target_files_skipped_metric_names)
+    {
+        metric
+    } else {
+        let total_files = count_active_adds(&snapshot, log_store.as_ref()).await?;
+        let (derived, impossible_state) =
+            derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
+        if impossible_state {
             warn!(
                 %operation_id,
+                total_files,
+                scanned_files = metrics.num_target_files_scanned,
                 metric_names = ?target_files_skipped_metric_names,
-                derived,
-                "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+                "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
             );
-            derived
-        },
-    );
+        }
+        warn!(
+            %operation_id,
+            metric_names = ?target_files_skipped_metric_names,
+            derived,
+            "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+        );
+        derived
+    };
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let app_metadata = &mut commit_properties.app_metadata;
@@ -1789,6 +1828,24 @@ fn derive_skipped_file_count(total_files: usize, scanned_files: usize) -> (usize
     (total_files.saturating_sub(scanned_files), impossible_state)
 }
 
+async fn count_active_adds(
+    snapshot: &EagerSnapshot,
+    log_store: &dyn LogStore,
+) -> DeltaResult<usize> {
+    let batches = snapshot
+        .snapshot()
+        .active_add_batches(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .await?;
+
+    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
+}
+
 fn get_metric_any(metrics: &MetricsSet, names: &[&str]) -> Option<usize> {
     names
         .iter()
@@ -1888,15 +1945,16 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::DeltaTable;
     use crate::TableProperty;
-    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
+    use crate::kernel::{Action, DataType, EagerSnapshot, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
+    use crate::test_utils::{TestResult, TestTables};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
+    use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -1931,13 +1989,14 @@ mod tests {
         DataFusionMixins, DeltaScanNext, PATH_COLUMN, resolve_file_column_name,
     };
 
+    use super::barrier::MergeBarrier;
     use super::validation::MergeValidation;
     use super::{
         DELETE_COLUMN, MatchParticipationClass, MergeMetrics, OPERATION_COLUMN, OperationType,
         SOURCE_COLUMN, TARGET_COLUMN, TARGET_COPY_COLUMN, TARGET_DELETE_COLUMN,
         TARGET_INSERT_COLUMN, TARGET_MATCH_CARDINALITY_CLASS_COLUMN,
         TARGET_ROW_ORDINAL_IN_FILE_COLUMN, TARGET_UPDATE_COLUMN,
-        build_duplicate_match_validation_plan,
+        build_duplicate_match_validation_plan, build_merge_barrier_validation_plan,
     };
 
     pub(crate) async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -2041,6 +2100,30 @@ mod tests {
             pre_merge_files.saturating_sub(metrics.num_target_files_scanned)
         );
         assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_active_adds_replays_lazy_snapshot_without_materialized_files() -> TestResult
+    {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let snapshot = EagerSnapshot::try_new(
+            &log_store,
+            DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        let total_files = super::count_active_adds(&snapshot, log_store.as_ref()).await?;
+
+        assert_eq!(total_files, 5);
+        assert!(!snapshot.snapshot().has_materialized_files_for_test());
+
+        Ok(())
     }
 
     #[test]
@@ -2199,6 +2282,55 @@ mod tests {
         assert!(
             !format!("{plan:?}").contains("Window"),
             "duplicate validation deduplicates in MergeValidationStream without a rank window"
+        );
+
+        let field_names = plan
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<_>>();
+        assert!(!field_names.contains(&TARGET_ROW_ORDINAL_IN_FILE_COLUMN));
+        assert!(!field_names.contains(&TARGET_MATCH_CARDINALITY_CLASS_COLUMN));
+    }
+
+    #[test]
+    fn test_noop_heavy_merge_applies_barrier_before_duplicate_validation() {
+        let input = duplicate_match_validation_input_plan();
+        let ops = vec![
+            (
+                HashMap::new(),
+                OperationType::Update,
+                MatchParticipationClass::MatchedAction,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Insert,
+                MatchParticipationClass::Ignore,
+            ),
+            (
+                HashMap::new(),
+                OperationType::Copy,
+                MatchParticipationClass::MatchedNoop,
+            ),
+        ];
+        let state = SessionContext::new().state();
+
+        let plan = build_merge_barrier_validation_plan(
+            input,
+            &state,
+            &ops,
+            Arc::new(PATH_COLUMN.to_string()),
+            true,
+        )
+        .expect("merge barrier and duplicate validation plan builds");
+
+        let validation = find_merge_validation(&plan).expect("matched clauses require validation");
+        assert!(
+            contains_merge_barrier(&validation.input),
+            "expected MergeBarrier before duplicate validation; unchanged target files drop \
+             before validation buffers their rows: {}",
+            validation.input.display_indent()
         );
 
         let field_names = plan
@@ -2397,6 +2529,16 @@ mod tests {
         }
 
         plan.inputs().into_iter().find_map(find_merge_validation)
+    }
+
+    fn contains_merge_barrier(plan: &LogicalPlan) -> bool {
+        if let LogicalPlan::Extension(Extension { node }) = plan
+            && node.as_any().downcast_ref::<MergeBarrier>().is_some()
+        {
+            return true;
+        }
+
+        plan.inputs().into_iter().any(contains_merge_barrier)
     }
 
     fn count_unions(plan: &LogicalPlan) -> usize {

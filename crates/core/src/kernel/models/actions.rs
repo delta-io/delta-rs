@@ -152,31 +152,32 @@ impl MetadataExt for Metadata {
     }
 }
 
-/// checks if table contains a datatype in any field including nested fields.
-fn contains_datatype<'a>(
-    mut fields: impl Iterator<Item = &'a StructField>,
-    dtype: &DataType,
-) -> bool {
-    fn _check_type(dtype_to_check: &DataType, dtype: &DataType) -> bool {
-        match dtype_to_check {
-            to_check if dtype == to_check => true,
-            DataType::Array(inner) => _check_type(inner.element_type(), dtype),
-            DataType::Struct(inner) => inner.fields().any(|f| _check_type(f.data_type(), dtype)),
-            _ => false,
-        }
+/// Checks if a datatype matches another type, or any of its inner fields match.
+fn matches_datatype(dtype_to_check: &DataType, dtype: &DataType) -> bool {
+    match dtype_to_check {
+        to_check if dtype == to_check => true,
+        DataType::Array(inner) => matches_datatype(inner.element_type(), dtype),
+        DataType::Struct(inner) => inner
+            .fields()
+            .any(|f| matches_datatype(f.data_type(), dtype)),
+        _ => false,
     }
-    fields.any(|f| _check_type(f.data_type(), dtype))
 }
 
 /// checks if table contains timestamp_ntz in any field including nested fields.
-pub fn contains_timestampntz<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
-    contains_datatype(fields, &DataType::TIMESTAMP_NTZ)
+pub fn contains_timestampntz<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| matches_datatype(f.data_type(), &DataType::TIMESTAMP_NTZ))
 }
 
 #[cfg(feature = "nanosecond-timestamps")]
-/// checks if table contains timestamp_nanos in any field including nested fields.
-pub fn contains_timestamp_nanos<'a>(fields: impl Iterator<Item = &'a StructField>) -> bool {
-    contains_datatype(fields, &DataType::TIMESTAMP_NANOS)
+/// checks if table contains timestamp_nanos or timestamp_nanos_ntz in any
+/// field including nested fields. Both primitive types require the same
+/// `timestampNanos` table feature.
+pub fn contains_timestamp_nanos<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fields.any(|f| {
+        matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS)
+            || matches_datatype(f.data_type(), &DataType::TIMESTAMP_NANOS_NTZ)
+    })
 }
 
 /// checks if table contains variant in any field including nested fields.
@@ -788,7 +789,7 @@ impl fmt::Display for TableFeatures {
 }
 
 impl TryFrom<&TableFeatures> for TableFeature {
-    type Error = strum::ParseError;
+    type Error = std::convert::Infallible;
 
     fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
         TableFeature::try_from(value.as_ref())
@@ -1091,7 +1092,7 @@ impl Transaction {
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
+/// However, the reference implementation as well as delta-rs store useful information that may for instance
 /// allow us to be more permissive in commit conflict resolution.
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1099,6 +1100,10 @@ pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
+
+    /// Same as timestamp above, but cooler
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_commit_timestamp: Option<i64>,
 
     /// Id of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1245,7 +1250,8 @@ impl FromStr for IsolationLevel {
 pub(crate) mod serde_path {
     use std::str::Utf8Error;
 
-    use percent_encoding::{AsciiSet, CONTROLS, percent_decode_str, percent_encode};
+    use percent_encoding::percent_decode_str;
+    use percent_encoding_rfc3986::{AsciiSet, CONTROLS, utf8_percent_encode};
     use serde::{self, Deserialize, Deserializer, Serialize, Serializer};
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -1269,9 +1275,14 @@ pub(crate) mod serde_path {
     pub const _DELIMITER_BYTE: u8 = _DELIMITER.as_bytes()[0];
 
     /// Characters we want to encode.
+    ///
+    /// Paths are URIs, so the hierarchy delimiter stays literal. Partition values are single
+    /// strings and go through the stricter set in [`crate::kernel::scalars`] instead.
     const INVALID: &AsciiSet = &CONTROLS
         // The delimiter we are reserving for internal hierarchy
         // .add(DELIMITER_BYTE)
+        // RFC 2396 excludes the space from URIs and CONTROLS does not cover it, see #4304
+        .add(b' ')
         // Characters AWS recommends avoiding for object keys
         // https://docs.aws.amazon.com/AmazonS3/latest/dev/UsingMetadata.html
         .add(b'\\')
@@ -1296,9 +1307,10 @@ pub(crate) mod serde_path {
         .add(b'?');
 
     fn encode_path(path: &str) -> String {
-        percent_encode(path.as_bytes(), INVALID).to_string()
+        utf8_percent_encode(path, INVALID).to_string()
     }
 
+    // rfc3986's percent_decode_str is fallible, so decoding stays on the url spec crate.
     pub fn decode_path(path: &str) -> Result<String, Utf8Error> {
         Ok(percent_decode_str(path).decode_utf8()?.to_string())
     }
@@ -1435,6 +1447,87 @@ mod tests {
             "reader side should remain legacy, got: {:?}",
             protocol.reader_features()
         );
+    }
+
+    #[test]
+    fn test_serialize_add_path_encodes_space() {
+        let add = Add {
+            path: "year=2021/part 0.parquet".to_string(),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&add).unwrap();
+        assert_eq!(value["path"], "year=2021/part%200.parquet");
+    }
+
+    #[test]
+    fn test_serialize_remove_and_cdc_path_encodes_space() {
+        let remove = Remove {
+            path: "part 1.parquet".to_string(),
+            ..Default::default()
+        };
+        let cdc = AddCDCFile {
+            path: "_change_data/part 2.parquet".to_string(),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            serde_json::to_value(&remove).unwrap()["path"],
+            "part%201.parquet"
+        );
+        assert_eq!(
+            serde_json::to_value(&cdc).unwrap()["path"],
+            "_change_data/part%202.parquet"
+        );
+    }
+
+    #[test]
+    fn test_serialize_path_preserves_hive_partition_delimiters() {
+        // A path is a multi segment URI, so encoding the delimiter or the `=` of a hive style
+        // directory would point the action at a file that does not exist.
+        let add = Add {
+            path: "year=2020/month=2/day=3/part-00000-abc.snappy.parquet".to_string(),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&add).unwrap();
+        assert_eq!(
+            value["path"],
+            "year=2020/month=2/day=3/part-00000-abc.snappy.parquet"
+        );
+    }
+
+    #[test]
+    fn test_serialize_round_trips_spark_written_path() {
+        // Spark writes this path, see dat/v0.0.3/reader_tests/generated/multi_partitioned_2.
+        // Re-serializing it has to reproduce the same string, because kernel matches removes
+        // against adds on the raw path rather than the decoded one.
+        let path = "bool=false/time=1970-01-02%2008%253A45%253A00/amount=12.000000000000000000/part-00000-12004196-1e98-4a42-a622-a12f05a4578e.c000.snappy.parquet";
+        let raw = serde_json::json!({
+            "path": path,
+            "partitionValues": {},
+            "size": 0,
+            "modificationTime": 0,
+            "dataChange": true
+        });
+
+        let add: Add = serde_json::from_value(raw).unwrap();
+        assert_eq!(serde_json::to_value(&add).unwrap()["path"], path);
+    }
+
+    #[test]
+    fn test_deserialize_path_accepts_unencoded_space() {
+        // Commits written before spaces were encoded have to keep decoding to the same path.
+        let raw = serde_json::json!({
+            "path": "city=New York/part-00000-abc.parquet",
+            "partitionValues": {},
+            "size": 0,
+            "modificationTime": 0,
+            "dataChange": true
+        });
+
+        let add: Add = serde_json::from_value(raw).unwrap();
+        assert_eq!(add.path, "city=New York/part-00000-abc.parquet");
     }
 
     // #[test]

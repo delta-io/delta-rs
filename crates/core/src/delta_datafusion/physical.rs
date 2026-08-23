@@ -4,10 +4,13 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::common::Statistics;
+use datafusion::common::tree_node::TreeNodeRecursion;
+use datafusion::error::DataFusionError;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
+use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    DisplayAs, ExecutionPlan, PhysicalExpr, RecordBatchStream, SendableRecordBatchStream,
 };
 use futures::{Stream, StreamExt};
 
@@ -104,11 +107,20 @@ impl ExecutionPlan for MetricObserverExec {
         }))
     }
 
-    fn partition_statistics(
+    fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
+        vec![ChildStats::At(partition)]
+    }
+
+    fn statistics_from_inputs(
         &self,
-        partition: Option<usize>,
+        input_stats: &[Arc<Statistics>],
+        _args: &StatisticsArgs,
     ) -> datafusion::common::Result<Arc<Statistics>> {
-        self.parent.partition_statistics(partition)
+        input_stats.first().map(Arc::clone).ok_or_else(|| {
+            DataFusionError::Internal(
+                "MetricObserverExec expects statistics for exactly one child".to_string(),
+            )
+        })
     }
 
     fn with_new_children(
@@ -120,6 +132,17 @@ impl ExecutionPlan for MetricObserverExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.parent.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

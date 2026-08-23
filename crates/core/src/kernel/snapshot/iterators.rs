@@ -12,6 +12,8 @@ use delta_kernel::engine::arrow_expression::evaluate_expression::to_json;
 use delta_kernel::expressions::{Scalar, StructData};
 use delta_kernel::scan::scan_row_schema;
 use delta_kernel::schema::DataType;
+#[cfg(any(test, feature = "datafusion"))]
+use indexmap::IndexMap;
 use object_store::ObjectMeta;
 use object_store::path::Path;
 use percent_encoding::percent_decode_str;
@@ -19,6 +21,8 @@ use percent_encoding::percent_decode_str;
 #[cfg(feature = "datafusion")]
 pub(crate) use self::scan_row::parse_stats_column_with_schema;
 pub use self::tombstones::TombstoneView;
+#[cfg(any(test, feature = "datafusion"))]
+use crate::kernel::StructType;
 use crate::kernel::scalars::ScalarExt;
 use crate::kernel::{Add, DeletionVectorDescriptor, Remove};
 use crate::{DeltaResult, DeltaTableError};
@@ -212,11 +216,25 @@ impl LogicalFileView {
     ///
     /// This preserves all partition columns even when `partitionValues_parsed` was narrowed to the
     /// predicate-referenced subset for data skipping.
-    fn partition_values_map(&self) -> HashMap<String, Option<String>> {
+    pub fn partition_values_map(&self) -> HashMap<String, Option<String>> {
         self.raw_partition_values()
             .filter(|partitions| partitions.is_valid(self.index))
             .and_then(|partitions| collect_string_map(&partitions.value(self.index)))
             .unwrap_or_default()
+    }
+
+    /// Builds the complete typed partition tuple in table metadata order.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn full_partition_values(
+        &self,
+        partition_columns: &[String],
+        table_schema: &StructType,
+    ) -> DeltaResult<IndexMap<String, Scalar>> {
+        typed_partition_values_from_raw_map(
+            &self.partition_values_map(),
+            partition_columns,
+            table_schema,
+        )
     }
 
     /// Returns the parsed statistics as a StructArray, if available.
@@ -341,6 +359,43 @@ impl LogicalFileView {
     }
 }
 
+#[cfg(any(test, feature = "datafusion"))]
+fn typed_partition_values_from_raw_map(
+    raw_partition_values: &HashMap<String, Option<String>>,
+    partition_columns: &[String],
+    table_schema: &StructType,
+) -> DeltaResult<IndexMap<String, Scalar>> {
+    let mut partition_values = IndexMap::with_capacity(partition_columns.len());
+
+    for column in partition_columns {
+        let field = table_schema
+            .field(column)
+            .ok_or_else(|| DeltaTableError::SchemaMismatch {
+                msg: format!("Partition column '{column}' is not present in table schema"),
+            })?;
+        let primitive_type = field.data_type().as_primitive_opt().ok_or_else(|| {
+            DeltaTableError::SchemaMismatch {
+                msg: format!("Partition column '{column}' is not a primitive type"),
+            }
+        })?;
+        let scalar = match raw_partition_values.get(column) {
+            Some(Some(raw)) => primitive_type.parse_scalar(raw.as_str())?,
+            Some(None) => Scalar::Null(field.data_type().clone()),
+            None => {
+                return Err(DeltaTableError::SchemaMismatch {
+                    msg: format!(
+                        "Add action for optimized file is missing partition value for '{column}'"
+                    ),
+                });
+            }
+        };
+
+        partition_values.insert(column.clone(), scalar);
+    }
+
+    Ok(partition_values)
+}
+
 /// Rounds up timestamp values to handle microsecond truncation in checkpoint statistics.
 ///
 /// When delta.checkpoint.writeStatsAsStruct is enabled, microsecond timestamps are
@@ -365,6 +420,8 @@ where
     match value {
         #[cfg(feature = "nanosecond-timestamps")]
         Scalar::TimestampNanos(v) => Scalar::TimestampNanos(func(v, 1_000_000)),
+        #[cfg(feature = "nanosecond-timestamps")]
+        Scalar::TimestampNanosNtz(v) => Scalar::TimestampNanosNtz(func(v, 1_000_000)),
         Scalar::Timestamp(v) => Scalar::Timestamp(func(v, 1_000)),
         Scalar::TimestampNtz(v) => Scalar::TimestampNtz(func(v, 1_000)),
         Scalar::Struct(struct_data) => {
@@ -618,6 +675,102 @@ mod tests {
         logical_file_view_with_stats(None, full_stats)
     }
 
+    fn partition_identity_schema() -> StructType {
+        StructType::try_new([
+            crate::kernel::StructField::nullable("part_b", DataType::STRING),
+            crate::kernel::StructField::nullable("part_a", DataType::LONG),
+            crate::kernel::StructField::nullable("part_c", DataType::STRING),
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_preserves_metadata_order_and_parses_values() {
+        let raw_partition_values = HashMap::from([
+            ("part_a".to_string(), Some("42".to_string())),
+            ("part_b".to_string(), Some("x".to_string())),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_values.keys().cloned().collect::<Vec<_>>(),
+            partition_columns
+        );
+        assert_eq!(
+            partition_values.get("part_b"),
+            Some(&Scalar::String("x".to_string()))
+        );
+        assert_eq!(partition_values.get("part_a"), Some(&Scalar::Long(42)));
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_preserves_typed_nulls() {
+        let raw_partition_values = HashMap::from([
+            ("part_b".to_string(), Some("x".to_string())),
+            ("part_a".to_string(), None),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            partition_values.get("part_a"),
+            Some(&Scalar::Null(DataType::LONG))
+        );
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_errors_on_missing_partition_column() {
+        let raw_partition_values = HashMap::from([("part_b".to_string(), Some("x".to_string()))]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let error = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("missing partition value for 'part_a'"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn typed_partition_values_from_raw_map_ignores_extra_raw_partition_keys() {
+        let raw_partition_values = HashMap::from([
+            ("part_a".to_string(), Some("42".to_string())),
+            ("part_b".to_string(), Some("x".to_string())),
+            ("part_c".to_string(), Some("extra".to_string())),
+        ]);
+        let partition_columns = vec!["part_b".to_string(), "part_a".to_string()];
+
+        let partition_values = typed_partition_values_from_raw_map(
+            &raw_partition_values,
+            &partition_columns,
+            &partition_identity_schema(),
+        )
+        .unwrap();
+
+        assert_eq!(partition_values.len(), 2);
+        assert!(!partition_values.contains_key("part_c"));
+    }
+
     #[tokio::test]
     async fn test_logical_file_view_with_real_data() {
         // Use existing test table with real Delta log data
@@ -745,6 +898,10 @@ mod tests {
             let timestamp = Scalar::TimestampNanos(1609459200000000);
             let rounded = round_ms_datetimes(timestamp, &ceil_fn);
             assert_eq!(rounded, Scalar::TimestampNanos(1609459201000000));
+
+            let timestamp_ntz = Scalar::TimestampNanosNtz(1609459200000000);
+            let rounded = round_ms_datetimes(timestamp_ntz, &ceil_fn);
+            assert_eq!(rounded, Scalar::TimestampNanosNtz(1609459201000000));
         }
 
         // Test non-timestamp scalar (should be unchanged)

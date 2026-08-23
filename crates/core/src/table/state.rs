@@ -139,7 +139,7 @@ impl DeltaTableState {
         &self,
         log_store: &dyn LogStore,
     ) -> BoxStream<'_, DeltaResult<TombstoneView>> {
-        self.snapshot.snapshot().tombstones(log_store)
+        self.snapshot.snapshot().active_tombstones(log_store)
     }
 
     /// Get the transaction version for the given application ID.
@@ -287,6 +287,40 @@ impl Snapshot {
         let expression = Expression::Struct(expressions, None);
         let table_schema = DataType::try_struct_type(fields)?;
         self.add_actions_batches_with_schema(true, expression, table_schema)
+    }
+
+    /// Project active add batches to path and partition columns.
+    #[cfg(feature = "datafusion")]
+    pub(crate) fn active_add_partition_batches_from(
+        &self,
+        batches: &[RecordBatch],
+    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
+        let mut expressions = vec![column_expr_ref!("path")];
+        let mut fields = vec![StructField::not_null("path", DataType::STRING)];
+
+        if let Some(partition_schema) = self.inner.partitions_schema()? {
+            fields.push(StructField::nullable(
+                "partition",
+                DataType::try_struct_type(partition_schema.fields().cloned())?,
+            ));
+            expressions.push(column_expr_ref!("partitionValues_parsed"));
+        }
+
+        let expression = Expression::Struct(expressions, None);
+        let table_schema = DataType::try_struct_type(fields)?;
+
+        let evaluated_batches = batches.iter().map(|batch| {
+            let input_schema = Arc::new(batch.schema().as_ref().try_into_kernel()?);
+            let evaluator = ARROW_HANDLER.new_expression_evaluator(
+                input_schema,
+                expression.clone().into(),
+                table_schema.clone(),
+            )?;
+            let batch = evaluator.evaluate_arrow(batch.clone())?;
+            Ok(batch.normalize(".", None)?)
+        });
+
+        coalesce_batches(evaluated_batches)
     }
 
     fn add_actions_batches_with_schema(
@@ -593,6 +627,72 @@ mod tests {
             assert!((0..batch.num_rows()).all(|row| column.is_null(row)));
         }
 
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_delta_table_state_serde_roundtrip_preserves_add_actions() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let state = table.snapshot()?;
+        let before = state.add_actions_table(true)?;
+
+        let bytes = serde_json::to_vec(state)?;
+        let actual: DeltaTableState = serde_json::from_slice(&bytes)?;
+        let after = actual.add_actions_table(true)?;
+
+        assert_eq!(actual.version(), state.version());
+        assert_eq!(after, before);
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_delta_table_state_without_files_roundtrip_stays_without_files() -> DeltaResult<()>
+    {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .await?;
+        let table = table
+            .write(vec![get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let config = DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        };
+        let state = DeltaTableState::try_new(table.log_store().as_ref(), config, None).await?;
+        assert!(
+            !state
+                .snapshot()
+                .snapshot()
+                .has_materialized_files_for_test()
+        );
+
+        let bytes = serde_json::to_vec(&state)?;
+        let actual: DeltaTableState = serde_json::from_slice(&bytes)?;
+
+        assert_eq!(actual.version(), state.version());
+        assert!(
+            !actual
+                .snapshot()
+                .snapshot()
+                .has_materialized_files_for_test()
+        );
+        assert!(matches!(
+            actual.add_actions_table(true),
+            Err(DeltaTableError::NotInitializedWithFiles(_))
+        ));
         Ok(())
     }
 

@@ -1,12 +1,13 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 use std::{
+    collections::BTreeSet,
     error::Error,
     sync::{Arc, Mutex},
 };
 
-use arrow_array::{Int32Array, RecordBatch, StringArray};
-use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
@@ -14,7 +15,7 @@ use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
-use deltalake_core::kernel::{Action, DataType, PrimitiveType, StructField};
+use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{
     CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
 };
@@ -24,11 +25,13 @@ use deltalake_core::operations::optimize::{
 use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::test_utils::TestTables;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake_core::{DeltaTable, PartitionFilter, Path, open_table};
+use deltalake_core::{
+    DeltaTable, NULL_PARTITION_VALUE_DATA_PATH, PartitionFilter, Path, open_table,
+};
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt as _;
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
@@ -197,6 +200,30 @@ fn ordered_range_batch(
     )?)
 }
 
+fn multi_partition_batch(
+    part_a: Option<i64>,
+    part_b: &str,
+    start: i64,
+    rows: usize,
+) -> Result<RecordBatch, Box<dyn Error>> {
+    let values = (start..start + rows as i64).collect::<Vec<_>>();
+    let part_a_values = vec![part_a; rows];
+    let part_b_values = vec![part_b.to_string(); rows];
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("part_a", ArrowDataType::Int64, true),
+            Field::new("part_b", ArrowDataType::Utf8, true),
+            Field::new("val", ArrowDataType::Int64, false),
+        ])),
+        vec![
+            Arc::new(Int64Array::from(part_a_values)),
+            Arc::new(StringArray::from(part_b_values)),
+            Arc::new(Int64Array::from(values)),
+        ],
+    )?)
+}
+
 fn single_int_batch(values: Vec<i32>) -> Result<RecordBatch, Box<dyn Error>> {
     Ok(RecordBatch::try_new(
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -249,6 +276,113 @@ async fn latest_commit_actions(table: &DeltaTable) -> Result<Vec<Action>, Box<dy
             std::io::Error::other(format!("missing commit entry for version {version}"))
         })?;
     Ok(get_actions(version, &commit_bytes)?)
+}
+
+async fn setup_multi_partition_optimize_table() -> Result<Context, Box<dyn Error>> {
+    let columns = vec![
+        StructField::new(
+            "part_a".to_owned(),
+            DataType::Primitive(PrimitiveType::Long),
+            true,
+        ),
+        StructField::new(
+            "part_b".to_owned(),
+            DataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+        StructField::new(
+            "val".to_owned(),
+            DataType::Primitive(PrimitiveType::Long),
+            false,
+        ),
+    ];
+    let partition_columns = vec!["part_a".to_owned(), "part_b".to_owned()];
+
+    let tmp_dir = tempfile::tempdir()?;
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let mut table = DeltaTable::try_from_url(
+        url::Url::from_directory_path(std::path::Path::new(table_uri)).unwrap(),
+    )
+    .await?
+    .create()
+    .with_columns(columns)
+    .with_partition_columns(partition_columns)
+    .await?;
+
+    let mut writer = RecordBatchWriter::for_table(&table)?;
+    for (part_a, writes, start_base) in [
+        (Some(1), 4, 1_000),
+        (Some(2), 3, 2_000),
+        (Some(3), 3, 3_000),
+        (None, 3, 4_000),
+    ] {
+        for write_idx in 0..writes {
+            write(
+                &mut writer,
+                &mut table,
+                multi_partition_batch(part_a, "x", start_base + write_idx * 10, 3)?,
+            )
+            .await?;
+        }
+    }
+
+    Ok(Context { tmp_dir, table })
+}
+
+async fn assert_latest_optimize_adds_preserve_full_partitions(
+    table: &DeltaTable,
+) -> Result<(), Box<dyn Error>> {
+    let actions = latest_commit_actions(table).await?;
+    let adds = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::Add(add) => Some(add),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(adds.len(), 4, "{adds:?}");
+
+    let mut actual_partitions = BTreeSet::new();
+    for add in adds {
+        assert!(
+            !add.path.starts_with("part_b=x/"),
+            "path was flattened to a partial partition: {}",
+            add.path
+        );
+        assert_eq!(add.partition_values.len(), 2, "{:?}", add.partition_values);
+        let part_a = add
+            .partition_values
+            .get("part_a")
+            .ok_or_else(|| std::io::Error::other(format!("missing part_a in {add:?}")))?;
+        let part_b = add
+            .partition_values
+            .get("part_b")
+            .and_then(|value| value.as_deref())
+            .ok_or_else(|| std::io::Error::other(format!("missing part_b in {add:?}")))?;
+
+        assert_eq!(part_b, "x");
+        let part_a_path_value = part_a.as_deref().unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+        let expected_prefix = format!("part_a={part_a_path_value}/part_b=x/");
+        assert!(
+            add.path.starts_with(&expected_prefix),
+            "path {} did not start with {expected_prefix}",
+            add.path
+        );
+        actual_partitions.insert((part_a.clone(), part_b.to_owned()));
+    }
+
+    let expected_partitions = [
+        (Some("1".to_string()), "x".to_string()),
+        (Some("2".to_string()), "x".to_string()),
+        (Some("3".to_string()), "x".to_string()),
+        (None, "x".to_string()),
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(actual_partitions, expected_partitions);
+
+    Ok(())
 }
 
 struct DvSmallAppendedTable {
@@ -596,6 +730,48 @@ async fn write(
     writer.write(batch).await?;
     writer.flush_and_commit(table).await?;
     table.update_state().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_subset_partition_filter_preserves_full_partition_values()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_multi_partition_optimize_table().await?;
+    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+
+    let (updated, metrics) = context
+        .table
+        .optimize()
+        .with_filters(&filter)
+        .with_target_size(NonZeroU64::new(1_000_000).unwrap())
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 4);
+    assert_eq!(metrics.num_files_removed, 13);
+    assert_eq!(metrics.partitions_optimized, 4);
+    assert_latest_optimize_adds_preserve_full_partitions(&updated).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_subset_partition_filter_preserves_full_partition_values()
+-> Result<(), Box<dyn Error>> {
+    let context = setup_multi_partition_optimize_table().await?;
+    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+
+    let (updated, metrics) = context
+        .table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["val".to_string()]))
+        .with_filters(&filter)
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 4);
+    assert_eq!(metrics.num_files_removed, 13);
+    assert_eq!(metrics.partitions_optimized, 4);
+    assert_latest_optimize_adds_preserve_full_partitions(&updated).await?;
+
     Ok(())
 }
 
@@ -1970,6 +2146,133 @@ async fn test_zorder_rejects_invalid_nested_path() -> Result<(), Box<dyn Error>>
             .to_string()
             .contains("\"value\" is not a struct type")
     );
+
+    Ok(())
+}
+
+/// Regression test: optimize must succeed on tables whose parquet files mark a
+/// nested struct field as nullable while the Delta log schema declares it
+/// non-nullable (the on-disk layout produced by Spark). Nullability in the log
+/// schema is a write-time invariant, not a read-time physical constraint.
+#[tokio::test]
+async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<dyn Error>> {
+    let tmp_dir = tempfile::tempdir()?;
+    let table_url = url::Url::from_directory_path(tmp_dir.path()).unwrap();
+
+    // Delta log schema: metadata_col.int_id is NOT nullable.
+    let meta_type = StructType::try_new(vec![StructField::new(
+        "int_id",
+        DataType::Primitive(PrimitiveType::String),
+        false,
+    )])?;
+    DeltaTable::try_from_url(table_url.clone())
+        .await?
+        .create()
+        .with_columns(vec![
+            StructField::new("id", DataType::Primitive(PrimitiveType::Long), false),
+            StructField::new("metadata_col", DataType::Struct(Box::new(meta_type)), true),
+        ])
+        .await?;
+
+    // Parquet files whose arrow schema marks int_id as nullable (mimicking
+    // Spark's writer), registered via raw Add actions to bypass the delta-rs
+    // writer which would cast to the table schema. Two files so optimize bins
+    // them for compaction.
+    let meta_fields = Fields::from(vec![Field::new("int_id", ArrowDataType::Utf8, true)]);
+    let file_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", ArrowDataType::Int64, false),
+        Field::new(
+            "metadata_col",
+            ArrowDataType::Struct(meta_fields.clone()),
+            true,
+        ),
+    ]));
+    for (name, ids, int_ids) in [
+        ("part-00000.parquet", vec![1i64, 2], vec!["t1", "t2"]),
+        ("part-00001.parquet", vec![3i64, 4], vec!["t3", "t4"]),
+    ] {
+        let meta = arrow_array::StructArray::new(
+            meta_fields.clone(),
+            vec![Arc::new(StringArray::from(int_ids)) as arrow_array::ArrayRef],
+            None,
+        );
+        let batch = RecordBatch::try_new(
+            file_schema.clone(),
+            vec![Arc::new(Int64Array::from(ids)), Arc::new(meta)],
+        )?;
+
+        let file_path = tmp_dir.path().join(name);
+        let file = std::fs::File::create(&file_path)?;
+        let mut writer = ArrowWriter::try_new(file, file_schema.clone(), None)?;
+        writer.write(&batch)?;
+        writer.close()?;
+        let size = std::fs::metadata(&file_path)?.len() as i64;
+
+        let table = open_table(table_url.clone()).await?;
+        let add = Add {
+            path: name.to_string(),
+            size,
+            data_change: true,
+            ..Default::default()
+        };
+        CommitBuilder::default()
+            .with_actions(vec![Action::Add(add)])
+            .build(
+                Some(table.snapshot()?),
+                table.log_store(),
+                DeltaOperation::Write {
+                    mode: deltalake_core::protocol::SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+    }
+
+    let table = open_table(table_url).await?;
+    assert_eq!(table.snapshot()?.log_data().num_files(), 2);
+
+    let (table, metrics) = table.optimize().await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(table.snapshot()?.log_data().num_files(), 1);
+
+    // Verify the compacted file preserved all rows.
+    let file = table.snapshot()?.log_data().into_iter().next().unwrap();
+    let path =
+        Path::parse(file.path().as_ref()).unwrap_or_else(|_| Path::from(file.path().as_ref()));
+    let batch = read_parquet_file(&path, table.object_store()).await?;
+    assert_eq!(batch.num_rows(), 4);
+
+    // Verify strict output schema: int_id must be non-nullable in the compacted file.
+    let batch_schema = batch.schema();
+    let ArrowDataType::Struct(out_meta_fields) =
+        batch_schema.field_with_name("metadata_col")?.data_type()
+    else {
+        panic!("expected struct");
+    };
+    assert!(
+        !out_meta_fields[0].is_nullable(),
+        "compacted file must preserve the strict (non-nullable) schema for int_id"
+    );
+
+    // Verify nested values: all int_id strings are present and correct.
+    let meta_col = batch
+        .column_by_name("metadata_col")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let int_id_col = meta_col
+        .column_by_name("int_id")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .unwrap();
+    let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
+    actual.sort_unstable();
+    assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
 
     Ok(())
 }
