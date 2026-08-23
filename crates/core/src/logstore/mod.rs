@@ -812,9 +812,9 @@ pub async fn get_all_versions_from(
 ) -> DeltaResult<(Vec<u64>, Vec<CommitInfo>)> {
     // Get the latest version to know our range
     let latest_version =
-        match get_latest_version(log_store.as_ref(), effective_start_version as Version).await {
+        match get_latest_version(log_store.as_ref(), start_version as Version).await {
             Ok(v) => v,
-            Err(DeltaTableError::InvalidVersion(_)) if effective_start_version == 0 => {
+            Err(DeltaTableError::InvalidVersion(_)) if start_version == 0 => {
                 // If we're looking for version 0 and it's not found, this might be a new table
                 return Ok((vec![], vec![]));
             }
@@ -826,7 +826,7 @@ pub async fn get_all_versions_from(
     let object_store = log_store.object_store(None);
 
     // Iterate through each version from start to latest
-    for version in effective_start_version..=latest_version as u64 {
+    for version in start_version..=latest_version as u64 {
         // Read the commit for this specific version
         if let Some(commit_bytes) =
             read_commit_entry(object_store.as_ref(), version as Version).await?
@@ -1242,33 +1242,6 @@ pub(crate) mod tests {
 
         let get_err = get_all_versions_from(table.log_store(), 999).await;
         assert!(get_err.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get_all_version_from_minus_1() {
-        use crate::DeltaOps;
-        use crate::protocol::SaveMode;
-        use crate::writer::test_utils::get_delta_schema;
-
-        let table_schema = get_delta_schema();
-
-        let table = DeltaOps::new_in_memory()
-            .create()
-            .with_columns(table_schema.fields().cloned())
-            .with_save_mode(SaveMode::Ignore)
-            .await
-            .unwrap();
-        assert_eq!(table.version().unwrap_or(999), 0);
-
-        let res = get_all_versions_from(table.log_store(), u64::MAX).await;
-        assert!(res.is_ok());
-        let (versions, commit_infos) = res.unwrap();
-
-        assert_eq!(versions.len(), 1);
-        assert_eq!(commit_infos.len(), 1);
-
-        assert_eq!(versions[0], 0);
-        assert_eq!(commit_infos[0].operation, Some("CREATE TABLE".to_string()));
     }
 
     #[tokio::test]
