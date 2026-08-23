@@ -10,26 +10,6 @@
 //! let provider = DeltaCdfTableProvider::try_new(builder)?;
 //! let df = ctx.read_table(provider).await?;
 
-use std::sync::Arc;
-use std::time::SystemTime;
-
-use arrow_schema::{ArrowError, Field, Schema};
-use chrono::{DateTime, Utc};
-use datafusion::catalog::Session;
-use datafusion::common::DFSchema;
-use datafusion::common::ScalarValue;
-use datafusion::config::TableParquetOptions;
-use datafusion::datasource::memory::DataSourceExec;
-use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
-use datafusion::datasource::table_schema::TableSchema;
-use datafusion::logical_expr::Expr;
-use datafusion::physical_expr::{PhysicalExpr, expressions};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::union::UnionExec;
-use delta_kernel::table_features::ColumnMappingMode;
-use tracing::log;
-
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
@@ -39,8 +19,34 @@ use crate::kernel::transaction::PROTOCOL;
 use crate::kernel::{
     Action, Add, AddCDCFile, CommitInfo, EagerSnapshot, Version, resolve_snapshot,
 };
-use crate::logstore::{LogStoreRef, get_actions};
+use crate::logstore::{LogStore, LogStoreExt, LogStoreRef, get_actions};
 use crate::{delta_datafusion::cdf::*, kernel::Remove};
+use arrow_schema::{ArrowError, Field, Schema, SchemaRef};
+use chrono::{DateTime, Utc};
+use datafusion::catalog::Session;
+use datafusion::common::DFSchema;
+use datafusion::common::ScalarValue;
+use datafusion::config::TableParquetOptions;
+use datafusion::datasource::memory::DataSourceExec;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::table_schema::TableSchema;
+use datafusion::execution::cache::default_cache::DefaultCache;
+use datafusion::logical_expr::Expr;
+use datafusion::physical_expr::{PhysicalExpr, expressions};
+use datafusion::physical_expr_common::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::projection::ProjectionExec;
+use datafusion::physical_plan::union::UnionExec;
+use datafusion_datasource::PartitionedFile;
+use delta_kernel::table_features::ColumnMappingMode;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::SystemTime;
+use tracing::log;
+
+type ScalarPartitionMap = HashMap<Vec<ScalarValue>, Vec<PartitionedFile>>;
+const METADATA_CACHE_SIZE: usize = 1024 * 1024;
 
 /// Builder for create a read of change data feeds for delta tables
 #[derive(Clone)]
@@ -59,13 +65,12 @@ pub struct CdfLoadBuilder {
     ending_timestamp: Option<DateTime<Utc>>,
     /// Enable ending version or timestamp exceeding the last commit
     allow_out_of_range: bool,
-    /// Datafusion session state relevant for executing the input plan
-    session: Option<Arc<dyn Session>>,
     /// Optional logical predicate used ONLY to prune files by their partition
     /// values. This is never applied as a row-level filter, so any non-partition
     /// conjuncts are ignored here and row-level correctness must be enforced by a
     /// separate `FilterExec` wrapped around the resulting plan.
     filter: Option<Expr>,
+    parquet_metadata_cache: Arc<CachedParquetFileReaderFactory>,
 }
 
 impl std::fmt::Debug for CdfLoadBuilder {
@@ -85,6 +90,10 @@ impl std::fmt::Debug for CdfLoadBuilder {
 impl CdfLoadBuilder {
     /// Create a new [`CdfLoadBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
+        let parquet_metadata_cache = Arc::new(CachedParquetFileReaderFactory::new(
+            log_store.object_store(None),
+            Arc::new(DefaultCache::new(METADATA_CACHE_SIZE)),
+        ));
         Self {
             snapshot,
             log_store,
@@ -93,8 +102,8 @@ impl CdfLoadBuilder {
             starting_timestamp: None,
             ending_timestamp: None,
             allow_out_of_range: false,
-            session: None,
             filter: None,
+            parquet_metadata_cache,
         }
     }
 
@@ -125,12 +134,6 @@ impl CdfLoadBuilder {
     /// Enable ending version or timestamp exceeding the last commit
     pub fn with_allow_out_of_range(mut self) -> Self {
         self.allow_out_of_range = true;
-        self
-    }
-
-    /// The Datafusion session state to use
-    pub fn with_session_state(mut self, session: Arc<dyn Session>) -> Self {
-        self.session = Some(session);
         self
     }
 
@@ -180,6 +183,7 @@ impl CdfLoadBuilder {
         Vec<CdcDataSpec<AddCDCFile>>,
         Vec<CdcDataSpec<Add>>,
         Vec<CdcDataSpec<Remove>>,
+        Vec<ResolvedPair>,
     )> {
         if self.starting_version.is_none() && self.starting_timestamp.is_none() {
             return Err(DeltaTableError::NoStartingVersionOrTimestamp);
@@ -190,15 +194,16 @@ impl CdfLoadBuilder {
             self.calculate_earliest_version(snapshot).await?
         };
 
-        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = vec![];
-        let mut add_files: Vec<CdcDataSpec<Add>> = vec![];
-        let mut remove_files: Vec<CdcDataSpec<Remove>> = vec![];
+        let mut change_files: Vec<CdcDataSpec<AddCDCFile>> = Vec::new();
+        let mut add_files: Vec<CdcDataSpec<Add>> = Vec::new();
+        let mut remove_files: Vec<CdcDataSpec<Remove>> = Vec::new();
+        let mut resolved_pairs: Vec<ResolvedPair> = Vec::new();
 
         // Start from 0 since if start > latest commit, the returned commit is not a valid commit
         let latest_version = match self.log_store.get_latest_version(start).await {
             Ok(latest_version) => latest_version,
             Err(DeltaTableError::InvalidVersion(_)) if self.allow_out_of_range => {
-                return Ok((change_files, add_files, remove_files));
+                return Ok((change_files, add_files, remove_files, resolved_pairs));
             }
             Err(e) => return Err(e),
         };
@@ -211,14 +216,14 @@ impl CdfLoadBuilder {
 
         if end < start {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataInvalidVersionRange { start, end })
             };
         }
         if start > latest_version {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::InvalidVersion(start))
             };
@@ -249,7 +254,7 @@ impl CdfLoadBuilder {
             && starting_timestamp.timestamp_millis() > *latest_timestamp
         {
             return if self.allow_out_of_range {
-                Ok((change_files, add_files, remove_files))
+                Ok((change_files, add_files, remove_files, resolved_pairs))
             } else {
                 Err(DeltaTableError::ChangeDataTimestampGreaterThanCommit { ending_timestamp })
             };
@@ -270,8 +275,9 @@ impl CdfLoadBuilder {
             let version_actions: Vec<Action> = get_actions(version, &snapshot_bytes?)?;
 
             let mut ts = 0;
-            let mut cdc_actions = vec![];
-
+            let mut cdc_actions = Vec::new();
+            let mut add_actions = Vec::new();
+            let mut remove_actions = Vec::new();
             if self.starting_timestamp.is_some() || self.ending_timestamp.is_some() {
                 // TODO: fallback on other actions for timestamps because CommitInfo action is optional
                 // theoretically.
@@ -301,9 +307,12 @@ impl CdfLoadBuilder {
                 }
             }
 
-            for action in &version_actions {
+            for action in version_actions {
                 match action {
-                    Action::Cdc(f) => cdc_actions.push(f.clone()),
+                    Action::CommitInfo(ci) => {
+                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0)
+                    }
+                    Action::Cdc(f) => cdc_actions.push(f),
                     Action::Metadata(md) => {
                         log::info!("Metadata: {md:?}");
                         if let Some(key) = &md.configuration().get("delta.enableChangeDataFeed") {
@@ -321,9 +330,8 @@ impl CdfLoadBuilder {
                             return Err(DeltaTableError::ChangeDataNotEnabled { version });
                         };
                     }
-                    Action::CommitInfo(ci) => {
-                        ts = ci.in_commit_timestamp.or(ci.timestamp).unwrap_or(0);
-                    }
+                    Action::Add(a) if a.data_change => add_actions.push(a),
+                    Action::Remove(r) if r.data_change => remove_actions.push(r),
                     _ => {}
                 }
             }
@@ -335,34 +343,37 @@ impl CdfLoadBuilder {
                 );
                 change_files.push(CdcDataSpec::new(version, ts, cdc_actions))
             } else {
-                let add_actions = version_actions
-                    .iter()
-                    .filter_map(|a| match a {
-                        Action::Add(a) if a.data_change => Some(a.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Add>>();
+                let mut removes_by_path: HashMap<String, Remove> = remove_actions
+                    .into_iter()
+                    .map(|r| (r.path.clone(), r))
+                    .collect();
+                let mut unpaired_adds: Vec<Add> = Vec::with_capacity(add_actions.len());
+                for add in add_actions {
+                    if let Some(remove) = removes_by_path.remove(&add.path) {
+                        resolved_pairs.push(ResolvedPair {
+                            version,
+                            timestamp: ts,
+                            rm_dv: remove.deletion_vector.clone(),
+                            add,
+                        });
+                    } else {
+                        unpaired_adds.push(add);
+                    }
+                }
+                let remove_actions: Vec<Remove> = removes_by_path.into_values().collect();
 
-                let remove_actions = version_actions
-                    .iter()
-                    .filter_map(|r| match r {
-                        Action::Remove(r) if r.data_change => Some(r.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<Remove>>();
-
-                if !add_actions.is_empty() {
+                if !unpaired_adds.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        add_actions.len(),
+                        "Located {} add cdf actions for version: {version}",
+                        unpaired_adds.len()
                     );
-                    add_files.push(CdcDataSpec::new(version, ts, add_actions));
+                    add_files.push(CdcDataSpec::new(version, ts, unpaired_adds));
                 }
 
                 if !remove_actions.is_empty() {
                     log::debug!(
-                        "Located {} cdf actions for version: {version}",
-                        remove_actions.len(),
+                        "Located {} remove cdf actions for version: {version}",
+                        remove_actions.len()
                     );
                     remove_files.push(CdcDataSpec::new(version, ts, remove_actions));
                 }
@@ -375,7 +386,7 @@ impl CdfLoadBuilder {
             remove_files = prune_specs_by_partition(remove_files, partition_pruning)?;
         }
 
-        Ok((change_files, add_files, remove_files))
+        Ok((change_files, add_files, remove_files, resolved_pairs))
     }
 
     #[inline]
@@ -433,7 +444,7 @@ impl CdfLoadBuilder {
     fn try_build_partition_pruning_predicate(
         &self,
         session: &dyn Session,
-        schema: &arrow_schema::SchemaRef,
+        schema: &SchemaRef,
         partition_columns: &[String],
         filter: Expr,
     ) -> DeltaResult<Option<PartitionPruningPredicate>> {
@@ -451,7 +462,7 @@ impl CdfLoadBuilder {
             .iter()
             .map(|name| schema.field_with_name(name).cloned())
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        let partition_schema: arrow_schema::SchemaRef = Arc::new(Schema::new(partition_fields));
+        let partition_schema: SchemaRef = Arc::new(Schema::new(partition_fields));
         let df_schema: DFSchema = partition_schema.as_ref().clone().try_into()?;
         let predicate = session.create_physical_expr(partition_predicate, &df_schema)?;
 
@@ -462,11 +473,78 @@ impl CdfLoadBuilder {
         }))
     }
 
-    /// Executes the scan
+    #[inline]
+    fn create_data_source(
+        &self,
+        source: ParquetSource,
+        groups: ScalarPartitionMap,
+    ) -> Arc<DataSourceExec> {
+        DataSourceExec::from_data_source(
+            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(source))
+                .with_file_groups(groups.into_values().map(FileGroup::from).collect())
+                .build(),
+        )
+    }
+
+    async fn create_file_groups<F: FileAction>(
+        &self,
+        schema: SchemaRef,
+        specs: Vec<CdcDataSpec<F>>,
+        table_partition_cols: &[String],
+        action_type: Option<ScalarValue>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> DeltaResult<ScalarPartitionMap> {
+        let mut file_groups: ScalarPartitionMap = HashMap::new();
+
+        for spec in specs {
+            let spec_partition_values = create_spec_partition_values(&spec, action_type.as_ref());
+
+            for action in spec.actions {
+                let partition_values = table_partition_cols
+                    .iter()
+                    .map(|part| map_action_to_scalar(&action, part, schema.clone()))
+                    .collect::<DeltaResult<Vec<ScalarValue>>>()?;
+
+                let mut new_part_values = spec_partition_values.clone();
+                new_part_values.extend(partition_values);
+                let mut part_file = PartitionedFile::new(action.path(), action.size()? as u64)
+                    .with_partition_values(new_part_values.clone());
+
+                if let Some(access_plan) = create_file_scan_plan(
+                    Arc::clone(&self.log_store.engine(None)),
+                    action,
+                    self.log_store.table_root_url(),
+                    Arc::clone(&self.parquet_metadata_cache),
+                    metrics,
+                )
+                .await?
+                {
+                    part_file = part_file.with_extension(access_plan);
+                }
+                file_groups
+                    .entry(new_part_values)
+                    .or_default()
+                    .push(part_file);
+            }
+        }
+        Ok(file_groups)
+    }
+
+    /// Executes the scan with no metric set
     pub async fn build(
         &self,
         session: &dyn Session,
         filters: Option<&Arc<dyn PhysicalExpr>>,
+    ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
+        self.build_with_metrics(session, filters, None).await
+    }
+
+    /// Executes the scan with a metric set to report
+    pub async fn build_with_metrics(
+        &self,
+        session: &dyn Session,
+        filters: Option<&Arc<dyn PhysicalExpr>>,
+        metrics: Option<ExecutionPlanMetricsSet>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
         let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
@@ -482,7 +560,7 @@ impl CdfLoadBuilder {
 
         let partition_pruning =
             self.partition_pruning_predicate(session, &schema, partition_values)?;
-        let (cdc, add, remove) = self
+        let (cdc, add, remove, pairs) = self
             .determine_files_to_read(&snapshot, partition_pruning.as_ref())
             .await?;
         session.ensure_log_store_registered(self.log_store.as_ref())?;
@@ -513,21 +591,6 @@ impl CdfLoadBuilder {
         cdc_partition_cols.extend_from_slice(&this_partition_values);
         add_remove_partition_cols.extend_from_slice(&this_partition_values);
 
-        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let cdc_file_groups = create_partition_values(schema.clone(), cdc, partition_values, None)?;
-        let add_file_groups = create_partition_values(
-            schema.clone(),
-            add,
-            partition_values,
-            Self::get_add_action_type(),
-        )?;
-        let remove_file_groups = create_partition_values(
-            schema.clone(),
-            remove,
-            partition_values,
-            Self::get_remove_action_type(),
-        )?;
-
         let cdc_partition_fields: Vec<Arc<Field>> =
             cdc_partition_cols.into_iter().map(Arc::new).collect();
         let add_remove_partition_fields: Vec<Arc<Field>> = add_remove_partition_cols
@@ -544,18 +607,61 @@ impl CdfLoadBuilder {
             Arc::clone(&add_remove_file_schema),
             add_remove_partition_fields,
         );
-
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
         };
 
         let mut cdc_source = ParquetSource::new(cdc_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
         let mut add_source = ParquetSource::new(add_table_schema)
-            .with_table_parquet_options(parquet_options.clone());
-        let mut remove_source =
-            ParquetSource::new(remove_table_schema).with_table_parquet_options(parquet_options);
+            .with_table_parquet_options(parquet_options.clone())
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+        let mut remove_source = ParquetSource::new(remove_table_schema)
+            .with_table_parquet_options(parquet_options)
+            .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
+
+        // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
+        let engine = self.log_store.engine(None);
+        let metrics = metrics.unwrap_or_default();
+
+        let cdc_file_groups = self
+            .create_file_groups(schema.clone(), cdc, partition_values, None, &metrics)
+            .await?;
+
+        let mut add_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                add,
+                partition_values,
+                Self::get_add_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        let mut remove_file_groups = self
+            .create_file_groups(
+                schema.clone(),
+                remove,
+                partition_values,
+                Self::get_remove_action_type(),
+                &metrics,
+            )
+            .await?;
+
+        extend_groups_with_pairs(
+            schema.clone(),
+            pairs,
+            partition_values,
+            &mut add_file_groups,
+            &mut remove_file_groups,
+            Arc::clone(&engine),
+            self.log_store.table_root_url(),
+            Arc::clone(&self.parquet_metadata_cache),
+            &metrics,
+        )
+        .await?;
 
         if let Some(filters) = filters {
             cdc_source = cdc_source.with_predicate(Arc::clone(filters));
@@ -563,29 +669,9 @@ impl CdfLoadBuilder {
             remove_source = remove_source.with_predicate(Arc::clone(filters));
         }
 
-        let cdc_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(cdc_source))
-                .with_file_groups(cdc_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let add_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(add_source))
-                .with_file_groups(add_file_groups.into_values().map(FileGroup::from).collect())
-                .build(),
-        );
-
-        let remove_scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(
-            FileScanConfigBuilder::new(self.log_store.object_store_url(), Arc::new(remove_source))
-                .with_file_groups(
-                    remove_file_groups
-                        .into_values()
-                        .map(FileGroup::from)
-                        .collect(),
-                )
-                .build(),
-        );
-
+        let cdc_scan = self.create_data_source(cdc_source, cdc_file_groups);
+        let add_scan = self.create_data_source(add_source, add_file_groups);
+        let remove_scan = self.create_data_source(remove_source, remove_file_groups);
         let union_scan = UnionExec::try_new(vec![cdc_scan, add_scan, remove_scan])?;
 
         // We project the union in the order of the input_schema + cdc cols at the end
@@ -1533,6 +1619,76 @@ pub(crate) mod tests {
             .filter(|action| matches!(action, &&Action::Cdc(_)))
             .collect_vec();
         assert!(cdc_actions.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_reading_cdf_with_dv() -> TestResult {
+        let ctx = SessionContext::new();
+        let table_path = Path::new("../test/tests/data/cdf-table-with-cdc-and-dvs");
+        let table_uri = Url::from_directory_path(std::fs::canonicalize(table_path)?).unwrap();
+        let table = DeltaTable::try_from_url(table_uri.clone())
+            .await?
+            .scan_cdf()
+            .with_starting_version(0)
+            .build(&ctx.state(), None)
+            .await?;
+
+        let batches = collect(table.clone(), ctx.task_ctx()).await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| id | comment            | _change_type     | _commit_version | _commit_timestamp       |",
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+                "| 0  | new                | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | after-large-delete | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 1  | initial            | insert           | 0               | 2024-12-13T06:07:53.501 |",
+                "| 1  | initial            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 1  | update1            | delete           | 10              | 2024-12-13T06:08:26.693 |",
+                "| 1  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 10 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 |                    | delete           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 11 |                    | update_postimage | 20              | 2024-12-13T06:08:49.795 |",
+                "| 11 | merge1-insert      | insert           | 18              | 2024-12-13T06:08:46.555 |",
+                "| 11 | merge1-insert      | update_preimage  | 20              | 2024-12-13T06:08:49.795 |",
+                "| 12 | merge2-insert      | insert           | 22              | 2024-12-13T06:08:57.892 |",
+                "| 2  |                    | insert           | 25              | 2024-12-13T06:09:03.075 |",
+                "| 2  | insert1            | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 2  | insert1            | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 2  | update1            | update_preimage  | 12              | 2024-12-13T06:08:30.100 |",
+                "| 2  | update2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 2  | update2            | update_postimage | 12              | 2024-12-13T06:08:30.100 |",
+                "| 3  | insert1-delete1    | delete           | 2               | 2024-12-13T06:08:07.275 |",
+                "| 3  | insert1-delete1    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 3  | insert1-delete1    | insert           | 4               | 2024-12-13T06:08:10.377 |",
+                "| 3  | insert1-delete1    | update_preimage  | 9               | 2024-12-13T06:08:23.703 |",
+                "| 3  | update1            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 3  | update1            | update_postimage | 9               | 2024-12-13T06:08:23.703 |",
+                "| 4  | insert1-delete2    | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 4  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 4  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 4  | insert1-delete2    | insert           | 7               | 2024-12-13T06:08:17.886 |",
+                "| 5  | insert1-delete2    | delete           | 5               | 2024-12-13T06:08:13.550 |",
+                "| 5  | insert1-delete2    | insert           | 1               | 2024-12-13T06:08:01.544 |",
+                "| 5  | insert2            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 5  | insert2            | insert           | 8               | 2024-12-13T06:08:20.269 |",
+                "| 6  | insert3            | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 6  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
+                "| 7  | insert3            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 7  | insert3            | insert           | 14              | 2024-12-13T06:08:32.490 |",
+                "| 8  | insert4            | delete           | 16              | 2024-12-13T06:08:37.690 |",
+                "| 8  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | insert           | 15              | 2024-12-13T06:08:34.587 |",
+                "| 9  | insert4            | update_preimage  | 18              | 2024-12-13T06:08:46.555 |",
+                "| 9  | merge1-update      | delete           | 24              | 2024-12-13T06:09:00.735 |",
+                "| 9  | merge1-update      | update_postimage | 18              | 2024-12-13T06:08:46.555 |",
+                "+----+--------------------+------------------+-----------------+-------------------------+",
+            ],
+            &batches
+        );
+
         Ok(())
     }
 }

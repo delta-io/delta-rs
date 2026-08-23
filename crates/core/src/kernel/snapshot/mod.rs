@@ -19,7 +19,7 @@ use std::sync::{Arc, LazyLock};
 
 use arrow::array::RecordBatch;
 use arrow::compute::{filter_record_batch, is_not_null};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -49,6 +49,7 @@ use crate::logstore::{LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
 
 pub use self::log_data::*;
+use self::stats_projection::FIELD_STATS;
 pub(crate) use self::stats_projection::{
     FIELD_STATS_PARSED, FileStatsMaterialization, StatsProjection,
 };
@@ -66,17 +67,21 @@ mod stream;
 pub(crate) static SCAN_ROW_ARROW_SCHEMA: LazyLock<arrow_schema::SchemaRef> =
     LazyLock::new(|| Arc::new(scan_row_schema().as_ref().try_into_arrow().unwrap()));
 
-/// Stats payload requested when streaming active add actions.
+/// Minimum stats payload requested when streaming active add actions.
+///
+/// The policy controls replay materialization and cache eligibility. Replay
+/// retains representations present in the log. Consumers validate raw stats
+/// when they parse them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AddStatsPolicy {
-    /// Skip stats during log replay.
+    /// Make stats optional during log replay.
     ///
-    /// Full table snapshots with cached parsed batches can return cached stats.
+    /// Compatible full table caches may include stats.
     None,
-    /// Preserve raw JSON stats and row count, without parsed stats.
+    /// Request available raw JSON stats and row counts without parsed stats.
     #[cfg(feature = "datafusion")]
     RawJson,
-    /// Preserve parsed stats and raw JSON stats.
+    /// Request stats that support parsed access.
     Parsed,
 }
 
@@ -129,6 +134,17 @@ impl SnapshotMaterializationMode {
 enum MaterializedFilesPolicy {
     FullTablePreserveRaw,
     FullTableWithoutStats,
+}
+
+impl MaterializedFilesPolicy {
+    fn satisfies(self, stats: AddStatsPolicy) -> bool {
+        match stats {
+            AddStatsPolicy::None => true,
+            #[cfg(feature = "datafusion")]
+            AddStatsPolicy::RawJson => self == Self::FullTablePreserveRaw,
+            AddStatsPolicy::Parsed => self == Self::FullTablePreserveRaw,
+        }
+    }
 }
 
 /// Borrowed protocol, metadata, and table configuration for metadata planners.
@@ -448,6 +464,11 @@ impl Snapshot {
             .filter(|materialized_files| materialized_files.is_cache_for(self))
     }
 
+    fn materialized_files_for(&self, stats: AddStatsPolicy) -> Option<&Arc<MaterializedFiles>> {
+        self.materialized_files()
+            .filter(|materialized_files| materialized_files.policy.satisfies(stats))
+    }
+
     #[cfg(test)]
     pub(crate) fn has_materialized_files_for_test(&self) -> bool {
         self.materialized_files().is_some()
@@ -465,10 +486,10 @@ impl Snapshot {
             .await
     }
 
-    pub(crate) fn try_log_data(&self) -> DeltaResult<LogDataHandler<'_>> {
-        let materialized_files = self
-            .materialized_files()
-            .ok_or_else(|| DeltaTableError::NotInitializedWithFiles("log_data".to_string()))?;
+    pub(crate) fn try_materialized_log_data(&self) -> DeltaResult<LogDataHandler<'_>> {
+        let materialized_files = self.materialized_files().ok_or_else(|| {
+            DeltaTableError::NotInitializedWithFiles("try_materialized_log_data".to_string())
+        })?;
         Ok(LogDataHandler::new(
             &materialized_files.batches,
             self.table_configuration(),
@@ -515,32 +536,33 @@ impl Snapshot {
 
     /// Build active add input for conflict checking.
     ///
-    /// Materialized snapshots borrow existing log data. Lazy snapshots replay
-    /// active adds with parsed stats and store those batches in the returned
-    /// read set while leaving this snapshot unmaterialized.
+    /// Snapshots borrow materialized log data that supports parsed stats. A cache
+    /// miss replays active adds with parsed stats and stores the batches in the
+    /// read set. Replay leaves the snapshot cache unchanged.
     pub(crate) async fn conflict_read_set(
         &self,
         log_store: &dyn LogStore,
     ) -> DeltaResult<ConflictReadSet<'_>> {
-        match self.try_log_data() {
-            Ok(log_data) => Ok(ConflictReadSet::from_log_data(log_data)),
-            Err(DeltaTableError::NotInitializedWithFiles(_)) => {
-                let batches = self
-                    .active_add_batches(
-                        log_store,
-                        ActiveAddOptions {
-                            predicate: None,
-                            stats: AddStatsPolicy::Parsed,
-                        },
-                    )
-                    .await?;
-                Ok(ConflictReadSet::from_owned_batches(
-                    batches,
-                    self.table_configuration(),
-                ))
-            }
-            Err(err) => Err(err),
+        if let Some(materialized_files) = self.materialized_files_for(AddStatsPolicy::Parsed) {
+            return Ok(ConflictReadSet::from_log_data(LogDataHandler::new(
+                &materialized_files.batches,
+                self.table_configuration(),
+            )));
         }
+
+        let batches = self
+            .active_add_batches(
+                log_store,
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::Parsed,
+                },
+            )
+            .await?;
+        Ok(ConflictReadSet::from_owned_batches(
+            batches,
+            self.table_configuration(),
+        ))
     }
 
     /// Get the table root of the snapshot
@@ -620,7 +642,11 @@ impl Snapshot {
     }
 
     fn cached_parsed_batches(&self) -> Option<SendableRBStream> {
-        let materialized = self.materialized_files()?;
+        self.cached_parsed_batches_for(AddStatsPolicy::None)
+    }
+
+    fn cached_parsed_batches_for(&self, stats: AddStatsPolicy) -> Option<SendableRBStream> {
+        let materialized = self.materialized_files_for(stats)?;
         if materialized.existing_predicate.is_some() {
             return None;
         }
@@ -672,7 +698,7 @@ impl Snapshot {
         stats_mode: FileStatsMode,
         skip_stats: bool,
     ) -> SendableRBStream {
-        self.warn_if_skip_stats_with_predicate(&predicate);
+        self.warn_if_skip_stats_with_predicate(&predicate, skip_stats);
         let scan = match self.scan_for_files(predicate, skip_stats, stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
@@ -728,8 +754,12 @@ impl Snapshot {
         Ok(FileStatsMaterialization::compatibility(stats_projection))
     }
 
-    fn warn_if_skip_stats_with_predicate(&self, predicate: &Option<PredicateRef>) {
-        if self.config.skip_stats && predicate.is_some() {
+    fn warn_if_skip_stats_with_predicate(
+        &self,
+        predicate: &Option<PredicateRef>,
+        skip_stats: bool,
+    ) {
+        if self.config.skip_stats && skip_stats && predicate.is_some() {
             tracing::warn!(
                 "`DeltaTable` was opened with `skip_stats=true`, but this query has \
                  a predicate. Every file in the table will be scanned. To avoid \
@@ -745,9 +775,9 @@ impl Snapshot {
         predicate: Option<PredicateRef>,
         stats_policy: AddStatsPolicy,
     ) -> SendableRBStream {
-        let skip_stats = matches!(stats_policy, AddStatsPolicy::None) || self.config.skip_stats;
+        let skip_stats = matches!(stats_policy, AddStatsPolicy::None);
         if predicate.is_none()
-            && let Some(cached) = self.cached_parsed_batches()
+            && let Some(cached) = self.cached_parsed_batches_for(stats_policy)
         {
             return cached;
         }
@@ -760,7 +790,7 @@ impl Snapshot {
         };
 
         match self
-            .materialized_files()
+            .materialized_files_for(stats_policy)
             .and_then(|materialized_files| materialized_files.full_table_seed())
         {
             Some(materialized_seed) => {
@@ -854,7 +884,7 @@ impl Snapshot {
         existing_predicate: Option<PredicateRef>,
         options: FileMaterializationOptions,
     ) -> SendableRBStream {
-        self.warn_if_skip_stats_with_predicate(&predicate);
+        self.warn_if_skip_stats_with_predicate(&predicate, options.skip_stats);
         let scan = match self.scan_for_files(predicate, options.skip_stats, options.stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
@@ -1225,6 +1255,19 @@ impl MaterializedFiles {
     }
 
     fn full_table_seed(&self) -> Option<MaterializedFilesSeed> {
+        if self.policy == MaterializedFilesPolicy::FullTableWithoutStats
+            && !self.batches.iter().all(|batch| {
+                batch
+                    .schema_ref()
+                    .field_with_name(FIELD_STATS)
+                    .is_ok_and(|field| {
+                        field.data_type() == &ArrowDataType::Utf8 && field.is_nullable()
+                    })
+            })
+        {
+            return None;
+        }
+
         match self.scope {
             MaterializedFilesScope::FullTable => Some(MaterializedFilesSeed {
                 version: self.identity.version,
@@ -1421,7 +1464,7 @@ impl EagerSnapshot {
     /// Try to get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of
     /// the log.
     pub fn try_log_data(&self) -> DeltaResult<LogDataHandler<'_>> {
-        match self.snapshot.try_log_data() {
+        match self.snapshot.try_materialized_log_data() {
             Ok(log_data) => Ok(log_data),
             Err(DeltaTableError::NotInitializedWithFiles(_)) => Ok(LogDataHandler::new(
                 &[],
@@ -1707,6 +1750,59 @@ mod tests {
         Ok((table_dir, table))
     }
 
+    async fn table_with_initial_stats_add() -> DeltaResult<(TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let mut add = make_test_add("part-00000.snappy.parquet", &[], 0);
+        add.size = 1;
+        add.stats = Some(
+            r#"{"numRecords":1,"minValues":{"id":1},"maxValues":{"id":1},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
+        let table = CreateBuilder::new()
+            .with_location(table_dir.path().to_string_lossy())
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .with_actions([Action::Add(add)])
+            .await?;
+
+        assert_eq!(table.version(), Some(0));
+        Ok((table_dir, table))
+    }
+
+    fn assert_canonical_no_stats_cache(materialized_files: &MaterializedFiles) {
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTableWithoutStats
+        );
+        for batch in materialized_files.batches.iter() {
+            let field = batch
+                .schema_ref()
+                .field_with_name("stats")
+                .expect("cache without statistics must retain the canonical stats field");
+            assert_eq!(field.data_type(), &ArrowDataType::Utf8);
+            assert!(field.is_nullable());
+            let stats = batch
+                .column_by_name("stats")
+                .expect("cache without statistics must retain the canonical stats column");
+            assert_eq!(stats.null_count(), batch.num_rows());
+            assert!(batch.column_by_name("stats_parsed").is_none());
+        }
+    }
+
+    fn without_stats_field(batch: &RecordBatch) -> DeltaResult<RecordBatch> {
+        let projection = batch
+            .schema_ref()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| (field.name() != "stats").then_some(idx))
+            .collect::<Vec<_>>();
+        Ok(batch.project(&projection)?)
+    }
+
     fn field_count(batch: &RecordBatch, name: &str) -> usize {
         batch
             .schema()
@@ -1944,12 +2040,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_snapshot_try_log_data_requires_materialized_files() -> TestResult {
+    async fn test_snapshot_try_materialized_log_data_requires_materialized_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
 
         assert!(matches!(
-            snapshot.try_log_data(),
+            snapshot.try_materialized_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
 
@@ -1991,6 +2087,115 @@ mod tests {
         assert_eq!(files.len(), 12);
         assert!(files.iter().all(|file| file.stats().is_none()));
         assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn snapshot_capability_explicit_stats_override_skip_stats() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(
+            log_store.as_ref(),
+            DeltaTableConfig {
+                require_files: false,
+                skip_stats: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+        let predicate: PredicateRef = Arc::new(Expression::column(["value"]).eq(Scalar::Long(1)));
+
+        for policy in [AddStatsPolicy::RawJson, AddStatsPolicy::Parsed] {
+            let files: Vec<_> = snapshot
+                .active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: Some(predicate.clone()),
+                        stats: policy,
+                    },
+                )
+                .try_collect()
+                .await?;
+
+            assert_eq!(files.len(), 1);
+            assert!(files[0].stats().is_some());
+            assert_eq!(files[0].num_records(), Some(3));
+            if matches!(policy, AddStatsPolicy::Parsed) {
+                assert!(files[0].min_values().is_some());
+                assert!(files[0].max_values().is_some());
+                assert!(files[0].null_counts().is_some());
+            }
+        }
+
+        assert!(!snapshot.has_materialized_files_for_test());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_required_stats_replay_when_cache_lacks_stats() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let snapshot = Arc::new(
+            Snapshot::try_new(
+                log_store.as_ref(),
+                DeltaTableConfig {
+                    skip_stats: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await?,
+        )
+        .ensure_materialized_files(log_store.as_ref())
+        .await?;
+        let original_cache = snapshot
+            .materialized_files()
+            .cloned()
+            .expect("expected a cache without stats");
+
+        #[cfg(feature = "datafusion")]
+        let required_policies = [AddStatsPolicy::RawJson, AddStatsPolicy::Parsed];
+        #[cfg(not(feature = "datafusion"))]
+        let required_policies = [AddStatsPolicy::Parsed];
+
+        for policy in required_policies {
+            let files: Vec<_> = snapshot
+                .active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: None,
+                        stats: policy,
+                    },
+                )
+                .try_collect()
+                .await?;
+
+            assert_eq!(files.len(), 1);
+            assert!(files[0].stats().is_some());
+            assert_eq!(files[0].num_records(), Some(3));
+            assert_eq!(
+                files[0].min_values().is_some(),
+                matches!(policy, AddStatsPolicy::Parsed)
+            );
+        }
+
+        let current_cache = snapshot
+            .materialized_files()
+            .expect("replay removed the existing cache");
+        assert!(Arc::ptr_eq(&original_cache, current_cache));
+        assert_eq!(
+            current_cache.policy,
+            MaterializedFilesPolicy::FullTableWithoutStats
+        );
+        assert!(
+            snapshot
+                .try_materialized_log_data()?
+                .iter()
+                .all(|file| file.stats().is_none())
+        );
 
         Ok(())
     }
@@ -2093,7 +2298,7 @@ mod tests {
             expected
         );
         assert!(matches!(
-            cached.try_log_data(),
+            cached.try_materialized_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
         assert!(!cached.has_materialized_files_for_test());
@@ -2172,6 +2377,61 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn snapshot_capability_conflict_read_set_replays_when_cache_lacks_stats() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let log_store = table.log_store();
+        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let materialized = Arc::new(
+            Snapshot::try_new(
+                log_store.as_ref(),
+                DeltaTableConfig {
+                    skip_stats: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await?,
+        )
+        .ensure_materialized_files(log_store.as_ref())
+        .await?;
+        let original_cache = materialized
+            .materialized_files()
+            .cloned()
+            .expect("expected a cache without stats");
+
+        let lazy_read_set = lazy.conflict_read_set(log_store.as_ref()).await?;
+        let materialized_read_set = materialized.conflict_read_set(log_store.as_ref()).await?;
+        let lazy_log_data = lazy_read_set.log_data();
+        let materialized_log_data = materialized_read_set.log_data();
+        let lazy_files = lazy_log_data.iter().collect_vec();
+        let materialized_files = materialized_log_data.iter().collect_vec();
+
+        assert_eq!(lazy_files.len(), 1);
+        assert_eq!(materialized_files.len(), 1);
+        assert_eq!(lazy_files[0].path_raw(), materialized_files[0].path_raw());
+        assert_eq!(lazy_files[0].stats(), materialized_files[0].stats());
+        assert_eq!(
+            lazy_files[0].min_values(),
+            materialized_files[0].min_values()
+        );
+        assert!(materialized_files[0].min_values().is_some());
+        assert!(Arc::ptr_eq(
+            &original_cache,
+            materialized
+                .materialized_files()
+                .expect("conflict replay removed the cache")
+        ));
+        assert!(
+            materialized
+                .try_materialized_log_data()?
+                .iter()
+                .all(|file| file.stats().is_none())
+        );
+
+        Ok(())
+    }
+
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn snapshot_capability_active_adds_raw_json_preserves_row_counts_and_raw_stats()
@@ -2201,14 +2461,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_capability_active_adds_paths_only_can_use_materialized_stats_cache()
+    async fn snapshot_capability_active_adds_reuses_compatible_materialized_stats_cache()
     -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
-        let log_store = table.log_store();
+        let (log_store, mut operations) = recording_log_store(table.log_store());
         let snapshot = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let original_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .cloned()
+            .expect("expected materialized state with stats");
+        drain_recorded_ops(&mut operations).await;
+
+        #[cfg(feature = "datafusion")]
+        let policies = [
+            AddStatsPolicy::None,
+            AddStatsPolicy::RawJson,
+            AddStatsPolicy::Parsed,
+        ];
+        #[cfg(not(feature = "datafusion"))]
+        let policies = [AddStatsPolicy::None, AddStatsPolicy::Parsed];
+
+        for policy in policies {
+            let files: Vec<_> = snapshot
+                .snapshot()
+                .active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: None,
+                        stats: policy,
+                    },
+                )
+                .try_collect()
+                .await?;
+
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].num_records(), Some(3));
+            assert!(drain_recorded_ops(&mut operations).await.is_empty());
+            assert!(Arc::ptr_eq(
+                &original_cache,
+                snapshot
+                    .snapshot()
+                    .materialized_files()
+                    .expect("compatible read removed the cache")
+            ));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_none_reuses_no_stats_cache() -> TestResult {
+        let (_table_dir, table) = selective_stats_table().await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let snapshot = Arc::new(
+            Snapshot::try_new(
+                log_store.as_ref(),
+                DeltaTableConfig {
+                    skip_stats: true,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await?,
+        )
+        .ensure_materialized_files(log_store.as_ref())
+        .await?;
+        let original_cache = snapshot
+            .materialized_files()
+            .cloned()
+            .expect("expected materialized state without stats");
+        assert_eq!(
+            original_cache.policy,
+            MaterializedFilesPolicy::FullTableWithoutStats
+        );
+        drain_recorded_ops(&mut operations).await;
 
         let files: Vec<_> = snapshot
-            .snapshot()
             .active_adds(
                 log_store.as_ref(),
                 ActiveAddOptions {
@@ -2219,10 +2548,18 @@ mod tests {
             .try_collect()
             .await?;
 
-        assert_eq!(files.len(), 1);
-        assert_eq!(files[0].num_records(), Some(3));
-        assert!(files[0].min_values().is_some());
-        assert!(snapshot.snapshot().has_materialized_files_for_test());
+        assert_eq!(
+            files.iter().map(|file| file.path_raw()).collect_vec(),
+            ["part-00000.snappy.parquet"]
+        );
+        assert!(files.iter().all(|file| file.stats().is_none()));
+        assert!(drain_recorded_ops(&mut operations).await.is_empty());
+        assert!(Arc::ptr_eq(
+            &original_cache,
+            snapshot
+                .materialized_files()
+                .expect("compatible read removed the cache")
+        ));
 
         Ok(())
     }
@@ -2251,6 +2588,120 @@ mod tests {
         assert!(files[0].null_counts().is_some());
         assert!(!snapshot.has_materialized_files_for_test());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_capability_selected_malformed_stats_retains_consumer_error() -> TestResult {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_url = url::Url::from_directory_path(table_dir.path()).unwrap();
+        let mut table = DeltaTable::try_from_url(table_url)
+            .await?
+            .create()
+            .with_columns([StructField::new(
+                "value",
+                DataType::Primitive(PrimitiveType::Long),
+                true,
+            )])
+            .with_configuration_property(TableProperty::DataSkippingNumIndexedCols, Some("1"))
+            .await?;
+        append_test_add_with_stats(
+            &mut table,
+            "selected-malformed.snappy.parquet",
+            "{not valid stats json",
+        )
+        .await?;
+
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let files: Vec<_> = snapshot
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: Some(Arc::new(delta_kernel::Predicate::literal(true))),
+                    stats: AddStatsPolicy::Parsed,
+                },
+            )
+            .try_collect()
+            .await?;
+
+        assert_eq!(
+            files.iter().map(|file| file.path_raw()).collect_vec(),
+            ["selected-malformed.snappy.parquet"]
+        );
+        let error = files[0]
+            .to_add()
+            .get_stats()
+            .expect_err("consumer parsed selected malformed stats");
+        let error = DeltaTableError::from(error);
+
+        assert!(
+            matches!(error, DeltaTableError::InvalidStatsJson { .. }),
+            "expected InvalidStatsJson, got {error:?}"
+        );
+        assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn snapshot_capability_predicate_prunes_malformed_stats_before_parsing() -> TestResult {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_url = url::Url::from_directory_path(table_dir.path()).unwrap();
+        let mut table = DeltaTable::try_from_url(table_url)
+            .await?
+            .create()
+            .with_columns([StructField::new(
+                "value",
+                DataType::Primitive(PrimitiveType::Long),
+                true,
+            )])
+            .with_configuration_property(TableProperty::DataSkippingNumIndexedCols, Some("1"))
+            .await?;
+
+        append_test_add_with_stats(
+            &mut table,
+            "excluded.snappy.parquet",
+            r#"{"numRecords":1,"minValues":{"value":7},"maxValues":{"value":7},"nullCount":{"value":"0"}}"#,
+        )
+        .await?;
+        append_test_add_with_stats(
+            &mut table,
+            "selected.snappy.parquet",
+            r#"{"numRecords":1,"nullCount":{"value":1}}"#,
+        )
+        .await?;
+
+        let log_store = table.log_store();
+        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let materialized = Arc::new(lazy.clone())
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
+        let predicate: PredicateRef = Arc::new(Expression::column(["value"]).is_null());
+
+        for snapshot in [&lazy, materialized.as_ref()] {
+            for policy in [AddStatsPolicy::RawJson, AddStatsPolicy::Parsed] {
+                let files: Vec<_> = snapshot
+                    .active_adds(
+                        log_store.as_ref(),
+                        ActiveAddOptions {
+                            predicate: Some(predicate.clone()),
+                            stats: policy,
+                        },
+                    )
+                    .try_collect()
+                    .await?;
+
+                assert_eq!(
+                    files.iter().map(|file| file.path_raw()).collect_vec(),
+                    ["selected.snappy.parquet"]
+                );
+            }
+        }
+
+        assert!(!lazy.has_materialized_files_for_test());
+        assert!(materialized.has_materialized_files_for_test());
         Ok(())
     }
 
@@ -2306,8 +2757,8 @@ mod tests {
 
         assert!(actual.materialized_files().is_some());
         assert_eq!(
-            actual.try_log_data()?.num_files(),
-            snapshot.try_log_data()?.num_files()
+            actual.try_materialized_log_data()?.num_files(),
+            snapshot.try_materialized_log_data()?.num_files()
         );
         let materialized_files = actual
             .materialized_files()
@@ -2338,13 +2789,13 @@ mod tests {
                 .await?;
 
         assert!(snapshot.materialized_files().is_some());
-        assert_eq!(snapshot.try_log_data()?.num_files(), 0);
+        assert_eq!(snapshot.try_materialized_log_data()?.num_files(), 0);
 
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let actual: Snapshot = serde_json::from_slice(&bytes)?;
 
         assert!(actual.materialized_files().is_some());
-        assert_eq!(actual.try_log_data()?.num_files(), 0);
+        assert_eq!(actual.try_materialized_log_data()?.num_files(), 0);
 
         Ok(())
     }
@@ -2432,7 +2883,7 @@ mod tests {
         );
         assert!(
             actual
-                .try_log_data()?
+                .try_materialized_log_data()?
                 .iter()
                 .all(|file| file.stats().is_none())
         );
@@ -2458,7 +2909,7 @@ mod tests {
 
         assert!(actual.materialized_files().is_none());
         assert!(matches!(
-            actual.try_log_data(),
+            actual.try_materialized_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
         assert_eq!(
@@ -2503,7 +2954,7 @@ mod tests {
 
         assert!(actual.materialized_files().is_none());
         assert!(matches!(
-            actual.try_log_data(),
+            actual.try_materialized_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
         assert_eq!(
@@ -2554,7 +3005,7 @@ mod tests {
             .materialized_files()
             .expect("trusted pre-identity cache was not restored");
         let mut actual_paths = actual
-            .try_log_data()?
+            .try_materialized_log_data()?
             .iter()
             .map(|file| file.path_raw().to_string())
             .collect_vec();
@@ -2688,7 +3139,7 @@ mod tests {
 
         assert!(actual.materialized_files().is_none());
         assert!(matches!(
-            actual.try_log_data(),
+            actual.try_materialized_log_data(),
             Err(DeltaTableError::NotInitializedWithFiles(_))
         ));
         assert_eq!(
@@ -3100,6 +3551,160 @@ mod tests {
             seed.into_iter().collect::<Vec<_>>(),
             materialized_files.batches.as_ref()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skip_stats_cache_seeds_update_replay() -> TestResult {
+        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
+        let log_store = table.log_store();
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(0)).await?;
+
+        let initial_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("eager snapshot must contain materialized files");
+        assert_canonical_no_stats_cache(initial_cache);
+        assert!(
+            initial_cache.full_table_seed().is_some(),
+            "new cache without statistics must support replay"
+        );
+
+        append_test_add_with_stats(
+            &mut table,
+            "part-00001.snappy.parquet",
+            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
+        )
+        .await?;
+        snapshot.update(log_store.as_ref(), Some(1)).await?;
+
+        assert_eq!(snapshot.version(), 1);
+        let mut files: Vec<_> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_collect()
+            .await?;
+        files.sort_by_key(|file| file.path().into_owned());
+        assert_eq!(
+            files.iter().map(|file| file.path()).collect_vec(),
+            ["part-00000.snappy.parquet", "part-00001.snappy.parquet"]
+        );
+        assert!(files.iter().all(|file| file.stats().is_none()));
+
+        let updated_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("updated eager snapshot must retain materialized files");
+        assert_canonical_no_stats_cache(updated_cache);
+        assert!(
+            updated_cache.full_table_seed().is_some(),
+            "updated cache without statistics must support replay"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_skip_stats_cache_reads_current_files_and_rebuilds_for_update() -> TestResult {
+        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config.clone(), Some(0)).await?;
+        let current_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("eager snapshot must contain materialized files");
+        let mut legacy_cache = current_cache.as_ref().clone();
+        legacy_cache.batches = current_cache
+            .batches
+            .iter()
+            .map(without_stats_field)
+            .collect::<DeltaResult<Vec<_>>>()?
+            .into();
+        assert!(
+            legacy_cache
+                .batches
+                .iter()
+                .any(|batch| batch.num_rows() > 0)
+        );
+        assert!(
+            legacy_cache.full_table_seed().is_none(),
+            "cache without a stats field cannot seed replay"
+        );
+
+        let zero_row_cache = MaterializedFiles {
+            batches: vec![legacy_cache.batches[0].slice(0, 0)].into(),
+            ..legacy_cache.clone()
+        };
+        assert!(
+            zero_row_cache.full_table_seed().is_none(),
+            "empty batch without a stats field cannot seed replay"
+        );
+
+        let empty_table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .await?;
+        let empty_snapshot = Snapshot::try_new(
+            empty_table.log_store().as_ref(),
+            config,
+            empty_table.version(),
+        )
+        .await?;
+        let zero_batch_cache = MaterializedFiles::full(&empty_snapshot, vec![]);
+        assert!(
+            zero_batch_cache.full_table_seed().is_some(),
+            "cache with no batches can seed replay"
+        );
+
+        let cached_snapshot = Arc::new(
+            snapshot
+                .snapshot()
+                .with_materialized_files(Some(Arc::new(legacy_cache))),
+        );
+        let mut legacy_snapshot = EagerSnapshot {
+            snapshot: cached_snapshot,
+        };
+        drain_recorded_ops(&mut operations).await;
+
+        let files: Vec<_> = legacy_snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_collect()
+            .await?;
+        let read_ops = drain_recorded_ops(&mut operations).await;
+        assert_eq!(files.len(), 1);
+        assert!(files.iter().all(|file| file.stats().is_none()));
+        assert!(
+            read_ops.iter().all(|op| !op.is_log_replay_read()),
+            "current version read must use the legacy cache; operations: {read_ops:?}"
+        );
+
+        append_test_add_with_stats(
+            &mut table,
+            "part-00001.snappy.parquet",
+            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
+        )
+        .await?;
+        legacy_snapshot.update(log_store.as_ref(), Some(1)).await?;
+
+        assert_eq!(legacy_snapshot.version(), 1);
+        let replacement_cache = legacy_snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("full replay must replace the legacy cache");
+        assert_canonical_no_stats_cache(replacement_cache);
+        assert!(replacement_cache.full_table_seed().is_some());
 
         Ok(())
     }
