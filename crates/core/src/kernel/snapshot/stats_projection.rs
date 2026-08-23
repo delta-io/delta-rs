@@ -57,16 +57,20 @@ pub(crate) enum StatsSourcePolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RawStatsPolicy {
-    /// Preserve the raw JSON `stats` field in emitted scan rows.
+    /// Keep the raw JSON `stats` payload in scan rows.
     Preserve,
-    /// Omit the raw JSON `stats` field from emitted scan rows.
+    /// Drop the raw JSON `stats` payload from scan rows.
+    ///
+    /// A cache without statistics needs the canonical `stats` slot for replay.
+    /// Materialization fills that slot with null values.
     Omit,
 }
 
 /// Controls file statistics materialization in scan metadata output.
 ///
-/// The policy stores the parsed stats fields to emit, the source for parsed stats,
-/// and whether raw JSON stats remain in the output.
+/// The policy selects parsed statistics and their source. It records whether rows keep the raw
+/// JSON payload. [`FileStatsMaterialization::retains_stats_field`] reports whether emitted batches
+/// keep the canonical `stats` slot.
 ///
 /// Query paths can emit narrow parsed stats and omit raw JSON. Compatibility paths can keep
 /// raw JSON stats for callers that convert file views back to Add actions.
@@ -119,6 +123,10 @@ impl FileStatsMaterialization {
 
     pub(crate) fn preserves_raw_stats(&self) -> bool {
         self.raw_stats_policy == RawStatsPolicy::Preserve
+    }
+
+    pub(crate) fn retains_stats_field(&self) -> bool {
+        self.preserves_raw_stats() || self.stats_source_policy == StatsSourcePolicy::None
     }
 }
 
