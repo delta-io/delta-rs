@@ -832,6 +832,7 @@ class DeltaTable:
         streamed_exec: bool = True,
         max_spill_size: int | None = None,
         max_temp_directory_size: int | None = None,
+        target_partitions: int | None = None,
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
@@ -858,6 +859,8 @@ class DeltaTable:
                 If not specified, uses DataFusion's default.
                 Set this to avoid OOM when merging into large tables with a source table which touches a large number of files.
             max_temp_directory_size: The maximum disk space for temporary spill files. If not specified, uses DataFusion's default.
+            target_partitions: The number of partitions DataFusion uses to execute the merge. If not specified, uses DataFusion's default (number of CPU cores).
+                Set this to 1 to disable partitioning, which avoids a RepartitionExec deadlock when combined with ``max_spill_size``.
             commit_properties: properties for the commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
@@ -888,6 +891,7 @@ class DeltaTable:
             streamed_exec=streamed_exec,
             max_spill_size=max_spill_size,
             max_temp_directory_size=max_temp_directory_size,
+            target_partitions=target_partitions,
             writer_properties=writer_properties,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
@@ -2308,6 +2312,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             max_temp_directory_size,
+            None,
             min_commit_interval,
             writer_properties,
             commit_properties,
@@ -2391,6 +2396,7 @@ class TableOptimizer:
             max_concurrent_tasks,
             max_spill_size,
             max_temp_directory_size,
+            None,
             min_commit_interval,
             writer_properties,
             commit_properties,

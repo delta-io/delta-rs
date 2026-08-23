@@ -128,6 +128,7 @@ class RawDeltaTable:
         max_concurrent_tasks: int | None,
         max_spill_size: int | None,
         max_temp_directory_size: int | None,
+        target_partitions: int | None,
         min_commit_interval: int | None,
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
@@ -141,6 +142,7 @@ class RawDeltaTable:
         max_concurrent_tasks: int | None,
         max_spill_size: int | None,
         max_temp_directory_size: int | None,
+        target_partitions: int | None,
         min_commit_interval: int | None,
         writer_properties: WriterProperties | None,
         commit_properties: CommitProperties | None,
@@ -252,6 +254,7 @@ class RawDeltaTable:
         streamed_exec: bool,
         max_spill_size: int | None,
         max_temp_directory_size: int | None,
+        target_partitions: int | None,
     ) -> PyMergeBuilder: ...
     def merge_execute(self, merge_builder: PyMergeBuilder) -> str: ...
     def get_active_partitions(
