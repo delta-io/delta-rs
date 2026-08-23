@@ -24,7 +24,8 @@ use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions,
 };
 use delta_kernel::schema::{
     DataType as KernelDataType, SchemaRef as KernelSchemaRef, StructField, StructType,
@@ -182,9 +183,10 @@ impl ExecutionPlan for ColumnMappingExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Internal(format!(
@@ -192,11 +194,31 @@ impl ExecutionPlan for ColumnMappingExec {
                 children.len()
             )));
         }
+        let input = children.remove(0);
+        let properties = match options.children_properties {
+            ChildrenPropertiesMode::Keep => Arc::clone(&self.properties),
+            ChildrenPropertiesMode::Recompute => Arc::new(PlanProperties::new(
+                EquivalenceProperties::new(Arc::clone(&self.physical_schema)),
+                input.properties().partitioning.clone(),
+                input.properties().emission_type,
+                input.properties().boundedness,
+            )),
+        };
         Ok(Arc::new(Self {
-            input: children.remove(0),
-            physical_schema: self.physical_schema.clone(),
-            properties: self.properties.clone(),
+            input,
+            physical_schema: Arc::clone(&self.physical_schema),
+            properties,
         }))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -236,12 +258,10 @@ impl ExecutionPlan for ColumnMappingExec {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.input.apply_expressions(expr_rewriter)?;
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -476,6 +496,7 @@ mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, ListArray, StringArray, StringViewArray, StructArray};
     use arrow_buffer::OffsetBuffer;
+    use datafusion::physical_plan::empty::EmptyExec;
     use delta_kernel::schema::ArrayType;
 
     use super::*;
@@ -680,6 +701,48 @@ mod tests {
         assert_eq!(out.schema().field(0).name(), "col-id");
         assert_eq!(out.schema().field(1).name(), "_change_type");
         assert_eq!(field_id(out.schema().field(1)), None);
+    }
+
+    #[test]
+    fn replace_children_preserves_property_cache_and_schema() {
+        let logical_schema = logical_kernel_schema();
+        let logical_arrow_schema = logical_batch().schema();
+        let one_partition = EmptyExec::new(Arc::clone(&logical_arrow_schema));
+        let same_properties_input: Arc<dyn ExecutionPlan> = Arc::new(one_partition.clone());
+        let one_partition_input: Arc<dyn ExecutionPlan> = Arc::new(one_partition);
+        let two_partition_input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(logical_arrow_schema).with_partitions(2));
+        assert!(Arc::ptr_eq(
+            one_partition_input.properties(),
+            same_properties_input.properties()
+        ));
+
+        let mapped = ColumnMappingExec::try_new(
+            one_partition_input,
+            &logical_schema,
+            ColumnMappingMode::Name,
+        )
+        .expect("ColumnMappingExec::try_new failed");
+        let original_properties = Arc::clone(mapped.properties());
+        let original_schema = mapped.schema();
+
+        let keep = Arc::clone(&mapped)
+            .replace_children(
+                vec![same_properties_input],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+            )
+            .expect("Keep mode rejected matching child properties");
+        assert!(Arc::ptr_eq(&original_properties, keep.properties()));
+
+        let recompute = mapped
+            .replace_children(
+                vec![two_partition_input],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )
+            .expect("Recompute mode rejected changed child properties");
+        assert!(!Arc::ptr_eq(&original_properties, recompute.properties()));
+        assert_eq!(recompute.properties().partitioning.partition_count(), 2);
+        assert_eq!(recompute.schema(), original_schema);
     }
 
     #[test]

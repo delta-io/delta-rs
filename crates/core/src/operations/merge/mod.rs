@@ -1963,6 +1963,7 @@ mod tests {
     use arrow_schema::Field;
     use dashmap::DashSet;
     use datafusion::assert_batches_sorted_eq;
+    use datafusion::common::tree_node::TreeNodeRecursion;
     use datafusion::common::{Column, ScalarValue, TableReference, ToDFSchema};
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::Expr;
@@ -1971,7 +1972,10 @@ mod tests {
     use datafusion::logical_expr::expr::Placeholder;
     use datafusion::logical_expr::lit;
     use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder};
+    use datafusion::physical_expr::PhysicalExpr;
+    use datafusion::physical_expr::expressions::Column as PhysicalColumn;
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
     use datafusion::physical_plan::metrics::MetricBuilder;
     use datafusion::physical_plan::{collect, displayable};
@@ -1991,8 +1995,8 @@ mod tests {
         DataFusionMixins, DeltaScanNext, PATH_COLUMN, resolve_file_column_name,
     };
 
-    use super::barrier::MergeBarrier;
-    use super::validation::MergeValidation;
+    use super::barrier::{MergeBarrier, MergeBarrierExec};
+    use super::validation::{MergeValidation, MergeValidationExec};
     use super::{
         DELETE_COLUMN, MatchParticipationClass, MergeMetrics, OPERATION_COLUMN, OperationType,
         SOURCE_COLUMN, TARGET_COLUMN, TARGET_COPY_COLUMN, TARGET_DELETE_COLUMN,
@@ -2012,6 +2016,44 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    #[test]
+    fn merge_execs_visit_owned_distribution_expression() {
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(Arc::new(ArrowSchema::new(vec![
+                Field::new("path", ArrowDataType::Utf8, false),
+            ]))));
+        let expression: Arc<dyn PhysicalExpr> = Arc::new(PhysicalColumn::new("path", 0));
+        let plans: [Arc<dyn ExecutionPlan>; 2] = [
+            Arc::new(MergeBarrierExec::new(
+                Arc::clone(&input),
+                Arc::new("path".to_string()),
+                Arc::clone(&expression),
+            )),
+            Arc::new(MergeValidationExec::new(
+                input,
+                Arc::clone(&expression),
+                Arc::new("path".to_string()),
+                Arc::new("row_ordinal".to_string()),
+            )),
+        ];
+
+        for plan in plans {
+            let mut visits = 0;
+            plan.apply_expressions(&mut |visited| {
+                assert!(Arc::ptr_eq(visited, &expression));
+                visits += 1;
+                Ok(TreeNodeRecursion::Continue)
+            })
+            .expect("apply_expressions failed");
+            assert_eq!(
+                visits,
+                1,
+                "{} must expose its owned expression",
+                plan.name()
+            );
+        }
     }
 
     pub(crate) async fn setup_table_with_non_null_column(
@@ -2677,9 +2719,9 @@ mod tests {
         );
     }
 
-    fn retained_row_index_delta_scan_child<'a>(
-        plan: &'a Arc<dyn ExecutionPlan>,
-    ) -> &'a Arc<dyn ExecutionPlan> {
+    fn retained_row_index_delta_scan_child(
+        plan: &Arc<dyn ExecutionPlan>,
+    ) -> &Arc<dyn ExecutionPlan> {
         let mut scan_children = Vec::new();
         collect_retained_row_index_scan_inputs(plan, &mut scan_children);
 

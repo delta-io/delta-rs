@@ -544,15 +544,17 @@ impl TableProviderFactory for DeltaTableFactory {
         ctx: &dyn Session,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let location = cmd
-            .locations
-            .get(0)
-            .expect("The command should have at least one location!");
+        let [location] = cmd.locations.as_slice() else {
+            return Err(DataFusionError::Plan(format!(
+                "Delta tables require one location, got {}",
+                cmd.locations.len()
+            )));
+        };
         let table = if cmd.options.is_empty() {
-            let table_url = ensure_table_uri(&location)?;
+            let table_url = ensure_table_uri(location)?;
             open_table(table_url).await?
         } else {
-            let table_url = ensure_table_uri(&location)?;
+            let table_url = ensure_table_uri(location)?;
             open_table_with_storage_options(table_url, cmd.to_owned().options).await?
         };
         let table_uri = table.log_store().root_url().clone();
@@ -647,6 +649,35 @@ mod tests {
 
     use super::*;
     use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
+
+    #[tokio::test]
+    async fn delta_table_factory_rejects_location_counts_other_than_one() {
+        let ctx = SessionContext::new();
+        let factory = DeltaTableFactory {};
+
+        for locations in [vec![], vec!["one".to_string(), "two".to_string()]] {
+            let command = CreateExternalTable::builder(
+                TableReference::bare("invalid_locations"),
+                "unused",
+                "DELTATABLE",
+                Arc::new(DFSchema::empty()),
+            )
+            .with_locations(locations.clone())
+            .build();
+
+            let error = factory
+                .create(&ctx.state(), &command)
+                .await
+                .expect_err("DeltaTableFactory accepted an invalid location count");
+            assert!(matches!(error, DataFusionError::Plan(_)));
+            assert!(
+                error.to_string().contains("require one location"),
+                "unexpected error for {} locations: {error}",
+                locations.len()
+            );
+        }
+    }
+
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]

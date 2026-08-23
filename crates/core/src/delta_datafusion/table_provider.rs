@@ -14,7 +14,8 @@ use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdo
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions,
 };
 use datafusion::{catalog::Session, common::HashSet, prelude::Expr};
 use futures::future::BoxFuture;
@@ -606,9 +607,10 @@ impl ExecutionPlan for DeltaScan {
         vec![&self.parquet_scan]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(format!(
@@ -616,13 +618,22 @@ impl ExecutionPlan for DeltaScan {
                 children.len()
             )));
         }
-        Ok(Arc::new(DeltaScan {
-            table_url: self.table_url.clone(),
-            config: self.config.clone(),
-            parquet_scan: children[0].clone(),
-            logical_schema: self.logical_schema.clone(),
-            metrics: self.metrics.clone(),
-        }))
+        Ok(Arc::new(DeltaScan::new(
+            &self.table_url,
+            self.config.clone(),
+            Arc::clone(&children[0]),
+            Arc::clone(&self.logical_schema),
+        )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn repartitioned(
@@ -682,12 +693,10 @@ impl ExecutionPlan for DeltaScan {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.parquet_scan.apply_expressions(expr_rewriter)?;
         Ok(TreeNodeRecursion::Continue)
     }
 }

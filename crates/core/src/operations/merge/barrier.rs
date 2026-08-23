@@ -24,7 +24,9 @@ use datafusion::common::{DataFusionError, Result as DataFusionResult};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::physical_expr::{Distribution, PhysicalExpr};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, RecordBatchStream, ReplaceChildrenOptions,
+    SendableRecordBatchStream, apply_expression_roots,
 };
 use futures::{Stream, StreamExt};
 
@@ -82,16 +84,23 @@ impl ExecutionPlan for MergeBarrierExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::KeyPartitioned(vec![self.expr.clone()]); 1]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(vec![Arc::clone(
+            &self.expr,
+        )])])
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(
@@ -103,6 +112,16 @@ impl ExecutionPlan for MergeBarrierExec {
             self.file_column.clone(),
             self.expr.clone(),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion::common::Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -125,9 +144,7 @@ impl ExecutionPlan for MergeBarrierExec {
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.input.apply_expressions(expr_rewriter)?;
-        Ok(TreeNodeRecursion::Continue)
+        apply_expression_roots([&self.expr], expr_rewriter)
     }
 }
 
