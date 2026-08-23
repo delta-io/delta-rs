@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
-use delta_kernel::table_features::{
-    ColumnMappingMode, assign_column_mapping_metadata, find_max_column_id_in_schema,
-};
+use delta_kernel::table_features::{ColumnMappingMode, assign_column_mapping_metadata};
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
@@ -356,7 +354,9 @@ impl CreateBuilder {
             column_mapping_mode,
             ColumnMappingMode::Name | ColumnMappingMode::Id
         ) {
-            let mut max_id = find_max_column_id_in_schema(&schema).unwrap_or(0);
+            // The guard above (field_has_column_mapping_metadata) rejects schemas that carry any
+            // pre-existing CM annotations, so there are no existing ids to scan — start from 0.
+            let mut max_id: i64 = 0;
             let mapped = assign_column_mapping_metadata(&schema, &mut max_id, false)?;
             configuration.insert(
                 "delta.columnMapping.maxColumnId".to_string(),
