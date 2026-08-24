@@ -38,7 +38,8 @@ use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, TombstoneView, Version, resolve_snapshot,
+    ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, TombstoneView, Version,
+    resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
@@ -66,6 +67,67 @@ fn resolve_scan_concurrency(override_value: Option<usize>) -> usize {
     override_value
         .filter(|&value| value > 0)
         .unwrap_or_else(default_vacuum_list_concurrency)
+}
+
+async fn collect_active_paths(
+    snapshot: &Snapshot,
+    log_store: &dyn LogStore,
+) -> DeltaResult<HashSet<Path>> {
+    snapshot
+        .active_adds(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .map_ok(|file| file.object_store_path())
+        .try_collect()
+        .await
+}
+
+fn tombstone_object_store_path(tombstone: &TombstoneView) -> Path {
+    let path = tombstone.path();
+    // Keep the existing percent encoding. `Path::from` encodes the percent sign a second time.
+    Path::parse(path.as_ref()).unwrap_or_else(|_| Path::from(path.as_ref()))
+}
+
+async fn collect_keep_version_paths(
+    log_store: &dyn LogStore,
+    versions: &[Version],
+) -> DeltaResult<HashSet<Path>> {
+    let mut sorted_versions = versions.to_vec();
+    sorted_versions.sort();
+    sorted_versions.dedup();
+    let Some((initial_version, remaining_versions)) = sorted_versions.split_first() else {
+        return Ok(HashSet::new());
+    };
+
+    log_store.refresh().await?;
+    let mut snapshot = Arc::new(
+        Snapshot::try_new(
+            log_store,
+            DeltaTableConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            Some(*initial_version),
+        )
+        .await?,
+    );
+    let engine = log_store.engine(None);
+    let mut keep_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
+    debug!("keep version {initial_version}: {keep_files:#?}");
+
+    for version in remaining_versions {
+        log_store.refresh().await?;
+        snapshot = snapshot.update(engine.clone(), Some(*version)).await?;
+        let version_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
+        debug!("keep version {version}: {version_files:#?}");
+        keep_files.extend(version_files);
+    }
+
+    Ok(keep_files)
 }
 
 /// Errors that can occur during vacuum
@@ -288,10 +350,7 @@ impl VacuumBuilder {
     }
 
     /// Determine which files can be deleted. Does not actually perform the deletion
-    async fn create_vacuum_plan(
-        &self,
-        snapshot: &EagerSnapshot,
-    ) -> Result<VacuumPlan, VacuumError> {
+    async fn create_vacuum_plan(&self, snapshot: &Snapshot) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
             info!(
                 "Vacuum configured to run with 'VacuumMode::Full'. It will scan for orphaned parquet files in the Delta table directory and remove those as well!"
@@ -320,41 +379,7 @@ impl VacuumBuilder {
         };
 
         let keep_files = match &self.keep_versions {
-            Some(versions) => {
-                let mut sorted_versions = versions.clone();
-                sorted_versions.sort();
-                let mut sorted_versions = sorted_versions.into_iter();
-                match sorted_versions.next() {
-                    Some(initial_version) => {
-                        let mut keep_files: HashSet<String> = HashSet::new();
-                        let mut state = DeltaTableState::try_new(
-                            &self.log_store,
-                            DeltaTableConfig::default(),
-                            Some(initial_version),
-                        )
-                        .await?;
-                        let mut record_keep_files = |version: Version, state: &DeltaTableState| {
-                            let files: Vec<String> = state
-                                .log_data()
-                                .into_iter()
-                                .map(|add| add.object_store_path())
-                                .map(|path| path.to_string())
-                                .collect();
-                            debug!("keep version:{version}\n, {files:#?}");
-                            keep_files.extend(files);
-                        };
-
-                        record_keep_files(initial_version, &state);
-                        for version in sorted_versions {
-                            state.update(&self.log_store, Some(version)).await?;
-                            record_keep_files(version, &state);
-                        }
-
-                        keep_files
-                    }
-                    None => HashSet::new(),
-                }
-            }
+            Some(versions) => collect_keep_version_paths(self.log_store.as_ref(), versions).await?,
             _ => HashSet::new(),
         };
 
@@ -370,18 +395,7 @@ impl VacuumBuilder {
                 TombstonePathSets::default(),
             )
         };
-        let valid_files: HashSet<_> = snapshot
-            .snapshot()
-            .active_adds(
-                self.log_store.as_ref(),
-                ActiveAddOptions {
-                    predicate: None,
-                    stats: AddStatsPolicy::None,
-                },
-            )
-            .map_ok(|f| f.object_store_path())
-            .try_collect()
-            .await?;
+        let valid_files = collect_active_paths(snapshot, self.log_store.as_ref()).await?;
 
         let partition_columns = snapshot.metadata().partition_columns();
 
@@ -391,7 +405,7 @@ impl VacuumBuilder {
         // VacuumMode::Lite file set
         // Expired tombstones are *always deleted (*unless in keep list)
         for tombs in expired_tombstones.iter() {
-            let path = Path::from(tombs.path().to_string());
+            let path = tombstone_object_store_path(tombs);
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
                 files_to_delete.push(path);
                 file_sizes.push(tombs.size().unwrap_or(0));
@@ -549,7 +563,7 @@ impl std::future::IntoFuture for VacuumBuilder {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            let plan = this.create_vacuum_plan(&snapshot).await?;
+            let plan = this.create_vacuum_plan(snapshot.snapshot()).await?;
 
             if this.dry_run {
                 return Ok((
@@ -726,12 +740,12 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
 fn ok_to_delete(
     location: &Path,
     valid_files: &HashSet<Path>,
-    keep_files: &HashSet<String>,
+    keep_files: &HashSet<Path>,
     partition_columns: &[String],
 ) -> Result<bool, DeltaTableError> {
     Ok(
         !(valid_files.contains(location) // file is still being tracked in table
-        || keep_files.contains(&location.to_string()) // file is associated with a version that we are keeping
+        || keep_files.contains(location) // file is associated with a version that we are keeping
         || is_hidden_directory(partition_columns, location)?),
     )
 }
@@ -743,7 +757,7 @@ fn ok_to_delete(
 fn consider_orphan_for_deletion(
     obj_meta: &object_store::ObjectMeta,
     valid_files: &HashSet<Path>,
-    keep_files: &HashSet<String>,
+    keep_files: &HashSet<Path>,
     partition_columns: &[String],
     tombstone_path_sets: &TombstonePathSets,
     now_millis: i64,
@@ -815,7 +829,7 @@ fn expand_partition_prefixes(
     store: Arc<dyn ObjectStore>,
     partition_depth: usize,
     valid_files: Arc<HashSet<Path>>,
-    keep_files: Arc<HashSet<String>>,
+    keep_files: Arc<HashSet<Path>>,
     partition_columns: Arc<Vec<String>>,
     tombstone_path_sets: Arc<TombstonePathSets>,
     now_millis: i64,
@@ -923,7 +937,7 @@ fn list_orphans_under_prefix(
     store: Arc<dyn ObjectStore>,
     prefix: Path,
     valid_files: Arc<HashSet<Path>>,
-    keep_files: Arc<HashSet<String>>,
+    keep_files: Arc<HashSet<Path>>,
     partition_columns: Arc<Vec<String>>,
     tombstone_path_sets: Arc<TombstonePathSets>,
     now_millis: i64,
@@ -958,18 +972,17 @@ fn list_orphans_under_prefix(
 }
 
 async fn collect_full_mode_tombstones(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
     snapshot
-        .snapshot()
         .active_tombstones(store)
         .try_fold(
             (Vec::new(), TombstonePathSets::default()),
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
-                let path = Path::from(tombstone.path().to_string());
+                let path = tombstone_object_store_path(&tombstone);
                 tombstone_path_sets.record(path, is_expired);
                 if is_expired {
                     expired_tombstones.push(tombstone);
@@ -982,14 +995,13 @@ async fn collect_full_mode_tombstones(
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 async fn get_stale_files(
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     retention_period: Duration,
     now_timestamp_millis: i64,
     store: &dyn LogStore,
 ) -> DeltaResult<Vec<TombstoneView>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
-        .snapshot()
         .active_tombstones(store)
         .try_filter(|tombstone| {
             ready(is_tombstone_expired(
@@ -1013,17 +1025,21 @@ fn should_try_parallel_vacuum(partition_columns: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use object_store::{ObjectStoreExt as _, PutPayload, local::LocalFileSystem, memory::InMemory};
     use serde_json::json;
+    use uuid::Uuid;
 
     use super::*;
-    use crate::kernel::Action;
-    use crate::kernel::transaction::CommitBuilder;
+    use crate::kernel::transaction::{CommitBuilder, TransactionError};
+    use crate::kernel::{Action, DataType, PrimitiveType, Remove, Snapshot, StructField};
+    use crate::logstore::{CommitOrBytes, LogStoreConfig};
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::create_initialized_table;
     use crate::writer::{DeltaWriter, JsonWriter};
     use crate::{ensure_table_uri, open_table};
     use std::path::Path;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{
         fs::{FileTimes, OpenOptions},
@@ -1031,6 +1047,419 @@ mod tests {
         time::{Duration as StdDuration, SystemTime, UNIX_EPOCH},
     };
     use url::Url;
+
+    async fn commit_test_actions(table: &DeltaTable, actions: Vec<Action>) -> DeltaResult<()> {
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(table.snapshot()?),
+                table.log_store(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn lazy_snapshot_config() -> DeltaTableConfig {
+        DeltaTableConfig {
+            require_files: false,
+            ..Default::default()
+        }
+    }
+
+    fn normalize_vacuum_plan(plan: VacuumPlan) -> (Vec<(String, i64)>, bool, i64, Option<i64>) {
+        let mut files = plan
+            .files_to_delete
+            .into_iter()
+            .zip(plan.file_sizes)
+            .map(|(path, size)| (path.to_string(), size))
+            .collect::<Vec<_>>();
+        files.sort();
+        (
+            files,
+            plan.retention_check_enabled,
+            plan.default_retention_millis,
+            plan.specified_retention_millis,
+        )
+    }
+
+    fn tombstone_paths(mut tombstones: Vec<TombstoneView>) -> Vec<String> {
+        let mut paths = tombstones
+            .drain(..)
+            .map(|tombstone| tombstone.path().to_string())
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths
+    }
+
+    #[derive(Debug)]
+    struct RefreshTrackingLogStore {
+        inner: LogStoreRef,
+        refresh_count: Arc<AtomicUsize>,
+        engine_count: AtomicUsize,
+        update_engine_refresh_epochs: Arc<Mutex<Vec<usize>>>,
+    }
+
+    struct RefreshTrackingEngine {
+        inner: Arc<dyn delta_kernel::Engine>,
+        refresh_count: Arc<AtomicUsize>,
+        update_engine_refresh_epochs: Arc<Mutex<Vec<usize>>>,
+        track_refresh_epochs: bool,
+    }
+
+    impl RefreshTrackingEngine {
+        fn record_refresh_epoch(&self) {
+            if !self.track_refresh_epochs {
+                return;
+            }
+            let refresh_epoch = self.refresh_count.load(Ordering::SeqCst);
+            let mut observed = self.update_engine_refresh_epochs.lock().unwrap();
+            if observed.last() != Some(&refresh_epoch) {
+                observed.push(refresh_epoch);
+            }
+        }
+    }
+
+    impl delta_kernel::Engine for RefreshTrackingEngine {
+        fn evaluation_handler(&self) -> Arc<dyn delta_kernel::EvaluationHandler> {
+            self.record_refresh_epoch();
+            self.inner.evaluation_handler()
+        }
+
+        fn storage_handler(&self) -> Arc<dyn delta_kernel::StorageHandler> {
+            self.record_refresh_epoch();
+            self.inner.storage_handler()
+        }
+
+        fn json_handler(&self) -> Arc<dyn delta_kernel::JsonHandler> {
+            self.record_refresh_epoch();
+            self.inner.json_handler()
+        }
+
+        fn parquet_handler(&self) -> Arc<dyn delta_kernel::ParquetHandler> {
+            self.record_refresh_epoch();
+            self.inner.parquet_handler()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl LogStore for RefreshTrackingLogStore {
+        fn name(&self) -> String {
+            self.inner.name()
+        }
+
+        async fn refresh(&self) -> DeltaResult<()> {
+            self.refresh_count.fetch_add(1, Ordering::SeqCst);
+            self.inner.refresh().await
+        }
+
+        async fn read_commit_entry(&self, version: Version) -> DeltaResult<Option<Bytes>> {
+            self.inner.read_commit_entry(version).await
+        }
+
+        async fn write_commit_entry(
+            &self,
+            version: Version,
+            commit_or_bytes: CommitOrBytes,
+            operation_id: Uuid,
+        ) -> Result<(), TransactionError> {
+            self.inner
+                .write_commit_entry(version, commit_or_bytes, operation_id)
+                .await
+        }
+
+        async fn abort_commit_entry(
+            &self,
+            version: Version,
+            commit_or_bytes: CommitOrBytes,
+            operation_id: Uuid,
+        ) -> Result<(), TransactionError> {
+            self.inner
+                .abort_commit_entry(version, commit_or_bytes, operation_id)
+                .await
+        }
+
+        async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version> {
+            self.inner.get_latest_version(start_version).await
+        }
+
+        fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+            self.inner.object_store(operation_id)
+        }
+
+        fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+            self.inner.root_object_store(operation_id)
+        }
+
+        fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn delta_kernel::Engine> {
+            // Snapshot creation uses the first engine. Updates use the second.
+            let track_refresh_epochs = self.engine_count.fetch_add(1, Ordering::SeqCst) == 1;
+            Arc::new(RefreshTrackingEngine {
+                inner: self.inner.engine(operation_id),
+                refresh_count: Arc::clone(&self.refresh_count),
+                update_engine_refresh_epochs: Arc::clone(&self.update_engine_refresh_epochs),
+                track_refresh_epochs,
+            })
+        }
+
+        fn config(&self) -> &LogStoreConfig {
+            self.inner.config()
+        }
+    }
+
+    async fn refresh_tracking_log_store() -> DeltaResult<(
+        RefreshTrackingLogStore,
+        Arc<AtomicUsize>,
+        Arc<Mutex<Vec<usize>>>,
+    )> {
+        let table =
+            open_table(ensure_table_uri("../test/tests/data/simple_table").unwrap()).await?;
+        let refresh_count = Arc::new(AtomicUsize::new(0));
+        let update_engine_refresh_epochs = Arc::new(Mutex::new(Vec::new()));
+        Ok((
+            RefreshTrackingLogStore {
+                inner: table.log_store(),
+                refresh_count: Arc::clone(&refresh_count),
+                engine_count: AtomicUsize::new(0),
+                update_engine_refresh_epochs: Arc::clone(&update_engine_refresh_epochs),
+            },
+            refresh_count,
+            update_engine_refresh_epochs,
+        ))
+    }
+
+    #[tokio::test]
+    async fn empty_keep_versions_do_not_refresh_log_store() -> DeltaResult<()> {
+        let (log_store, refresh_count, update_engine_refresh_epochs) =
+            refresh_tracking_log_store().await?;
+
+        let paths = collect_keep_version_paths(&log_store, &[]).await?;
+
+        assert!(paths.is_empty());
+        assert_eq!(refresh_count.load(Ordering::SeqCst), 0);
+        assert!(update_engine_refresh_epochs.lock().unwrap().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_keep_versions_scan_each_version_once() -> DeltaResult<()> {
+        let (log_store, refresh_count, update_engine_refresh_epochs) =
+            refresh_tracking_log_store().await?;
+
+        let paths = collect_keep_version_paths(&log_store, &[3, 2, 3, 2]).await?;
+
+        assert!(!paths.is_empty());
+        assert_eq!(refresh_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            update_engine_refresh_epochs.lock().unwrap().as_slice(),
+            &[2]
+        );
+        Ok(())
+    }
+
+    async fn encoded_tombstone_table() -> DeltaResult<(DeltaTable, object_store::path::Path)> {
+        let encoded_path = "partition=a/file%20name.parquet";
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            )])
+            .with_actions([Action::Add(crate::test_utils::make_test_add(
+                encoded_path,
+                &[],
+                0,
+            ))])
+            .await?;
+        let physical_path = object_store::path::Path::parse(encoded_path)?;
+        table
+            .object_store()
+            .put(&physical_path, PutPayload::from_static(b"encoded"))
+            .await?;
+        commit_test_actions(
+            &table,
+            vec![Action::Remove(Remove {
+                path: encoded_path.to_string(),
+                data_change: true,
+                deletion_timestamp: Some(0),
+                size: Some(7),
+                ..Default::default()
+            })],
+        )
+        .await?;
+
+        Ok((table, physical_path))
+    }
+
+    async fn encoded_tombstone_plan(
+        mode: VacuumMode,
+    ) -> DeltaResult<(VacuumPlan, object_store::path::Path)> {
+        let (table, expected_path) = encoded_tombstone_table().await?;
+        let log_store = table.log_store();
+        let snapshot = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let plan = VacuumBuilder::new(log_store, None)
+            .with_retention_period(Duration::milliseconds(1))
+            .with_mode(mode)
+            .with_enforce_retention_duration(false)
+            .with_clock(Arc::new(MockClock::new(2_000_000_000_000)))
+            .create_vacuum_plan(&snapshot)
+            .await
+            .map_err(DeltaTableError::from)?;
+        Ok((plan, expected_path))
+    }
+
+    #[tokio::test]
+    async fn lite_vacuum_preserves_encoded_tombstone_identity() -> DeltaResult<()> {
+        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Lite).await?;
+
+        assert_eq!(plan.files_to_delete, vec![expected_path]);
+        assert_eq!(plan.file_sizes, vec![7]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn full_vacuum_preserves_encoded_tombstone_identity_without_duplicate_orphan()
+    -> DeltaResult<()> {
+        let (plan, expected_path) = encoded_tombstone_plan(VacuumMode::Full).await?;
+
+        assert_eq!(plan.files_to_delete, vec![expected_path]);
+        assert_eq!(plan.file_sizes, vec![7]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn vacuum_plan_lazy_eager_parity_stays_unmaterialized() -> DeltaResult<()> {
+        let table =
+            open_table(ensure_table_uri("../test/tests/data/simple_table").unwrap()).await?;
+        let log_store = table.log_store();
+        let eager = table.snapshot()?.snapshot();
+        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let builder = VacuumBuilder::new(log_store, None)
+            .with_retention_period(Duration::hours(0))
+            .with_mode(VacuumMode::Lite)
+            .with_enforce_retention_duration(false)
+            .with_clock(Arc::new(MockClock::new(2_000_000_000_000)));
+
+        assert!(!lazy.has_materialized_files_for_test());
+        let eager_plan = builder.create_vacuum_plan(eager.snapshot()).await?;
+        let lazy_plan = builder.create_vacuum_plan(&lazy).await?;
+
+        assert_eq!(
+            normalize_vacuum_plan(eager_plan),
+            normalize_vacuum_plan(lazy_plan)
+        );
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn encoded_active_and_kept_paths_share_canonical_identity() -> DeltaResult<()> {
+        let encoded = "partition=a/file%20name.parquet";
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            )])
+            .with_actions([Action::Add(crate::test_utils::make_test_add(
+                encoded,
+                &[],
+                0,
+            ))])
+            .await?;
+        let log_store = table.log_store();
+        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+
+        assert!(!lazy.has_materialized_files_for_test());
+        let active_paths = collect_active_paths(&lazy, log_store.as_ref()).await?;
+        let keep_paths = collect_keep_version_paths(log_store.as_ref(), &[0]).await?;
+        let path = object_store::path::Path::parse(encoded)?;
+
+        assert_eq!(active_paths, keep_paths);
+        assert!(active_paths.contains(&path));
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_native_tombstone_helpers_match_eager_and_lazy() -> DeltaResult<()> {
+        let expired_path = "expired.parquet";
+        let recent_path = "recent.parquet";
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            )])
+            .with_actions([
+                Action::Add(crate::test_utils::make_test_add(expired_path, &[], 0)),
+                Action::Add(crate::test_utils::make_test_add(recent_path, &[], 0)),
+            ])
+            .await?;
+        commit_test_actions(
+            &table,
+            vec![
+                Action::Remove(Remove {
+                    path: expired_path.to_string(),
+                    data_change: true,
+                    deletion_timestamp: Some(98_000),
+                    ..Default::default()
+                }),
+                Action::Remove(Remove {
+                    path: recent_path.to_string(),
+                    data_change: true,
+                    deletion_timestamp: Some(99_500),
+                    ..Default::default()
+                }),
+            ],
+        )
+        .await?;
+        let log_store = table.log_store();
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let now_millis = 100_000;
+        let retention = Duration::milliseconds(1_000);
+
+        assert!(!lazy.has_materialized_files_for_test());
+        let eager_stale =
+            get_stale_files(eager.snapshot(), retention, now_millis, log_store.as_ref()).await?;
+        let lazy_stale = get_stale_files(&lazy, retention, now_millis, log_store.as_ref()).await?;
+        assert_eq!(tombstone_paths(eager_stale), vec![expired_path]);
+        assert_eq!(tombstone_paths(lazy_stale), vec![expired_path]);
+
+        let cutoff = now_millis - retention.num_milliseconds();
+        let (eager_expired, eager_sets) =
+            collect_full_mode_tombstones(eager.snapshot(), cutoff, log_store.as_ref()).await?;
+        let (lazy_expired, lazy_sets) =
+            collect_full_mode_tombstones(&lazy, cutoff, log_store.as_ref()).await?;
+        assert_eq!(
+            tombstone_paths(eager_expired),
+            tombstone_paths(lazy_expired)
+        );
+        assert_eq!(eager_sets, lazy_sets);
+        assert!(
+            lazy_sets
+                .expired_tombstone_paths
+                .contains(&object_store::path::Path::from(expired_path))
+        );
+        assert!(
+            lazy_sets
+                .all_tombstone_paths
+                .contains(&object_store::path::Path::from(recent_path))
+        );
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_vacuum_full() -> DeltaResult<()> {
@@ -1708,7 +2137,10 @@ mod tests {
             [object_store::path::Path::from("valid.parquet")]
                 .into_iter()
                 .collect();
-        let keep_files: HashSet<String> = ["kept.parquet".to_string()].into_iter().collect();
+        let keep_files: HashSet<object_store::path::Path> =
+            [object_store::path::Path::from("kept.parquet")]
+                .into_iter()
+                .collect();
 
         let mut tombstone_path_sets = TombstonePathSets::default();
         tombstone_path_sets.record(
@@ -2017,7 +2449,10 @@ mod tests {
             [object_store::path::Path::from("leaf/valid.parquet")]
                 .into_iter()
                 .collect();
-        let keep_files: HashSet<String> = ["leaf/kept.parquet".to_string()].into_iter().collect();
+        let keep_files: HashSet<object_store::path::Path> =
+            [object_store::path::Path::from("leaf/kept.parquet")]
+                .into_iter()
+                .collect();
         let partition_columns = vec!["modified".to_string()];
 
         let mut tombstone_path_sets = TombstonePathSets::default();
