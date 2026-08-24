@@ -5,6 +5,7 @@ use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
 
+use crate::logstore::parquet_reader::ParquetObjectReader;
 use arrow_schema::{ArrowError, Schema as ArrowSchema};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::schema::StructType;
@@ -12,7 +13,7 @@ use futures::TryStreamExt;
 use futures::future::{self, BoxFuture};
 use indexmap::IndexMap;
 use itertools::Itertools;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
 use tracing::debug;

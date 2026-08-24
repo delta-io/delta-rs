@@ -66,7 +66,7 @@ impl ExecutionPlan for MergeValidationExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.file_expr.clone()]); 1]
+        vec![Distribution::KeyPartitioned(vec![self.file_expr.clone()]); 1]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

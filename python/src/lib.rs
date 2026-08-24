@@ -56,7 +56,8 @@ use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
 use deltalake::partitions::{
-    FilterLiteral, FilterValue, PartitionFilter, dnf_to_kernel_predicate, to_kernel_predicate,
+    FilterLiteral, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
+    filter_literal,
 };
 use deltalake::protocol::log_compaction::compact_logs;
 use deltalake::protocol::{DeltaOperation, SaveMode};
@@ -868,9 +869,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
             }
 
+            let partition_filters = partition_filters.unwrap_or_default();
             let converted_filters =
-                convert_partition_filters(partition_filters.unwrap_or_default())
-                    .map_err(PythonError::from)?;
+                convert_partition_filters(&partition_filters).map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
             rt().block_on(cmd.into_future())
@@ -946,9 +947,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
             }
 
+            let partition_filters = partition_filters.unwrap_or_default();
             let converted_filters =
-                convert_partition_filters(partition_filters.unwrap_or_default())
-                    .map_err(PythonError::from)?;
+                convert_partition_filters(&partition_filters).map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
             rt().block_on(cmd.into_future())
@@ -1626,9 +1627,9 @@ impl RawDeltaTable {
 
             match mode {
                 SaveMode::Overwrite => {
-                    let converted_filters =
-                        convert_partition_filters(partitions_filters.unwrap_or_default())
-                            .map_err(PythonError::from)?;
+                    let partitions_filters = partitions_filters.unwrap_or_default();
+                    let converted_filters = convert_partition_filters(&partitions_filters)
+                        .map_err(PythonError::from)?;
 
                     let state = self.cloned_state()?;
                     let log_store = self.log_store()?;
@@ -1636,8 +1637,11 @@ impl RawDeltaTable {
                         None
                     } else {
                         Some(Arc::new(
-                            to_kernel_predicate(&converted_filters, state.schema().as_ref())
-                                .map_err(PythonError::from)?,
+                            conjunction_to_kernel_predicate(
+                                &converted_filters,
+                                state.schema().as_ref(),
+                            )
+                            .map_err(PythonError::from)?,
                         ) as PredicateRef)
                     };
                     let add_actions: Vec<_> = rt()
@@ -2420,50 +2424,33 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
     Ok(properties.build())
 }
 
-/// Translate DNF filter tuples into a kernel predicate, without materializing
-/// `PartitionFilter`s along the way.
+/// Translate DNF filter tuples into a kernel predicate.
 fn kernel_dnf_predicate(
     dnf: &[PyFilterConjunction],
     table_schema: &delta_kernel::schema::StructType,
 ) -> Result<delta_kernel::expressions::Predicate, DeltaTableError> {
     let dnf: Vec<Vec<FilterLiteral<'_>>> = dnf
         .iter()
-        .map(|conjunction| {
-            conjunction
-                .iter()
-                .map(|(column, op, value)| {
-                    let value = match value {
-                        PartitionFilterValue::Single(v) => FilterValue::Scalar(v.as_ref()),
-                        PartitionFilterValue::Multiple(vs) => {
-                            FilterValue::Set(vs.iter().map(|v| v.as_ref()).collect())
-                        }
-                    };
-                    (column.as_ref(), op.as_ref(), value)
-                })
-                .collect()
-        })
-        .collect();
+        .map(|conjunction| convert_partition_filters(conjunction))
+        .collect::<Result<_, _>>()?;
     dnf_to_kernel_predicate(&dnf, table_schema)
 }
 
+/// Parse raw `(column, op, value)` tuples into typed filter literals borrowing
+/// from the Python-backed strings.
 fn convert_partition_filters(
-    partitions_filters: Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>,
-) -> Result<Vec<PartitionFilter>, DeltaTableError> {
+    partitions_filters: &[(PyBackedStr, PyBackedStr, PartitionFilterValue)],
+) -> Result<Vec<FilterLiteral<'_>>, DeltaTableError> {
     partitions_filters
-        .into_iter()
-        .map(|filter| match filter {
-            (key, op, PartitionFilterValue::Single(v)) => {
-                let key: &'_ str = key.as_ref();
-                let op: &'_ str = op.as_ref();
-                let v: &'_ str = v.as_ref();
-                PartitionFilter::try_from((key, op, v))
-            }
-            (key, op, PartitionFilterValue::Multiple(v)) => {
-                let key: &'_ str = key.as_ref();
-                let op: &'_ str = op.as_ref();
-                let v: Vec<&'_ str> = v.iter().map(|v| v.as_ref()).collect();
-                PartitionFilter::try_from((key, op, v.as_slice()))
-            }
+        .iter()
+        .map(|(column, op, value)| {
+            let value = match value {
+                PartitionFilterValue::Single(v) => FilterValue::Scalar(v.as_ref()),
+                PartitionFilterValue::Multiple(vs) => {
+                    FilterValue::Set(vs.iter().map(|v| v.as_ref()).collect())
+                }
+            };
+            filter_literal(column.as_ref(), op.as_ref(), value)
         })
         .collect()
 }
