@@ -282,7 +282,7 @@ impl RecordBatchWriter {
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
 
-        let written_schema = match self.arrow_writers.get_mut(&partition_key) {
+        let non_partition_schema = match self.arrow_writers.get_mut(&partition_key) {
             Some(writer) => writer.write(&record_batch, mode)?,
             None => {
                 let mut writer = PartitionWriter::new(
@@ -294,15 +294,38 @@ impl RecordBatchWriter {
                     self.writer_properties.clone(),
                 )?;
                 let schema = writer.write(&record_batch, mode)?;
-                // Currently schema evolution is not supported with partition columns which means
-                // the schema returned here is equivalent to `arrow_schema_without_partitions`
-                // which can cause problems see #3783
                 let _ = self.arrow_writers.insert(partition_key, writer);
                 schema
             }
         };
         if mode == WriteMode::MergeSchema {
-            Ok(written_schema)
+            // Reconstruct the full table schema:
+            //   1. Walk the current arrow_schema_ref in its original order, substituting
+            //      any non-partition field with its (possibly widened) version from
+            //      non_partition_schema.  Partition fields are kept unchanged.
+            //   2. Append any brand-new non-partition fields that were not yet in
+            //      arrow_schema_ref (i.e. columns added by this MergeSchema write).
+            let mut evolved_fields: Vec<_> = self
+                .arrow_schema_ref
+                .fields()
+                .iter()
+                .map(|f| {
+                    if self.partition_columns.contains(f.name()) {
+                        f.clone()
+                    } else {
+                        non_partition_schema
+                            .field_with_name(f.name())
+                            .map(|ef| Arc::new(ef.clone()))
+                            .unwrap_or_else(|_| f.clone())
+                    }
+                })
+                .collect();
+            for field in non_partition_schema.fields() {
+                if self.arrow_schema_ref.field_with_name(field.name()).is_err() {
+                    evolved_fields.push(field.clone());
+                }
+            }
+            Ok(Arc::new(ArrowSchema::new(evolved_fields)))
         } else {
             Ok(self.arrow_schema_ref.clone())
         }
@@ -318,8 +341,13 @@ impl RecordBatchWriter {
         &mut self,
         values: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
+        // Use the incoming batch's own schema (minus partition columns) so that
+        // any new columns introduced by a MergeSchema write are preserved in the
+        // PartitionResult and forwarded to PartitionWriter for schema merging.
+        // For Default writes the batch schema must match the table schema anyway,
+        // so PartitionWriter will surface a SchemaMismatch if it does not.
         divide_by_partition_values(
-            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns),
+            arrow_schema_without_partitions(&values.schema(), &self.partition_columns),
             self.partition_columns.clone(),
             values,
         )
@@ -339,12 +367,6 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         values: RecordBatch,
         mode: WriteMode,
     ) -> Result<(), DeltaTableError> {
-        if mode == WriteMode::MergeSchema && !self.partition_columns.is_empty() {
-            return Err(DeltaTableError::Generic(
-                "Merging Schemas with partition columns present is currently unsupported"
-                    .to_owned(),
-            ));
-        }
         // Set the should_evolve flag for later in case the writer should perform schema evolution
         // on its flush_and_commit
         self.should_evolve = mode == WriteMode::MergeSchema;
@@ -408,15 +430,10 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         if self.arrow_schema_ref != self.original_schema_ref && self.should_evolve {
             let schema: StructType = self.arrow_schema_ref.clone().try_into_kernel()?;
-            if !self.partition_columns.is_empty() {
-                return Err(DeltaTableError::Generic(
-                    "Merging Schemas with partition columns present is currently unsupported"
-                        .to_owned(),
-                ));
-            }
-            // TODO: we are using the metadata from the passed table, but actually have no guarantee that this is
-            // the same table that was used to create the writer instance. Previously we were erasing current config
-            // assigning a new table ID, which we should not be doing when evolving the schema.
+            // Evolve the schema on the passed table's *current* metadata (preserving
+            // its config and table id), not a fresh one.
+            // TODO: there is no guarantee the passed `table` is the one the writer was
+            // created against.
             let current_meta = table.snapshot()?.metadata().clone();
             let metadata = current_meta.with_schema(&schema)?;
             adds.push(Action::Metadata(metadata));
@@ -1083,7 +1100,10 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_write_schema_evolution_with_partition_columns_should_fail_as_unsupported() {
+        async fn test_write_schema_evolution_with_partition_columns() {
+            // Schema evolution (MergeSchema) must work even when the table has partition
+            // columns.  The new columns should be added to the committed table metadata
+            // AND their values must be present in the written Parquet file.
             let table_schema = get_delta_schema();
             let table_dir = tempfile::tempdir().unwrap();
             let table_path = table_dir.path();
@@ -1102,17 +1122,17 @@ mod tests {
             let batch = get_record_batch(None, false);
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
-            writer.write(batch).await.unwrap();
+            writer.write(batch.clone()).await.unwrap();
             let version = writer.flush_and_commit(&mut table).await.unwrap();
             assert_eq!(version, 1);
             table.load().await.expect("Failed to load table");
             assert_eq!(table.version(), Some(1));
 
-            // Create a second batch with appended columns
+            // Create a second batch with appended columns (include the partition column
+            // so that divide_by_partition_values can split on it).
             let second_batch = {
-                let second = get_record_batch(None, false);
                 let second_schema = ArrowSchema::new(
-                    second
+                    batch
                         .schema()
                         .fields
                         .iter()
@@ -1124,9 +1144,9 @@ mod tests {
                         .collect_vec(),
                 );
 
-                let len = second.num_rows();
+                let len = batch.num_rows();
 
-                let second_arrays = second
+                let second_arrays = batch
                     .columns()
                     .iter()
                     .cloned()
@@ -1142,18 +1162,24 @@ mod tests {
             let result = writer
                 .write_with_mode(second_batch, WriteMode::MergeSchema)
                 .await;
+            assert!(
+                result.is_ok(),
+                "MergeSchema write with partition columns must succeed, got: {result:?}",
+            );
 
-            assert!(result.is_err());
+            let version = writer.flush_and_commit(&mut table).await.unwrap();
+            assert_eq!(version, 2);
+            table.load().await.expect("Failed to load table");
+            assert_eq!(table.version(), Some(2));
 
-            match result.unwrap_err() {
-                DeltaTableError::Generic(s) => {
-                    assert_eq!(
-                        s,
-                        "Merging Schemas with partition columns present is currently unsupported"
-                    )
-                }
-                e => panic!("unexpected error: {e:?}"),
-            }
+            // Table schema must now include the evolved columns.
+            let new_schema = table.snapshot().unwrap().metadata().parse_schema().unwrap();
+            let expected_columns = vec!["id", "value", "modified", "vid", "name"];
+            let found_columns: Vec<&String> = new_schema.fields().map(|f| f.name()).collect();
+            assert_eq!(
+                expected_columns, found_columns,
+                "The new table schema does not contain all evolved columns as expected"
+            );
         }
 
         #[tokio::test]
