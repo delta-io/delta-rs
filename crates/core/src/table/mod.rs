@@ -23,7 +23,7 @@ use crate::logstore::{
     LogStoreConfig, LogStoreExt, LogStoreRef, ObjectStoreRef, commit_uri_from_version,
     extract_version_from_filename,
 };
-use crate::partitions::PartitionFilter;
+use crate::partitions::FilterLiteral;
 use crate::{DeltaResult, DeltaTableBuilder, DeltaTableError};
 
 mod blind;
@@ -308,10 +308,11 @@ impl DeltaTable {
         state.snapshot().file_views(&self.log_store, predicate)
     }
 
-    /// Stream all logical files matching the provided `PartitionFilter`s.
+    /// Stream all logical files matching the provided conjunction (AND) of
+    /// `(column, op, value)` partition filter literals.
     pub fn get_active_add_actions_by_partitions(
         &self,
-        filters: &[PartitionFilter],
+        filters: &[FilterLiteral<'_>],
     ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
         let Some(state) = self.state.as_ref() else {
             return Box::pin(futures::stream::once(async {
@@ -323,21 +324,23 @@ impl DeltaTable {
             return state.snapshot().file_views(&self.log_store, None);
         }
 
-        let predicate =
-            match crate::to_kernel_predicate(filters, state.snapshot().schema().as_ref()) {
-                Ok(predicate) => Arc::new(predicate),
-                Err(err) => return Box::pin(once(ready(Err(err)))),
-            };
+        let predicate = match crate::conjunction_to_kernel_predicate(
+            filters,
+            state.snapshot().schema().as_ref(),
+        ) {
+            Ok(predicate) => Arc::new(predicate),
+            Err(err) => return Box::pin(once(ready(Err(err)))),
+        };
         state
             .snapshot()
             .file_views(&self.log_store, Some(predicate))
     }
 
     /// Returns the file list tracked in current table state filtered by provided
-    /// `PartitionFilter`s.
+    /// partition filter literals.
     pub async fn get_files_by_partitions(
         &self,
-        filters: &[PartitionFilter],
+        filters: &[FilterLiteral<'_>],
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)
@@ -351,7 +354,7 @@ impl DeltaTable {
     /// Return the file uris as strings for the partition(s)
     pub async fn get_file_uris_by_partitions(
         &self,
-        filters: &[PartitionFilter],
+        filters: &[FilterLiteral<'_>],
     ) -> Result<Vec<String>, DeltaTableError> {
         let files = self.get_files_by_partitions(filters).await?;
         Ok(files
