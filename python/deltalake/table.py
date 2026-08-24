@@ -1237,10 +1237,16 @@ class DeltaTable:
                 "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
             )
 
+        if partitions is not None:
+            warnings.warn(
+                "`partitions` is deprecated; use `filters` instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
-            partitions=partitions,
+            file_pruning_predicate=partitions,
             filesystem=filesystem,
         ).to_table(columns=columns, filter=filters)
 
