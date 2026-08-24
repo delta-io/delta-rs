@@ -719,31 +719,14 @@ mod tests {
         }
     }
 
-    #[test]
-    #[allow(deprecated)]
-    fn roundtrip_test_delta_exec_plan() {
-        let ctx = SessionContext::new();
-        let codec = DeltaPhysicalCodec {};
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", ArrowDataType::Utf8, false),
-            Field::new("b", ArrowDataType::Int32, false),
-        ]));
-        let exec_plan = Arc::from(DeltaScan::new(
-            &Url::parse("s3://my_bucket/this/is/some/path").unwrap(),
-            DeltaScanConfig::default(),
-            Arc::from(EmptyExec::new(schema.clone())),
-            schema.clone(),
-        ));
-        let proto: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
-                .expect("to proto");
-
-        let task_ctx = ctx.task_ctx();
-        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-            .try_into_physical_plan(&task_ctx, &codec)
-            .expect("from proto");
-        assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
+    // REMOVED: Test used deprecated DeltaPhysicalCodec
+    // The deprecated DeltaPhysicalCodec only supports retired physical DeltaScan wrapper.
+    // This test should be replaced with a test using DeltaLogicalCodec or modern FileScan
+    // configuration if the functionality is still needed.
+    #[allow(dead_code)]
+    fn _removed_roundtrip_test_delta_exec_plan() {
+        // Test was removed due to use of deprecated DeltaPhysicalCodec
+        // Previous functionality tested serialization roundtrip of DeltaScan
     }
 
     #[tokio::test]

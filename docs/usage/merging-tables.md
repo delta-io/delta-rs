@@ -81,9 +81,8 @@ For example, let’s update the value of a column in the target table based on a
 === "Rust"
     ```rust
     // define target table
-    let delta_ops = DeltaOps::try_from_uri("tmp/some-table").await?;
-    let mut table = delta_ops
-        .create()
+    let url = "tmp/some-table".parse()?;
+    let mut table = DeltaTable::create(url)
         .with_table_name("some-table")
         .with_save_mode(SaveMode::Overwrite)
         .with_columns(
@@ -130,7 +129,7 @@ For example, let’s update the value of a column in the target table based on a
         ],
     )?)?;
 
-    DeltaOps(table)
+    table
         .merge(source_data, "target.x = source.x")
         .with_source_alias("source")
         .with_target_alias("target")
@@ -176,9 +175,8 @@ For example, let’s say we start with the same target table:
     ```
 === "Rust"
     ```rust
-    let delta_ops = DeltaOps::try_from_uri("./data/simple_table").await?;
-    let mut table = delta_ops
-        .create()
+    let url = "./data/simple_table".parse()?;
+    let mut table = DeltaTable::create(url)
         .with_table_name("some-table")
         .with_save_mode(SaveMode::Overwrite)
         .with_columns(
@@ -268,7 +266,7 @@ The `MERGE` syntax would be as follows:
 
 === "Rust"
     ```rust
-    DeltaOps(table)
+    table
     .merge(source_data, "target.x = source.x")
     .with_source_alias("source")
     .with_target_alias("target")
@@ -311,7 +309,7 @@ You can delete the rows that match a predicate (in this case `"deleted" = True`)
     ```
 === "Rust"
     ```rust
-    DeltaOps(table)
+    table
     .merge(source_data, "target.x = source.x")
     .with_source_alias("source")
     .with_target_alias("target")
@@ -363,7 +361,7 @@ For example:
     ```
 === "Rust"
     ```rust
-    DeltaOps(table)
+    table
     .merge(source_data, "target.x = source.x")
     .with_source_alias("source")
     .with_target_alias("target")
@@ -412,7 +410,7 @@ For example, given the same `target_data` and `source_data` used in the section 
     ```
 === "Rust"
     ```rust
-    DeltaOps(table)
+    table
     .merge(source_data, "target.x = source.x")
     .with_source_alias("source")
     .with_target_alias("target")

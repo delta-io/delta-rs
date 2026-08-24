@@ -10,7 +10,7 @@
 //! # Example
 //! ```rust ignore
 //! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-//! let (table, metrics) = DeltaOps(table)
+//! let (table, metrics) = table
 //!     .merge(source, col("target.id").eq(col("source.id")))
 //!     .with_source_alias("source")
 //!     .with_target_alias("target")
@@ -235,7 +235,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -273,7 +273,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -306,7 +306,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -341,7 +341,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -373,7 +373,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")

@@ -1226,13 +1226,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_get_all_version_should_fail() {
-        use crate::DeltaOps;
         use crate::protocol::SaveMode;
+        use crate::DeltaTable;
         use crate::writer::test_utils::get_delta_schema;
 
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(SaveMode::Ignore)
@@ -1246,13 +1246,13 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn test_get_all_versions_from_zero() {
-        use crate::DeltaOps;
         use crate::protocol::SaveMode;
+        use crate::DeltaTable;
         use crate::writer::test_utils::get_delta_schema;
 
         let table_schema = get_delta_schema();
 
-        let table = DeltaOps::new_in_memory()
+        let table = DeltaTable::new_in_memory()
             .create()
             .with_columns(table_schema.fields().cloned())
             .with_save_mode(SaveMode::Ignore)

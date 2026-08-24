@@ -124,9 +124,8 @@ Let’s write 100 hours worth of data to the Delta table.
 
 === "Rust"
     ```rust
-    let mut table = DeltaOps::try_from_uri("observation_data")
-      .await?
-      .create()
+    let url = "observation_data".parse()?;
+    let mut table = DeltaTable::create(url)
       .with_table_name("observations_data")
       .with_columns(
           StructType::new(vec![
@@ -228,7 +227,7 @@ Let’s run the optimize command to compact the existing small files into larger
 === "Rust"
     ```rust
     let table = open_table(observation_data_path_url).await?;
-    let (table, metrics) = DeltaOps(table).optimize().with_type(OptimizeType::Compact).await?;
+    let (table, metrics) = table.optimize().with_type(OptimizeType::Compact).await?;
     println!("{:?}", metrics);
     ```
 
@@ -346,7 +345,7 @@ To optimize a single partition, you can pass in a `partition_filters` argument s
 === "Rust"
     ```rust
       let table = open_table(observation_data_path_url).await?;
-      let (table, metrics) = DeltaOps(table)
+      let (table, metrics) = table
           .optimize()
           .with_type(OptimizeType::Compact)
           .with_filters(&vec![("date", "=", "2021-01-05").try_into()?])
@@ -449,7 +448,7 @@ Let’s run the vacuum command:
 === "Rust"
     ```rust
     let table = open_table(observation_data_path_url).await?;
-    let (table, metrics) = DeltaOps(table)
+    let (table, metrics) = table
         .vacuum()
         .with_retention_period(chrono::Duration::days(0))
         .with_enforce_retention_duration(false)
