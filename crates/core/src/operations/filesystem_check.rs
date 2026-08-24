@@ -33,7 +33,7 @@ use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
-use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, resolve_snapshot};
+use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -140,11 +140,10 @@ impl FileSystemCheckBuilder {
         self
     }
 
-    async fn create_fsck_plan(&self, snapshot: &EagerSnapshot) -> DeltaResult<FileSystemCheckPlan> {
+    async fn create_fsck_plan(&self, snapshot: &Snapshot) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<String, Add> = HashMap::new();
         let log_store = self.log_store.clone();
         let mut file_stream = snapshot
-            .snapshot()
             .active_adds(
                 log_store.as_ref(),
                 ActiveAddOptions {
@@ -263,7 +262,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
-            let plan = this.create_fsck_plan(&snapshot).await?;
+            let plan = this.create_fsck_plan(snapshot.snapshot()).await?;
             if this.dry_run {
                 return Ok((
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
@@ -306,7 +305,104 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use crate::kernel::{
+        DataType, DeletionVectorDescriptor, EagerSnapshot, PrimitiveType, Snapshot, StorageType,
+        StructField,
+    };
+    use crate::{DeltaTableConfig, TableProperty};
+
+    async fn metadata_rich_missing_file_table() -> DeltaResult<(DeltaTable, Add)> {
+        let mut source_add = crate::test_utils::make_test_add(
+            "part=a/metadata-rich.parquet",
+            &[("part", "a")],
+            1_725_000_000_000,
+        );
+        source_add.size = 1234;
+        source_add.stats = None;
+        source_add.tags = Some(HashMap::from([
+            ("source".to_string(), Some("metadata-rich".to_string())),
+            ("nullable-tag".to_string(), None),
+        ]));
+        source_add.deletion_vector = Some(DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "AAAA".to_string(),
+            offset: None,
+            size_in_bytes: 0,
+            cardinality: 2,
+        });
+        source_add.base_row_id = Some(41);
+        source_add.default_row_commit_version = Some(3);
+        source_add.clustering_provider = Some("liquid".to_string());
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(vec![
+                StructField::new(
+                    "id".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    false,
+                ),
+                StructField::new(
+                    "part".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+            ])
+            .with_partition_columns(["part"])
+            .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions([Action::Add(source_add.clone())])
+            .await?;
+
+        Ok((table, source_add))
+    }
+
+    fn normalize_adds(mut adds: Vec<Add>) -> DeltaResult<Vec<serde_json::Value>> {
+        adds.sort_by(|left, right| left.path.cmp(&right.path));
+        adds.into_iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn fsck_plan_lazy_eager_parity_preserves_complete_adds() -> DeltaResult<()> {
+        let (table, source_add) = metadata_rich_missing_file_table().await?;
+        let log_store = table.log_store();
+        let eager = EagerSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaTableConfig {
+                skip_stats: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+        let lazy = Snapshot::try_new(
+            log_store.as_ref(),
+            DeltaTableConfig {
+                require_files: false,
+                skip_stats: true,
+                ..Default::default()
+            },
+            None,
+        )
+        .await?;
+        let builder = FileSystemCheckBuilder::new(log_store.clone(), None);
+
+        assert!(!lazy.has_materialized_files_for_test());
+        let eager_plan = builder.create_fsck_plan(eager.snapshot()).await?;
+        let lazy_plan = builder.create_fsck_plan(&lazy).await?;
+
+        let lazy_files = normalize_adds(lazy_plan.files_to_remove.clone())?;
+        assert_eq!(normalize_adds(eager_plan.files_to_remove)?, lazy_files);
+        assert_eq!(lazy_files, vec![serde_json::to_value(source_add)?]);
+        assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
 
     #[test]
     fn absolute_path() {
