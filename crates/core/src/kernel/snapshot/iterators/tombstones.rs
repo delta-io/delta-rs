@@ -5,7 +5,7 @@ use arrow::{
     datatypes::Int64Type,
 };
 use delta_kernel::{actions::Remove, schema::ToSchema};
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::snapshot::iterators::get_string_value;
@@ -38,10 +38,10 @@ impl TombstoneView {
     /// Returns an object store path using the same decoded representation as logical files.
     pub(crate) fn object_store_path(&self) -> Path {
         let path = self.path();
-        match Path::parse(path.as_ref()) {
-            Ok(path) => path,
-            Err(_) => Path::from(path.as_ref()),
-        }
+        path.as_ref()
+            .split('/')
+            .map(|segment| PathPart::parse(segment).unwrap_or_else(|_| PathPart::from(segment)))
+            .collect()
     }
 
     /// Returns the deletion timestamp (milliseconds since epoch), if recorded.
@@ -94,8 +94,7 @@ mod tests {
     use delta_kernel::scan::scan_row_schema;
     use std::sync::Arc;
 
-    #[test]
-    fn object_store_path_matches_logical_file_view() {
+    fn tombstone_view(raw_path: &str) -> TombstoneView {
         let kernel_schema = Remove::to_schema();
         let schema: Schema = (&kernel_schema).try_into_arrow().unwrap();
         let mut columns: Vec<ArrayRef> = schema
@@ -103,14 +102,19 @@ mod tests {
             .iter()
             .map(|field| new_null_array(field.data_type(), 1))
             .collect();
-        let raw_path = "part=a%20b/file.parquet";
         columns[schema.index_of("path").unwrap()] =
             Arc::new(StringArray::from(vec![Some(raw_path)]));
         columns[schema.index_of("dataChange").unwrap()] =
             Arc::new(BooleanArray::from(vec![Some(true)]));
 
         let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
-        let view = TombstoneView::new(batch, 0);
+        TombstoneView::new(batch, 0)
+    }
+
+    #[test]
+    fn object_store_path_matches_logical_file_view() {
+        let raw_path = "part=a%20b/file.parquet";
+        let view = tombstone_view(raw_path);
 
         assert_eq!(view.path(), "part=a b/file.parquet");
         let expected = Path::parse(view.path().as_ref()).unwrap();
@@ -134,5 +138,24 @@ mod tests {
         let logical_view =
             crate::kernel::snapshot::iterators::LogicalFileView::new(logical_batch, 0);
         assert_eq!(view.object_store_path(), logical_view.object_store_path());
+    }
+
+    #[test]
+    fn object_store_path_falls_back_for_invalid_path() {
+        let view = tombstone_view("valid/../file.parquet");
+
+        assert!(Path::parse(view.path().as_ref()).is_err());
+        assert_eq!(
+            view.object_store_path().as_ref(),
+            "valid/%2E%2E/file.parquet"
+        );
+    }
+
+    #[test]
+    fn object_store_path_preserves_percent_encoding() {
+        let view = tombstone_view("part=a%2520b/file.parquet");
+
+        assert_eq!(view.path(), "part=a%20b/file.parquet");
+        assert_eq!(view.object_store_path().as_ref(), "part=a%20b/file.parquet");
     }
 }

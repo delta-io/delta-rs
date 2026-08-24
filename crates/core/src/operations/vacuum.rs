@@ -325,11 +325,10 @@ impl VacuumBuilder {
 
         // VacuumMode::Lite file set
         // Expired tombstones are *always deleted (*unless in keep list)
-        for tombs in expired_tombstones.iter() {
-            let path = tombs.object_store_path();
+        for (tombstone, path) in expired_tombstones {
             if ok_to_delete(&path, &valid_files, &keep_files, partition_columns)? {
                 files_to_delete.push(path);
-                file_sizes.push(tombs.size().unwrap_or(0));
+                file_sizes.push(tombstone.size().unwrap_or(0));
             }
         }
 
@@ -609,7 +608,7 @@ async fn collect_full_mode_tombstones(
     snapshot: &EagerSnapshot,
     tombstone_retention_timestamp: i64,
     store: &dyn LogStore,
-) -> DeltaResult<(Vec<TombstoneView>, TombstonePathSets)> {
+) -> DeltaResult<(Vec<(TombstoneView, Path)>, TombstonePathSets)> {
     snapshot
         .snapshot()
         .active_tombstones(store)
@@ -618,9 +617,9 @@ async fn collect_full_mode_tombstones(
             |(mut expired_tombstones, mut tombstone_path_sets), tombstone| {
                 let is_expired = is_tombstone_expired(&tombstone, tombstone_retention_timestamp);
                 let path = tombstone.object_store_path();
-                tombstone_path_sets.record(path, is_expired);
+                tombstone_path_sets.record(path.clone(), is_expired);
                 if is_expired {
-                    expired_tombstones.push(tombstone);
+                    expired_tombstones.push((tombstone, path));
                 }
                 ready(Ok((expired_tombstones, tombstone_path_sets)))
             },
@@ -634,7 +633,7 @@ async fn get_stale_files(
     retention_period: Duration,
     now_timestamp_millis: i64,
     store: &dyn LogStore,
-) -> DeltaResult<Vec<TombstoneView>> {
+) -> DeltaResult<Vec<(TombstoneView, Path)>> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
     snapshot
         .snapshot()
@@ -644,6 +643,10 @@ async fn get_stale_files(
                 tombstone,
                 tombstone_retention_timestamp,
             ))
+        })
+        .map_ok(|tombstone| {
+            let path = tombstone.object_store_path();
+            (tombstone, path)
         })
         .try_collect::<Vec<_>>()
         .await
