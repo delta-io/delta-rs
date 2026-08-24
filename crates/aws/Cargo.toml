@@ -49,7 +49,7 @@ pretty_env_logger = "0.5.0"
 pretty_assertions = "1"
 rand = "0.10"
 serde_json = { workspace = true }
-serial_test = "3"
+serial_test = "4"
 
 [features]
 default = ["rustls"]
