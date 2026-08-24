@@ -128,7 +128,9 @@ impl FromStr for FilterOp {
             "not in" => FilterOp::NotIn,
             _ => {
                 return Err(DeltaTableError::InvalidPartitionFilter {
-                    partition_filter: format!("unknown operator {s:?}"),
+                    partition_filter: format!(
+                        "unknown operator {s:?}, expected one of =, !=, <, <=, >, >=, in, not in"
+                    ),
                 });
             }
         })
@@ -170,8 +172,12 @@ pub fn filter_literal<'a>(
 
 /// Render a filter literal as the predicate string recorded in commit metadata
 /// (`operationParameters.predicate`), e.g. `key = 'value'` or `key IN ('a', 'b')`.
-pub fn literal_to_predicate_string(literal: &FilterLiteral<'_>) -> String {
+pub(crate) fn literal_to_predicate_string(literal: &FilterLiteral<'_>) -> String {
     let (column, op, value) = literal;
+    debug_assert!(
+        op.matches_value(value),
+        "filter literal not validated: ({column:?}, {op}, {value:?})"
+    );
     match value {
         FilterValue::Scalar(v) => format!("{column} {op} '{v}'"),
         // upper case for IN and NOT IN, similar to SQL
