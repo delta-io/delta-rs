@@ -877,7 +877,7 @@ mod tests {
         },
         error::DataFusionError,
         logical_expr::dml::InsertOp,
-        physical_optimizer::pruning::PruningPredicate,
+        physical_optimizer::pruning::PruningPredicateBuilder,
         physical_plan::{ExecutionPlanVisitor, collect_partitioned, visit_execution_plan},
         prelude::{col, lit},
     };
@@ -1050,10 +1050,9 @@ mod tests {
                 return Ok(true);
             };
 
-            let pruning_predicate = PruningPredicate::try_new(
-                predicate.clone(),
-                parquet_source.table_schema().table_schema().clone(),
-            )?;
+            let pruning_predicate = PruningPredicateBuilder::new()
+                .with_file_schema(parquet_source.table_schema().table_schema().clone())
+                .try_build(predicate.clone())?;
             self.predicate = Some(predicate.to_string());
             self.pruning_predicate = Some(pruning_predicate.predicate_expr().to_string());
             Ok(false)

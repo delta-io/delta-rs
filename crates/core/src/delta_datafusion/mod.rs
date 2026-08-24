@@ -45,7 +45,7 @@ use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::logical_plan::CreateExternalTable;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
@@ -276,7 +276,9 @@ pub(crate) fn files_matching_predicate<'a>(
         let df_schema = Arc::new(schema.clone().to_dfschema()?);
         let resolved = Expression::from(predicate).resolve(&session.state(), df_schema.clone())?;
         let expr = session.create_physical_expr(resolved, &df_schema)?;
-        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
+        let pruning_predicate = PruningPredicateBuilder::new()
+            .with_file_schema(schema)
+            .try_build(expr)?;
         let mask = pruning_predicate.prune(&log_data)?;
 
         Ok(Either::Left(log_data.into_iter().zip(mask).filter_map(
