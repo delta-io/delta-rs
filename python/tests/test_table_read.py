@@ -782,6 +782,19 @@ def test_legacy_dataset_partitions_param_warns():
         dt.to_pyarrow_dataset(partitions=[("year", "=", "2021")])
 
 
+@pytest.mark.pyarrow
+def test_dataframe_partitions_param_warns_with_filters_hint():
+    dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
+
+    # the dataframe methods have no file_pruning_predicate, so their warning
+    # must point at `filters`
+    with pytest.warns(DeprecationWarning, match="use `filters`"):
+        legacy = dt.to_pyarrow_table(partitions=[("year", "=", "2021")])
+    assert (
+        legacy.num_rows == dt.to_pyarrow_table(filters=[("year", "=", "2021")]).num_rows
+    )
+
+
 def test_file_uris_filter_errors():
     dt = DeltaTable("../crates/test/tests/data/delta-0.8.0-partitioned")
 
