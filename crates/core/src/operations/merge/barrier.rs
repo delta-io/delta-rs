@@ -82,7 +82,7 @@ impl ExecutionPlan for MergeBarrierExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.expr.clone()]); 1]
+        vec![Distribution::KeyPartitioned(vec![self.expr.clone()]); 1]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {

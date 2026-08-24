@@ -598,15 +598,15 @@ impl CdfLoadBuilder {
             .map(Arc::new)
             .collect();
 
-        let cdc_table_schema = TableSchema::new(Arc::clone(&cdc_file_schema), cdc_partition_fields);
-        let add_table_schema = TableSchema::new(
-            Arc::clone(&add_remove_file_schema),
-            add_remove_partition_fields.clone(),
-        );
-        let remove_table_schema = TableSchema::new(
-            Arc::clone(&add_remove_file_schema),
-            add_remove_partition_fields,
-        );
+        let cdc_table_schema = TableSchema::builder(Arc::clone(&cdc_file_schema))
+            .with_table_partition_cols(cdc_partition_fields)
+            .build();
+        let add_table_schema = TableSchema::builder(Arc::clone(&add_remove_file_schema))
+            .with_table_partition_cols(add_remove_partition_fields.clone())
+            .build();
+        let remove_table_schema = TableSchema::builder(Arc::clone(&add_remove_file_schema))
+            .with_table_partition_cols(add_remove_partition_fields)
+            .build();
         let parquet_options = TableParquetOptions {
             global: session.config().options().execution.parquet.clone(),
             ..Default::default()
