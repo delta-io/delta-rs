@@ -41,6 +41,7 @@ arrow-schema = { workspace = true, features = ["serde"] }
 arrow-select = { workspace = true }
 parquet = { workspace = true, features = ["async", "object_store"] }
 object_store = { workspace = true }
+roaring = "0.11.4"
 
 # datafusion
 datafusion = { workspace = true, optional = true }

@@ -48,6 +48,7 @@
 //! ## Configuration
 //!
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Cursor};
 use std::sync::{Arc, LazyLock};
 
 use bytes::Bytes;
@@ -74,7 +75,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::kernel::transaction::TransactionError;
-use crate::kernel::{Action, Version, spawn_blocking_with_span};
+use crate::kernel::{Action, CommitInfo, Version, spawn_blocking_with_span};
 use crate::table::normalize_table_url;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -95,6 +96,9 @@ pub mod config;
 pub(crate) mod default_logstore;
 pub(crate) mod factories;
 pub(crate) mod storage;
+
+/// Parquet reader for object storage
+pub mod parquet_reader;
 
 /// Internal trait to handle object store configuration and initialization.
 trait LogStoreFactoryExt {
@@ -803,6 +807,62 @@ pub async fn get_latest_version(
     Ok(segment.end_version)
 }
 
+/// Get all versions related to the delta table and return a tuple of a vector of versions and a
+/// vector of commit infos. We guarantee the length of the two vectors is equal
+pub async fn get_all_versions_from(
+    log_store: LogStoreRef,
+    start_version: u64,
+) -> DeltaResult<(Vec<u64>, Vec<CommitInfo>)> {
+    // Get the latest version to know our range
+    let latest_version =
+        match get_latest_version(log_store.as_ref(), start_version as Version).await {
+            Ok(v) => v,
+            Err(DeltaTableError::InvalidVersion(_)) if start_version == 0 => {
+                // If we're looking for version 0 and it's not found, this might be a new table
+                return Ok((vec![], vec![]));
+            }
+            Err(e) => return Err(e),
+        };
+
+    let mut versions = Vec::<u64>::new();
+    let mut commit_files = Vec::<CommitInfo>::new();
+    let object_store = log_store.object_store(None);
+
+    // Iterate through each version from start to latest
+    for version in start_version..=latest_version as u64 {
+        // Read the commit for this specific version
+        if let Some(commit_bytes) =
+            read_commit_entry(object_store.as_ref(), version as Version).await?
+        {
+            let reader = BufReader::new(Cursor::new(commit_bytes));
+            let mut found_commit_info = None;
+
+            for line in reader.lines() {
+                let action: Action = serde_json::from_str(line?.as_str())?;
+                if let Action::CommitInfo(commit_info) = action {
+                    found_commit_info = Some(commit_info);
+                    break; // We only need the first CommitInfo action per file
+                }
+            }
+
+            if let Some(commit_info) = found_commit_info {
+                versions.push(version);
+                commit_files.push(commit_info);
+            }
+        }
+    }
+
+    if versions.len() != commit_files.len() {
+        return Err(DeltaTableError::Generic(format!(
+            "Length of versions ({}) not equal to length of commit files ({})",
+            versions.len(),
+            commit_files.len()
+        )));
+    }
+
+    Ok((versions, commit_files))
+}
+
 /// Read delta log for a specific version
 #[instrument(skip(storage), fields(version = version, path = %commit_uri_from_version(Some(version))))]
 pub async fn read_commit_entry(
@@ -1165,6 +1225,54 @@ pub(crate) mod tests {
             .map_ok(|meta| meta.location)
             .try_collect::<Vec<Path>>()
             .await
+    }
+
+    #[tokio::test]
+    async fn test_get_all_version_should_fail() {
+        use crate::DeltaTable;
+        use crate::protocol::SaveMode;
+        use crate::writer::test_utils::get_delta_schema;
+
+        let table_schema = get_delta_schema();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_save_mode(SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version().unwrap_or(999), 0);
+
+        let get_err = get_all_versions_from(table.log_store(), 999).await;
+        assert!(get_err.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_get_all_versions_from_zero() {
+        use crate::DeltaTable;
+        use crate::protocol::SaveMode;
+        use crate::writer::test_utils::get_delta_schema;
+
+        let table_schema = get_delta_schema();
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_save_mode(SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version().unwrap_or(999), 0);
+
+        // Test with start_version = 0 (should return all versions, which is just version 0 for a new table)
+        let res = get_all_versions_from(table.log_store(), 0).await;
+        assert!(res.is_ok());
+        let (versions, commit_infos) = res.unwrap();
+
+        assert_eq!(versions.len(), 1);
+        assert_eq!(commit_infos.len(), 1);
+
+        assert_eq!(versions[0], 0);
+        assert_eq!(commit_infos[0].operation, Some("CREATE TABLE".to_string()));
     }
 }
 

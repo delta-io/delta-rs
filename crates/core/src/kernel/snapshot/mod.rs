@@ -19,7 +19,7 @@ use std::sync::{Arc, LazyLock};
 
 use arrow::array::RecordBatch;
 use arrow::compute::{filter_record_batch, is_not_null};
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
 use delta_kernel::actions::{Remove, Sidecar};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
@@ -46,9 +46,10 @@ use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
+use self::stats_projection::FIELD_STATS;
 pub(crate) use self::stats_projection::{
     FIELD_STATS_PARSED, FileStatsMaterialization, StatsProjection,
 };
@@ -1254,6 +1255,19 @@ impl MaterializedFiles {
     }
 
     fn full_table_seed(&self) -> Option<MaterializedFilesSeed> {
+        if self.policy == MaterializedFilesPolicy::FullTableWithoutStats
+            && !self.batches.iter().all(|batch| {
+                batch
+                    .schema_ref()
+                    .field_with_name(FIELD_STATS)
+                    .is_ok_and(|field| {
+                        field.data_type() == &ArrowDataType::Utf8 && field.is_nullable()
+                    })
+            })
+        {
+            return None;
+        }
+
         match self.scope {
             MaterializedFilesScope::FullTable => Some(MaterializedFilesSeed {
                 version: self.identity.version,
@@ -1492,26 +1506,6 @@ impl EagerSnapshot {
         self.snapshot.file_views(log_store, predicate)
     }
 
-    /// Stream the file views matching the given partition `filters`.
-    ///
-    /// Deprecated in favor of [`file_views`](Self::file_views) with a kernel predicate, which
-    /// supports richer expressions than simple partition equality filters.
-    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
-    pub fn file_views_by_partitions(
-        &self,
-        log_store: &dyn LogStore,
-        filters: &[PartitionFilter],
-    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if filters.is_empty() {
-            return self.file_views(log_store, None);
-        }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema().as_ref()) {
-            Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(once(ready(Err(err)))),
-        };
-        self.file_views(log_store, Some(predicate))
-    }
-
     /// Return the latest committed transaction version for the given application id, if any.
     ///
     /// This is used to implement idempotent writes: an application records its own monotonic
@@ -1574,6 +1568,9 @@ mod tests {
     use super::*;
     use crate::{
         DeltaTable, DeltaTableConfig, TableProperty, checkpoints,
+        kernel::schema::partitions::{
+            FilterOp, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
+        },
         kernel::transaction::CommitData,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, DataType, PrimitiveType, StructField, StructType},
@@ -1734,6 +1731,59 @@ mod tests {
         append_test_add_with_stats(&mut table, "part-00000.snappy.parquet", custom_stats).await?;
 
         Ok((table_dir, table))
+    }
+
+    async fn table_with_initial_stats_add() -> DeltaResult<(TempDir, DeltaTable)> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let mut add = make_test_add("part-00000.snappy.parquet", &[], 0);
+        add.size = 1;
+        add.stats = Some(
+            r#"{"numRecords":1,"minValues":{"id":1},"maxValues":{"id":1},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
+        let table = CreateBuilder::new()
+            .with_location(table_dir.path().to_string_lossy())
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .with_actions([Action::Add(add)])
+            .await?;
+
+        assert_eq!(table.version(), Some(0));
+        Ok((table_dir, table))
+    }
+
+    fn assert_canonical_no_stats_cache(materialized_files: &MaterializedFiles) {
+        assert_eq!(
+            materialized_files.policy,
+            MaterializedFilesPolicy::FullTableWithoutStats
+        );
+        for batch in materialized_files.batches.iter() {
+            let field = batch
+                .schema_ref()
+                .field_with_name("stats")
+                .expect("cache without statistics must retain the canonical stats field");
+            assert_eq!(field.data_type(), &ArrowDataType::Utf8);
+            assert!(field.is_nullable());
+            let stats = batch
+                .column_by_name("stats")
+                .expect("cache without statistics must retain the canonical stats column");
+            assert_eq!(stats.null_count(), batch.num_rows());
+            assert!(batch.column_by_name("stats_parsed").is_none());
+        }
+    }
+
+    fn without_stats_field(batch: &RecordBatch) -> DeltaResult<RecordBatch> {
+        let projection = batch
+            .schema_ref()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, field)| (field.name() != "stats").then_some(idx))
+            .collect::<Vec<_>>();
+        Ok(batch.project(&projection)?)
     }
 
     fn field_count(batch: &RecordBatch, name: &str) -> usize {
@@ -3489,6 +3539,160 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn skip_stats_cache_seeds_update_replay() -> TestResult {
+        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
+        let log_store = table.log_store();
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(0)).await?;
+
+        let initial_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("eager snapshot must contain materialized files");
+        assert_canonical_no_stats_cache(initial_cache);
+        assert!(
+            initial_cache.full_table_seed().is_some(),
+            "new cache without statistics must support replay"
+        );
+
+        append_test_add_with_stats(
+            &mut table,
+            "part-00001.snappy.parquet",
+            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
+        )
+        .await?;
+        snapshot.update(log_store.as_ref(), Some(1)).await?;
+
+        assert_eq!(snapshot.version(), 1);
+        let mut files: Vec<_> = snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_collect()
+            .await?;
+        files.sort_by_key(|file| file.path().into_owned());
+        assert_eq!(
+            files.iter().map(|file| file.path()).collect_vec(),
+            ["part-00000.snappy.parquet", "part-00001.snappy.parquet"]
+        );
+        assert!(files.iter().all(|file| file.stats().is_none()));
+
+        let updated_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("updated eager snapshot must retain materialized files");
+        assert_canonical_no_stats_cache(updated_cache);
+        assert!(
+            updated_cache.full_table_seed().is_some(),
+            "updated cache without statistics must support replay"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_skip_stats_cache_reads_current_files_and_rebuilds_for_update() -> TestResult {
+        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
+        let (log_store, mut operations) = recording_log_store(table.log_store());
+        let config = DeltaTableConfig {
+            skip_stats: true,
+            ..Default::default()
+        };
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config.clone(), Some(0)).await?;
+        let current_cache = snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("eager snapshot must contain materialized files");
+        let mut legacy_cache = current_cache.as_ref().clone();
+        legacy_cache.batches = current_cache
+            .batches
+            .iter()
+            .map(without_stats_field)
+            .collect::<DeltaResult<Vec<_>>>()?
+            .into();
+        assert!(
+            legacy_cache
+                .batches
+                .iter()
+                .any(|batch| batch.num_rows() > 0)
+        );
+        assert!(
+            legacy_cache.full_table_seed().is_none(),
+            "cache without a stats field cannot seed replay"
+        );
+
+        let zero_row_cache = MaterializedFiles {
+            batches: vec![legacy_cache.batches[0].slice(0, 0)].into(),
+            ..legacy_cache.clone()
+        };
+        assert!(
+            zero_row_cache.full_table_seed().is_none(),
+            "empty batch without a stats field cannot seed replay"
+        );
+
+        let empty_table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
+            .await?;
+        let empty_snapshot = Snapshot::try_new(
+            empty_table.log_store().as_ref(),
+            config,
+            empty_table.version(),
+        )
+        .await?;
+        let zero_batch_cache = MaterializedFiles::full(&empty_snapshot, vec![]);
+        assert!(
+            zero_batch_cache.full_table_seed().is_some(),
+            "cache with no batches can seed replay"
+        );
+
+        let cached_snapshot = Arc::new(
+            snapshot
+                .snapshot()
+                .with_materialized_files(Some(Arc::new(legacy_cache))),
+        );
+        let mut legacy_snapshot = EagerSnapshot {
+            snapshot: cached_snapshot,
+        };
+        drain_recorded_ops(&mut operations).await;
+
+        let files: Vec<_> = legacy_snapshot
+            .file_views(log_store.as_ref(), None)
+            .try_collect()
+            .await?;
+        let read_ops = drain_recorded_ops(&mut operations).await;
+        assert_eq!(files.len(), 1);
+        assert!(files.iter().all(|file| file.stats().is_none()));
+        assert!(
+            read_ops.iter().all(|op| !op.is_log_replay_read()),
+            "current version read must use the legacy cache; operations: {read_ops:?}"
+        );
+
+        append_test_add_with_stats(
+            &mut table,
+            "part-00001.snappy.parquet",
+            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
+        )
+        .await?;
+        legacy_snapshot.update(log_store.as_ref(), Some(1)).await?;
+
+        assert_eq!(legacy_snapshot.version(), 1);
+        let replacement_cache = legacy_snapshot
+            .snapshot()
+            .materialized_files()
+            .expect("full replay must replace the legacy cache");
+        assert_canonical_no_stats_cache(replacement_cache);
+        assert!(replacement_cache.full_table_seed().is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_eager_file_views_reuses_materialized_files_same_version() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
@@ -3635,10 +3839,10 @@ mod tests {
         let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
         let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
 
-        let predicate = Arc::new(to_kernel_predicate(
+        let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
-                PartitionFilter::try_from(("month", "=", "2"))?,
-                PartitionFilter::try_from(("year", "=", "2020"))?,
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
             ],
             eager.schema().as_ref(),
         )?);
@@ -3675,6 +3879,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_views_with_dnf_predicate() -> TestResult {
+        let base = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+
+        let dnf = vec![
+            vec![
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
+            ],
+            vec![
+                ("year", FilterOp::Eq, FilterValue::Scalar("2021")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("12")),
+            ],
+        ];
+        let predicate = Arc::new(dnf_to_kernel_predicate(&dnf, snapshot.schema().as_ref())?);
+
+        let mut paths: Vec<_> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect()
+            .await?;
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+                "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string(),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_partition_values_map_preserves_all_columns_under_narrowing_predicate()
     -> TestResult {
         use std::collections::BTreeSet;
@@ -3688,10 +3930,10 @@ mod tests {
             .build_storage()?;
         let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
 
-        let predicate = Arc::new(to_kernel_predicate(
+        let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
-                PartitionFilter::try_from(("year", "=", "2020"))?,
-                PartitionFilter::try_from(("month", "=", "2"))?,
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
             ],
             snapshot.schema().as_ref(),
         )?);

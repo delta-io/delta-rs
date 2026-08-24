@@ -10,7 +10,7 @@
 //! # Example
 //! ```rust ignore
 //! let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-//! let (table, metrics) = DeltaOps(table)
+//! let (table, metrics) = table
 //!     .merge(source, col("target.id").eq(col("source.id")))
 //!     .with_source_alias("source")
 //!     .with_target_alias("target")
@@ -33,7 +33,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 
-use arrow_schema::{DataType, Field, SchemaBuilder};
+use arrow_schema::{DataType, SchemaBuilder};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
@@ -44,6 +44,7 @@ use datafusion::datasource::provider_as_source;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::build_join_schema;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
@@ -234,7 +235,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -272,7 +273,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -305,7 +306,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -340,7 +341,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -372,7 +373,7 @@ impl MergeBuilder {
     /// #Example
     /// ```rust ignore
     /// let table = open_table(Url::from_directory_path("/abs/path/to/table").unwrap())?;
-    /// let (table, metrics) = DeltaOps(table)
+    /// let (table, metrics) = table
     ///     .merge(source, col("target.id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .with_target_alias("target")
@@ -719,7 +720,8 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        session_state: &SessionState,
+        session_state: &dyn Session,
+        planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
             if metric_observer.id.eq(SOURCE_COUNT_ID) {
@@ -796,7 +798,12 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             let schema = validation.input.schema();
             return Ok(Some(Arc::new(MergeValidationExec::new(
                 physical_inputs.first().unwrap().clone(),
-                planner.create_physical_expr(&validation.file_expr, schema, session_state)?,
+                planner.create_physical_expr(
+                    &validation.file_expr,
+                    schema,
+                    session_state,
+                    planning_ctx,
+                )?,
                 Arc::clone(&validation.file_column),
                 Arc::clone(&validation.row_ordinal_column),
             ))));
@@ -810,7 +817,7 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
             return Ok(Some(Arc::new(MergeBarrierExec::new(
                 physical_inputs.first().unwrap().clone(),
                 barrier.file_column.clone(),
-                planner.create_physical_expr(&barrier.expr, schema, session_state)?,
+                planner.create_physical_expr(&barrier.expr, schema, session_state, planning_ctx)?,
             ))));
         }
 
@@ -1540,13 +1547,17 @@ async fn execute(
                 "__delta_rs_update_expanded",
                 when(
                     col(CDC_COLUMN_NAME).eq(lit("update")),
+                    // `new_list` takes the *element* type, not the list type. DataFusion 54
+                    // ignored this argument for non-empty values; 55 casts the values to it
+                    // (apache/datafusion `ScalarValue::new_list`), so passing a list type here
+                    // yields List(List(Utf8)) and unnest leaves a list behind.
                     lit(ScalarValue::List(ScalarValue::new_list(
                         &[
                             ScalarValue::Utf8(Some("update_preimage".into())),
                             ScalarValue::Utf8(Some("update_postimage".into())),
                         ],
-                        &DataType::List(Field::new("element", DataType::Utf8, false).into()),
-                        true,
+                        &DataType::Utf8,
+                        false,
                     ))),
                 )
                 .end()?,
@@ -1942,6 +1953,8 @@ mod tests {
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::test_utils::get_delta_schema_non_null_id;
+    use crate::writer::test_utils::get_non_null_arrow_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
     use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
@@ -2001,6 +2014,20 @@ mod tests {
         table
     }
 
+    pub(crate) async fn setup_table_with_non_null_column(
+        partitions: Option<Vec<&str>>,
+    ) -> DeltaTable {
+        let table_schema = get_delta_schema_non_null_id();
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(table_schema.fields().cloned())
+            .with_partition_columns(partitions.unwrap_or_default())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), Some(0));
+        table
+    }
+
     #[tokio::test]
     async fn test_merge_early_filter_does_not_row_filter_rewritten_files() {
         let schema = get_arrow_schema(&None);
@@ -2047,6 +2074,65 @@ mod tests {
             "| D  | 100   | 2021-02-02 |",
             "+----+-------+------------+",
         ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_non_null() {
+        let schema = get_non_null_arrow_schema();
+        let table = setup_table_with_non_null_column(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), Some(1));
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+
+        let ctx = SessionContext::new();
+        let null_schema = get_arrow_schema(&None);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&null_schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![999])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-01"])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let predicate = col("target.id")
+            .eq(col("source.id"))
+            .and(col("target.modified").eq(col("source.modified")));
+
+        let (table, metrics) = table
+            .merge(source, predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_merge_schema(true)
+            .when_matched_update(|update| {
+                update
+                    .update("id", col("source.id"))
+                    .update("value", col("source.value"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 999   | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let schema = table.snapshot().unwrap().schema();
+        let id_field = schema.field("id").unwrap();
+        assert!(!id_field.is_nullable());
         let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }

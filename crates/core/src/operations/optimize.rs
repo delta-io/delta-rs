@@ -63,7 +63,10 @@ use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaTable, ObjectMeta, PartitionFilter, to_kernel_predicate};
+use crate::{
+    DeltaTable, FilterLiteral, ObjectMeta, conjunction_to_kernel_predicate,
+    literal_to_predicate_string,
+};
 
 /// Planner used by optimize.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +283,7 @@ pub struct OptimizeBuilder<'a> {
     /// Delta object store for handling data files
     log_store: LogStoreRef,
     /// Filters to select specific table partitions to be optimized
-    filters: &'a [PartitionFilter],
+    filters: &'a [FilterLiteral<'a>],
     /// Desired file size after bin-packing files
     target_size: Option<NonZeroU64>,
     /// Properties passed to underlying parquet writer
@@ -332,8 +335,9 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Only optimize files that return true for the specified partition filter
-    pub fn with_filters(mut self, filters: &'a [PartitionFilter]) -> Self {
+    /// Only optimize files matching the given conjunction of `(column, op, value)`
+    /// partition filter literals
+    pub fn with_filters(mut self, filters: &'a [FilterLiteral<'a>]) -> Self {
         self.filters = filters;
         self
     }
@@ -1010,7 +1014,7 @@ pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
     snapshot: &EagerSnapshot,
-    filters: &[PartitionFilter],
+    filters: &[FilterLiteral<'_>],
     target_size: Option<NonZeroU64>,
     writer_properties: WriterProperties,
     session: SessionState,
@@ -1043,9 +1047,12 @@ pub async fn create_merge_plan(
         "merge plan created"
     );
 
+    // rendered predicate strings land in operationParameters in the commit log;
+    // the format is pinned, e.g. `key = 'value'` and `key IN ('a', 'b')`
+    let rendered_filters: Vec<String> = filters.iter().map(literal_to_predicate_string).collect();
     let input_parameters = OptimizeInput {
         target_size,
-        predicate: serde_json::to_string(filters).ok(),
+        predicate: serde_json::to_string(&rendered_filters).ok(),
     };
     let file_schema = arrow_schema_without_partitions(
         &Arc::new(snapshot.schema().as_ref().try_into_arrow()?),
@@ -1196,7 +1203,7 @@ fn plan_compaction_bins_in_stable_order(
 async fn build_compaction_plan(
     log_store: &dyn LogStore,
     snapshot: &EagerSnapshot,
-    filters: &[PartitionFilter],
+    filters: &[FilterLiteral<'_>],
     target_size: NonZeroU64,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     type PartitionFileEntry = (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>);
@@ -1210,7 +1217,7 @@ async fn build_compaction_plan(
     let predicate = if filters.is_empty() {
         None
     } else {
-        Some(Arc::new(to_kernel_predicate(
+        Some(Arc::new(conjunction_to_kernel_predicate(
             filters,
             snapshot.schema().as_ref(),
         )?))
@@ -1312,7 +1319,7 @@ async fn build_zorder_plan(
     zorder_columns: Vec<String>,
     snapshot: &EagerSnapshot,
     partition_keys: &[String],
-    filters: &[PartitionFilter],
+    filters: &[FilterLiteral<'_>],
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -1341,7 +1348,7 @@ async fn build_zorder_plan(
     let predicate = if filters.is_empty() {
         None
     } else {
-        Some(Arc::new(to_kernel_predicate(
+        Some(Arc::new(conjunction_to_kernel_predicate(
             filters,
             snapshot.schema().as_ref(),
         )?))

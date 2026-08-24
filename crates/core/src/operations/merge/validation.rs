@@ -6,6 +6,7 @@ use std::task::{Context, Poll};
 use arrow::array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, UInt64Array};
 use arrow::compute::{filter_record_batch, take};
 use arrow::datatypes::SchemaRef;
+use datafusion::common::tree_node::TreeNodeRecursion;
 use datafusion::common::{Column, DataFusionError, Result as DataFusionResult};
 use datafusion::execution::context::SessionState;
 use datafusion::logical_expr::{
@@ -65,7 +66,7 @@ impl ExecutionPlan for MergeValidationExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.file_expr.clone()]); 1]
+        vec![Distribution::KeyPartitioned(vec![self.file_expr.clone()]); 1]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -101,6 +102,17 @@ impl ExecutionPlan for MergeValidationExec {
             Arc::clone(&self.file_column),
             Arc::clone(&self.row_ordinal_column),
         )))
+    }
+
+    fn apply_expressions(
+        &self,
+        expr_rewriter: &mut dyn FnMut(
+            &Arc<dyn PhysicalExpr>,
+        ) -> Result<TreeNodeRecursion, DataFusionError>,
+    ) -> Result<TreeNodeRecursion, DataFusionError> {
+        // Traverse child execution plan with the expression rewriter
+        self.input.apply_expressions(expr_rewriter)?;
+        Ok(TreeNodeRecursion::Continue)
     }
 }
 

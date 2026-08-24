@@ -457,13 +457,6 @@ impl EagerSnapshot {
     ) -> Result<Vec<arrow::record_batch::RecordBatch>, DeltaTableError> {
         self.snapshot().add_actions_batches(flatten)
     }
-
-    #[cfg(feature = "datafusion")]
-    pub(crate) fn add_actions_partition_batches(
-        &self,
-    ) -> Result<Vec<RecordBatch>, DeltaTableError> {
-        self.snapshot().add_actions_partition_batches()
-    }
 }
 
 /// Target number of rows per coalesced batch. Matches DataFusion's default batch size.
@@ -777,7 +770,15 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
 
-        let snapshot = table.snapshot()?.snapshot();
+        let snapshot = Snapshot::try_new(
+            table.log_store().as_ref(),
+            DeltaTableConfig::default(),
+            None,
+        )
+        .await?;
+        let snapshot = Arc::new(snapshot)
+            .ensure_materialized_files(table.log_store().as_ref())
+            .await?;
         let batches = snapshot.add_actions_partition_batches()?;
         assert!(!batches.is_empty());
 

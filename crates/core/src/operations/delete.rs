@@ -44,7 +44,7 @@ use datafusion::catalog::Session;
 use datafusion::common::tree_node::TreeNode;
 use datafusion::common::{ToDFSchema as _, exec_datafusion_err};
 use datafusion::error::Result as DataFusionResult;
-use datafusion::execution::context::SessionState;
+use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::{conjunction, split_conjunction_owned};
 use datafusion::logical_expr::{Extension, LogicalPlan, UserDefinedLogicalNode, lit};
 use datafusion::optimizer::simplify_expressions::simplify_predicates;
@@ -70,13 +70,14 @@ use crate::delta_datafusion::logical::{
 };
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
 use crate::delta_datafusion::{
-    Expression, add_actions_partition_mem_table, create_session, resolve_session_state,
-    scan_files_where_matches, update_datafusion_session,
+    Expression, create_session, resolve_session_state, scan_files_where_matches,
+    try_materialized_add_actions_partition_mem_table, update_datafusion_session,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL};
 use crate::kernel::{
-    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, resolve_snapshot,
+    Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, LogicalFileView, Snapshot,
+    resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
@@ -393,7 +394,8 @@ impl ExtensionPlanner for DeleteMetricExtensionPlanner {
         node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        _session: &dyn Session,
+        _planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>()
             && (metric_observer.id.eq(SOURCE_COUNT_ID) || metric_observer.id.eq(RESCUED_COUNT_ID))
@@ -429,6 +431,8 @@ async fn execute(
     operation_id: Uuid,
     writer_properties: Option<WriterProperties>,
 ) -> DeltaResult<(Vec<Action>, DeleteMetrics)> {
+    let eager_snapshot = snapshot;
+    let snapshot = eager_snapshot.snapshot();
     let exec_start = Instant::now();
     let mut metrics = DeleteMetrics {
         num_removed_files: 0,
@@ -441,7 +445,7 @@ async fn execute(
     let Some(predicate) = predicate else {
         // no predicate means all files match.
         // cdc actions are not written when table files are removed.
-        let full_file = collect_full_file_deletes(snapshot.snapshot().active_adds(
+        let full_file = collect_full_file_deletes(snapshot.active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
                 predicate: None,
@@ -484,7 +488,7 @@ async fn execute(
                 // evaluating `partition_predicate` against `partitionValues_parsed` is exact:
                 // a file either fully matches or does not. It is therefore safe to treat this as
                 // the authoritative match set for DELETE.
-                collect_full_file_deletes(snapshot.snapshot().active_adds(
+                collect_full_file_deletes(snapshot.active_adds(
                     log_store.as_ref(),
                     ActiveAddOptions {
                         predicate: Some(Arc::new(delta_predicate)),
@@ -502,14 +506,13 @@ async fn execute(
                 let matching_paths = Arc::new(
                     find_file_paths_by_partition_predicate_datafusion(
                         session,
-                        &snapshot,
+                        snapshot,
                         &partition_predicate,
                     )
                     .await?,
                 );
                 collect_full_file_deletes(
                     snapshot
-                        .snapshot()
                         .active_adds(
                             log_store.as_ref(),
                             ActiveAddOptions {
@@ -537,7 +540,7 @@ async fn execute(
     }
 
     let maybe_scan_plan =
-        scan_files_where_matches(session, &snapshot, log_store.clone(), predicate).await?;
+        scan_files_where_matches(session, snapshot, log_store.clone(), predicate).await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     let Some(files_scan) = maybe_scan_plan else {
@@ -549,7 +552,6 @@ async fn execute(
 
     let root_url = Arc::new(snapshot.table_configuration().table_root().clone());
     let removes: Vec<_> = snapshot
-        .snapshot()
         .active_adds(
             log_store.as_ref(),
             ActiveAddOptions {
@@ -597,7 +599,7 @@ async fn execute(
         }),
     });
 
-    let (write_plan, write_cdc) = if should_write_cdc(&snapshot)? {
+    let (write_plan, write_cdc) = if should_write_cdc(&eager_snapshot)? {
         // create change set entries for all records we deleted
         let cdc_deletes = files_scan
             .scan()
@@ -657,7 +659,7 @@ async fn execute(
 
 async fn find_file_paths_by_partition_predicate_datafusion(
     session: &dyn Session,
-    snapshot: &EagerSnapshot,
+    snapshot: &Snapshot,
     predicate: &Expr,
 ) -> DeltaResult<std::collections::HashSet<String>> {
     use arrow_array::StringArray;
@@ -669,7 +671,7 @@ async fn find_file_paths_by_partition_predicate_datafusion(
     use datafusion::datasource::provider_as_source;
     use datafusion::physical_plan::collect;
 
-    let Some(mem_table) = add_actions_partition_mem_table(snapshot)? else {
+    let Some(mem_table) = try_materialized_add_actions_partition_mem_table(snapshot)? else {
         return Ok(std::collections::HashSet::new());
     };
 

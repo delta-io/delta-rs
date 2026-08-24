@@ -70,6 +70,16 @@ pub fn get_arrow_schema(part: &Option<String>) -> Arc<ArrowSchema> {
     }
 }
 
+/// Return the Arrow schema matching the columns produced by [`get_record_batch`] for `part` with
+/// `id` non-nullable.
+pub fn get_non_null_arrow_schema() -> Arc<ArrowSchema> {
+    Arc::new(ArrowSchema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("value", DataType::Int32, true),
+        Field::new("modified", DataType::Utf8, true),
+    ]))
+}
+
 fn data_with_null() -> (Int32Array, StringArray, StringArray) {
     let base_int = Int32Array::from(vec![
         Some(1),
@@ -141,6 +151,28 @@ pub fn get_delta_schema() -> StructType {
             "id".to_string(),
             DeltaDataType::Primitive(PrimitiveType::String),
             true,
+        ),
+        StructField::new(
+            "value".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::Integer),
+            true,
+        ),
+        StructField::new(
+            "modified".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            true,
+        ),
+    ])
+    .unwrap()
+}
+
+/// Return the canonical sample Delta schema (id, value, modified) with id non-nullable.
+pub fn get_delta_schema_non_null_id() -> StructType {
+    StructType::try_new(vec![
+        StructField::new(
+            "id".to_string(),
+            DeltaDataType::Primitive(PrimitiveType::String),
+            false,
         ),
         StructField::new(
             "value".to_string(),
