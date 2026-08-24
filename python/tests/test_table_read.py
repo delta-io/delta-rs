@@ -927,7 +927,11 @@ def test_delta_table_to_pandas():
 
     table_path = "../crates/test/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
+    assert (
+        dt.to_pandas()
+        .sort_values("id", ignore_index=True)
+        .equals(pd.DataFrame({"id": [5, 7, 9]}))
+    )
 
 
 @pytest.mark.pandas
@@ -1003,10 +1007,12 @@ def test_writer_fails_on_protocol():
     dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
     with pytest.raises(DeltaProtocolError):
         dt.to_pyarrow_dataset()
+    # the version guard only applies to reads forced through the pyarrow
+    # dataset path; the DataFusion path reads newer protocols natively
     with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_table()
+        dt.to_pyarrow_table(file_pruning_predicate=[("id", "=", "5")])
     with pytest.raises(DeltaProtocolError):
-        dt.to_pandas()
+        dt.to_pandas(file_pruning_predicate=[("id", "=", "5")])
 
 
 class ExcPassThroughThread(Thread):

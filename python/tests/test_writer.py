@@ -3172,8 +3172,10 @@ def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
     new_file_path = new_file_path.joinpath("foo.parquet")
     write_parquet(data, new_file_path)
 
+    # add paths are relative to the table root per the Delta protocol; the
+    # DataFusion read path rejects a leading slash
     action = AddAction(
-        "/ds=2026-01-01/foo.parquet",
+        "ds=2026-01-01/foo.parquet",
         new_file_path.stat().st_size,
         {"ds": "2026-01-01"},
         0,

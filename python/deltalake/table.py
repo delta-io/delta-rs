@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import math
 import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -113,6 +114,115 @@ def _encode_filter_conjunction(
             str_value = encode_partition_value(value)
         encoded.append((field, op, str_value))
     return encoded
+
+
+def _normalize_filter_dnf(filters: FilterType) -> FilterDNFType:
+    """Normalize tuple filters to disjunctive normal form: a list of
+    conjunctions."""
+    conjunctions: FilterDNFType
+    if all(isinstance(conjunction, list) for conjunction in filters):
+        conjunctions = cast(FilterDNFType, filters)
+    elif all(isinstance(literal, tuple) for literal in filters):
+        conjunctions = [cast(FilterConjunctionType, filters)]
+    else:
+        raise ValueError(
+            "filters must be a list of (column, op, value) tuples (a conjunction), "
+            "or a list of such lists (an OR across conjunctions), not a mix of both"
+        )
+    for conjunction in conjunctions:
+        if not conjunction:
+            raise ValueError(
+                "empty conjunction in filters; pass no filter to match all files"
+            )
+    return conjunctions
+
+
+class _SqlUnrepresentable(Exception):
+    """A filter value that cannot be rendered as a SQL literal."""
+
+
+_SQL_COMPARISON_OPS = {
+    "=": "=",
+    "==": "=",
+    "!=": "<>",
+    "<": "<",
+    ">": ">",
+    "<=": "<=",
+    ">=": ">=",
+}
+
+
+def _sql_ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _sql_literal(value: Any) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise _SqlUnrepresentable(f"non-finite float: {value!r}")
+        return repr(value)
+    if isinstance(value, datetime):
+        return f"TIMESTAMP '{value.isoformat(sep=' ')}'"
+    if isinstance(value, date):
+        return f"DATE '{value.isoformat()}'"
+    raise _SqlUnrepresentable(f"no SQL literal for {type(value).__name__}")
+
+
+def _sql_filter_expr(column: str, op: str, value: Any) -> str:
+    ident = _sql_ident(column)
+    if op in ("in", "not in"):
+        if isinstance(value, str) or not isinstance(value, Iterable):
+            raise ValueError(f"{op!r} requires a collection of values, got: {value!r}")
+        rendered = [_sql_literal(item) for item in value]
+        if not rendered:
+            return "FALSE" if op == "in" else "TRUE"
+        keyword = "IN" if op == "in" else "NOT IN"
+        return f"{ident} {keyword} ({', '.join(rendered)})"
+    sql_op = _SQL_COMPARISON_OPS.get(op)
+    if sql_op is None:
+        raise ValueError(f"invalid filter operator: {op!r}")
+    if isinstance(value, str) and not value:
+        # the empty string selects null values, see `file_uris`
+        if op in ("=", "=="):
+            return f"{ident} IS NULL"
+        if op == "!=":
+            return f"{ident} IS NOT NULL"
+    return f"{ident} {sql_op} {_sql_literal(value)}"
+
+
+def _filters_to_sql(filters: FilterType) -> str:
+    """Render tuple filters (syntax in `file_uris`) as a SQL predicate."""
+    rendered = [
+        " AND ".join(_sql_filter_expr(column, op, value) for column, op, value in conj)
+        for conj in _normalize_filter_dnf(filters)
+    ]
+    if len(rendered) == 1:
+        return rendered[0]
+    return "(" + " OR ".join(f"({conj})" for conj in rendered) + ")"
+
+
+_SQL_TABLE_NAME = "tbl"
+
+
+def _read_query(columns: list[str] | None, filters: FilterType | None) -> str:
+    """Render a read as a single SELECT against the registered table."""
+    if columns is not None and not columns:
+        raise _SqlUnrepresentable("empty projection")
+    projection = (
+        "*" if columns is None else ", ".join(_sql_ident(column) for column in columns)
+    )
+    query = f"SELECT {projection} FROM {_SQL_TABLE_NAME}"
+    if filters:
+        query += " WHERE " + _filters_to_sql(filters)
+    return query
 
 
 class _KeywordArgDefault:
@@ -1181,11 +1291,21 @@ class DeltaTable:
         """
         Build a PyArrow Table using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
+        When the read only projects and filters rows -- any combination of
+        `columns` and tuple `filters` -- it runs through the embedded DataFusion
+        engine as a single query: the filters apply to rows exactly, with file
+        pruning derived from them, and tables with reader features such as
+        columnMapping and deletionVectors are supported. Tuple filters follow
+        the conventions documented in `file_uris`, so the empty string matches
+        a null value.
+
+        Everything else scans through a pyarrow dataset: a
+        `pyarrow.dataset.Expression` as `filters`, a custom `filesystem`, or
+        `file_pruning_predicate`, which selects which *files* are read before
+        any data is scanned; see the `file_uris` docstring for its syntax and
+        pruning semantics. A pruning predicate on a non-partition column selects
+        a superset of files, so pair it with an equivalent `filters` expression
+        when you need exact rows:
 
         ```python
         dt.to_pyarrow_table(
@@ -1200,6 +1320,39 @@ class DeltaTable:
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
             file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
+        query: str | None = None
+        if (
+            filesystem is None
+            and partitions is None
+            and file_pruning_predicate is None
+            and (filters is None or isinstance(filters, list))
+        ):
+            try:
+                query = _read_query(columns, filters)
+            except _SqlUnrepresentable:
+                query = None
+
+        if query is not None:
+            try:
+                import pyarrow
+            except ImportError:
+                raise ImportError(
+                    "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
+                )
+            if not self._table.has_files():
+                raise DeltaError("Table is instantiated without files.")
+
+            from deltalake.query import QueryBuilder
+
+            reader = QueryBuilder().register(_SQL_TABLE_NAME, self).execute(query)
+            result = pyarrow.RecordBatchReader.from_stream(reader).read_all()
+            # DataFusion reads parquet as arrow view types; cast back to the
+            # table's logical schema so both read paths return the same types
+            schema = pyarrow.schema(self.schema().to_arrow())
+            if columns is not None:
+                schema = pyarrow.schema([schema.field(column) for column in columns])
+            return result.cast(schema)
+
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
         except ImportError:
@@ -1227,15 +1380,11 @@ class DeltaTable:
         """
         Build a pandas dataframe using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
-
-        ```python
-        dt.to_pandas(file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)])
-        ```
+        Routing and filter semantics follow `to_pyarrow_table`: reads with only
+        `columns` and tuple `filters` run through the embedded DataFusion engine
+        and filter rows exactly; a `pyarrow.dataset.Expression`, a custom
+        `filesystem` or `file_pruning_predicate` scan through a pyarrow dataset
+        instead, with file-level pruning as described in `file_uris`.
 
         Args:
             partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
@@ -1294,22 +1443,10 @@ class DeltaTable:
         conjunctions -- and encode every value to its partition string form."""
         if not partition_filters:
             return None
-        conjunctions: FilterDNFType
-        if all(isinstance(conjunction, list) for conjunction in partition_filters):
-            conjunctions = cast(FilterDNFType, partition_filters)
-        elif all(isinstance(literal, tuple) for literal in partition_filters):
-            conjunctions = [cast(FilterConjunctionType, partition_filters)]
-        else:
-            raise ValueError(
-                "filters must be a list of (column, op, value) tuples (a conjunction), "
-                "or a list of such lists (an OR across conjunctions), not a mix of both"
-            )
-        for conjunction in conjunctions:
-            if not conjunction:
-                raise ValueError(
-                    "empty conjunction in filters; pass no filter to match all files"
-                )
-        return [_encode_filter_conjunction(conjunction) for conjunction in conjunctions]
+        return [
+            _encode_filter_conjunction(conjunction)
+            for conjunction in _normalize_filter_dnf(partition_filters)
+        ]
 
     def get_add_actions(self, flatten: bool = False) -> Table:
         """Return an Arrow table describing every file currently in the table.
