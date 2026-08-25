@@ -128,6 +128,12 @@ async fn upload_parquet_file(
         }
     };
     let file_size = arrow_writer.bytes_written();
+    // `bytes_written()` returns cumulative bytes flushed through AsyncArrowWriter,
+    // including all row groups. After `finish()`, the parquet footer is written and
+    // included in this counter (parquet-rs calls write_footer() then updates the
+    // internal byte count before returning the metadata). If this ever understates
+    // the physical object size, use `object_store.head(&path).size` as the source
+    // of truth instead.
     Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
@@ -494,7 +500,14 @@ impl DeltaDataWriter for DeltaWriter {
         // interleave).
         if let Err(e) = write_batches_timed(&mut self, batches).await {
             // Abort rather than drop: dropping leaks the open multipart uploads.
-            let _ = (*self).abort().await;
+            // Log abort failures but always return the original write error — callers cannot
+            // meaningfully act on a secondary abort error, and leaked parts are cleaned
+            // up by vacuum's lifecycle policy.
+            if let Err(abort_err) = (*self).abort().await {
+                warn!(
+                    "failed to abort in-progress multipart uploads after write error: {abort_err}"
+                );
+            }
             return Err(e);
         }
         (*self).close().await

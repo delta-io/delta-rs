@@ -1,5 +1,4 @@
 pub mod latency_store;
-pub mod latency_store;
 pub mod merge;
 pub mod smoke;
 pub mod tpcds_queries;
