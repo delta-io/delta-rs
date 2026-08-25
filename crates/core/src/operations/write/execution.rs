@@ -3,10 +3,8 @@ use std::sync::{Arc, OnceLock};
 
 use arrow::datatypes::Schema;
 use arrow_array::RecordBatch;
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
 use datafusion::common::ToDFSchema;
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::SessionContext;
 use datafusion::logical_expr::{Expr, col, lit, when};
 use datafusion::physical_expr::expressions::col as physical_col;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -45,6 +43,10 @@ fn parse_channel_size(raw: Option<&str>) -> usize {
         .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
 }
 
+/// Capacity of the mpsc channels between partition-reader workers and the writer task.
+/// Env override: `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (positive integer; 0 or invalid → default).
+/// Distinct from `DELTARS_MAX_CONCURRENT_WRITERS` (partition parallelism) and
+/// `DELTARS_MAX_CONCURRENCY_TASKS` in writer.rs (per-file upload parallelism).
 fn channel_size() -> usize {
     static CHANNEL_SIZE: OnceLock<usize> = OnceLock::new();
     *CHANNEL_SIZE.get_or_init(|| {
@@ -252,6 +254,8 @@ mod tests {
 /// and in-memory buffers, so more writers means higher memory and FD usage.
 /// Defaults to `num_cpus` (matching DataFusion's `target_partitions`),
 /// clamped to [1, 128]. Override via `DELTARS_MAX_CONCURRENT_WRITERS`.
+/// Distinct from `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (channel backpressure) and
+/// `DELTARS_MAX_CONCURRENCY_TASKS` in writer.rs (per-file multipart upload parallelism).
 fn max_concurrent_writers() -> usize {
     static MAX_WRITERS: OnceLock<usize> = OnceLock::new();
     *MAX_WRITERS.get_or_init(|| {
@@ -782,6 +786,69 @@ async fn write_data_plan(
     Ok((actions, metrics))
 }
 
+/// Split a CDC-unioned batch into (normal-write rows, cdf rows) using Arrow compute,
+/// avoiding the overhead of a DataFusion plan-and-execute cycle per batch.
+///
+/// Split a CDC-unioned batch into (normal-write rows, cdf rows) using Arrow compute,
+/// avoiding the overhead of a DataFusion plan-and-execute cycle per batch.
+///
+/// Mirrors the original DataFusion filter semantics exactly:
+/// - **normal side** (written to the data file): rows where `_change_type` is NOT IN
+///   {"delete", "source_delete", "update_preimage"} — survivor rows (null change type)
+///   plus "insert" and "update_postimage" rows. The `_change_type` column is stripped.
+/// - **CDF side** (written to `_change_data`): rows where `_change_type` IS IN
+///   {"delete", "insert", "update_preimage", "update_postimage"} — null survivors excluded.
+fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch)> {
+    use arrow::array::BooleanArray;
+    use arrow::array::cast::AsArray;
+    use arrow::compute::filter_record_batch;
+
+    let cdc_idx = batch
+        .schema()
+        .index_of(CDC_COLUMN_NAME)
+        .map_err(|_| DeltaTableError::generic("_change_type column not found in CDC batch"))?;
+
+    let change_type_col = batch
+        .column(cdc_idx)
+        .as_string_opt::<i32>()
+        .ok_or_else(|| {
+            DeltaTableError::generic("_change_type column is not a Utf8 string array")
+        })?;
+
+    // Normal side: keep survivors (null _change_type) and non-delete events.
+    // Mirrors `NOT IN ("delete", "source_delete", "update_preimage")`.
+    let normal_mask: BooleanArray = change_type_col
+        .iter()
+        .map(|v| {
+            Some(!matches!(
+                v,
+                Some("delete" | "source_delete" | "update_preimage")
+            ))
+        })
+        .collect();
+
+    let mut normal_batch = filter_record_batch(batch, &normal_mask)
+        .map_err(|e| DeltaTableError::Generic(format!("CDC normal-row filter failed: {e}")))?;
+    // _change_type must not appear in the data file.
+    normal_batch.remove_column(cdc_idx);
+
+    // CDF side: only explicit change events; null survivors are excluded.
+    // Mirrors `IN ("delete", "insert", "update_preimage", "update_postimage")`.
+    let cdf_mask: BooleanArray = change_type_col
+        .iter()
+        .map(|v| {
+            Some(matches!(
+                v,
+                Some("delete" | "insert" | "update_preimage" | "update_postimage")
+            ))
+        })
+        .collect();
+    let cdf_batch = filter_record_batch(batch, &cdf_mask)
+        .map_err(|e| DeltaTableError::Generic(format!("CDC cdf-row filter failed: {e}")))?;
+
+    Ok((normal_batch, cdf_batch))
+}
+
 async fn write_cdc_plan(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
@@ -874,64 +941,17 @@ async fn write_cdc_plan(
         for mut partition_stream in partition_streams {
             let txn = tx_normal.clone();
             let txc = tx_cdf.clone();
-            let session_ctx = SessionContext::new();
 
             let h = tokio::task::spawn(async move {
                 while let Some(maybe_batch) = partition_stream.next().await {
                     let batch = maybe_batch?;
-
-                    // split batch since upstream unioned write and cdf plans
-                    let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
-                        batch.schema(),
-                        vec![vec![batch.clone()]],
-                    )?);
-                    let batch_df = session_ctx
-                        .read_table(table_provider)
-                        .map_err(|e| DeltaTableError::Generic(format!("read_table failed: {e}")))?;
-
-                    let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
-                        vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
-                        true,
-                    ))?;
-
-                    let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
-                        vec![
-                            lit("delete"),
-                            lit("insert"),
-                            lit("update_preimage"),
-                            lit("update_postimage"),
-                        ],
-                        false,
-                    ))?;
-
-                    let mut normal_stream = normal_df.execute_stream().await?;
-                    while let Some(mut normal_batch) = normal_stream.try_next().await? {
-                        let mut idx: Option<usize> = None;
-                        for (i_field, field) in
-                            normal_batch.schema_ref().fields().iter().enumerate()
-                        {
-                            if field.name() == CDC_COLUMN_NAME {
-                                idx = Some(i_field);
-                                break;
-                            }
-                        }
-                        normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
-                            "idx of _change_type col not found. This shouldn't have happened.",
-                        ))?);
-
-                        txn.send(normal_batch).await.map_err(|_| {
-                            DeltaTableError::Generic(
-                                "normal writer closed unexpectedly".to_string(),
-                            )
-                        })?;
-                    }
-
-                    let mut cdf_stream = cdf_df.execute_stream().await?;
-                    while let Some(cdf_batch) = cdf_stream.try_next().await? {
-                        txc.send(cdf_batch).await.map_err(|_| {
-                            DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
-                        })?;
-                    }
+                    let (normal_batch, cdf_batch) = split_cdc_batch(&batch)?;
+                    txn.send(normal_batch).await.map_err(|_| {
+                        DeltaTableError::Generic("normal writer closed unexpectedly".to_string())
+                    })?;
+                    txc.send(cdf_batch).await.map_err(|_| {
+                        DeltaTableError::Generic("cdf writer closed unexpectedly".to_string())
+                    })?;
                 }
                 Ok::<(), DeltaTableError>(())
             });
@@ -1023,60 +1043,16 @@ async fn write_cdc_plan(
         join_set.spawn(async move {
             let mut normal_writer = DeltaWriter::new(store, normal_config);
             let mut cdf_writer = DeltaWriter::new(cdf_store, cdf_config);
-            let session_ctx = SessionContext::new();
             let mut write_ms: u64 = 0;
 
             while let Some(maybe_batch) = stream.next().await {
                 let batch = maybe_batch?;
+                let (normal_batch, cdf_batch) = split_cdc_batch(&batch)?;
 
-                // split batch since upstream unioned write and cdf plans
-                let table_provider: Arc<dyn TableProvider> = Arc::new(MemTable::try_new(
-                    batch.schema(),
-                    vec![vec![batch.clone()]],
-                )?);
-                let batch_df = session_ctx
-                    .read_table(table_provider)
-                    .map_err(|e| DeltaTableError::Generic(format!("read_table failed: {e}")))?;
-
-                let normal_df = batch_df.clone().filter(col(CDC_COLUMN_NAME).in_list(
-                    vec![lit("delete"), lit("source_delete"), lit("update_preimage")],
-                    true,
-                ))?;
-
-                let cdf_df = batch_df.filter(col(CDC_COLUMN_NAME).in_list(
-                    vec![
-                        lit("delete"),
-                        lit("insert"),
-                        lit("update_preimage"),
-                        lit("update_postimage"),
-                    ],
-                    false,
-                ))?;
-
-                let mut normal_stream = normal_df.execute_stream().await?;
-                while let Some(mut normal_batch) = normal_stream.try_next().await? {
-                    let mut idx: Option<usize> = None;
-                    for (i_field, field) in normal_batch.schema_ref().fields().iter().enumerate() {
-                        if field.name() == CDC_COLUMN_NAME {
-                            idx = Some(i_field);
-                            break;
-                        }
-                    }
-                    normal_batch.remove_column(idx.ok_or(DeltaTableError::generic(
-                        "idx of _change_type col not found. This shouldn't have happened.",
-                    ))?);
-
-                    let wstart = std::time::Instant::now();
-                    normal_writer.write(&normal_batch).await?;
-                    write_ms += wstart.elapsed().as_millis() as u64;
-                }
-
-                let mut cdf_stream = cdf_df.execute_stream().await?;
-                while let Some(cdf_batch) = cdf_stream.try_next().await? {
-                    let wstart = std::time::Instant::now();
-                    cdf_writer.write(&cdf_batch).await?;
-                    write_ms += wstart.elapsed().as_millis() as u64;
-                }
+                let wstart = std::time::Instant::now();
+                normal_writer.write(&normal_batch).await?;
+                cdf_writer.write(&cdf_batch).await?;
+                write_ms += wstart.elapsed().as_millis() as u64;
             }
 
             let normal_adds = normal_writer.close().await?;

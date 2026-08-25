@@ -58,6 +58,10 @@ fn upload_part_size() -> usize {
     })
 }
 
+/// Maximum number of concurrent multipart-upload tasks per `PartitionWriter` (per open file).
+/// Env override: `DELTARS_MAX_CONCURRENCY_TASKS`.
+/// Distinct from `DELTARS_MAX_CONCURRENT_WRITERS` in execution.rs (number of partition writers
+/// running in parallel) and `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (channel buffer depth).
 fn get_max_concurrency_tasks() -> usize {
     static MAX_CONCURRENCY_TASKS: OnceLock<usize> = OnceLock::new();
     *MAX_CONCURRENCY_TASKS.get_or_init(|| {
