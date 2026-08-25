@@ -43,8 +43,7 @@ use datafusion_datasource::{
     file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
-    BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapterFactory,
-    PhysicalExprAdapterFactory,
+    BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
 };
 use delta_kernel::{
     Engine, Expression, expressions::StructData, scan::ScanMetadata, table_features::TableFeature,
@@ -72,8 +71,11 @@ use crate::{
 
 mod exec;
 mod exec_meta;
+mod expr_adapter;
 mod plan;
 mod replay;
+
+use self::expr_adapter::DeltaExprAdapterFactory;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 
@@ -477,7 +479,9 @@ async fn get_read_plan(
     full_read_schema.push(file_id_field.as_ref().clone().with_nullable(true));
     let full_read_schema = Arc::new(full_read_schema.finish());
     let parquet_predicate_df_schema = parquet_predicate_schema.clone().to_dfschema()?;
-    let adapter_factory = Arc::new(DefaultPhysicalExprAdapterFactory {});
+    // Not DataFusion's adapter: it cannot null-fill a struct nested in a Map value.
+    // See `expr_adapter` for the full story and the upstream fix that retires this.
+    let adapter_factory = Arc::new(DeltaExprAdapterFactory);
 
     for (store_url, files) in files_by_store.into_iter() {
         let reader_factory = Arc::new(CachedParquetFileReaderFactory::new(

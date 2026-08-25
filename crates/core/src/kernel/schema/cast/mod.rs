@@ -189,6 +189,24 @@ fn is_cast_required(a: &DataType, b: &DataType) -> bool {
     }
 }
 
+/// Cast a single column array to `field`, filling fields the array is missing with nulls when
+/// `add_missing` is set - recursing through `Struct`, `List` and `Map` values.
+///
+/// Same machinery [`cast_record_batch`] uses, exposed per-column for the read-path expression
+/// adapter (see `delta_datafusion::table_provider::next::scan::expr_adapter`).
+pub(crate) fn cast_array_to_field(
+    array: &ArrayRef,
+    field: &FieldRef,
+    safe: bool,
+    add_missing: bool,
+) -> Result<ArrayRef, ArrowError> {
+    let cast_options = CastOptions {
+        safe,
+        ..Default::default()
+    };
+    cast_field(array, field, &cast_options, add_missing)
+}
+
 /// Cast recordbatch to a new target_schema, by casting each column array
 pub fn cast_record_batch(
     batch: &RecordBatch,
