@@ -17,6 +17,8 @@ use datafusion::common::{
 use datafusion::config::ConfigOptions;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
+use datafusion::functions::core::expr_ext::FieldAccessor as _;
+use datafusion::functions_nested::expr_fn::{array_compact, array_length, map_values};
 use datafusion::logical_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
@@ -32,7 +34,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion::prelude::{Expr, binary_expr, col};
+use datafusion::prelude::{Expr, binary_expr, col, ident};
 use datafusion::scalar::ScalarValue;
 use delta_kernel::Expression;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow;
@@ -43,7 +45,7 @@ use futures::Stream;
 use itertools::Itertools as _;
 use pin_project_lite::pin_project;
 
-use crate::delta_datafusion::engine::{to_datafusion_expr, to_delta_expression};
+use crate::delta_datafusion::engine::to_delta_expression;
 use crate::delta_datafusion::expr::{
     parse_generated_column_expression, parse_predicate_expression,
 };
@@ -76,7 +78,6 @@ impl PartialOrd for DataValidation {
 }
 
 impl DataValidation {
-    #[allow(dead_code)]
     pub(crate) fn try_new(
         input: LogicalPlan,
         validations: impl IntoIterator<Item = Expr>,
@@ -118,7 +119,6 @@ impl DataValidation {
 ///
 /// This is used to update the schema of the data after validation to
 /// reflect the non-nullability of these columns.
-#[allow(dead_code)]
 struct NotNullExtractor {
     non_nullable_columns: Vec<ColumnName>,
 }
@@ -191,11 +191,13 @@ impl UserDefinedLogicalNodeCore for DataValidation {
                 inputs.len()
             );
         }
-        Ok(Self {
-            input: inputs.remove(0),
-            validations: exprs,
-            validated_schema: self.validated_schema.clone(),
-        })
+        // Recompute validated_schema from the new expressions and input so that any
+        // optimizer rewrites (e.g. constant folding removing an IS NOT NULL check) are
+        // reflected in the schema rather than carrying stale non-nullability marks.
+        let new = Self::try_new(inputs.remove(0), exprs)?;
+        // try_new returns a freshly-allocated Arc with no other owners, so unwrap is safe.
+        Ok(Arc::try_unwrap(new)
+            .unwrap_or_else(|_| panic!("DataValidation Arc had unexpected shared owners")))
     }
 }
 
@@ -273,16 +275,23 @@ pub(crate) fn validation_predicates(
     let non_nullable_source: HashSet<_> = collect_non_nullable_fields(source_schema.as_arrow())
         .into_iter()
         .collect();
+    // A scalar field (top-level or nested inside structs) holds one value per row, so it can be
+    // validated with `col IS NOT NULL`. We trust the source schema and only check fields that are
+    // nullable in the source, since a non-nullable source already guarantees the values.
+    //
+    // Collection element non-nullability (map values and list elements) cannot be expressed as a
+    // scalar `IS NOT NULL` and the source's declared element-nullability is unreliable for the very
+    // case #3690 reports, so those checks are driven from the table schema regardless of the source
+    // and emitted separately below.
     let mut validations: Vec<_> = non_nullable_table
         .difference(&non_nullable_source)
-        .map(|col| {
-            to_datafusion_expr(
-                &Expression::Column(col.clone()),
-                &delta_kernel::schema::DataType::BOOLEAN,
-            )
-        })
-        .map_ok(|e| e.is_not_null())
-        .try_collect()?;
+        .filter_map(|col| non_nullable_scalar_check_expr(col, &table_schema))
+        .collect();
+    validations.extend(
+        non_nullable_table
+            .iter()
+            .filter_map(|col| non_nullable_collection_check_expr(col, &table_schema)),
+    );
 
     if table_configuration.is_feature_enabled(&TableFeature::Invariants) {
         let invariants = table_configuration
@@ -316,6 +325,101 @@ pub(crate) fn validation_predicates(
     }
 
     Ok(validations)
+}
+
+/// Build a column reference expression from a kernel column path.
+///
+/// Uses `ident`/`field` to match the segment handling in `to_datafusion_expr` (no SQL
+/// normalization, `.` treated literally), so camelCase and other names resolve correctly.
+fn col_expr(path: &[String]) -> Option<Expr> {
+    let mut iter = path.iter();
+    let base = iter.next()?;
+    Some(iter.fold(ident(base), |acc, n| acc.field(n)))
+}
+
+/// Build a `col IS NOT NULL` check for a non-nullable scalar field.
+///
+/// Returns `None` for collection elements (list/map), which are handled by
+/// [`non_nullable_collection_check_expr`] instead.
+fn non_nullable_scalar_check_expr(path: &ColumnName, table_schema: &Schema) -> Option<Expr> {
+    let segments = path.path();
+    let mut data_type = table_schema
+        .field_with_name(segments.first()?)
+        .ok()?
+        .data_type();
+    // Walk the remaining segments through structs only; anything reached past a list or map
+    // element is not a scalar field.
+    for segment in &segments[1..] {
+        match data_type {
+            DataType::Struct(fields) => {
+                data_type = fields.iter().find(|f| f.name() == segment)?.data_type();
+            }
+            _ => return None,
+        }
+    }
+    col_expr(segments).map(|e| e.is_not_null())
+}
+
+/// Build a "no null elements" check for a non-nullable map value or list element.
+///
+/// Collection element nullability cannot be expressed as a scalar `IS NOT NULL`: the values form
+/// an array per row, so we compare the element count before and after dropping nulls. Returns
+/// `None` for scalar fields and for paths that reach past a list/map element (those cannot be
+/// addressed per-element today and are skipped rather than erroring).
+fn non_nullable_collection_check_expr(path: &ColumnName, table_schema: &Schema) -> Option<Expr> {
+    let segments = path.path();
+    // A collection element path has at least a parent and the element/value segment; a
+    // single-segment path is a top-level scalar field, handled by the scalar check.
+    if segments.len() < 2 {
+        return None;
+    }
+    // Resolve the parent collection and the element/value field of the final path segment.
+    let last = segments.last()?;
+    let mut data_type = table_schema
+        .field_with_name(segments.first()?)
+        .ok()?
+        .data_type();
+    for segment in &segments[1..segments.len() - 1] {
+        match data_type {
+            DataType::Struct(fields) => {
+                data_type = fields.iter().find(|f| f.name() == segment)?.data_type();
+            }
+            // Path crosses a list/map element; per-element access isn't expressible, skip it.
+            _ => return None,
+        }
+    }
+
+    let parent = &segments[..segments.len() - 1];
+    match data_type {
+        DataType::List(element) | DataType::LargeList(element) if !element.is_nullable() => {
+            // FixedSizeList is intentionally excluded here (and in collect_non_nullable_fields):
+            // DataFusion's array_compact does not support it, so we cannot emit a safe check.
+            col_expr(parent).map(no_null_elements_check)
+        }
+        DataType::Map(entries, _) if last == "value" => {
+            if let DataType::Struct(fields) = entries.data_type() {
+                let value = fields.iter().find(|f| f.name() == "value")?;
+                if !value.is_nullable() {
+                    return col_expr(parent).map(|m| no_null_elements_check(map_values(m)));
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Assert an array expression contains no null elements.
+///
+/// `array_compact` drops nulls; if the length is unchanged there were none. `IS NOT DISTINCT FROM`
+/// is null-safe, so a NULL collection (e.g. a nullable list column whose slot is null) compares
+/// NULL to NULL and passes — only the element is required to be non-null, not the collection.
+fn no_null_elements_check(array: Expr) -> Expr {
+    binary_expr(
+        array_length(array.clone()),
+        Operator::IsNotDistinctFrom,
+        array_length(array_compact(array)),
+    )
 }
 
 pub(crate) fn constraints_to_exprs<'a>(
@@ -555,7 +659,10 @@ impl ExecutionPlan for DataValidationExec {
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
+        // Visit this node's own check expression so that any column-index remapping
+        // performed by the physical optimizer is applied to it (e.g. after a
+        // ProjectionExec is inserted below this node by the optimizer).
+        expr_rewriter(&self.check_expression)?;
         self.input.apply_expressions(expr_rewriter)?;
         Ok(TreeNodeRecursion::Continue)
     }
@@ -705,13 +812,26 @@ fn collect_non_nullable_fields_recursive(
             }
         }
         DataType::Map(child, _) => {
-            // Map's child is a struct with "key" and "value" fields
+            // Map's child is a struct with "key" and "value" fields.
+            // Arrow map keys are always non-nullable by spec and cannot be validated
+            // with an element-level check, so only recurse into "value".
             if let DataType::Struct(fields) = child.data_type() {
-                for map_field in fields.iter() {
+                for map_field in fields.iter().filter(|f| f.name() == "value") {
                     let mut map_path = current_path.clone();
                     map_path.push(map_field.name());
                     collect_non_nullable_fields_recursive(map_field, map_path, non_nullable_paths);
                 }
+            }
+        }
+        DataType::List(element) | DataType::LargeList(element) => {
+            // Record a non-nullable element so the collection check can enforce it; we don't
+            // recurse further as paths past a list element aren't addressable today.
+            // FixedSizeList is intentionally excluded: DataFusion's array_compact does not
+            // support it, so we can't emit a safe check.
+            if !element.is_nullable() {
+                let mut element_path = current_path.clone();
+                element_path.push(element.name());
+                non_nullable_paths.push(ColumnName::from_iter(element_path.iter().cloned()));
             }
         }
         // For primitive types, we've already recorded if non-nullable above
@@ -743,7 +863,6 @@ fn collect_non_nullable_fields_recursive(
 /// ];
 /// let new_schema = make_fields_non_nullable(schema.as_ref(), &paths);
 /// ```
-#[allow(dead_code)]
 pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) -> Schema {
     // Convert ColumnName paths to Vec<String> for easier comparison
     let target_paths: HashSet<Vec<String>> = paths
@@ -765,7 +884,6 @@ pub(crate) fn make_fields_non_nullable(schema: &Schema, paths: &[ColumnName]) ->
 }
 
 /// Recursively make fields non-nullable based on target paths.
-#[allow(dead_code)]
 fn make_fields_non_nullable_recursive(
     field: &arrow_schema::Field,
     current_path: Vec<String>,
@@ -812,8 +930,13 @@ fn make_fields_non_nullable_recursive(
                         make_fields_non_nullable_recursive(map_field, map_path, target_paths)
                     })
                     .collect();
-                let new_map_struct =
-                    Field::new("entries", DataType::Struct(Fields::from(new_fields)), false);
+                // Preserve the original child field name rather than hardcoding "entries";
+                // Arrow allows any name for the map entries struct.
+                let new_map_struct = Field::new(
+                    child.name(),
+                    DataType::Struct(Fields::from(new_fields)),
+                    child.is_nullable(),
+                );
                 DataType::Map(Arc::new(new_map_struct), *sorted)
             } else {
                 // Shouldn't happen, but keep original if malformed
@@ -1528,9 +1651,9 @@ mod tests {
 
         let non_nullable = collect_non_nullable_fields(schema.as_ref());
 
-        assert_eq!(non_nullable.len(), 1);
+        assert_eq!(non_nullable.len(), 2);
         assert_eq!(non_nullable[0], ColumnName::new(["id"]));
-        // assert_eq!(non_nullable[1], ColumnName::new(["tags", "element"]));
+        assert_eq!(non_nullable[1], ColumnName::new(["tags", "element"]));
     }
 
     #[test]
@@ -1751,6 +1874,309 @@ mod tests {
             assert!(fields[1].is_nullable()); // phone unchanged
         } else {
             panic!("Expected Struct type");
+        }
+    }
+
+    // Tests for non-nullable collection element / map value enforcement (#3690)
+
+    use arrow_array::builder::{
+        Int32Builder, ListBuilder, MapBuilder, MapFieldNames, StringBuilder,
+    };
+
+    /// Table schema for a Map<Utf8, Int32> column whose value field is non-nullable.
+    fn map_table_schema() -> Schema {
+        let entries = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, false),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        Schema::new(vec![Field::new(
+            "m",
+            DataType::Map(Arc::new(entries), false),
+            true,
+        )])
+    }
+
+    /// Build a map batch from `(key, value)` rows. The physical array declares the value field
+    /// nullable (so nulls can be appended); the non-nullable contract lives in the table schema.
+    fn map_batch(rows: Vec<Vec<(&str, Option<i32>)>>) -> RecordBatch {
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut builder = MapBuilder::new(Some(names), StringBuilder::new(), Int32Builder::new());
+        for row in rows {
+            for (k, v) in row {
+                builder.keys().append_value(k);
+                builder.values().append_option(v);
+            }
+            builder.append(true).unwrap();
+        }
+        let array = builder.finish();
+        RecordBatch::try_from_iter(vec![("m", Arc::new(array) as _)]).unwrap()
+    }
+
+    /// Table schema for a List<Int32> column with a non-nullable element.
+    fn list_table_schema() -> Schema {
+        Schema::new(vec![Field::new(
+            "l",
+            DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
+            true,
+        )])
+    }
+
+    fn list_batch(rows: Vec<Vec<Option<i32>>>) -> RecordBatch {
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        for row in rows {
+            for v in row {
+                builder.values().append_option(v);
+            }
+            builder.append(true);
+        }
+        let array = builder.finish();
+        RecordBatch::try_from_iter(vec![("l", Arc::new(array) as _)]).unwrap()
+    }
+
+    /// Derive the collection check from `table_schema` and run it against `batch`.
+    async fn run_collection_check(table_schema: &Schema, batch: RecordBatch) -> Result<()> {
+        let check = collect_non_nullable_fields(table_schema)
+            .into_iter()
+            .find_map(|p| non_nullable_collection_check_expr(&p, table_schema))
+            .expect("expected a collection check");
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), batch.schema(), vec![batch]).await;
+        let validated_exec =
+            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, vec![check])?;
+        collect(validated_exec, ctx.task_ctx()).await.map(|_| ())
+    }
+
+    #[tokio::test]
+    async fn test_map_null_value_rejected() {
+        // The literal #3690 repro: real keys, a null value in one row.
+        let batch = map_batch(vec![
+            vec![("a", Some(1)), ("b", Some(2))],
+            vec![("a", None)],
+        ]);
+        let result = run_collection_check(&map_table_schema(), batch).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid data found")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_map_all_values_present_accepted() {
+        let batch = map_batch(vec![
+            vec![("a", Some(1)), ("b", Some(2))],
+            vec![("c", Some(3))],
+        ]);
+        assert!(
+            run_collection_check(&map_table_schema(), batch)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_null_element_rejected() {
+        let batch = list_batch(vec![vec![Some(1), None, Some(3)]]);
+        assert!(
+            run_collection_check(&list_table_schema(), batch)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_valid_accepted() {
+        let batch = list_batch(vec![vec![Some(1), Some(2)]]);
+        assert!(
+            run_collection_check(&list_table_schema(), batch)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_empty_accepted() {
+        let batch = list_batch(vec![vec![]]);
+        assert!(
+            run_collection_check(&list_table_schema(), batch)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_all_null_rejected() {
+        let batch = list_batch(vec![vec![None, None]]);
+        assert!(
+            run_collection_check(&list_table_schema(), batch)
+                .await
+                .is_err()
+        );
+    }
+
+    /// Derive the scalar check from `table_schema` and run it against `batch`.
+    async fn run_scalar_check(table_schema: &Schema, batch: RecordBatch) -> Result<()> {
+        let check = collect_non_nullable_fields(table_schema)
+            .into_iter()
+            .find_map(|p| non_nullable_scalar_check_expr(&p, table_schema))
+            .expect("expected a scalar check");
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), batch.schema(), vec![batch]).await;
+        let validated_exec =
+            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, vec![check])?;
+        collect(validated_exec, ctx.task_ctx()).await.map(|_| ())
+    }
+
+    /// Table schema with a non-nullable struct field, and a batch with a nullable physical field.
+    fn struct_table_schema() -> Schema {
+        Schema::new(vec![Field::new(
+            "person",
+            DataType::Struct(vec![Field::new("name", DataType::Utf8, false)].into()),
+            true,
+        )])
+    }
+
+    fn struct_batch(names: Vec<Option<&str>>) -> RecordBatch {
+        let array = arrow_array::StructArray::from(vec![(
+            Arc::new(Field::new("name", DataType::Utf8, true)),
+            Arc::new(StringArray::from(names)) as Arc<dyn arrow_array::Array>,
+        )]);
+        RecordBatch::try_from_iter(vec![("person", Arc::new(array) as _)]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_struct_field_null_rejected() {
+        let batch = struct_batch(vec![Some("a"), None]);
+        assert!(
+            run_scalar_check(&struct_table_schema(), batch)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_struct_field_present_accepted() {
+        let batch = struct_batch(vec![Some("a"), Some("b")]);
+        assert!(
+            run_scalar_check(&struct_table_schema(), batch)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_large_list_null_element_rejected() {
+        // LargeList<Int32 NOT NULL> — a null element should be rejected.
+        use arrow::array::LargeListBuilder;
+
+        let table_schema = Schema::new(vec![Field::new(
+            "l",
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, false))),
+            true,
+        )]);
+        let mut builder = LargeListBuilder::new(Int32Builder::new());
+        builder.values().append_option(Some(1));
+        builder.values().append_option(None); // null element
+        builder.values().append_option(Some(3));
+        builder.append(true);
+        let array = builder.finish();
+        let batch = RecordBatch::try_from_iter(vec![("l", Arc::new(array) as _)]).unwrap();
+
+        assert!(run_collection_check(&table_schema, batch).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_large_list_valid_accepted() {
+        use arrow::array::LargeListBuilder;
+
+        let table_schema = Schema::new(vec![Field::new(
+            "l",
+            DataType::LargeList(Arc::new(Field::new("element", DataType::Int32, false))),
+            true,
+        )]);
+        let mut builder = LargeListBuilder::new(Int32Builder::new());
+        builder.values().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true);
+        let array = builder.finish();
+        let batch = RecordBatch::try_from_iter(vec![("l", Arc::new(array) as _)]).unwrap();
+
+        assert!(run_collection_check(&table_schema, batch).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_null_map_row_passes_when_values_non_nullable() {
+        // A row where the map column itself is NULL (i.e. the list slot is absent) should
+        // pass: the non-nullable constraint is on the *values inside* a non-null map, not
+        // on the map container. The IS NOT DISTINCT FROM check is null-safe and treats
+        // NULL == NULL as true, so a null map row doesn't trigger a failure.
+        let names = MapFieldNames {
+            entry: "entries".to_string(),
+            key: "key".to_string(),
+            value: "value".to_string(),
+        };
+        let mut builder = MapBuilder::new(Some(names), StringBuilder::new(), Int32Builder::new());
+        // Row 0: has entries, all values present.
+        builder.keys().append_value("a");
+        builder.values().append_option(Some(1));
+        builder.append(true).unwrap();
+        // Row 1: map is null (no entries appended; append(false) marks the slot as null).
+        builder.append(false).unwrap();
+        let array = builder.finish();
+        let batch = RecordBatch::try_from_iter(vec![("m", Arc::new(array) as _)]).unwrap();
+
+        assert!(
+            run_collection_check(&map_table_schema(), batch)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_list_not_collected_for_non_nullable_check() {
+        // FixedSizeList elements are excluded from the collection check because DataFusion's
+        // array_compact does not support them. Verify that collect_non_nullable_fields returns
+        // no path for a FixedSizeList<NOT NULL> column.
+        let schema = Schema::new(vec![Field::new(
+            "fsl",
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, false)), 3),
+            true,
+        )]);
+        let paths = collect_non_nullable_fields(&schema);
+        // The parent column "fsl" is nullable (true), so only the element path ["fsl", "item"]
+        // could appear — but FixedSizeList is excluded, so the result should be empty.
+        assert!(
+            paths.is_empty(),
+            "FixedSizeList element path should not be collected; got: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn test_map_key_path_not_collected() {
+        // Map keys are always non-nullable by Arrow spec but are now excluded from collection
+        // to avoid phantom entries in the set difference. Only the "value" path should be collected.
+        let table_schema = map_table_schema();
+        let paths = collect_non_nullable_fields(&table_schema);
+        for path in &paths {
+            let segments = path.path();
+            assert_ne!(
+                segments.last().map(|s| s.as_str()),
+                Some("key"),
+                "map key path should not be collected: {path:?}"
+            );
         }
     }
 
