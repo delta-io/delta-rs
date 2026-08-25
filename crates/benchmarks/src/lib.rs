@@ -22,8 +22,3 @@ pub use vacuum::{
     VacuumScanMode,
 };
 pub use write::{create_table, generate_batches, run_write, write_cases, WriteParams, WritePath};
-    default_fixture_dir, fixture_exists, generate_vacuum_fixture, open_vacuum_fixture,
-    open_vacuum_fixture_with_list_latency, run_vacuum_full_dry_run, VacuumFixtureParams,
-    VacuumScanMode,
-};
->>>>>>> upstream/main

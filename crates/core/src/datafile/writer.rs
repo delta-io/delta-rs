@@ -110,7 +110,7 @@ async fn upload_parquet_file(
             // that case degrades to a leaked-parts warning instead of taking
             // down the write task.
             use futures::FutureExt as _;
-            let mut buf_writer = arrow_writer.into_inner().into_inner();
+            let mut buf_writer = arrow_writer.into_inner();
             let abort = std::panic::AssertUnwindSafe(buf_writer.abort()).catch_unwind();
             match abort.await {
                 Ok(Ok(())) => {}
@@ -585,7 +585,7 @@ impl LazyArrowWriter {
                 // `Initialized` — unreachable by the outer abort paths — so the
                 // upload must be aborted here before surfacing the error.
                 if let Err(e) = arrow_writer.write(batch).await {
-                    let mut buf_writer = arrow_writer.into_inner().into_inner();
+                    let mut buf_writer = arrow_writer.into_inner();
                     if let Err(abort_err) = buf_writer.abort().await {
                         warn!(
                             "failed to abort multipart upload after a failed first write: {abort_err}"
@@ -616,7 +616,7 @@ impl LazyArrowWriter {
     /// instead would leak upload parts, which vacuum cannot see.
     async fn abort(self) -> DeltaResult<()> {
         if let LazyArrowWriter::Writing(_, arrow_writer) = self {
-            let mut buf_writer = arrow_writer.into_inner().into_inner();
+            let mut buf_writer = arrow_writer.into_inner();
             buf_writer.abort().await?;
         }
         Ok(())

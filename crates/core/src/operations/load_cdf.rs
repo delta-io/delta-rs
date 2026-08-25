@@ -10,7 +10,6 @@
 //! let provider = DeltaCdfTableProvider::try_new(builder)?;
 //! let df = ctx.read_table(provider).await?;
 
-
 use crate::DeltaTableError;
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaSessionExt, extract_partition_only_predicate,
