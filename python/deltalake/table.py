@@ -1309,7 +1309,7 @@ class DeltaTable:
         partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
-        filters: FilterType | Expression | None = None,
+        filters: str | FilterType | Expression | None = None,
         engine: Literal["pyarrow", "datafusion"] = "pyarrow",
     ) -> "pyarrow.Table":
         """
@@ -1346,7 +1346,7 @@ class DeltaTable:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem. `engine="pyarrow"` only
-            filters: A disjunctive normal form (DNF) predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
+            filters: A SQL predicate string (`engine="datafusion"` only) or a disjunctive normal form (DNF) tuple predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
             engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """
         if engine == "datafusion":
@@ -1374,8 +1374,10 @@ class DeltaTable:
         partitions: FilterType | None,
         columns: list[str] | None,
         filesystem: str | pa_fs.FileSystem | None,
-        filters: FilterType | Expression | None,
+        filters: str | FilterType | Expression | None,
     ) -> "pyarrow.Table":
+        if isinstance(filters, str):
+            raise ValueError('SQL string filters require engine="datafusion"')
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
         except ImportError:
@@ -1402,7 +1404,7 @@ class DeltaTable:
         partitions: FilterType | None,
         columns: list[str] | None,
         filesystem: str | pa_fs.FileSystem | None,
-        filters: FilterType | Expression | None,
+        filters: str | FilterType | Expression | None,
     ) -> "pyarrow.Table":
         if partitions is not None:
             raise ValueError(
@@ -1422,13 +1424,15 @@ class DeltaTable:
             )
 
         predicate: str | None = None
-        if isinstance(filters, list):
+        if isinstance(filters, str):
+            predicate = filters
+        elif isinstance(filters, list):
             predicate = _filters_to_sql_predicate(filters) if filters else None
         elif filters is not None:
             raise ValueError(
-                'engine="datafusion" takes tuple filters (a list of (column, op, '
-                "value) tuples, or a list of such lists); pyarrow expressions "
-                'require engine="pyarrow"'
+                'engine="datafusion" takes a SQL predicate string or tuple filters '
+                "(a list of (column, op, value) tuples, or a list of such lists); "
+                'pyarrow expressions require engine="pyarrow"'
             )
 
         reader = self._table.scan(columns=columns, predicate=predicate)
@@ -1444,7 +1448,7 @@ class DeltaTable:
         partitions: FilterType | None = None,
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
-        filters: FilterType | Expression | None = None,
+        filters: str | FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
         engine: Literal["pyarrow", "datafusion"] = "pyarrow",
     ) -> "pd.DataFrame":
@@ -1482,7 +1486,7 @@ class DeltaTable:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem. `engine="pyarrow"` only
-            filters: A disjunctive normal form (DNF) predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
+            filters: A SQL predicate string (`engine="datafusion"` only) or a disjunctive normal form (DNF) tuple predicate for filtering rows. `engine="pyarrow"` also accepts a pyarrow.dataset.Expression
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
             engine: The engine reading the table. The pyarrow engine is deprecated and will be removed in a future release
         """

@@ -146,6 +146,20 @@ def test_unknown_engine_errors(edge_table):
         edge_table.to_pyarrow_table(engine="polars")
 
 
+def test_sql_string_filters_datafusion(edge_table):
+    by_string = read(edge_table, "datafusion", filters="v >= 3 AND s IS NOT NULL")
+    by_tuples = read(
+        edge_table, "datafusion", filters=[("v", ">=", 3), ("s", "!=", None)]
+    )
+    assert by_string == by_tuples
+    assert by_string["v"] == [3]
+
+
+def test_sql_string_filters_rejected_under_pyarrow(edge_table):
+    with pytest.raises(ValueError, match="SQL string filters"):
+        edge_table.to_pyarrow_table(filters="v >= 3", engine="pyarrow")
+
+
 @pytest.mark.pandas
 def test_to_pandas_datafusion(edge_table):
     df = edge_table.to_pandas(engine="datafusion", filters=[("v", "<", 3)])
