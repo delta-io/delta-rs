@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn test_dnf_to_kernel_predicate_or_of_ands() {
+    fn test_dnf_to_kernel_predicate_or_of_and_groups() {
         let schema = dnf_test_schema();
         let dnf = vec![
             vec![
