@@ -562,6 +562,41 @@ class DeltaTable:
             allow_out_of_range=allow_out_of_range,
         )
 
+    def scan(
+        self,
+        columns: list[str] | None = None,
+        predicate: str | None = None,
+    ) -> RecordBatchReader:
+        """
+        Lazily read the table with the built-in DataFusion engine.
+
+        Returns an Arrow RecordBatchReader that streams batches as they are
+        produced; consume it with anything arrow-native (pyarrow, duckdb,
+        polars). Reads tables with column mapping or deletion vectors.
+        Row order is not guaranteed.
+
+        Parameters:
+            columns: Column names to project. If None, all columns are read.
+            predicate: SQL predicate evaluated per row by the engine; the
+                result contains exactly the matching rows. This is unlike
+                `file_pruning_predicate` on the file listing APIs, which only
+                skips whole files.
+
+        Returns:
+            RecordBatchReader: A lazy stream of record batches.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+
+            dt = DeltaTable("tmp/my_table")
+            reader = dt.scan(columns=["value"], predicate="year = '2021'")
+            for batch in reader:
+                ...
+            ```
+        """
+        return self._table.scan(columns=columns, predicate=predicate)
+
     def deletion_vectors(self) -> RecordBatchReader:
         """
         Return deletion vectors for data files in this table.

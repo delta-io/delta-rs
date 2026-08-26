@@ -27,7 +27,8 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{
-    DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext,
+    DataFusionMixins, DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig,
+    DeltaScanNext, DeltaSessionContext,
 };
 use pyo3_arrow::PyDataType;
 
@@ -1211,6 +1212,46 @@ impl RawDeltaTable {
         py.detach(|| {
             let stream = convert_stream_to_reader(stream);
             Ok(stream.into())
+        })
+    }
+
+    #[pyo3(signature = (columns=None, predicate=None))]
+    pub fn scan(
+        &self,
+        py: Python,
+        columns: Option<Vec<String>>,
+        predicate: Option<String>,
+    ) -> PyResult<Arro3RecordBatchReader> {
+        let snapshot = self.cloned_state()?;
+        let log_store = self.log_store()?;
+
+        py.detach(|| {
+            // Same session setup as PyQueryBuilder::register: a Delta-tuned context
+            // with the table's object store registered so non-local storage works.
+            let ctx = DeltaSessionContext::new().into_inner();
+            ctx.register_object_store(log_store.root_url(), log_store.root_object_store(None));
+
+            let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+            let provider =
+                Arc::new(DeltaScanNext::new(snapshot.clone(), config).map_err(PythonError::from)?)
+                    as Arc<dyn TableProvider>;
+
+            let mut df = ctx.read_table(provider).map_err(PythonError::from)?;
+            if let Some(predicate) = &predicate {
+                let expr = snapshot
+                    .parse_predicate_expression(predicate, &ctx.state())
+                    .map_err(PythonError::from)?;
+                df = df.filter(expr).map_err(PythonError::from)?;
+            }
+            if let Some(columns) = &columns {
+                let columns: Vec<&str> = columns.iter().map(String::as_str).collect();
+                df = df.select_columns(&columns).map_err(PythonError::from)?;
+            }
+
+            let stream = rt()
+                .block_on(df.execute_stream())
+                .map_err(PythonError::from)?;
+            Ok(convert_stream_to_reader(stream).into())
         })
     }
 
