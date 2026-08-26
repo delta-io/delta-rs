@@ -1220,9 +1220,22 @@ class DeltaTable:
         `filters` both prunes files and filters rows: each file's partition
         values and min/max statistics are attached to its dataset fragment, so
         files that cannot contain matching rows are never read, and the
-        surviving rows are filtered exactly. For file pruning without reading
-        data, or to hand a pruned file list to another engine, use
-        `file_uris` or `to_pyarrow_dataset` with `file_pruning_predicate`.
+        surviving rows are filtered exactly.
+
+        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
+        chain is equivalent, and passing `file_pruning_predicate` there prunes
+        during log replay, before any per-file fragment setup, which can matter
+        on tables with very large file counts:
+
+        ```python
+        dt.to_pyarrow_table(columns=cols, filters=[("year", "=", "2021")])
+
+        # equivalent, pruning pre-scan; the pruning predicate keeps whole
+        # surviving files, pass filter= to to_table for exact rows
+        dt.to_pyarrow_dataset(
+            file_pruning_predicate="year = 2021"
+        ).to_table(columns=cols)
+        ```
 
         Args:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
@@ -1264,9 +1277,22 @@ class DeltaTable:
         `filters` both prunes files and filters rows: each file's partition
         values and min/max statistics are attached to its dataset fragment, so
         files that cannot contain matching rows are never read, and the
-        surviving rows are filtered exactly. For file pruning without reading
-        data, or to hand a pruned file list to another engine, use
-        `file_uris` or `to_pyarrow_dataset` with `file_pruning_predicate`.
+        surviving rows are filtered exactly.
+
+        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
+        chain is equivalent, and passing `file_pruning_predicate` there prunes
+        during log replay, before any per-file fragment setup, which can matter
+        on tables with very large file counts:
+
+        ```python
+        dt.to_pandas(columns=cols, filters=[("year", "=", "2021")])
+
+        # equivalent, pruning pre-scan; the pruning predicate keeps whole
+        # surviving files, pass filter= to to_table for exact rows
+        dt.to_pyarrow_dataset(
+            file_pruning_predicate="year = 2021"
+        ).to_table(columns=cols).to_pandas()
+        ```
 
         Args:
             partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`

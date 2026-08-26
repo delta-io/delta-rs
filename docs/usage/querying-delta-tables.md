@@ -73,12 +73,18 @@ predicate may reference any column, not just partition columns:
   for how to lay out tables so predicates prune well.
 
 As the name says, the predicate prunes files, not rows. On `to_pandas` and
-`to_pyarrow_table` there is no pruning parameter for that reason: `filters`
-already prunes files the same way through the dataset fragments and then
-filters the surviving rows exactly, so it is strictly more precise there:
+`to_pyarrow_table` there is no pruning parameter: `filters` prunes files just
+as effectively through the per-fragment statistics and then filters the
+surviving rows exactly. Both methods are thin wrappers over
+`to_pyarrow_dataset`, so to prune during log replay instead, before any
+per-file fragment setup (which can matter on tables with very large file
+counts), unroll the chain:
 
 ``` python
 >>> dt.to_pandas(filters=[("value", ">=", "5")])
+>>> # unrolled: prune files first, then read; whole surviving files come
+>>> # back unless you also pass a row filter to to_table
+>>> dt.to_pyarrow_dataset(file_pruning_predicate="value >= '5'").to_table().to_pandas()
 ```
 
 The full syntax for both forms is documented on
