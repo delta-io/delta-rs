@@ -45,7 +45,12 @@ materializing dataset fragments.
 
 ``` python
 >>> dt.to_pandas(engine="datafusion", filters=[("year", "=", "2021")], columns=["value"])
+>>> dt.to_pandas(engine="datafusion", filters="year = '2021'", columns=["value"])
 ```
+
+Under the datafusion engine, `filters` also accepts a SQL predicate string,
+passed to the engine as written; tuple filters are sugar compiled to the same
+SQL semantics.
 
 The engines agree on tuple filters in the common cases but differ where
 PyArrow and SQL semantics genuinely part ways. Migrating code should account
