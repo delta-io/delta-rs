@@ -84,6 +84,25 @@ non-partition column:
 The full syntax for both forms is documented on
 [`DeltaTable.file_uris`](../api/delta_table/index.md).
 
+## Lazy reads with the built-in engine
+
+`DeltaTable.scan` reads the table with the built-in DataFusion engine and
+returns an Arrow `RecordBatchReader`, so batches stream as they are produced
+and can be handed to any Arrow-native engine (PyArrow, DuckDB, Polars).
+Unlike `file_pruning_predicate`, its `predicate` filters rows: the result
+contains exactly the matching rows. It also reads tables that
+`to_pyarrow_dataset` cannot, such as those using column mapping or deletion
+vectors.
+
+``` python
+>>> reader = dt.scan(columns=["value"], predicate="year = '2021'")
+>>> reader.read_all()
+```
+
+The predicate follows DataFusion SQL semantics: three-valued NULL logic, SQL
+type coercion. These differ from PyArrow dataset filter expressions in edge
+cases, so take care when swapping one read path for the other.
+
 Converting to a PyArrow Dataset allows you to filter on columns other
 than partition columns and load the result as a stream of batches rather
 than a single table. Convert to a dataset using

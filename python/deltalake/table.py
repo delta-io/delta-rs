@@ -580,7 +580,10 @@ class DeltaTable:
             predicate: SQL predicate evaluated per row by the engine; the
                 result contains exactly the matching rows. This is unlike
                 `file_pruning_predicate` on the file listing APIs, which only
-                skips whole files.
+                skips whole files. Follows DataFusion SQL semantics
+                (three-valued NULL logic, SQL type coercion), which differ
+                from pyarrow dataset filters in edge cases; take care when
+                using this as a drop-in replacement.
 
         Returns:
             RecordBatchReader: A lazy stream of record batches.
