@@ -2,6 +2,7 @@ mod datafusion;
 mod error;
 mod features;
 mod filesystem;
+mod filters;
 mod merge;
 mod query;
 mod reader;
@@ -92,6 +93,7 @@ use crate::datafusion::TokioDeltaScan;
 use crate::error::{DeltaError, DeltaProtocolError, PythonError, to_rt_err};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
+use crate::filters::{PyRowFilterConjunction, dnf_to_datafusion_expr};
 use crate::merge::PyMergeBuilder;
 use crate::query::PyQueryBuilder;
 use crate::reader::convert_stream_to_reader;
@@ -1215,13 +1217,26 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (columns=None, predicate=None))]
+    #[pyo3(signature = (columns=None, predicate=None, filters=None))]
     pub fn scan(
         &self,
         py: Python,
         columns: Option<Vec<String>>,
         predicate: Option<String>,
+        filters: Option<Vec<PyRowFilterConjunction>>,
     ) -> PyResult<Arro3RecordBatchReader> {
+        if predicate.is_some() && filters.is_some() {
+            return Err(PyValueError::new_err(
+                "pass either predicate or filters, not both",
+            ));
+        }
+        let filter_expr = match &filters {
+            Some(filters) if !filters.is_empty() => Some(
+                dnf_to_datafusion_expr(filters, self.snapshot_schema()?.as_ref())
+                    .map_err(PythonError::from)?,
+            ),
+            _ => None,
+        };
         let snapshot = self.cloned_state()?;
         let log_store = self.log_store()?;
 
@@ -1241,6 +1256,9 @@ impl RawDeltaTable {
                 let expr = snapshot
                     .parse_predicate_expression(predicate, &ctx.state())
                     .map_err(PythonError::from)?;
+                df = df.filter(expr).map_err(PythonError::from)?;
+            }
+            if let Some(expr) = filter_expr {
                 df = df.filter(expr).map_err(PythonError::from)?;
             }
             if let Some(columns) = &columns {
