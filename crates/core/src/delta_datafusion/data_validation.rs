@@ -31,7 +31,8 @@ use datafusion::physical_plan::execution_plan::CardinalityEffect;
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr,
+    PlanProperties, ReplaceChildrenOptions, apply_expression_roots,
 };
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion::prelude::{Expr, binary_expr, col, ident};
@@ -538,6 +539,22 @@ impl DataValidationExec {
             properties,
         })
     }
+
+    fn with_new_input_same_properties(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            input,
+            check_expression: Arc::clone(&self.check_expression),
+            properties: Arc::clone(&self.properties),
+        }
+    }
+
+    fn try_with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Result<Self> {
+        Self::try_new(
+            input,
+            Arc::clone(&self.check_expression),
+            Some(self.schema()),
+        )
+    }
 }
 
 impl DisplayAs for DataValidationExec {
@@ -569,9 +586,10 @@ impl ExecutionPlan for DataValidationExec {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return plan_err!(
@@ -579,11 +597,23 @@ impl ExecutionPlan for DataValidationExec {
                 children.len()
             );
         }
-        Ok(Arc::new(Self {
-            input: children.remove(0),
-            check_expression: Arc::clone(&self.check_expression),
-            properties: self.properties.clone(),
-        }))
+        let input = children.remove(0);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                Ok(Arc::new(self.with_new_input_same_properties(input)))
+            }
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(self.try_with_new_input(input)?)),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -624,11 +654,7 @@ impl ExecutionPlan for DataValidationExec {
         config: &ConfigOptions,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         if let Some(repartitioned) = self.input.repartitioned(target_partitions, config)? {
-            Ok(Some(Arc::new(Self {
-                input: repartitioned,
-                check_expression: Arc::clone(&self.check_expression),
-                properties: self.properties.clone(),
-            })))
+            Ok(Some(Arc::new(self.try_with_new_input(repartitioned)?)))
         } else {
             Ok(None)
         }
@@ -640,11 +666,9 @@ impl ExecutionPlan for DataValidationExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let input_with_fetch = self.input.with_fetch(limit)?;
-        Some(Arc::new(Self {
-            input: input_with_fetch,
-            check_expression: Arc::clone(&self.check_expression),
-            properties: self.properties.clone(),
-        }))
+        Some(Arc::new(
+            self.with_new_input_same_properties(input_with_fetch),
+        ))
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -666,12 +690,7 @@ impl ExecutionPlan for DataValidationExec {
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Visit this node's own check expression so that any column-index remapping
-        // performed by the physical optimizer is applied to it (e.g. after a
-        // ProjectionExec is inserted below this node by the optimizer).
-        expr_rewriter(&self.check_expression)?;
-        self.input.apply_expressions(expr_rewriter)?;
-        Ok(TreeNodeRecursion::Continue)
+        apply_expression_roots([&self.check_expression], expr_rewriter)
     }
 }
 
@@ -970,7 +989,9 @@ mod tests {
     use datafusion::datasource::provider_as_source;
     use datafusion::logical_expr::{Extension, LogicalPlanBuilder};
     use datafusion::physical_plan::empty::EmptyExec;
-    use datafusion::physical_plan::{collect, displayable};
+    use datafusion::physical_plan::{
+        ChildrenPropertiesMode, ReplaceChildrenOptions, collect, displayable,
+    };
     use datafusion::prelude::{SessionContext, binary_expr, col};
     use futures::StreamExt;
 
@@ -1360,27 +1381,132 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_validation_with_new_children() -> Result<()> {
+    #[test]
+    fn test_validation_plan_walk_visits_owned_expressions_once() -> Result<()> {
         let schema = create_test_schema(true);
-        let batch = create_test_batch(
-            schema.clone(),
-            vec![Some(10), Some(20)],
-            vec![Some("a"), Some("b")],
+        let ctx = SessionContext::new();
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
+
+        let inner = DataValidationExec::try_new_with_predicates(
+            &ctx.state(),
+            input,
+            vec![col("id").gt(datafusion::prelude::lit(0i32))],
+        )?;
+        let inner_expected = Arc::clone(
+            &inner
+                .downcast_ref::<DataValidationExec>()
+                .unwrap()
+                .check_expression,
+        );
+        let outer = DataValidationExec::try_new_with_predicates(
+            &ctx.state(),
+            inner,
+            vec![col("id").lt(datafusion::prelude::lit(100i32))],
+        )?;
+        let outer_validation = outer.downcast_ref::<DataValidationExec>().unwrap();
+        let expected = Arc::clone(&outer_validation.check_expression);
+
+        let mut roots = Vec::new();
+        outer.apply(|plan| {
+            plan.apply_expressions(&mut |expr| {
+                roots.push(Arc::clone(expr));
+                Ok(TreeNodeRecursion::Continue)
+            })?;
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+
+        assert_eq!(roots.len(), 2, "validation plan must expose two roots");
+        assert_eq!(
+            roots
+                .iter()
+                .filter(|root| Arc::ptr_eq(root, &expected))
+                .count(),
+            1,
+            "plan walker must visit the outer validation expression once"
+        );
+        assert_eq!(
+            roots
+                .iter()
+                .filter(|root| Arc::ptr_eq(root, &inner_expected))
+                .count(),
+            1,
+            "plan walker must visit the inner validation expression once"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_validation_replace_children_honors_property_mode() -> Result<()> {
+        let schema = create_test_schema(true);
+        let ctx = SessionContext::new();
+        let one_partition = EmptyExec::new(Arc::clone(&schema));
+        let same_properties_input: Arc<dyn ExecutionPlan> = Arc::new(one_partition.clone());
+        let one_partition_input: Arc<dyn ExecutionPlan> = Arc::new(one_partition);
+        let two_partition_input: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(schema).with_partitions(2));
+        assert!(Arc::ptr_eq(
+            one_partition_input.properties(),
+            same_properties_input.properties()
+        ));
+
+        let validation = DataValidationExec::try_new_with_predicates(
+            &ctx.state(),
+            one_partition_input,
+            vec![col("id").is_not_null()],
+        )?;
+        let original_properties = Arc::clone(validation.properties());
+
+        let keep = Arc::clone(&validation).replace_children(
+            vec![same_properties_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )?;
+        assert!(Arc::ptr_eq(&original_properties, keep.properties()));
+
+        let recompute = validation.replace_children(
+            vec![two_partition_input],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        assert!(!Arc::ptr_eq(&original_properties, recompute.properties()));
+        assert_eq!(recompute.properties().partitioning.partition_count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_repartitioned_recomputes_properties() -> Result<()> {
+        let schema = create_test_schema(true);
+        let batches = vec![
+            create_test_batch(Arc::clone(&schema), vec![Some(10)], vec![Some("a")]),
+            create_test_batch(Arc::clone(&schema), vec![Some(20)], vec![Some("b")]),
+        ];
+        let ctx = SessionContext::new();
+        let input = get_memory_exec(&ctx.state(), schema, batches).await;
+        let validation = DataValidationExec::try_new_with_predicates(
+            &ctx.state(),
+            input,
+            vec![col("id").is_not_null()],
+        )?;
+
+        let repartitioned = validation
+            .repartitioned(2, &ConfigOptions::new())?
+            .expect("MemoryExec::repartitioned returned None for two batches");
+        let child_partition_count = repartitioned.children()[0]
+            .properties()
+            .partitioning
+            .partition_count();
+
+        assert_eq!(child_partition_count, 2);
+        assert_eq!(
+            repartitioned.properties().partitioning.partition_count(),
+            child_partition_count,
+            "wrapper partition count must match its child"
         );
 
-        let ctx = SessionContext::new();
-        let memory_exec1 = get_memory_exec(&ctx.state(), schema.clone(), vec![batch.clone()]).await;
-        let memory_exec2 = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
-
-        let predicates = vec![col("id").is_not_null()];
-        let validated_exec =
-            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec1, predicates)?;
-
-        // Create new plan with different child
-        let new_exec = validated_exec.with_new_children(vec![memory_exec2])?;
-        assert!(new_exec.downcast_ref::<DataValidationExec>().is_some());
-
+        let row_count = collect(repartitioned, ctx.task_ctx())
+            .await?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>();
+        assert_eq!(row_count, 2, "repartitioned plan must return two rows");
         Ok(())
     }
 
@@ -1395,7 +1521,10 @@ mod tests {
             DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
 
         // Try to create with wrong number of children
-        let result = validated_exec.with_new_children(vec![]);
+        let result = validated_exec.replace_children(
+            vec![],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        );
         assert!(result.is_err());
         assert!(
             result

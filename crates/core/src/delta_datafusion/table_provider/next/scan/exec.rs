@@ -29,7 +29,8 @@ use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdo
 use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, Statistics,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, PhysicalExpr, ReplaceChildrenOptions, Statistics,
 };
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
@@ -186,6 +187,26 @@ impl DeltaScanExec {
         }
     }
 
+    fn with_new_input_same_properties(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self {
+            input,
+            metrics: ExecutionPlanMetricsSet::new(),
+            ..Self::clone(self)
+        }
+    }
+
+    fn with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
+        Self::new(
+            Arc::clone(&self.scan_plan),
+            input,
+            Arc::clone(&self.transforms),
+            Arc::clone(&self.selection_vectors),
+            Arc::clone(&self.public_file_ids),
+            self.partition_stats.clone(),
+            ExecutionPlanMetricsSet::new(),
+        )
+    }
+
     /// Transform the statistics from the inner physical parquet read plan to the logical
     /// schema we expose via the table provider. We do not attempt to provide meaningful
     /// statistics for metadata columns as we do not expect these to be useful in planning.
@@ -289,11 +310,15 @@ impl ExecutionPlan for DeltaScanExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         if self.scan_plan.contract.retained_row_index_field().is_some() {
             // Retained row indexes depend on one stream seeing each file's rows.
-            vec![Distribution::SinglePartition]
+            InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
-            vec![Distribution::UnspecifiedDistribution]
+            InputDistributionRequirements::new(vec![Distribution::UnspecifiedDistribution])
         }
     }
 
@@ -302,22 +327,31 @@ impl ExecutionPlan for DeltaScanExec {
     //     vec![true]
     // }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        mut children: Vec<Arc<dyn ExecutionPlan>>,
+        options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return plan_err!("DeltaScan: wrong number of children {}", children.len());
         }
-        Ok(Arc::new(Self::new(
-            self.scan_plan.clone(),
-            children[0].clone(),
-            self.transforms.clone(),
-            self.selection_vectors.clone(),
-            self.public_file_ids.clone(),
-            self.partition_stats.clone(),
-            self.metrics.clone(),
-        )))
+        let input = children.remove(0);
+        match options.children_properties {
+            ChildrenPropertiesMode::Keep => {
+                Ok(Arc::new(self.with_new_input_same_properties(input)))
+            }
+            ChildrenPropertiesMode::Recompute => Ok(Arc::new(self.with_new_input(input))),
+        }
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn repartitioned(
@@ -332,10 +366,7 @@ impl ExecutionPlan for DeltaScanExec {
         }
 
         if let Some(input) = self.input.repartitioned(target_partitions, config)? {
-            Ok(Some(Arc::new(Self {
-                input,
-                ..self.clone()
-            })))
+            Ok(Some(Arc::new(self.with_new_input(input))))
         } else {
             Ok(None)
         }
@@ -394,9 +425,7 @@ impl ExecutionPlan for DeltaScanExec {
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
         let new_input = self.input.with_fetch(limit)?;
-        let mut new_plan = self.clone();
-        new_plan.input = new_input;
-        Some(Arc::new(new_plan))
+        Some(Arc::new(self.with_new_input_same_properties(new_input)))
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -473,12 +502,10 @@ impl ExecutionPlan for DeltaScanExec {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Apply expressions to the input execution plan
-        self.input.apply_expressions(expr_rewriter)?;
         Ok(TreeNodeRecursion::Continue)
     }
 }
@@ -810,6 +837,7 @@ mod tests {
     use arrow_array::Array;
     use arrow_array::ArrayAccessor;
     use datafusion::{
+        catalog::MemTable,
         common::{ToDFSchema, stats::Precision},
         datasource::TableProvider,
         logical_expr::Operator,
@@ -1821,11 +1849,11 @@ mod tests {
             .downcast_ref::<DeltaScanExec>()
             .expect("expected DeltaScanExec");
 
-        let distribution = exec.required_input_distribution();
+        let distribution = exec.input_distribution_requirements();
         assert!(
             matches!(
-                distribution.as_slice(),
-                [Distribution::UnspecifiedDistribution]
+                distribution.child_distribution(0),
+                Some(Distribution::UnspecifiedDistribution)
             ),
             "unexpected distribution: {distribution:?}"
         );
@@ -1840,9 +1868,12 @@ mod tests {
             exec.metrics.clone(),
         );
 
-        let distribution = retained_exec.required_input_distribution();
+        let distribution = retained_exec.input_distribution_requirements();
         assert!(
-            matches!(distribution.as_slice(), [Distribution::SinglePartition]),
+            matches!(
+                distribution.child_distribution(0),
+                Some(Distribution::SinglePartition)
+            ),
             "unexpected distribution: {distribution:?}"
         );
 
@@ -1886,6 +1917,53 @@ mod tests {
             "unexpected error: {err}"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_repartitioned_recomputes_properties_and_executes_all_rows() -> TestResult {
+        let (_kernel_type, scan_plan) = int32_scan_plan().await?;
+        let first = value_and_file_id_batch(&[10], &[Some("f1")], false)?;
+        let second = value_and_file_id_batch(&[20], &[Some("f2")], false)?;
+        let input_schema = first.schema();
+        let table = MemTable::try_new(input_schema, vec![vec![first, second]])?;
+        let session = Arc::new(create_session().into_inner());
+        let input = table.scan(&session.state(), None, &[], None).await?;
+
+        let mut public_file_ids = super::super::PublicFileIdMap::default();
+        public_file_ids.insert("f1".to_string(), "f1".to_string());
+        public_file_ids.insert("f2".to_string(), "f2".to_string());
+        let exec = DeltaScanExec::new(
+            scan_plan,
+            input,
+            Arc::new(HashMap::new()),
+            Arc::new(DashMap::new()),
+            Arc::new(public_file_ids),
+            HashMap::new(),
+            ExecutionPlanMetricsSet::new(),
+        );
+
+        let repartitioned = exec
+            .repartitioned(2, &ConfigOptions::new())?
+            .expect("MemoryExec::repartitioned returned None for two batches");
+        let child_partition_count = repartitioned.children()[0]
+            .properties()
+            .partitioning
+            .partition_count();
+
+        assert_eq!(child_partition_count, 2);
+        assert_eq!(
+            repartitioned.properties().partitioning.partition_count(),
+            child_partition_count,
+            "wrapper partition count must match its child"
+        );
+
+        let row_count = collect(repartitioned, session.task_ctx())
+            .await?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>();
+        assert_eq!(row_count, 2, "repartitioned plan must return two rows");
         Ok(())
     }
 
