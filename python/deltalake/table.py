@@ -126,27 +126,70 @@ def _warn_pyarrow_engine(method: str) -> None:
     )
 
 
-def _encode_row_filter_value(value: Any) -> str | None:
-    """Encode one row-filter value with nulls preserved: unlike the partition
-    string form, None stays None so the engine sees a null, not ''."""
+_SQL_FILTER_OPS = frozenset({"=", "==", "!=", "<", "<=", ">", ">=", "in", "not in"})
+
+
+def _sql_identifier(name: str) -> str:
+    """Double-quote an identifier so case survives and any name is legal."""
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
+
+
+def _sql_literal(value: Any) -> str:
     if value is None:
-        return None
-    return encode_partition_value(value)
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = encode_partition_value(value).replace("'", "''")
+    return f"'{escaped}'"
 
 
-def _encode_row_filters(
-    filters: FilterType | None,
-) -> list[list[tuple[str, str, str | None | list[str | None]]]] | None:
-    """Normalize tuple filters to disjunctive normal form and encode the values
-    for the engine row filter."""
-    if filters is None:
-        return None
-    if not isinstance(filters, list):
+def _sql_filter_literal(literal: FilterLiteralType) -> str:
+    """Render one (column, op, value) tuple with the engine's declared
+    semantics: `= None` is IS NULL, a None in an `in` list matches NULLs, and
+    `not in` keeps SQL three-valued logic."""
+    if not (isinstance(literal, tuple) and len(literal) == 3):
+        raise ValueError(f"filter must be a (column, op, value) tuple: {literal!r}")
+    column, op, value = literal
+    if not isinstance(column, str) or op not in _SQL_FILTER_OPS:
         raise ValueError(
-            'engine="datafusion" takes tuple filters (a list of (column, op, value) '
-            "tuples, or a list of such lists); pyarrow expressions require "
-            'engine="pyarrow"'
+            f"invalid filter {literal!r}; expected a string column and an "
+            f"operator among =, !=, <, <=, >, >=, in, not in"
         )
+    ident = _sql_identifier(column)
+    if op in ("in", "not in"):
+        if not isinstance(value, (list, tuple, set)):
+            raise ValueError(f"operator {op!r} takes a list of values: {literal!r}")
+        values = list(value)
+        if op == "not in":
+            if not values:
+                return "TRUE"
+            return f"{ident} NOT IN ({', '.join(_sql_literal(v) for v in values)})"
+        non_null = [v for v in values if v is not None]
+        in_clause = (
+            f"{ident} IN ({', '.join(_sql_literal(v) for v in non_null)})"
+            if non_null
+            else "FALSE"
+        )
+        if len(non_null) == len(values):
+            return in_clause
+        return f"({in_clause} OR {ident} IS NULL)" if non_null else f"{ident} IS NULL"
+    if isinstance(value, (list, tuple, set)):
+        raise ValueError(f"operator {op!r} takes a single value: {literal!r}")
+    if value is None:
+        if op in ("=", "=="):
+            return f"{ident} IS NULL"
+        if op == "!=":
+            return f"{ident} IS NOT NULL"
+        return f"{ident} {op} NULL"
+    return f"{ident} {'=' if op == '==' else op} {_sql_literal(value)}"
+
+
+def _filters_to_sql_predicate(filters: FilterType) -> str:
+    """Compile tuple filters to a DataFusion SQL predicate: a flat list is a
+    conjunction (AND), a list of lists an OR across parenthesized ANDs."""
     conjunctions: FilterDNFType
     if all(isinstance(conjunction, list) for conjunction in filters):
         conjunctions = cast(FilterDNFType, filters)
@@ -157,21 +200,16 @@ def _encode_row_filters(
             "filters must be a list of (column, op, value) tuples (a conjunction), "
             "or a list of such lists (an OR across conjunctions), not a mix of both"
         )
-    encoded: list[list[tuple[str, str, str | None | list[str | None]]]] = []
+    parts = []
     for conjunction in conjunctions:
-        encoded.append(
-            [
-                (
-                    column,
-                    op,
-                    [_encode_row_filter_value(v) for v in value]
-                    if isinstance(value, (list, tuple, set))
-                    else _encode_row_filter_value(value),
-                )
-                for column, op, value in conjunction
-            ]
-        )
-    return encoded
+        if not conjunction:
+            raise ValueError(
+                "empty conjunction in filters; pass no filter to match all rows"
+            )
+        parts.append(" AND ".join(_sql_filter_literal(lit) for lit in conjunction))
+    if len(parts) == 1:
+        return parts[0]
+    return " OR ".join(f"({part})" for part in parts)
 
 
 class _KeywordArgDefault:
@@ -1383,7 +1421,17 @@ class DeltaTable:
                 "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
             )
 
-        reader = self._table.scan(columns=columns, filters=_encode_row_filters(filters))
+        predicate: str | None = None
+        if isinstance(filters, list):
+            predicate = _filters_to_sql_predicate(filters) if filters else None
+        elif filters is not None:
+            raise ValueError(
+                'engine="datafusion" takes tuple filters (a list of (column, op, '
+                "value) tuples, or a list of such lists); pyarrow expressions "
+                'require engine="pyarrow"'
+            )
+
+        reader = self._table.scan(columns=columns, predicate=predicate)
         table = pyarrow.RecordBatchReader.from_stream(reader).read_all()
         # the engine emits arrow view types; cast back to the table's logical schema
         target = pyarrow.schema(self.schema().to_arrow())
