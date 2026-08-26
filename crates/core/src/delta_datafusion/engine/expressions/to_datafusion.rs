@@ -65,7 +65,7 @@ pub(crate) fn to_datafusion_expr(expr: &Expression, output_type: &DataType) -> D
 ///
 /// Handles type mapping between Delta Lake's scalar types and DataFusion's scalar types,
 /// including primitive types, temporal types, structs, and null values.
-pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
+pub fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
     Ok(match scalar {
         Scalar::Boolean(value) => ScalarValue::Boolean(Some(*value)),
         Scalar::String(value) => ScalarValue::Utf8(Some(value.clone())),

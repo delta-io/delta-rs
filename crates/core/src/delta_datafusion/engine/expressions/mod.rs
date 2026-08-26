@@ -1,3 +1,4 @@
+pub use self::to_datafusion::to_datafusion_scalar;
 pub(crate) use self::to_datafusion::*;
 pub(crate) use self::to_kernel::*;
 
