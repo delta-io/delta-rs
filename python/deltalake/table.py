@@ -578,12 +578,11 @@ class DeltaTable:
         Parameters:
             columns: Column names to project. If None, all columns are read.
             predicate: SQL predicate evaluated per row by the engine; the
-                result contains exactly the matching rows. This is unlike
+                result contains exactly the matching rows, unlike
                 `file_pruning_predicate` on the file listing APIs, which only
-                skips whole files. Follows DataFusion SQL semantics
-                (three-valued NULL logic, SQL type coercion), which differ
-                from pyarrow dataset filters in edge cases; take care when
-                using this as a drop-in replacement.
+                skips whole files. DataFusion SQL, parsed with the generic
+                dialect and identifier normalization disabled, so unquoted
+                column names match case sensitively.
 
         Returns:
             RecordBatchReader: A lazy stream of record batches.
