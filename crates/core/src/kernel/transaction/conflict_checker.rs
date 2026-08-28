@@ -132,13 +132,7 @@ impl<'a> TransactionInfo<'a> {
             .map(|pred| log_data.parse_predicate_expression(pred, &session.state()))
             .transpose()?;
 
-        let mut read_app_ids = HashSet::<String>::new();
-        for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
-                read_app_ids.insert(app_id.clone());
-            }
-        }
-
+        // read_app_ids is computed from `actions` inside Self::new; no need to duplicate it here.
         Ok(Self::new(
             read_snapshot,
             read_predicates,
@@ -436,7 +430,9 @@ impl<'a> ConflictChecker<'a> {
                     .protocol()
                     .min_writer_version(),
             );
-            if curr_read < win_read || win_write < curr_write {
+            // curr_read < win_read: our reader capability is below the new minimum — can't read this format.
+            // curr_write < win_write: our writer capability is below the new minimum — can't safely write.
+            if curr_read < win_read || curr_write < win_write {
                 return Err(CommitConflictError::ProtocolChanged(format!(
                     "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
                 )));
@@ -593,8 +589,8 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
-            .cloned()
-            .map(|r| r.path)
+            .filter(|r| r.data_change)
+            .map(|r| r.path.clone())
             .collect();
         let intersection: HashSet<&String> = txn_deleted_files
             .intersection(&winning_deleted_files)
@@ -894,6 +890,29 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "datafusion")]
+    async fn test_protocol_writer_upgrade_conflicts_with_lower_version_writer() {
+        // Winning commit raises min_writer_version from the default to 4.
+        // Our transaction was written against a lower-version table — it must be rejected.
+        // This specifically validates the direction of the writer-version comparison
+        // (curr_write < win_write must fire, NOT the old win_write < curr_write).
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            None,
+            None,
+            // winning commit: protocol with higher min_writer_version
+            vec![ActionFactory::protocol(Some(1), Some(4), None::<Vec<_>>, None::<Vec<_>>).into()],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit that raises min_writer_version must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
     async fn test_read_whole_table_disallows_concurrent_append() {
         // `read_whole_table` should disallow any concurrent change, even if the change
         // is disjoint with the earlier filter
@@ -1094,10 +1113,44 @@ mod tests {
             false,
         )
         .await;
-        // Should still fail - even with data_change = false, can't delete the same file twice
+        // Should succeed because two compaction removes (data_change=false) on the same file
+        // are physical-layout-only and do not logically delete anything — mirroring the filter
+        // on the read-delete check and matching the Spark reference implementation.
         assert!(
-            matches!(result, Err(CommitConflictError::ConcurrentDeleteDelete)),
-            "Concurrent double delete should conflict even with data_change=false"
+            result.is_ok(),
+            "Concurrent compaction removes (data_change=false) on the same file should not raise ConcurrentDeleteDelete: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_compaction_remove_does_not_conflict_with_real_delete() {
+        // OPTIMIZE compaction removed file F (data_change=false).
+        // Current transaction also wants to delete F (data_change=true, real logical delete).
+        // With the old unfiltered check this raised ConcurrentDeleteDelete spuriously.
+        let file = simple_add(true, "1", "10");
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file.clone().into());
+
+        // Winning commit: OPTIMIZE removes the file (physical-only, data_change=false)
+        let compaction_remove = ActionFactory::remove(&file, false);
+
+        // Current txn: real delete of the same file (data_change=true)
+        let real_remove = ActionFactory::remove(&file, true);
+
+        let result = execute_test(
+            Some(setup_actions),
+            None,
+            vec![compaction_remove.into()],
+            vec![real_remove.into()],
+            false,
+        )
+        .await;
+        // The compaction removed the file physically but not logically; our real delete
+        // should be allowed through (idempotent — the file is gone either way).
+        assert!(
+            result.is_ok(),
+            "Compaction remove (data_change=false) should not conflict with a concurrent real delete: {result:?}"
         );
     }
 

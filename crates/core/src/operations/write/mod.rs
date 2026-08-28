@@ -71,7 +71,10 @@ pub(crate) mod generated_columns;
 pub(crate) mod metrics;
 mod plan;
 pub(crate) mod schema_evolution;
-pub mod writer;
+
+/// Back-compat re-export: the writer types moved to [`crate::datafile::writer`].
+#[deprecated(note = "moved to deltalake_core::datafile::writer")]
+pub use crate::datafile::writer;
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum WriteError {
