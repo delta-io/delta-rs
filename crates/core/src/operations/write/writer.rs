@@ -68,6 +68,15 @@ fn get_max_concurrency_tasks() -> usize {
     })
 }
 
+fn roll_on_row_group_boundary_default() -> bool {
+    static ROLL_ON_ROW_GROUP_BOUNDARY: OnceLock<bool> = OnceLock::new();
+    *ROLL_ON_ROW_GROUP_BOUNDARY.get_or_init(|| {
+        std::env::var("DELTARS_ROLL_ON_ROW_GROUP_BOUNDARY")
+            .map(|s| matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .unwrap_or(false)
+    })
+}
+
 /// Upload a parquet file to object store and return metadata for creating an Add action
 #[instrument(skip(arrow_writer), fields(rows = 0, size = 0))]
 async fn upload_parquet_file(
@@ -331,6 +340,10 @@ pub struct PartitionWriterConfig {
     write_batch_size: usize,
     /// Concurrency level for writing to object store
     max_concurrency_tasks: usize,
+    /// Defer the `target_file_size` roll until the current row group is complete, so no
+    /// file ends in a truncated row group. See
+    /// [`PartitionWriterConfig::with_roll_on_row_group_boundary`].
+    roll_on_row_group_boundary: bool,
 }
 
 impl PartitionWriterConfig {
@@ -360,7 +373,27 @@ impl PartitionWriterConfig {
             target_file_size,
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
+            roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
         })
+    }
+
+    /// Defer the `target_file_size` file roll until the parquet writer's current row group is
+    /// complete, so no file ends in a truncated row group.
+    ///
+    /// A row group cannot span files, so the plain byte roll cuts each file's last row group
+    /// wherever the target happens to land. Columnar readers that map one row group to one
+    /// in-memory segment degrade on those runt tail groups. With this enabled, every row group
+    /// is exactly the configured `max_row_group_row_count` — the single end-of-data remainder
+    /// written at close is the one exception — and a file may overshoot `target_file_size` by
+    /// up to one row group.
+    ///
+    /// Only effective when the writer properties bound row groups by row count alone
+    /// (`max_row_group_row_count` set, `max_row_group_bytes` unset); byte-bounded row groups
+    /// keep the legacy roll behavior. Defaults to the `DELTARS_ROLL_ON_ROW_GROUP_BOUNDARY`
+    /// env var ("1"/"true"/"yes"), else `false`.
+    pub fn with_roll_on_row_group_boundary(mut self, roll_on_row_group_boundary: bool) -> Self {
+        self.roll_on_row_group_boundary = roll_on_row_group_boundary;
+        self
     }
 }
 
@@ -401,6 +434,13 @@ impl LazyArrowWriter {
             LazyArrowWriter::Writing(_, arrow_writer) => {
                 arrow_writer.bytes_written() + arrow_writer.in_progress_size()
             }
+        }
+    }
+
+    fn in_progress_rows(&self) -> usize {
+        match self {
+            LazyArrowWriter::Initialized(_, _, _) => 0,
+            LazyArrowWriter::Writing(_, arrow_writer) => arrow_writer.in_progress_rows(),
         }
     }
 }
@@ -478,6 +518,28 @@ impl PartitionWriter {
         Ok(())
     }
 
+    /// Rows the parquet writer will accept before its current row group completes, when the
+    /// group-aligned roll is enabled and row groups are bounded by row count alone. `None`
+    /// means slices need no alignment: the feature is off, no row-count bound is configured
+    /// (both bounds unset writes a single row group per file), or row groups are byte-bounded
+    /// and can close early on bytes, where a row-count-aligned slice cannot hit the boundary
+    /// reliably.
+    fn rows_to_row_group_boundary(&self) -> Option<usize> {
+        if !self.config.roll_on_row_group_boundary {
+            return None;
+        }
+        if self
+            .config
+            .writer_properties
+            .max_row_group_bytes()
+            .is_some()
+        {
+            return None;
+        }
+        let max_rows = self.config.writer_properties.max_row_group_row_count()?;
+        Some(max_rows - (self.writer.in_progress_rows() % max_rows))
+    }
+
     /// Buffers record batches in-memory up to appx. `target_file_size`.
     /// Flushes data to storage once a full file can be written.
     ///
@@ -493,15 +555,26 @@ impl PartitionWriter {
         }
 
         let max_offset = batch.num_rows();
-        for offset in (0..max_offset).step_by(self.config.write_batch_size) {
-            let length = usize::min(self.config.write_batch_size, max_offset - offset);
+        let mut offset = 0;
+        while offset < max_offset {
+            let mut length = usize::min(self.config.write_batch_size, max_offset - offset);
+            // Never let a slice straddle a row-group boundary: the roll below may only fire
+            // when the writer sits exactly on one (no rows buffered in an open group).
+            let boundary = self.rows_to_row_group_boundary();
+            if let Some(to_boundary) = boundary {
+                length = usize::min(length, to_boundary);
+            }
             self.writer
                 .write_batch(&batch.slice(offset, length))
                 .await?;
+            offset += length;
             if let Some(target_file_size) = self.config.target_file_size {
                 let estimated_size = self.writer.estimated_size();
-                // flush currently buffered data to disk once we meet or exceed the target file size.
-                if estimated_size as u64 >= target_file_size.get() {
+                // flush currently buffered data to disk once we meet or exceed the target file
+                // size — with the group-aligned roll, only once the open row group completed.
+                if estimated_size as u64 >= target_file_size.get()
+                    && (boundary.is_none() || self.writer.in_progress_rows() == 0)
+                {
                     debug!("Writing file with estimated size {estimated_size:?} in background.");
                     self.reset_writer()?;
                 }
@@ -569,6 +642,7 @@ mod tests {
     use arrow::array::{Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
     use object_store::ObjectStoreExt as _;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
 
@@ -730,6 +804,72 @@ mod tests {
             .iter()
             .fold(0, |acc, add| acc + (add.size > 10_000) as i32);
         assert!(target_file_count >= adds.len() as i32 - 1)
+    }
+
+    #[tokio::test]
+    async fn test_roll_on_row_group_boundary_never_truncates_groups() {
+        // 10_000 rows in 1024-row groups with a tiny byte target: the group-aligned roll must
+        // wait for each row group to complete before starting a new file, so every written row
+        // group is exactly 1024 rows — except the single end-of-data remainder
+        // (10_000 = 9 * 1024 + 784).
+        let base_int = Arc::new(Int32Array::from((0..10000).collect::<Vec<i32>>()));
+        let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(schema, vec![base_str, base_int]).unwrap();
+
+        let object_store = DeltaTableBuilder::from_url(url::Url::parse("memory:///").unwrap())
+            .unwrap()
+            .build_storage()
+            .unwrap()
+            .object_store(None);
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1024))
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            Some(properties),
+            Some(NonZeroU64::new(10_000).unwrap()),
+            None,
+            None,
+            None,
+        )
+        .unwrap()
+        .with_roll_on_row_group_boundary(true);
+        let mut writer = PartitionWriter::try_with_config(
+            object_store.clone(),
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        // the byte target still splits the write into multiple files
+        assert!(adds.len() > 1);
+
+        let mut group_sizes = Vec::new();
+        for add in &adds {
+            let bytes = object_store
+                .get(&Path::from(add.path.clone()))
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap();
+            let reader = SerializedFileReader::new(bytes).unwrap();
+            for rg in reader.metadata().row_groups() {
+                group_sizes.push(rg.num_rows());
+            }
+        }
+        assert_eq!(group_sizes.iter().sum::<i64>(), 10_000);
+        // every group is full except the one end-of-data remainder
+        let runts: Vec<_> = group_sizes.iter().filter(|n| **n != 1024).collect();
+        assert_eq!(runts.len(), 1);
+        assert_eq!(*runts[0], 10_000 % 1024);
     }
 
     #[tokio::test]
