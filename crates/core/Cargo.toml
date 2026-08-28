@@ -48,6 +48,7 @@ datafusion = { workspace = true, optional = true }
 datafusion-datasource = { workspace = true, optional = true }
 datafusion-physical-expr-adapter = { workspace = true, optional = true }
 datafusion-proto = { workspace = true, optional = true }
+prost = { version = "0.14.1", optional = true }
 
 # serde
 serde = { workspace = true, features = ["derive"] }
@@ -121,6 +122,7 @@ datafusion = [
     "datafusion-datasource",
     "datafusion-physical-expr-adapter",
     "datafusion-proto",
+    "dep:prost",
 ]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]

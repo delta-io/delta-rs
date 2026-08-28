@@ -80,6 +80,9 @@ pub(crate) struct DeltaScanMetaExec {
     file_id_field: Option<FieldRef>,
     /// plan properties
     properties: Arc<PlanProperties>,
+    /// The originating scan request, when planned via `DeltaScan::scan`. Enables
+    /// wire serialization by replaying the scan on the receiving side.
+    replay: Option<Arc<super::super::ScanReplay>>,
 }
 
 impl DisplayAs for DeltaScanMetaExec {
@@ -146,7 +149,19 @@ impl DeltaScanMetaExec {
             metrics,
             file_id_field,
             properties,
+            replay: None,
         }
+    }
+
+    /// Attach the originating scan request for wire serialization support.
+    pub(crate) fn with_replay(mut self, replay: Arc<super::super::ScanReplay>) -> Self {
+        self.replay = Some(replay);
+        self
+    }
+
+    /// The originating scan request, when available.
+    pub(crate) fn replay(&self) -> Option<&Arc<super::super::ScanReplay>> {
+        self.replay.as_ref()
     }
 
     fn effective_row_count_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {

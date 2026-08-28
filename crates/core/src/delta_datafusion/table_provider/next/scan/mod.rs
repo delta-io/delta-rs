@@ -64,7 +64,7 @@ use tracing::debug;
 use url::Url;
 
 pub use self::exec::DeltaScanExec;
-use self::exec_meta::DeltaScanMetaExec;
+pub(crate) use self::exec_meta::DeltaScanMetaExec;
 use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};

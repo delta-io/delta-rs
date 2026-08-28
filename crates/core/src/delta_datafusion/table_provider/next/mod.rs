@@ -44,6 +44,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use uuid::Uuid;
 
+pub use self::codec::DeltaScanExecCodec;
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
 use self::scan::ProjectedScanContract;
@@ -58,6 +59,7 @@ use crate::logstore::LogStoreRef;
 use crate::protocol::SaveMode;
 use crate::table::normalize_table_url;
 
+pub mod codec;
 mod scan;
 
 /// Default column name for the file id column we add to files read from disk.
@@ -478,6 +480,20 @@ impl SnapshotWrapper {
     }
 }
 
+/// The originating `TableProvider::scan` request, captured at plan time.
+///
+/// `DeltaScanExec` itself holds live kernel state that has no wire form; what IS
+/// wire-safe is the request that produced it: the (serializable) provider plus the
+/// scan arguments. `DeltaScanExecCodec` serializes this and replays `scan()` on the
+/// receiving side to reconstruct an equivalent plan from the embedded snapshot.
+#[derive(Clone, Debug)]
+pub struct ScanReplay {
+    pub(crate) provider: DeltaScan,
+    pub(crate) projection: Option<Vec<usize>>,
+    pub(crate) filters: Vec<Expr>,
+    pub(crate) limit: Option<usize>,
+}
+
 /// An executable, serializable Delta table scan.
 ///
 /// `DeltaScan` captures everything needed to read a consistent set of data files from a
@@ -755,7 +771,7 @@ impl TableProvider for DeltaScan {
             .await?;
         let stream = self.scan_metadata_stream(&scan_plan, engine.clone());
 
-        scan::execution_plan(
+        let plan = scan::execution_plan(
             &self.config,
             session,
             scan_plan,
@@ -764,7 +780,27 @@ impl TableProvider for DeltaScan {
             limit,
             resolved_file_selection.as_ref(),
         )
-        .await
+        .await?;
+
+        // Capture the request that produced this plan so DeltaScanExecCodec can
+        // replay it across a wire boundary (distributed engines ship physical
+        // plans between processes).
+        let replay = || {
+            Arc::new(ScanReplay {
+                provider: self.clone(),
+                projection: projection.cloned(),
+                filters: filters.to_vec(),
+                limit,
+            })
+        };
+        let any = plan.as_ref() as &dyn std::any::Any;
+        if let Some(exec) = any.downcast_ref::<scan::DeltaScanExec>() {
+            return Ok(Arc::new(exec.clone().with_replay(replay())));
+        }
+        if let Some(exec) = any.downcast_ref::<scan::DeltaScanMetaExec>() {
+            return Ok(Arc::new(exec.clone().with_replay(replay())));
+        }
+        Ok(plan)
     }
 
     async fn insert_into(
