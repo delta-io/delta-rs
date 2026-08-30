@@ -363,6 +363,11 @@ impl PartitionWriterConfig {
         };
         let writer_properties =
             writer_properties.unwrap_or_else(|| default_writer_properties(Compression::SNAPPY));
+        if write_batch_size == Some(0) {
+            return Err(DeltaTableError::generic(
+                "write_batch_size must be greater than 0",
+            ));
+        }
         let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
 
         Ok(Self {
@@ -806,12 +811,11 @@ mod tests {
         assert!(target_file_count >= adds.len() as i32 - 1)
     }
 
-    #[tokio::test]
-    async fn test_roll_on_row_group_boundary_never_truncates_groups() {
-        // 10_000 rows in 1024-row groups with a tiny byte target: the group-aligned roll must
-        // wait for each row group to complete before starting a new file, so every written row
-        // group is exactly 1024 rows — except the single end-of-data remainder
-        // (10_000 = 9 * 1024 + 784).
+    /// Write 10_000 rows in 1024-row groups with 700-row write batches and a tiny byte
+    /// target, then return the row counts of every written row group. The 700-row batch
+    /// size never lands on a 1024 multiple, so the byte target is always crossed with a
+    /// row group open — only the group-aligned roll keeps groups intact.
+    async fn write_and_collect_group_sizes(roll_on_row_group_boundary: bool) -> Vec<i64> {
         let base_int = Arc::new(Int32Array::from((0..10000).collect::<Vec<i32>>()));
         let base_str = Arc::new(StringArray::from(vec!["A"; 10000]));
         let schema = Arc::new(ArrowSchema::new(vec![
@@ -833,12 +837,12 @@ mod tests {
             IndexMap::new(),
             Some(properties),
             Some(NonZeroU64::new(10_000).unwrap()),
-            None,
+            Some(700),
             None,
             None,
         )
         .unwrap()
-        .with_roll_on_row_group_boundary(true);
+        .with_roll_on_row_group_boundary(roll_on_row_group_boundary);
         let mut writer = PartitionWriter::try_with_config(
             object_store.clone(),
             config,
@@ -866,10 +870,42 @@ mod tests {
             }
         }
         assert_eq!(group_sizes.iter().sum::<i64>(), 10_000);
-        // every group is full except the one end-of-data remainder
+        group_sizes
+    }
+
+    #[tokio::test]
+    async fn test_roll_on_row_group_boundary_never_truncates_groups() {
+        // With the group-aligned roll, every row group is exactly 1024 rows except the
+        // single end-of-data remainder (10_000 = 9 * 1024 + 784).
+        let group_sizes = write_and_collect_group_sizes(true).await;
         let runts: Vec<_> = group_sizes.iter().filter(|n| **n != 1024).collect();
         assert_eq!(runts.len(), 1);
         assert_eq!(*runts[0], 10_000 % 1024);
+
+        // Negative control: the same setup with the plain byte roll cuts row groups
+        // mid-file, so the assertions above genuinely depend on the feature.
+        let group_sizes = write_and_collect_group_sizes(false).await;
+        let runts: Vec<_> = group_sizes.iter().filter(|n| **n != 1024).collect();
+        assert!(runts.len() > 1);
+    }
+
+    #[tokio::test]
+    async fn test_zero_write_batch_size_is_rejected() {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+        let result = PartitionWriterConfig::try_new(
+            schema,
+            IndexMap::new(),
+            None,
+            None,
+            Some(0),
+            None,
+            None,
+        );
+        assert!(result.is_err());
     }
 
     #[tokio::test]
