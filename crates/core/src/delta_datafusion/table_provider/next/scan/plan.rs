@@ -308,10 +308,17 @@ impl KernelScanPlan {
         } else {
             Arc::new(scan_builder.build()?)
         };
-        let parquet_read_schema = config.physical_arrow_schema(
-            scan.snapshot().table_configuration(),
-            &scan.physical_schema().as_ref().try_into_arrow()?,
-        )?;
+        let parquet_read_schema = if config.schema.is_some() {
+            config.physical_arrow_schema(
+                scan.snapshot().table_configuration(),
+                contract.scan_schema.as_ref(),
+            )?
+        } else {
+            config.physical_arrow_schema(
+                scan.snapshot().table_configuration(),
+                &scan.physical_schema().as_ref().try_into_arrow()?,
+            )?
+        };
         let parquet_predicate_schema =
             build_parquet_predicate_schema(&parquet_read_schema, &contract.file_id_field);
         Ok(Self {
@@ -1012,6 +1019,38 @@ mod tests {
                 .field_with_name("day")
                 .is_err()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_nested_schema_override_prunes_parquet_read_schema() -> TestResult {
+        let mut table = open_fs_path("../test/tests/data/table_with_null_stats_in_notnull_struct");
+        table.load().await?;
+
+        let override_schema = Arc::new(Schema::new(vec![arrow_schema::Field::new(
+            "s",
+            DataType::Struct(
+                vec![Arc::new(arrow_schema::Field::new(
+                    "l",
+                    DataType::Int64,
+                    false,
+                ))]
+                .into(),
+            ),
+            false,
+        )]));
+        let config = DeltaScanConfig::default().with_schema(override_schema.clone());
+        let scan_plan = KernelScanPlan::try_new(
+            table.snapshot()?.snapshot().snapshot(),
+            None,
+            &[],
+            &config,
+            None,
+        )?;
+
+        assert_eq!(scan_plan.contract.scan_schema, override_schema);
+        assert_eq!(scan_plan.parquet_read_schema, override_schema);
 
         Ok(())
     }
