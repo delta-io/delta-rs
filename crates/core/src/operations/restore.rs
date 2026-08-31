@@ -37,8 +37,8 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, ProtocolExt as _, ProtocolInner,
-    Remove, Snapshot, Version, resolve_snapshot,
+    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView,
+    ProtocolExt as _, ProtocolInner, Remove, Snapshot, Version, resolve_snapshot,
 };
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
@@ -169,7 +169,7 @@ async fn plan_restore_file_changes(
             log_store,
             ActiveAddOptions {
                 predicate: None,
-                stats: AddStatsPolicy::None,
+                stats: AddStatsPolicy::RawJson,
             },
         )
         .try_collect()
@@ -184,12 +184,12 @@ async fn plan_restore_file_changes(
         )
         .try_collect()
         .await?;
-    let target_paths = HashSet::<_>::from_iter(target_files.iter().map(|f| f.path().to_string()));
-    let current_paths = HashSet::<_>::from_iter(current_files.iter().map(|f| f.path().to_string()));
+    let target_keys = HashSet::<_>::from_iter(target_files.iter().map(restore_file_key));
+    let current_keys = HashSet::<_>::from_iter(current_files.iter().map(restore_file_key));
 
     let files_to_add = target_files
         .iter()
-        .filter(|file| !current_paths.contains(&file.path().to_string()))
+        .filter(|file| !current_keys.contains(&restore_file_key(file)))
         .map(|file| {
             let mut add = file.to_add();
             add.data_change = true;
@@ -198,15 +198,35 @@ async fn plan_restore_file_changes(
         .collect();
     let files_to_remove = current_files
         .iter()
-        .filter(|file| !target_paths.contains(&file.path().to_string()))
+        .filter(|file| !target_keys.contains(&restore_file_key(file)))
         .map(|file| {
+            let add = file.to_add();
             let mut remove = file.remove_action(true);
             remove.deletion_timestamp = Some(deletion_timestamp);
+            remove.tags = add.tags;
+            remove.base_row_id = add.base_row_id;
+            remove.default_row_commit_version = add.default_row_commit_version;
             remove
         })
         .collect();
 
     Ok((files_to_add, files_to_remove))
+}
+
+fn restore_file_key(file: &LogicalFileView) -> (Path, Option<String>) {
+    let deletion_vector_id =
+        file.deletion_vector_descriptor()
+            .map(|deletion_vector| match deletion_vector.offset {
+                Some(offset) => format!(
+                    "{}{}@{offset}",
+                    deletion_vector.storage_type, deletion_vector.path_or_inline_dv
+                ),
+                None => format!(
+                    "{}{}",
+                    deletion_vector.storage_type, deletion_vector.path_or_inline_dv
+                ),
+            });
+    (file.object_store_path(), deletion_vector_id)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -420,13 +440,17 @@ mod tests {
         Ok(())
     }
 
-    async fn metadata_rich_restore_table() -> DeltaResult<(DeltaTable, Add)> {
+    async fn metadata_rich_restore_table() -> DeltaResult<(DeltaTable, Add, Add)> {
         let mut target_add = crate::test_utils::make_test_add(
             "part=a/metadata-rich.parquet",
             &[("part", "a")],
             1_725_000_000_000,
         );
         target_add.size = 1234;
+        target_add.stats = Some(
+            r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
         target_add.tags = Some(HashMap::from([
             ("source".to_string(), Some("restore-target".to_string())),
             ("nullable-tag".to_string(), None),
@@ -473,18 +497,39 @@ mod tests {
             base_row_id: target_add.base_row_id,
             default_row_commit_version: target_add.default_row_commit_version,
         };
-        let current_add = crate::test_utils::make_test_add(
-            "part=b/current.parquet",
-            &[("part", "b")],
+        let mut current_add = crate::test_utils::make_test_add(
+            target_add.path.clone(),
+            &[("part", "a")],
             1_725_000_002_000,
         );
+        current_add.size = target_add.size;
+        current_add.stats = Some(
+            r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
+        current_add.tags = Some(HashMap::from([
+            ("source".to_string(), Some("restore-current".to_string())),
+            ("nullable-tag".to_string(), None),
+        ]));
+        current_add.deletion_vector = Some(DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "BBBB".to_string(),
+            offset: None,
+            size_in_bytes: 0,
+            cardinality: 1,
+        });
+        current_add.base_row_id = Some(84);
+        current_add.default_row_commit_version = Some(4);
         commit_actions(
             &table,
-            vec![Action::Remove(remove_target), Action::Add(current_add)],
+            vec![
+                Action::Remove(remove_target),
+                Action::Add(current_add.clone()),
+            ],
         )
         .await?;
 
-        Ok((table, target_add))
+        Ok((table, target_add, current_add))
     }
 
     fn no_stats_config(require_files: bool) -> DeltaTableConfig {
@@ -514,7 +559,7 @@ mod tests {
 
     #[tokio::test]
     async fn restore_plan_lazy_eager_parity_preserves_complete_actions() -> DeltaResult<()> {
-        let (table, target_add) = metadata_rich_restore_table().await?;
+        let (table, target_add, current_add) = metadata_rich_restore_table().await?;
         let log_store = table.log_store();
         let eager_current =
             EagerSnapshot::try_new(log_store.as_ref(), no_stats_config(true), None).await?;
@@ -550,9 +595,22 @@ mod tests {
             normalize_removes(eager_removes)?,
             normalize_removes(lazy_removes.clone())?
         );
-        assert_eq!(lazy_removes.len(), 1);
-        assert_eq!(lazy_removes[0].path, "part=b/current.parquet");
-        assert_eq!(lazy_removes[0].deletion_timestamp, Some(deletion_timestamp));
+        let expected_remove = Remove {
+            path: current_add.path,
+            data_change: true,
+            deletion_timestamp: Some(deletion_timestamp),
+            extended_file_metadata: Some(true),
+            partition_values: Some(current_add.partition_values),
+            size: Some(current_add.size),
+            tags: current_add.tags,
+            deletion_vector: current_add.deletion_vector,
+            base_row_id: current_add.base_row_id,
+            default_row_commit_version: current_add.default_row_commit_version,
+        };
+        assert_eq!(
+            normalize_removes(lazy_removes)?,
+            vec![serde_json::to_value(expected_remove)?]
+        );
         assert!(!lazy_current.has_materialized_files_for_test());
         assert!(!lazy_target.has_materialized_files_for_test());
 

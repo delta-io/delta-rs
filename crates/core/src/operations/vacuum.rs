@@ -88,7 +88,7 @@ async fn collect_active_paths(
 
 fn tombstone_object_store_path(tombstone: &TombstoneView) -> Path {
     let path = tombstone.path();
-    // Keep the existing percent encoding. `Path::from` encodes the percent sign a second time.
+    // Use `Path::parse` to preserve percent encoding. `Path::from` converts percent signs to `%25`.
     Path::parse(path.as_ref()).unwrap_or_else(|_| Path::from(path.as_ref()))
 }
 
@@ -745,7 +745,7 @@ fn ok_to_delete(
 ) -> Result<bool, DeltaTableError> {
     Ok(
         !(valid_files.contains(location) // file is still being tracked in table
-        || keep_files.contains(location) // file is associated with a version that we are keeping
+        || keep_files.contains(location)
         || is_hidden_directory(partition_columns, location)?),
     )
 }
@@ -1196,7 +1196,7 @@ mod tests {
         }
 
         fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn delta_kernel::Engine> {
-            // Snapshot creation uses the first engine. Updates use the second.
+            // The first engine creates the snapshot. The second applies updates.
             let track_refresh_epochs = self.engine_count.fetch_add(1, Ordering::SeqCst) == 1;
             Arc::new(RefreshTrackingEngine {
                 inner: self.inner.engine(operation_id),

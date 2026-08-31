@@ -217,7 +217,7 @@ impl FileSystemCheckPlan {
                 extended_file_metadata: None,
                 partition_values: Some(file.partition_values),
                 size: Some(file.size),
-                deletion_vector: None,
+                deletion_vector: file.deletion_vector,
                 tags: file.tags,
                 base_row_id: file.base_row_id,
                 default_row_commit_version: file.default_row_commit_version,
@@ -321,7 +321,10 @@ mod tests {
             1_725_000_000_000,
         );
         source_add.size = 1234;
-        source_add.stats = None;
+        source_add.stats = Some(
+            r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
         source_add.tags = Some(HashMap::from([
             ("source".to_string(), Some("metadata-rich".to_string())),
             ("nullable-tag".to_string(), None),
@@ -368,7 +371,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fsck_plan_lazy_eager_parity_preserves_complete_adds() -> DeltaResult<()> {
+    async fn fsck_plan_lazy_eager_parity_preserves_remove_metadata() -> DeltaResult<()> {
         let (table, source_add) = metadata_rich_missing_file_table().await?;
         let log_store = table.log_store();
         let eager = EagerSnapshot::try_new(
@@ -398,8 +401,36 @@ mod tests {
 
         let lazy_files = normalize_adds(lazy_plan.files_to_remove.clone())?;
         assert_eq!(normalize_adds(eager_plan.files_to_remove)?, lazy_files);
-        assert_eq!(lazy_files, vec![serde_json::to_value(source_add)?]);
+        let mut expected = source_add;
+        expected.stats = None;
+        assert_eq!(lazy_files, vec![serde_json::to_value(expected)?]);
         assert!(!lazy.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fsck_removes_missing_deletion_vector_logical_file() -> DeltaResult<()> {
+        let (table, source_add) = metadata_rich_missing_file_table().await?;
+        let log_store = table.log_store();
+
+        let (table, metrics) = table.filesystem_check().await?;
+
+        assert_eq!(metrics.files_removed, vec![source_add.path]);
+        let active_files: Vec<_> = table
+            .snapshot()?
+            .snapshot()
+            .snapshot()
+            .active_adds(
+                log_store.as_ref(),
+                ActiveAddOptions {
+                    predicate: None,
+                    stats: AddStatsPolicy::None,
+                },
+            )
+            .try_collect()
+            .await?;
+        assert!(active_files.is_empty());
 
         Ok(())
     }
