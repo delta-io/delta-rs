@@ -685,8 +685,9 @@ async fn get_read_plan(
         // NOTE: In the "next" provider, DataFusion's Parquet scan partition fields are file-id
         // only. Delta partition columns/values are injected via kernel transforms and handled
         // above Parquet, so they are not part of the Parquet partition schema here.
-        let table_schema =
-            TableSchema::new(parquet_read_schema.clone(), vec![file_id_field.clone()]);
+        let table_schema = TableSchema::builder(parquet_read_schema.clone())
+            .with_table_partition_cols(vec![file_id_field.clone()])
+            .build();
         let full_table_schema = table_schema.table_schema().clone();
         let mut file_source = ParquetSource::new(table_schema)
             .with_table_parquet_options(pq_options.clone())

@@ -85,7 +85,7 @@ jobs:
         run: make develop
 
       - name: Run tests
-        run: uv run --no-sync pytest -n auto -m '((s3 or azure) and integration) or not integration and not benchmark and not no_pyarrow' --doctest-modules
+        run: uv run --no-sync pytest -n auto -m '((s3 or azure) and integration and not pyspark) or not integration and not benchmark and not no_pyarrow' --doctest-modules
 
       - name: Test without pandas
         run: |
@@ -200,6 +200,9 @@ jobs:
         with:
           distribution: "zulu"
           java-version: "21"
+
+      - name: Start emulated services
+        run: docker compose up -d
 
       - name: Build and install deltalake
         run: make develop-pyspark

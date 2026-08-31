@@ -46,7 +46,7 @@ use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{DeltaResult, DeltaTableConfig, DeltaTableError, PartitionFilter, to_kernel_predicate};
+use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
 
 pub use self::log_data::*;
 use self::stats_projection::FIELD_STATS;
@@ -1503,26 +1503,6 @@ impl EagerSnapshot {
         self.snapshot.file_views(log_store, predicate)
     }
 
-    /// Stream the file views matching the given partition `filters`.
-    ///
-    /// Deprecated in favor of [`file_views`](Self::file_views) with a kernel predicate, which
-    /// supports richer expressions than simple partition equality filters.
-    #[deprecated(since = "0.29.0", note = "Use `files` with kernel predicate instead.")]
-    pub fn file_views_by_partitions(
-        &self,
-        log_store: &dyn LogStore,
-        filters: &[PartitionFilter],
-    ) -> BoxStream<'_, DeltaResult<LogicalFileView>> {
-        if filters.is_empty() {
-            return self.file_views(log_store, None);
-        }
-        let predicate = match to_kernel_predicate(filters, self.snapshot.schema().as_ref()) {
-            Ok(predicate) => Arc::new(predicate),
-            Err(err) => return Box::pin(once(ready(Err(err)))),
-        };
-        self.file_views(log_store, Some(predicate))
-    }
-
     /// Return the latest committed transaction version for the given application id, if any.
     ///
     /// This is used to implement idempotent writes: an application records its own monotonic
@@ -1585,6 +1565,9 @@ mod tests {
     use super::*;
     use crate::{
         DeltaTable, DeltaTableConfig, TableProperty, checkpoints,
+        kernel::schema::partitions::{
+            FilterOp, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
+        },
         kernel::transaction::CommitData,
         kernel::transaction::{CommitBuilder, TableReference},
         kernel::{Action, DataType, PrimitiveType, StructField, StructType},
@@ -3853,10 +3836,10 @@ mod tests {
         let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
         let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
 
-        let predicate = Arc::new(to_kernel_predicate(
+        let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
-                PartitionFilter::try_from(("month", "=", "2"))?,
-                PartitionFilter::try_from(("year", "=", "2020"))?,
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
             ],
             eager.schema().as_ref(),
         )?);
@@ -3893,6 +3876,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_views_with_dnf_predicate() -> TestResult {
+        let base = TestTables::Delta0_8_0Partitioned
+            .table_builder()?
+            .build_storage()?;
+        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+
+        let dnf = vec![
+            vec![
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
+            ],
+            vec![
+                ("year", FilterOp::Eq, FilterValue::Scalar("2021")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("12")),
+            ],
+        ];
+        let predicate = Arc::new(dnf_to_kernel_predicate(&dnf, snapshot.schema().as_ref())?);
+
+        let mut paths: Vec<_> = snapshot
+            .file_views(base.as_ref(), Some(predicate))
+            .map_ok(|view| view.path_raw().to_string())
+            .try_collect()
+            .await?;
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+                "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+                "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string(),
+            ]
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_partition_values_map_preserves_all_columns_under_narrowing_predicate()
     -> TestResult {
         use std::collections::BTreeSet;
@@ -3906,10 +3927,10 @@ mod tests {
             .build_storage()?;
         let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
 
-        let predicate = Arc::new(to_kernel_predicate(
+        let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
-                PartitionFilter::try_from(("year", "=", "2020"))?,
-                PartitionFilter::try_from(("month", "=", "2"))?,
+                ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                ("month", FilterOp::Eq, FilterValue::Scalar("2")),
             ],
             snapshot.schema().as_ref(),
         )?);

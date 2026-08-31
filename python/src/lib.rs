@@ -13,7 +13,7 @@ mod writer;
 use arrow_schema::{ArrowError, SchemaRef};
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use datafusion_ffi::table_provider::FFI_TableProvider;
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{PredicateRef, Scalar};
 use delta_kernel::schema::{MetadataValue, StructField};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use deltalake::arrow::{
@@ -27,7 +27,8 @@ use deltalake::datafusion::logical_expr::LogicalPlanBuilder;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::engine::AsObjectStoreUrl;
 use deltalake::delta_datafusion::{
-    DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig, DeltaScanNext,
+    DataFusionMixins, DeletionVectorSelection, DeltaCdfTableProvider, DeltaScanConfig,
+    DeltaScanNext, DeltaSessionContext,
 };
 use pyo3_arrow::PyDataType;
 
@@ -35,6 +36,7 @@ use deltalake::arrow::array::{
     ArrayRef, BooleanBuilder, LargeStringBuilder, ListBuilder, RecordBatchIterator,
 };
 use deltalake::delta_datafusion::create_session_state_with_spill_config;
+use deltalake::delta_datafusion::expr::parse_sql_predicate_to_kernel;
 use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
@@ -54,7 +56,10 @@ use deltalake::operations::write::WriteBuilder;
 use deltalake::parquet::basic::{Compression, Encoding};
 use deltalake::parquet::errors::ParquetError;
 use deltalake::parquet::file::properties::{EnabledStatistics, WriterProperties};
-use deltalake::partitions::PartitionFilter;
+use deltalake::partitions::{
+    FilterLiteral, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
+    filter_literal,
+};
 use deltalake::protocol::log_compaction::compact_logs;
 use deltalake::protocol::{DeltaOperation, SaveMode};
 use deltalake::table::config::TablePropertiesExt as _;
@@ -116,6 +121,19 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 enum PartitionFilterValue {
     Single(PyBackedStr),
     Multiple(Vec<PyBackedStr>),
+}
+
+/// One conjunction (AND group) of `(column, op, value)` filter tuples. The
+/// Python side always sends filters as a list of these, i.e. in disjunctive
+/// normal form; a lone conjunction arrives as a single-element list.
+type PyFilterConjunction = Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>;
+
+/// The file pruning predicate of the listing APIs: a SQL string, or tuple
+/// filters in disjunctive normal form.
+#[derive(FromPyObject)]
+enum PyFilePruningPredicate {
+    Sql(String),
+    Dnf(Vec<PyFilterConjunction>),
 }
 
 #[pyclass(module = "deltalake._internal", frozen)]
@@ -291,6 +309,36 @@ impl RawDeltaTable {
                 .map_err(PythonError::from)
                 .map_err(PyErr::from)
         })
+    }
+
+    /// Resolve the file pruning predicate of the listing APIs into a kernel
+    /// predicate.
+    fn resolve_files_predicate(
+        &self,
+        predicate: Option<PyFilePruningPredicate>,
+    ) -> PyResult<Option<PredicateRef>> {
+        let resolved = match predicate {
+            None => return Ok(None),
+            Some(PyFilePruningPredicate::Dnf(filters)) if filters.is_empty() => return Ok(None),
+            Some(PyFilePruningPredicate::Dnf(filters)) => {
+                kernel_dnf_predicate(&filters, self.snapshot_schema()?.as_ref())
+                    .map_err(PythonError::from)?
+            }
+            Some(PyFilePruningPredicate::Sql(sql)) => {
+                let session = SessionContext::new();
+                parse_sql_predicate_to_kernel(
+                    &sql,
+                    self.snapshot_schema()?.as_ref(),
+                    &session.state(),
+                )
+                .map_err(PythonError::from)?
+            }
+        };
+        Ok(Some(Arc::new(resolved)))
+    }
+
+    fn snapshot_schema(&self) -> PyResult<delta_kernel::schema::SchemaRef> {
+        self.with_table(|t| Ok(t.snapshot().map_err(PythonError::from)?.schema().clone()))
     }
 
     /// Clone both the table handle and its snapshot state under a single lock acquisition.
@@ -561,30 +609,28 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (partition_filters=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     pub fn files(
         &self,
         py: Python,
-        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
         }
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         py.detach(|| {
-            if let Some(filters) = partition_filters {
-                let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
-                Ok(self
-                    .with_table(|t| {
-                        rt().block_on(async {
-                            t.get_files_by_partitions(&filters)
-                                .await
-                                .map_err(PythonError::from)
-                                .map_err(PyErr::from)
-                        })
-                    })?
-                    .into_iter()
-                    .map(|p| p.to_string())
-                    .collect())
+            if let Some(filter) = filter {
+                self.with_table(|t| {
+                    rt().block_on(async {
+                        t.get_active_add_actions_by_predicate(Some(filter.clone()))
+                            .map_ok(|view| view.object_store_path().to_string())
+                            .try_collect()
+                            .await
+                            .map_err(PythonError::from)
+                            .map_err(PyErr::from)
+                    })
+                })
             } else {
                 match self._table.lock() {
                     Ok(table) => Ok(table
@@ -598,23 +644,29 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (partition_filters=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     pub fn file_uris(
         &self,
-        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
         if !self.with_table(|t| Ok(t.config.require_files))? {
             return Err(DeltaError::new_err("Table is initiated without files."));
         }
 
-        if let Some(filters) = partition_filters {
-            let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
+        if let Some(filter) = filter {
             self.with_table(|t| {
                 rt().block_on(async {
-                    t.get_file_uris_by_partitions(&filters)
+                    let paths: Vec<_> = t
+                        .get_active_add_actions_by_predicate(Some(filter.clone()))
+                        .map_ok(|view| view.object_store_path())
+                        .try_collect()
                         .await
-                        .map_err(PythonError::from)
-                        .map_err(PyErr::from)
+                        .map_err(PythonError::from)?;
+                    Ok(paths
+                        .iter()
+                        .map(|path| t.log_store().to_uri(path))
+                        .collect())
                 })
             })
         } else {
@@ -772,7 +824,7 @@ impl RawDeltaTable {
     pub fn compact_optimize(
         &self,
         py: Python,
-        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        partition_filters: Option<PyFilterConjunction>,
         target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: Option<usize>,
@@ -818,9 +870,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
             }
 
+            let partition_filters = partition_filters.unwrap_or_default();
             let converted_filters =
-                convert_partition_filters(partition_filters.unwrap_or_default())
-                    .map_err(PythonError::from)?;
+                convert_partition_filters(&partition_filters).map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
             rt().block_on(cmd.into_future())
@@ -848,7 +900,7 @@ impl RawDeltaTable {
         &self,
         py: Python,
         z_order_columns: Vec<String>,
-        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        partition_filters: Option<PyFilterConjunction>,
         target_size: Option<u64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: Option<usize>,
@@ -896,9 +948,9 @@ impl RawDeltaTable {
                 cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
             }
 
+            let partition_filters = partition_filters.unwrap_or_default();
             let converted_filters =
-                convert_partition_filters(partition_filters.unwrap_or_default())
-                    .map_err(PythonError::from)?;
+                convert_partition_filters(&partition_filters).map_err(PythonError::from)?;
             cmd = cmd.with_filters(&converted_filters);
 
             rt().block_on(cmd.into_future())
@@ -1163,6 +1215,46 @@ impl RawDeltaTable {
         })
     }
 
+    #[pyo3(signature = (columns=None, predicate=None))]
+    pub fn scan(
+        &self,
+        py: Python,
+        columns: Option<Vec<String>>,
+        predicate: Option<String>,
+    ) -> PyResult<Arro3RecordBatchReader> {
+        let snapshot = self.cloned_state()?;
+        let log_store = self.log_store()?;
+
+        py.detach(|| {
+            // Same session setup as PyQueryBuilder::register: a Delta-tuned context
+            // with the table's object store registered so non-local storage works.
+            let ctx = DeltaSessionContext::new().into_inner();
+            ctx.register_object_store(log_store.root_url(), log_store.root_object_store(None));
+
+            let config = DeltaScanConfig::new().with_wrap_partition_values(false);
+            let provider =
+                Arc::new(DeltaScanNext::new(snapshot.clone(), config).map_err(PythonError::from)?)
+                    as Arc<dyn TableProvider>;
+
+            let mut df = ctx.read_table(provider).map_err(PythonError::from)?;
+            if let Some(predicate) = &predicate {
+                let expr = snapshot
+                    .parse_predicate_expression(predicate, &ctx.state())
+                    .map_err(PythonError::from)?;
+                df = df.filter(expr).map_err(PythonError::from)?;
+            }
+            if let Some(columns) = &columns {
+                let columns: Vec<&str> = columns.iter().map(String::as_str).collect();
+                df = df.select_columns(&columns).map_err(PythonError::from)?;
+            }
+
+            let stream = rt()
+                .block_on(df.execute_stream())
+                .map_err(PythonError::from)?;
+            Ok(convert_stream_to_reader(stream).into())
+        })
+    }
+
     pub fn deletion_vectors(&self, py: Python) -> PyResult<Arro3RecordBatchReader> {
         if !self.has_files()? {
             return Err(DeltaError::new_err("Table is instantiated without files."));
@@ -1381,18 +1473,19 @@ impl RawDeltaTable {
         })
     }
 
-    #[pyo3(signature = (schema, partition_filters=None))]
+    #[pyo3(signature = (schema, file_pruning_predicate=None))]
     pub fn dataset_partitions<'py>(
         &self,
         py: Python<'py>,
         schema: PyArrowSchema,
-        partition_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<(String, Option<Bound<'py, PyAny>>)>> {
-        let path_set = match partition_filters {
-            Some(filters) => Some(HashSet::<_>::from_iter(
-                self.files(py, Some(filters))?.iter().cloned(),
-            )),
-            None => None,
+        let path_set = if file_pruning_predicate.is_some() {
+            Some(HashSet::<_>::from_iter(
+                self.files(py, file_pruning_predicate)?.iter().cloned(),
+            ))
+        } else {
+            None
         };
         let stats_cols = self.get_stats_columns()?;
         let num_index_cols = self.get_num_index_cols()?;
@@ -1437,10 +1530,10 @@ impl RawDeltaTable {
             .collect()
     }
 
-    #[pyo3(signature = (partitions_filters=None))]
+    #[pyo3(signature = (file_pruning_predicate=None))]
     fn get_active_partitions<'py>(
         &self,
-        partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        file_pruning_predicate: Option<PyFilePruningPredicate>,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PyFrozenSet>> {
         let schema = self.with_table(|t| {
@@ -1465,9 +1558,10 @@ impl RawDeltaTable {
             .map(|col| col.as_str())
             .collect();
 
-        if let Some(filters) = &partitions_filters {
+        if let Some(PyFilePruningPredicate::Dnf(filters)) = &file_pruning_predicate {
             let unknown_columns: Vec<&PyBackedStr> = filters
                 .iter()
+                .flatten()
                 .map(|(column_name, _, _)| column_name)
                 .filter(|column_name| {
                     let column_name: &'_ str = column_name.as_ref();
@@ -1479,25 +1573,9 @@ impl RawDeltaTable {
                     "Filters include columns that are not in table schema: {unknown_columns:?}"
                 )));
             }
-
-            let non_partition_columns: Vec<&PyBackedStr> = filters
-                .iter()
-                .map(|(column_name, _, _)| column_name)
-                .filter(|column_name| {
-                    let column_name: &'_ str = column_name.as_ref();
-                    !partition_columns.contains(column_name)
-                })
-                .collect();
-
-            if !non_partition_columns.is_empty() {
-                return Err(PyValueError::new_err(format!(
-                    "Filters include columns that are not partition columns: {non_partition_columns:?}"
-                )));
-            }
         }
 
-        let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
-            .map_err(PythonError::from)?;
+        let filter = self.resolve_files_predicate(file_pruning_predicate)?;
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
         let partition_column_keys: Vec<(&str, String)> = partition_columns
@@ -1522,13 +1600,7 @@ impl RawDeltaTable {
         let state = self.cloned_state()?;
         let log_store = self.log_store()?;
         let adds: Vec<_> = rt()
-            .block_on(async {
-                #[allow(deprecated)]
-                state
-                    .file_views_by_partitions(&log_store, &converted_filters)
-                    .try_collect()
-                    .await
-            })
+            .block_on(async { state.file_views(&log_store, filter).try_collect().await })
             .map_err(PythonError::from)?;
         let active_partitions: HashSet<Vec<(&str, Option<String>)>> = adds
             .iter()
@@ -1576,7 +1648,7 @@ impl RawDeltaTable {
         mode: &str,
         partition_by: Vec<String>,
         schema: PyRef<PySchema>,
-        partitions_filters: Option<Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>>,
+        partitions_filters: Option<PyFilterConjunction>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<()> {
@@ -1596,19 +1668,26 @@ impl RawDeltaTable {
 
             match mode {
                 SaveMode::Overwrite => {
-                    let converted_filters =
-                        convert_partition_filters(partitions_filters.unwrap_or_default())
-                            .map_err(PythonError::from)?;
+                    let partitions_filters = partitions_filters.unwrap_or_default();
+                    let converted_filters = convert_partition_filters(&partitions_filters)
+                        .map_err(PythonError::from)?;
 
                     let state = self.cloned_state()?;
                     let log_store = self.log_store()?;
+                    let filter = if converted_filters.is_empty() {
+                        None
+                    } else {
+                        Some(Arc::new(
+                            conjunction_to_kernel_predicate(
+                                &converted_filters,
+                                state.schema().as_ref(),
+                            )
+                            .map_err(PythonError::from)?,
+                        ) as PredicateRef)
+                    };
                     let add_actions: Vec<_> = rt()
                         .block_on(async {
-                            #[allow(deprecated)]
-                            state
-                                .file_views_by_partitions(&log_store, &converted_filters)
-                                .try_collect()
-                                .await
+                            state.file_views(&log_store, filter).try_collect().await
                         })
                         .map_err(PythonError::from)?;
 
@@ -2386,24 +2465,33 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
     Ok(properties.build())
 }
 
+/// Translate DNF filter tuples into a kernel predicate.
+fn kernel_dnf_predicate(
+    dnf: &[PyFilterConjunction],
+    table_schema: &delta_kernel::schema::StructType,
+) -> Result<delta_kernel::expressions::Predicate, DeltaTableError> {
+    let dnf: Vec<Vec<FilterLiteral<'_>>> = dnf
+        .iter()
+        .map(|conjunction| convert_partition_filters(conjunction))
+        .collect::<Result<_, _>>()?;
+    dnf_to_kernel_predicate(&dnf, table_schema)
+}
+
+/// Parse raw `(column, op, value)` tuples into typed filter literals borrowing
+/// from the Python-backed strings.
 fn convert_partition_filters(
-    partitions_filters: Vec<(PyBackedStr, PyBackedStr, PartitionFilterValue)>,
-) -> Result<Vec<PartitionFilter>, DeltaTableError> {
+    partitions_filters: &[(PyBackedStr, PyBackedStr, PartitionFilterValue)],
+) -> Result<Vec<FilterLiteral<'_>>, DeltaTableError> {
     partitions_filters
-        .into_iter()
-        .map(|filter| match filter {
-            (key, op, PartitionFilterValue::Single(v)) => {
-                let key: &'_ str = key.as_ref();
-                let op: &'_ str = op.as_ref();
-                let v: &'_ str = v.as_ref();
-                PartitionFilter::try_from((key, op, v))
-            }
-            (key, op, PartitionFilterValue::Multiple(v)) => {
-                let key: &'_ str = key.as_ref();
-                let op: &'_ str = op.as_ref();
-                let v: Vec<&'_ str> = v.iter().map(|v| v.as_ref()).collect();
-                PartitionFilter::try_from((key, op, v.as_slice()))
-            }
+        .iter()
+        .map(|(column, op, value)| {
+            let value = match value {
+                PartitionFilterValue::Single(v) => FilterValue::Scalar(v.as_ref()),
+                PartitionFilterValue::Multiple(vs) => {
+                    FilterValue::Set(vs.iter().map(|v| v.as_ref()).collect())
+                }
+            };
+            filter_literal(column.as_ref(), op.as_ref(), value)
         })
         .collect()
 }

@@ -26,7 +26,7 @@ use deltalake_core::protocol::DeltaOperation;
 use deltalake_core::test_utils::TestTables;
 use deltalake_core::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake_core::{
-    DeltaTable, NULL_PARTITION_VALUE_DATA_PATH, PartitionFilter, Path, open_table,
+    DeltaTable, FilterOp, FilterValue, NULL_PARTITION_VALUE_DATA_PATH, Path, open_table,
 };
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt as _;
@@ -737,7 +737,7 @@ async fn write(
 async fn test_compact_subset_partition_filter_preserves_full_partition_values()
 -> Result<(), Box<dyn Error>> {
     let context = setup_multi_partition_optimize_table().await?;
-    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+    let filter = vec![("part_b", FilterOp::Eq, FilterValue::Scalar("x"))];
 
     let (updated, metrics) = context
         .table
@@ -758,7 +758,7 @@ async fn test_compact_subset_partition_filter_preserves_full_partition_values()
 async fn test_zorder_subset_partition_filter_preserves_full_partition_values()
 -> Result<(), Box<dyn Error>> {
     let context = setup_multi_partition_optimize_table().await?;
-    let filter = vec![PartitionFilter::try_from(("part_b", "=", "x"))?];
+    let filter = vec![("part_b", FilterOp::Eq, FilterValue::Scalar("x"))];
 
     let (updated, metrics) = context
         .table
@@ -807,7 +807,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version().unwrap();
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
 
     let optimize = dt.optimize().with_filters(&filter);
     let (dt, metrics) = optimize.await?;
@@ -1014,7 +1014,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let df_context: SessionContext = DeltaSessionContext::default().into();
 
     //create the merge plan, remove a file, and execute the plan.
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
@@ -1081,7 +1081,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let df_context: SessionContext = DeltaSessionContext::default().into();
 
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
@@ -1206,7 +1206,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
 
     let optimize = dt
         .optimize()
@@ -1376,7 +1376,7 @@ async fn test_idempotent_with_multiple_bins() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
 
     let optimize = dt
         .optimize()
@@ -1709,7 +1709,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version().unwrap();
 
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
 
     let optimize = dt
         .optimize()
@@ -1958,7 +1958,7 @@ async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+    let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar("2022-05-22"))];
 
     let optimize = dt
         .optimize()

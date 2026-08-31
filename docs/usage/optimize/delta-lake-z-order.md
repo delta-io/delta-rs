@@ -20,7 +20,7 @@ Here's how to Z Order a Delta table:
     ```rust
     let table = open_table(delta_path_url).await?;    
     
-    let (table, metrics) = DeltaOps(table)
+    let (table, metrics) = table
         .optimize()
         .with_type(OptimizeType::ZOrder(vec!["country".to_string()]))
         .await?;

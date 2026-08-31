@@ -26,11 +26,13 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use arrow_array::{Array, GenericListArray};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Schema};
 use chrono::{DateTime, NaiveDate};
 use datafusion::catalog::Session;
 use datafusion::common::Result as DFResult;
-use datafusion::common::{DFSchema, Result, ScalarValue, TableReference, config::ConfigOptions};
+use datafusion::common::{
+    DFSchema, Result, ScalarValue, TableReference, ToDFSchema, config::ConfigOptions,
+};
 use datafusion::execution::context::SessionState;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::functions_nested::make_array::MakeArray;
@@ -56,6 +58,8 @@ use datafusion::sql::sqlparser::dialect::GenericDialect;
 use datafusion::sql::sqlparser::parser::Parser;
 use datafusion::sql::sqlparser::tokenizer::Tokenizer;
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+use delta_kernel::expressions::Predicate;
+use delta_kernel::schema::StructType;
 use tracing::log::*;
 
 use crate::delta_datafusion::session::DeltaParserOptions;
@@ -289,6 +293,31 @@ pub fn parse_predicate_expression(
     session: &dyn Session,
 ) -> DeltaResult<Expr> {
     sql_expr_to_df_expr(session, schema, parse_sql_expr(expr)?)
+}
+
+/// Parse a SQL predicate string into a kernel [`Predicate`] for file skipping
+/// during log replay.
+///
+/// The predicate is resolved against the table's logical schema, coercing
+/// literals to the referenced column types the same way operation predicates
+/// (delete, update, merge) are resolved. Only constructs the kernel can
+/// evaluate against file-level metadata are accepted.
+pub fn parse_sql_predicate_to_kernel(
+    predicate: impl AsRef<str>,
+    table_schema: &StructType,
+    session: &dyn Session,
+) -> DeltaResult<Predicate> {
+    let predicate = predicate.as_ref();
+    let schema: Schema = table_schema.try_into_arrow()?;
+    let df_schema = schema.to_dfschema_ref()?;
+    let expr = crate::delta_datafusion::utils::Expression::String(predicate.to_string())
+        .resolve(session, df_schema)?;
+    crate::delta_datafusion::engine::to_delta_predicate(&expr).map_err(|err| {
+        DeltaTableError::Generic(format!(
+            "Cannot use predicate {predicate:?} for file skipping: {err}. Supported are \
+             column comparisons, IS [NOT] NULL, [NOT] IN, [NOT] BETWEEN, NOT, AND and OR."
+        ))
+    })
 }
 
 fn parse_sql_expr(expr: impl AsRef<str>) -> DeltaResult<SqlExpr> {
@@ -1377,6 +1406,112 @@ mod test {
 
         for test in unsupported_types {
             assert!(fmt_expr_to_sql(&test.expr).is_err());
+        }
+    }
+
+    mod sql_predicate_to_kernel {
+        use delta_kernel::expressions::{Expression as KernelExpression, Scalar};
+
+        use super::super::parse_sql_predicate_to_kernel;
+        use super::*;
+        use crate::kernel::schema::partitions::{
+            FilterOp, FilterValue, dnf_to_kernel_predicate, literal_to_kernel_predicate,
+        };
+
+        fn test_schema() -> StructType {
+            StructType::try_new(vec![
+                StructField::new("year", DataType::Primitive(PrimitiveType::Integer), true),
+                StructField::new("month", DataType::Primitive(PrimitiveType::Integer), true),
+                StructField::new("name", DataType::Primitive(PrimitiveType::String), true),
+            ])
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn parses_coerced_comparison() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            let predicate =
+                parse_sql_predicate_to_kernel("year > 2020", &schema, &session.state()).unwrap();
+
+            let expected = KernelExpression::column(["year"]).gt(Scalar::Integer(2020));
+            assert_eq!(predicate, expected);
+        }
+
+        #[tokio::test]
+        async fn parses_boolean_logic_matching_dnf() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            let from_sql = parse_sql_predicate_to_kernel(
+                "(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)",
+                &schema,
+                &session.state(),
+            )
+            .unwrap();
+
+            let from_dnf = dnf_to_kernel_predicate(
+                &[
+                    vec![
+                        ("year", FilterOp::Eq, FilterValue::Scalar("2020")),
+                        ("month", FilterOp::Eq, FilterValue::Scalar("2")),
+                    ],
+                    vec![
+                        ("year", FilterOp::Eq, FilterValue::Scalar("2021")),
+                        ("month", FilterOp::Eq, FilterValue::Scalar("12")),
+                    ],
+                ],
+                &schema,
+            )
+            .unwrap();
+
+            assert_eq!(from_sql, from_dnf);
+        }
+
+        #[tokio::test]
+        async fn parses_in_list_and_null_checks() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            let from_sql =
+                parse_sql_predicate_to_kernel("year IN (2020, 2021)", &schema, &session.state())
+                    .unwrap();
+            let from_literal = literal_to_kernel_predicate(
+                &("year", FilterOp::In, FilterValue::Set(vec!["2020", "2021"])),
+                &schema,
+            )
+            .unwrap();
+            assert_eq!(from_sql, from_literal);
+
+            let null_check =
+                parse_sql_predicate_to_kernel("name IS NULL", &schema, &session.state()).unwrap();
+            assert_eq!(null_check, KernelExpression::column(["name"]).is_null());
+        }
+
+        #[tokio::test]
+        async fn unknown_column_errors_with_name() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            let err = parse_sql_predicate_to_kernel("nope = 1", &schema, &session.state())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("nope"), "unexpected error: {err}");
+        }
+
+        #[tokio::test]
+        async fn unsupported_construct_errors_with_predicate() {
+            let session = SessionContext::new();
+            let schema = test_schema();
+
+            let err = parse_sql_predicate_to_kernel("name LIKE 'a%'", &schema, &session.state())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("name LIKE 'a%'") && err.contains("file skipping"),
+                "unexpected error: {err}"
+            );
         }
     }
 }

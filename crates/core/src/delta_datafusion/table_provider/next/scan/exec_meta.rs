@@ -29,7 +29,8 @@ use datafusion::physical_plan::metrics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    PhysicalExpr, ReplaceChildrenOptions, Statistics,
 };
 use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef};
 use delta_kernel::{EvaluationHandler, ExpressionRef};
@@ -206,9 +207,10 @@ impl ExecutionPlan for DeltaScanMetaExec {
         vec![]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if !children.is_empty() {
             return Err(DataFusionError::Plan(
@@ -216,6 +218,16 @@ impl ExecutionPlan for DeltaScanMetaExec {
             ));
         }
         Ok(self.clone())
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn repartitioned(
@@ -320,12 +332,10 @@ impl ExecutionPlan for DeltaScanMetaExec {
 
     fn apply_expressions(
         &self,
-        expr_rewriter: &mut dyn FnMut(
+        _expr_rewriter: &mut dyn FnMut(
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // DeltaScanMetaExec has no children execution plans to traverse
-        // Just continue the recursion
         Ok(TreeNodeRecursion::Continue)
     }
 }

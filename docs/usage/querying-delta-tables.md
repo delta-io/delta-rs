@@ -23,16 +23,91 @@ value: string
 year: string
 month: string
 day: string
->>> dt.to_pandas(partitions=[("year", "=", "2021")], columns=["value"])
+>>> dt.to_pandas(filters=[("year", "=", "2021")], columns=["value"])
       value
 0     6
 1     7
 2     5
 3     4
->>> dt.to_pyarrow_table(partitions=[("year", "=", "2021")], columns=["value"])
+>>> dt.to_pyarrow_table(filters=[("year", "=", "2021")], columns=["value"])
 pyarrow.Table
 value: string
 ```
+
+## Selecting files with a pruning predicate
+
+`file_pruning_predicate` selects which files a table's log lists, before any
+data is read. It takes either a SQL string or tuple filters. A flat list of
+tuples is a conjunction (AND); a list of such lists is an OR across the inner
+AND groups:
+
+``` python
+>>> # SQL string
+>>> dt.file_uris(file_pruning_predicate="(year = 2020 AND month = 2) OR (year = 2021 AND month = 12)")
+>>> # flat list of tuples: a single conjunction, year = 2020 AND month = 2
+>>> dt.file_uris(file_pruning_predicate=[("year", "=", "2020"), ("month", "=", "2")])
+>>> # list of lists: OR across the inner AND groups
+>>> dt.file_uris(
+...     file_pruning_predicate=[
+...         [("year", "=", "2020"), ("month", "=", "2")],
+...         [("year", "=", "2021"), ("month", "=", "12")],
+...     ],
+... )
+```
+
+The parameter is accepted on `file_uris`, `partitions`, and
+`to_pyarrow_dataset`. The older `partitions` and `partition_filters`
+parameters on these methods still work but are deprecated in its favor. The
+predicate may reference any column, not just partition columns:
+
+- **Partition columns** prune exactly: every returned file matches the
+  predicate, and only matching files are returned.
+- **Other columns** prune conservatively using the per-file min/max statistics
+  in the transaction log: files that provably contain no matching row are
+  dropped, every file that *may* contain one is kept, and files without
+  statistics for a referenced column are always kept. The result is a
+  complete superset of the matching files. How much gets pruned depends on the
+  data layout: statistics only rule out files when similar values are
+  colocated, for example by partitioning or z-ordering on the column. See
+  [Delta Lake File Skipping](../how-delta-lake-works/delta-lake-file-skipping.md)
+  for how to lay out tables so predicates prune well.
+
+As the name says, the predicate prunes files, not rows. On `to_pandas` and
+`to_pyarrow_table` there is no pruning parameter: `filters` prunes files just
+as effectively through the per-fragment statistics and then filters the
+surviving rows exactly. Both methods are thin wrappers over
+`to_pyarrow_dataset`, so to prune during log replay instead, before any
+per-file fragment setup (which can matter on tables with very large file
+counts), unroll the chain:
+
+``` python
+>>> dt.to_pandas(filters=[("value", ">=", "5")])
+>>> # unrolled: prune files first, then read; whole surviving files come
+>>> # back unless you also pass a row filter to to_table
+>>> dt.to_pyarrow_dataset(file_pruning_predicate="value >= '5'").to_table().to_pandas()
+```
+
+The full syntax for both forms is documented on
+[`DeltaTable.file_uris`](../api/delta_table/index.md).
+
+## Lazy reads with the built-in engine
+
+`DeltaTable.scan` reads the table with the built-in DataFusion engine and
+returns an Arrow `RecordBatchReader`, so batches stream as they are produced
+and can be handed to any Arrow-native engine (PyArrow, DuckDB, Polars).
+Unlike `file_pruning_predicate`, its `predicate` filters rows: the result
+contains exactly the matching rows. It also reads tables that
+`to_pyarrow_dataset` cannot, such as those using column mapping or deletion
+vectors.
+
+``` python
+>>> reader = dt.scan(columns=["value"], predicate="year = '2021'")
+>>> reader.read_all()
+```
+
+The predicate follows DataFusion SQL semantics: three-valued NULL logic, SQL
+type coercion. These differ from PyArrow dataset filter expressions in edge
+cases, so take care when swapping one read path for the other.
 
 Converting to a PyArrow Dataset allows you to filter on columns other
 than partition columns and load the result as a stream of batches rather
@@ -91,10 +166,13 @@ VARCHAR
 ```
 
 Finally, you can always pass the list of file paths to an engine. For
-example, you can pass them to `dask.dataframe.read_parquet`:
+example, you can pass them to `dask.dataframe.read_parquet`. `file_uris`
+accepts the same predicates, so the file list can be pruned before it ever
+reaches the other engine:
 
 ``` python
 >>> import dask.dataframe as dd
+>>> df = dd.read_parquet(dt.file_uris(file_pruning_predicate="year = 2021 OR month = 2"))
 >>> df = dd.read_parquet(dt.file_uris())
 >>> df
 Dask DataFrame Structure:

@@ -14,7 +14,7 @@ When using the Rust `deltalake` crate with the `gcs` feature enabled, GCS suppor
 // Legacy approach where applications had to register the handler
 deltalake::gcp::register_handlers(None);
 
-let ops = DeltaOps::try_from_uri("gs://bucket/table".parse()?).await?;
+let table = DeltaTable::try_from_uri("gs://bucket/table".parse()?).await?;
 ```
 
 ### After (automatic registration)
@@ -23,12 +23,12 @@ let ops = DeltaOps::try_from_uri("gs://bucket/table".parse()?).await?;
 // Enable the gcs feature in Cargo.toml:
 // deltalake = { version = "0.29", features = ["gcs"] }
 
-use deltalake::DeltaOps;
+use deltalake::DeltaTable;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The gs:// scheme is recognized automatically
-    let ops = DeltaOps::try_from_uri("gs://bucket/table".parse()?).await?;
+    let table = DeltaTable::try_from_uri("gs://bucket/table".parse()?).await?;
     Ok(())
 }
 ```

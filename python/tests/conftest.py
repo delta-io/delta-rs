@@ -58,15 +58,19 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
         sleep(spacing)
 
 
-def _s3_bucket_name(worker_id: str) -> str:
+def _s3_bucket_name(worker_id: str = "master") -> str:
     if worker_id == "master":
         return "deltars"
     return f"deltars-{worker_id}"
 
 
 @pytest.fixture(scope="session")
-def s3_localstack_creds(worker_id: str):
+def s3_localstack_creds(request):
     endpoint_url = "http://localhost:4566"
+    # Get worker_id if available (for xdist), otherwise use "master"
+    worker_id = getattr(request.config, "workerinput", {"workerid": "master"}).get(
+        "workerid", "master"
+    )
     bucket_name = _s3_bucket_name(worker_id)
 
     config = dict(
@@ -145,7 +149,10 @@ def s3_localstack(monkeypatch, s3_localstack_creds):
 
 
 @pytest.fixture(scope="session")
-def s3_localstack_bucket_name(worker_id: str):
+def s3_localstack_bucket_name(request):
+    worker_id = getattr(request.config, "workerinput", {"workerid": "master"}).get(
+        "workerid", "master"
+    )
     return _s3_bucket_name(worker_id)
 
 

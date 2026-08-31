@@ -3605,3 +3605,109 @@ def test_merge_schema_evolution_with_nanosecond_timestamps(
 
         expected_array = pa.array([None, None, 123_456], pa.timestamp("us", tz="UTC"))
         assert pa.chunked_array(result.column("ts")).combine_chunks() == expected_array
+
+
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_type_mismatch_partition_pruning(tmp_path: pathlib.Path, streaming: bool):
+    """
+    Test that merge partition pruning works even when predicate values don't exactly match
+    the partition column type (e.g., string-quoted integers for integer partition columns).
+
+    This is a regression test for issue #3278 where string-quoted integer values in merge
+    predicates caused poor partition pruning with streamed_exec=True.
+    """
+    nrows = 4
+    data = Table(
+        {
+            "id": Array(
+                [str(x) for x in range(nrows)],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "month_id": Array(
+                [202501, 202502, 202502, 202503],
+                ArrowField("month_id", type=DataType.int32(), nullable=True),
+            ),
+            "date_id": Array(
+                [20250101, 20250201, 20250226, 20250301],
+                ArrowField("date_id", type=DataType.int32(), nullable=True),
+            ),
+            "unique_row_hash": Array(
+                [
+                    "hash_202501_20250101",
+                    "hash_202502_20250201",
+                    "hash_202502_20250226",
+                    "hash_202503_20250301",
+                ],
+                ArrowField(
+                    "unique_row_hash", type=DataType.string_view(), nullable=True
+                ),
+            ),
+            "col1": Array(
+                ["value1", "value2", "value3", "value4"],
+                ArrowField("col1", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    write_deltalake(tmp_path, data, mode="append", partition_by=["month_id", "date_id"])
+
+    dt = DeltaTable(tmp_path)
+
+    # Create source table with data targeting specific partition
+    # month_id = 202502, date_id = 20250226
+    source_table = Table(
+        {
+            "id": Array(
+                ["4"],
+                ArrowField("id", type=DataType.string_view(), nullable=True),
+            ),
+            "month_id": Array(
+                [202502],
+                ArrowField("month_id", type=DataType.int32(), nullable=True),
+            ),
+            "date_id": Array(
+                [20250226],
+                ArrowField("date_id", type=DataType.int32(), nullable=True),
+            ),
+            "unique_row_hash": Array(
+                ["new_hash"],
+                ArrowField(
+                    "unique_row_hash", type=DataType.string_view(), nullable=True
+                ),
+            ),
+            "col1": Array(
+                ["new_value"],
+                ArrowField("col1", type=DataType.string_view(), nullable=True),
+            ),
+        }
+    )
+
+    # Test with string-quoted predicates (type mismatch for integer partition columns)
+    # This was the problematic case in issue #3278
+    merge_predicate = "(s.unique_row_hash = t.unique_row_hash) AND (s.month_id = t.month_id AND t.month_id = '202502' AND s.date_id = t.date_id AND t.date_id = '20250226')"
+
+    metrics = (
+        dt.merge(
+            source=source_table,
+            predicate=merge_predicate,
+            source_alias="s",
+            target_alias="t",
+            streamed_exec=streaming,
+        )
+        .when_not_matched_insert_all()
+        .execute()
+    )
+
+    # Verify that partition pruning still works reasonably well despite type mismatch
+    # With 4 files total (one per partition), we should see good pruning
+    # streamed_exec=True might scan 1-2 files max, not all 4
+    assert metrics["num_target_files_scanned"] <= 2, (
+        f"Expected <= 2 files scanned with type mismatch and streamed_exec={streaming}, "
+        f"got {metrics['num_target_files_scanned']}. "
+        "This suggests partition pruning is not working effectively with type mismatches."
+    )
+    assert metrics["num_target_files_skipped_during_scan"] >= 2, (
+        f"Expected >= 2 files skipped with type mismatch and streamed_exec={streaming}, "
+        f"got {metrics['num_target_files_skipped_during_scan']}. "
+        "This suggests partition pruning is not working effectively with type mismatches."
+    )

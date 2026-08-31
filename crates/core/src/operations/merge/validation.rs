@@ -15,8 +15,9 @@ use datafusion::logical_expr::{
 };
 use datafusion::physical_expr::Distribution;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, RecordBatchStream,
-    SendableRecordBatchStream,
+    ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
+    InputDistributionRequirements, PhysicalExpr, RecordBatchStream, ReplaceChildrenOptions,
+    SendableRecordBatchStream, apply_expression_roots,
 };
 use datafusion::prelude::DataFrame;
 use futures::{Stream, StreamExt};
@@ -66,16 +67,23 @@ impl ExecutionPlan for MergeValidationExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
-        vec![Distribution::HashPartitioned(vec![self.file_expr.clone()]); 1]
+        self.input_distribution_requirements().into_per_child()
+    }
+
+    fn input_distribution_requirements(&self) -> InputDistributionRequirements {
+        InputDistributionRequirements::new(vec![Distribution::KeyPartitioned(vec![Arc::clone(
+            &self.file_expr,
+        )])])
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
         vec![&self.input]
     }
 
-    fn with_new_children(
+    fn replace_children(
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
+        _options: ReplaceChildrenOptions,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         if children.len() != 1 {
             return Err(DataFusionError::Plan(
@@ -88,6 +96,16 @@ impl ExecutionPlan for MergeValidationExec {
             Arc::clone(&self.file_column),
             Arc::clone(&self.row_ordinal_column),
         )))
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        self.replace_children(
+            children,
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )
     }
 
     fn execute(
@@ -110,9 +128,7 @@ impl ExecutionPlan for MergeValidationExec {
             &Arc<dyn PhysicalExpr>,
         ) -> Result<TreeNodeRecursion, DataFusionError>,
     ) -> Result<TreeNodeRecursion, DataFusionError> {
-        // Traverse child execution plan with the expression rewriter
-        self.input.apply_expressions(expr_rewriter)?;
-        Ok(TreeNodeRecursion::Continue)
+        apply_expression_roots([&self.file_expr], expr_rewriter)
     }
 }
 
