@@ -4,19 +4,37 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::Expression;
 use delta_kernel::engine::arrow_data::ArrowEngineData;
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::engine::arrow_data::fix_nested_null_masks;
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::plans::ir::nodes::Project;
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::plans::ir::plan::{Plan, PlanNode};
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::scan::scan_row_schema;
 use delta_kernel::scan::{Scan as KernelScan, ScanBuilder as KernelScanBuilder, ScanMetadata};
 use delta_kernel::schema::SchemaRef;
+#[cfg(feature = "datafusion-declarative-scan")]
+use delta_kernel::schema::{DataType, StructField, StructType};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::{Engine, EngineData, PredicateRef, SnapshotRef, Version};
 use futures::Stream;
+#[cfg(feature = "datafusion-declarative-scan")]
+use futures::StreamExt as _;
 use futures::future::ready;
 use futures::stream::once;
 use url::Url;
 
 #[cfg(feature = "datafusion")]
 use super::MaterializedFiles;
+#[cfg(feature = "datafusion-declarative-scan")]
+use super::stats_projection::FIELD_STATS_PARSED;
 use super::stats_projection::{FileStatsMaterialization, StatsProjection, StatsSourcePolicy};
+#[cfg(feature = "datafusion-declarative-scan")]
+use crate::delta_datafusion::engine::DataFusionEngine;
 use crate::kernel::{ReceiverStreamBuilder, scan_row_in_eval};
 use crate::{DeltaResult, DeltaTableError};
 
@@ -172,6 +190,65 @@ fn with_kernel_stats_output(
     };
 
     builder.with_stats(stats_opts)
+}
+
+#[cfg(feature = "datafusion-declarative-scan")]
+fn project_declarative_scan_metadata(
+    mut plan: Plan,
+    snapshot: &KernelSnapshot,
+    stats_materialization: &FileStatsMaterialization,
+) -> DeltaResult<Plan> {
+    let uses_struct_stats = stats_materialization.stats_source_policy()
+        == StatsSourcePolicy::ParsedWithJsonFallback
+        && matches!(
+            stats_materialization.stats_projection(),
+            StatsProjection::Full | StatsProjection::PredicateColumns(_)
+        );
+
+    let stats = if uses_struct_stats
+        || stats_materialization.stats_source_policy() == StatsSourcePolicy::None
+    {
+        Expression::null_literal(DataType::STRING)
+    } else {
+        Expression::column(["add", "stats"])
+    };
+    let mut expressions = vec![
+        Expression::column(["add", "path"]),
+        Expression::column(["add", "size"]),
+        Expression::column(["add", "modificationTime"]),
+        stats,
+        Expression::column(["add", "deletionVector"]),
+        Expression::struct_from([
+            Expression::column(["add", "partitionValues"]),
+            Expression::column(["add", "baseRowId"]),
+            Expression::column(["add", "defaultRowCommitVersion"]),
+            Expression::column(["add", "tags"]),
+            Expression::column(["add", "clusteringProvider"]),
+        ]),
+    ];
+    let mut output_fields: Vec<_> = scan_row_schema().fields().cloned().collect();
+
+    if uses_struct_stats {
+        // PredicateColumns currently maps to kernel's all_struct mode above, so the plan carries
+        // the full physical stats schema in both cases.
+        let stats_schema = StatsProjection::Full.stats_schema(snapshot)?;
+        expressions.push(Expression::column(["add", FIELD_STATS_PARSED]));
+        output_fields.push(StructField::nullable(
+            FIELD_STATS_PARSED,
+            stats_schema.as_ref().clone(),
+        ));
+    }
+
+    let input = plan.nodes.len().checked_sub(1).ok_or_else(|| {
+        DeltaTableError::Generic("declarative metadata scan returned an empty plan".to_string())
+    })?;
+    let schema: SchemaRef = Arc::new(StructType::try_new(output_fields)?);
+    let project = Project {
+        expr: Arc::new(Expression::struct_from(expressions)),
+        schema,
+    };
+    plan.nodes.push(PlanNode::new(project, vec![input]));
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -475,6 +552,65 @@ impl Scan {
         // TODO: which capacity to choose?
         let mut builder = ReceiverStreamBuilder::<ScanMetadata>::new(100);
         let tx = builder.tx();
+
+        #[cfg(feature = "datafusion-declarative-scan")]
+        if let Some(datafusion_engine) = engine
+            .as_ref()
+            .any_ref()
+            .downcast_ref::<DataFusionEngine>()
+            .filter(|engine| engine.can_execute_declarative_plan())
+            .cloned()
+        {
+            let stats_materialization = self.stats_materialization.clone();
+            let inner = self.inner.clone();
+            builder.spawn(async move {
+                // Checkpoint-shape discovery uses kernel's synchronous PlanExecutor contract, so
+                // keep plan construction off the async runtime worker. The completed metadata plan
+                // itself is executed natively by delta-rs below.
+                let plan_engine = datafusion_engine.clone();
+                let plan = tokio::task::spawn_blocking(move || {
+                    let Some(plan) =
+                        inner.declarative_metadata_scan_plan(&plan_engine as &dyn Engine)?
+                    else {
+                        return Ok(None);
+                    };
+                    project_declarative_scan_metadata(
+                        plan,
+                        inner.snapshot().as_ref(),
+                        &stats_materialization,
+                    )
+                    .map(Some)
+                })
+                .await;
+                let plan = match plan {
+                    Ok(plan) => plan?,
+                    Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+                    Err(error) => {
+                        return Err(DeltaTableError::Generic(format!(
+                            "declarative metadata plan task failed: {error}"
+                        )));
+                    }
+                };
+                let Some(plan) = plan else {
+                    return Ok(());
+                };
+
+                let mut batches = datafusion_engine.execute_declarative_plan(&plan).await?;
+                while let Some(batch) = batches.next().await {
+                    let batch: RecordBatch = fix_nested_null_masks(batch?.into()).into();
+                    let metadata = ScanMetadata {
+                        scan_files: (Box::new(ArrowEngineData::new(batch)) as Box<dyn EngineData>)
+                            .into(),
+                        scan_file_transforms: Vec::new(),
+                    };
+                    if tx.send(Ok(metadata)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(())
+            });
+            return builder.build();
+        }
 
         let inner = self.inner.clone();
         let blocking_iter = move || {
