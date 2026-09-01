@@ -79,7 +79,6 @@ pub(crate) enum AddStatsPolicy {
     /// Compatible full table caches may include stats.
     None,
     /// Request available raw JSON stats and row counts without parsed stats.
-    #[cfg(feature = "datafusion")]
     RawJson,
     /// Request stats that support parsed access.
     Parsed,
@@ -140,7 +139,6 @@ impl MaterializedFilesPolicy {
     fn satisfies(self, stats: AddStatsPolicy) -> bool {
         match stats {
             AddStatsPolicy::None => true,
-            #[cfg(feature = "datafusion")]
             AddStatsPolicy::RawJson => self == Self::FullTablePreserveRaw,
             AddStatsPolicy::Parsed => self == Self::FullTablePreserveRaw,
         }
@@ -784,7 +782,6 @@ impl Snapshot {
 
         let stats_mode = match stats_policy {
             AddStatsPolicy::None => FileStatsMode::PreserveRaw,
-            #[cfg(feature = "datafusion")]
             AddStatsPolicy::RawJson => FileStatsMode::PreserveRaw,
             AddStatsPolicy::Parsed => FileStatsMode::FullPreserveRaw,
         };
