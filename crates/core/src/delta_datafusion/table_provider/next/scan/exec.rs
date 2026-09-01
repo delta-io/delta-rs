@@ -13,7 +13,6 @@ use arrow::compute::filter_record_batch;
 use arrow::datatypes::{FieldRef, Schema, SchemaRef, UInt16Type};
 use arrow_array::StringViewArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, UInt64Array};
-use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::common::tree_node::TreeNodeRecursion;
@@ -26,9 +25,7 @@ use datafusion::physical_expr::utils::collect_columns;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
 use datafusion::physical_plan::execution_plan::{CardinalityEffect, PlanProperties};
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use datafusion::physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-};
+use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
@@ -52,17 +49,39 @@ use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 const DELTA_MATERIALIZED_PUSHDOWN_SENTINEL: &str =
     "__delta_rs_unpushable_delta_materialized_filter";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DvApplicationMode {
+/// DeltaScanExec uses these inputs to apply deletion vectors during a physical scan.
+#[derive(Clone, Debug)]
+pub(super) enum DvExecutionState {
     None,
-    Sequential,
+    Sequential {
+        /// The planner captures these masks. Each execution stream copies them before use.
+        selection_vectors: Arc<HashMap<String, Vec<bool>>>,
+        /// The validator compares child files against this whole file ownership map.
+        physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
+    },
 }
 
-impl DvApplicationMode {
-    fn as_str(self) -> &'static str {
+impl DvExecutionState {
+    fn is_sequential(&self) -> bool {
+        matches!(self, Self::Sequential { .. })
+    }
+
+    fn selection_vectors(&self) -> Option<&HashMap<String, Vec<bool>>> {
         match self {
-            Self::None => "none",
-            Self::Sequential => "sequential",
+            Self::None => None,
+            Self::Sequential {
+                selection_vectors, ..
+            } => Some(selection_vectors),
+        }
+    }
+
+    fn physical_file_identities(&self) -> Option<&super::PhysicalFileIdentityMap> {
+        match self {
+            Self::None => None,
+            Self::Sequential {
+                physical_file_identities,
+                ..
+            } => Some(physical_file_identities),
         }
     }
 }
@@ -127,7 +146,7 @@ pub(crate) fn consume_dv_mask(
 ///
 /// 1. Inner [`input`](Self::input) plan reads raw Parquet data
 /// 2. Per-file [`transforms`](Self::transforms) convert physical to logical schema
-/// 3. [`selection_vectors`](Self::selection_vectors) filter deleted rows
+/// 3. The scan applies deletion vectors before it returns rows
 /// 4. Result is cast to the projected scan contract's result schema
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
@@ -136,14 +155,10 @@ pub struct DeltaScanExec {
     input: Arc<dyn ExecutionPlan>,
     /// Transforms to be applied to data eminating from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
-    /// Selection vectors to be applied to data read from individual files
-    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
-    /// Stable deletion-vector execution mode for this plan.
-    dv_mode: DvApplicationMode,
+    /// The planner records deletion vector masks and physical file ownership here.
+    dv_state: DvExecutionState,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
-    /// Expected physical file ownership keyed by compact scan file id.
-    physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
     /// File id column name carried by the input batches for per file correlation.
@@ -170,12 +185,6 @@ impl DisplayAs for DeltaScanExec {
                 if let Some(row_index_field) = self.scan_plan.contract.retained_row_index_field() {
                     write!(f, ": row_index_column={}", row_index_field.name())?;
                 }
-                write!(
-                    f,
-                    ": dv_mode={}, physical_row_index=false, file_group_layout_locked={}",
-                    self.dv_mode.as_str(),
-                    matches!(self.dv_mode, DvApplicationMode::Sequential)
-                )?;
                 Ok(())
             }
         }
@@ -183,33 +192,15 @@ impl DisplayAs for DeltaScanExec {
 }
 
 impl DeltaScanExec {
-    fn register_dv_file_metric(
-        metrics: &ExecutionPlanMetricsSet,
-        selection_vectors: &DashMap<String, Vec<bool>>,
-    ) {
-        if !selection_vectors.is_empty() {
-            MetricBuilder::new(metrics)
-                .global_counter("dv_files")
-                .add(selection_vectors.len());
-        }
-    }
-
-    pub(crate) fn new(
+    pub(super) fn new(
         scan_plan: Arc<KernelScanPlan>,
         input: Arc<dyn ExecutionPlan>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
-        selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        dv_state: DvExecutionState,
         public_file_ids: Arc<super::PublicFileIdMap>,
-        physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
         partition_stats: HashMap<String, ColumnStatistics>,
         metrics: ExecutionPlanMetricsSet,
     ) -> Self {
-        let dv_mode = if selection_vectors.is_empty() {
-            DvApplicationMode::None
-        } else {
-            DvApplicationMode::Sequential
-        };
-        Self::register_dv_file_metric(&metrics, &selection_vectors);
         let input_file_id_column = scan_plan.contract.file_id_field.name().to_owned();
         let file_id_column = scan_plan
             .contract
@@ -225,10 +216,8 @@ impl DeltaScanExec {
             scan_plan,
             input,
             transforms,
-            selection_vectors,
-            dv_mode,
+            dv_state,
             public_file_ids,
-            physical_file_identities,
             partition_stats,
             metrics,
             input_file_id_column,
@@ -238,11 +227,9 @@ impl DeltaScanExec {
     }
 
     fn with_new_input_same_properties(&self, input: Arc<dyn ExecutionPlan>) -> Self {
-        let metrics = ExecutionPlanMetricsSet::new();
-        Self::register_dv_file_metric(&metrics, &self.selection_vectors);
         Self {
             input,
-            metrics,
+            metrics: ExecutionPlanMetricsSet::new(),
             ..Self::clone(self)
         }
     }
@@ -252,16 +239,15 @@ impl DeltaScanExec {
             Arc::clone(&self.scan_plan),
             input,
             Arc::clone(&self.transforms),
-            Arc::clone(&self.selection_vectors),
+            self.dv_state.clone(),
             Arc::clone(&self.public_file_ids),
-            Arc::clone(&self.physical_file_identities),
             self.partition_stats.clone(),
             ExecutionPlanMetricsSet::new(),
         )
     }
 
     fn has_deletion_vectors(&self) -> bool {
-        !matches!(self.dv_mode, DvApplicationMode::None)
+        self.dv_state.is_sequential()
     }
 
     fn validate_dv_child_topology(&self, input: &Arc<dyn ExecutionPlan>) -> Result<()> {
@@ -280,6 +266,11 @@ impl DeltaScanExec {
             expected: &super::PhysicalFileIdentityMap,
             observed: &mut HashSet<String>,
         ) -> Result<()> {
+            if let Some(fetch) = plan.fetch() {
+                return plan_err!(
+                    "DeltaScanExec rejects child fetch limit {fetch} during sequential deletion vector scans"
+                );
+            }
             if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
                 return visit(coalesce.input(), expected, observed);
             }
@@ -291,13 +282,13 @@ impl DeltaScanExec {
             }
             let Some(source_exec) = plan.downcast_ref::<DataSourceExec>() else {
                 return plan_err!(
-                    "DeltaScanExec sequential deletion-vector topology contains unsupported node {}",
+                    "DeltaScanExec rejects node {} during sequential deletion vector scans",
                     plan.name()
                 );
             };
             let Some(config) = source_exec.data_source().downcast_ref::<FileScanConfig>() else {
                 return plan_err!(
-                    "DeltaScanExec sequential deletion-vector topology requires FileScanConfig leaves"
+                    "DeltaScanExec requires FileScanConfig leaves during sequential deletion vector scans"
                 );
             };
             if !matches!(
@@ -306,7 +297,12 @@ impl DeltaScanExec {
                     if partitions == config.file_groups.len()
             ) {
                 return plan_err!(
-                    "DeltaScanExec sequential deletion-vector file-group layout is not locked"
+                    "DeltaScanExec requires a locked file group layout during sequential deletion vector scans"
+                );
+            }
+            if config.file_source.filter().is_some() {
+                return plan_err!(
+                    "DeltaScanExec rejects file source filters during sequential deletion vector scans"
                 );
             }
 
@@ -315,29 +311,29 @@ impl DeltaScanExec {
                     let Some(file_id) = file.partition_values.first().and_then(scalar_file_id)
                     else {
                         return plan_err!(
-                            "DeltaScanExec sequential deletion-vector file is missing a compact file id"
+                            "A sequential deletion vector file lacks a compact file id"
                         );
                     };
                     if file.range.is_some() {
                         return plan_err!(
-                            "DeltaScanExec sequential deletion-vector file id '{file_id}' has a byte range"
+                            "Sequential deletion vector file id '{file_id}' uses a byte range"
                         );
                     }
                     let Some(expected_file) = expected.get(file_id) else {
                         return plan_err!(
-                            "DeltaScanExec sequential deletion-vector topology contains unknown file id '{file_id}'"
+                            "Sequential deletion vector scan received unknown file id '{file_id}'"
                         );
                     };
                     if expected_file.object_store_url != config.object_store_url
                         || expected_file.location != file.object_meta.location
                     {
                         return plan_err!(
-                            "DeltaScanExec sequential deletion-vector topology has an inconsistent mapping for file id '{file_id}'"
+                            "Sequential deletion vector file id '{file_id}' has an unexpected store or location"
                         );
                     }
                     if !observed.insert(file_id.to_owned()) {
                         return plan_err!(
-                            "DeltaScanExec sequential deletion-vector topology has duplicate ownership for file id '{file_id}'"
+                            "Sequential deletion vector file id '{file_id}' belongs to multiple child files"
                         );
                     }
                 }
@@ -345,12 +341,15 @@ impl DeltaScanExec {
             Ok(())
         }
 
+        let expected = self.dv_state.physical_file_identities().ok_or_else(|| {
+            internal_datafusion_err!(
+                "DeltaScanExec deletion vector topology validation requires sequential state"
+            )
+        })?;
         let mut observed = HashSet::new();
-        visit(input, &self.physical_file_identities, &mut observed)?;
-        if observed.len() != self.physical_file_identities.len() {
-            return plan_err!(
-                "DeltaScanExec sequential deletion-vector topology is missing selected files"
-            );
+        visit(input, expected, &mut observed)?;
+        if observed.len() != expected.len() {
+            return plan_err!("DeltaScanExec sequential deletion vector scan lacks selected files");
         }
         Ok(())
     }
@@ -412,14 +411,9 @@ impl DeltaScanExec {
 
         stats.column_statistics = new_stats;
         if self.has_deletion_vectors() {
-            // The child statistics describe physical Parquet rows. Sequential DV filtering can
-            // only provide conservative bounds until the DV index carries validated numRecords.
-            stats.num_rows = stats.num_rows.to_inexact();
-            stats.column_statistics = stats
-                .column_statistics
-                .into_iter()
-                .map(ColumnStatistics::to_inexact)
-                .collect();
+            // Child statistics describe physical Parquet rows. This node reports conservative
+            // bounds unless the DV index contains numRecords.
+            stats = stats.to_inexact();
         }
         Ok(stats)
     }
@@ -475,8 +469,8 @@ impl ExecutionPlan for DeltaScanExec {
         if self.scan_plan.contract.retained_row_index_field().is_some()
             || self.has_deletion_vectors()
         {
-            // Retained row indexes and sequential deletion-vector masks depend on one stream
-            // seeing each file's rows in physical order.
+            // DeltaScanExec requires one stream to preserve physical row order for retained row
+            // indexes and sequential DV masks.
             InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
             InputDistributionRequirements::new(vec![Distribution::UnspecifiedDistribution])
@@ -526,8 +520,8 @@ impl ExecutionPlan for DeltaScanExec {
         if self.scan_plan.contract.retained_row_index_field().is_some()
             || self.has_deletion_vectors()
         {
-            // Each DeltaScanStream keeps row ordinal counters and sequential DV cursors for one
-            // execution partition. Repartitioning can split one file across streams.
+            // A DeltaScanStream stores row ordinals and DV cursors for one execution partition.
+            // DataFusion can split a file across streams after repartitioning.
             return Ok(None);
         }
 
@@ -546,10 +540,8 @@ impl ExecutionPlan for DeltaScanExec {
         // Normal planning enforces this through EnforceDistribution. Keep this check for
         // callers that build DeltaScanExec directly or replace its child plan.
         let retains_row_index = self.scan_plan.contract.retained_row_index_field().is_some();
-        if self.has_deletion_vectors() {
-            self.validate_dv_child_topology(&self.input)?;
-        }
-        if retains_row_index || self.has_deletion_vectors() {
+        let has_deletion_vectors = self.has_deletion_vectors();
+        if retains_row_index || has_deletion_vectors {
             let input_partition_count = self.input.properties().partitioning.partition_count();
             if input_partition_count > 1 {
                 if retains_row_index {
@@ -563,28 +555,18 @@ impl ExecutionPlan for DeltaScanExec {
             }
         }
 
-        let dv_file_ids = self
-            .selection_vectors
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect();
-        let dv_rows_checked =
-            MetricBuilder::new(&self.metrics).counter("dv_rows_checked", partition);
-        let dv_rows_removed =
-            MetricBuilder::new(&self.metrics).counter("dv_rows_removed", partition);
-
         Ok(Box::pin(DeltaScanStream {
             scan_plan: Arc::clone(&self.scan_plan),
             kernel_type: Arc::clone(self.scan_plan.scan.logical_schema()).into(),
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             transforms: Arc::clone(&self.transforms),
-            // Sequential cursors are execution-local. Reusing the physical plan must start each
-            // stream from the original immutable planning snapshot.
-            selection_vectors: self.selection_vectors.as_ref().clone(),
-            dv_file_ids,
-            dv_rows_checked,
-            dv_rows_removed,
+            // Each execution owns its cursors and copies the masks that the planner captured.
+            selection_vectors: self
+                .dv_state
+                .selection_vectors()
+                .cloned()
+                .unwrap_or_default(),
             public_file_ids: Arc::clone(&self.public_file_ids),
             input_file_id_column: self.input_file_id_column.clone(),
             file_id_column: self.file_id_column.clone(),
@@ -614,9 +596,11 @@ impl ExecutionPlan for DeltaScanExec {
     }
 
     fn fetch(&self) -> Option<usize> {
-        (!self.has_deletion_vectors())
-            .then(|| self.input.fetch())
-            .flatten()
+        if self.has_deletion_vectors() {
+            None
+        } else {
+            self.input.fetch()
+        }
     }
 
     fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
@@ -739,11 +723,7 @@ struct DeltaScanStream {
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Selection vectors to be applied to data read from individual files
-    selection_vectors: DashMap<String, Vec<bool>>,
-    /// Files that had a DV at planning time; unlike the mutable sequential cursors this is stable.
-    dv_file_ids: HashSet<String>,
-    dv_rows_checked: Count,
-    dv_rows_removed: Count,
+    selection_vectors: HashMap<String, Vec<bool>>,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
     /// File id column name carried by the input batches for per file correlation.
@@ -789,11 +769,8 @@ impl DeltaScanStream {
         file_id: String,
         file_id_idx: usize,
     ) -> Result<RecordBatch> {
-        let input_row_count = batch.num_rows();
-        let has_deletion_vector = self.dv_file_ids.contains(&file_id);
-        let dv_result = if let Some(mut selection_vector) = self.selection_vectors.get_mut(&file_id)
-        {
-            consume_dv_mask(&mut selection_vector, batch.num_rows())
+        let dv_result = if let Some(selection_vector) = self.selection_vectors.get_mut(&file_id) {
+            consume_dv_mask(selection_vector, batch.num_rows())
         } else {
             DvMaskResult {
                 selection: None,
@@ -810,12 +787,6 @@ impl DeltaScanStream {
         } else {
             batch
         };
-        if has_deletion_vector {
-            self.dv_rows_checked.add(input_row_count);
-            self.dv_rows_removed
-                .add(input_row_count.saturating_sub(batch.num_rows()));
-        }
-
         batch.remove_column(file_id_idx);
 
         let result = if let Some(transform) = self.transforms.get(&file_id) {
@@ -1056,7 +1027,7 @@ mod tests {
     use datafusion::{
         catalog::MemTable,
         common::{ToDFSchema, stats::Precision},
-        datasource::TableProvider,
+        datasource::{TableProvider, physical_plan::ParquetSource},
         logical_expr::Operator,
         physical_expr::expressions::{
             BinaryExpr, Column, DynamicFilterPhysicalExpr, lit as physical_lit,
@@ -1065,12 +1036,13 @@ mod tests {
         physical_plan::{
             PhysicalExpr,
             coalesce_partitions::CoalescePartitionsExec,
-            collect, collect_partitioned, displayable,
+            collect, collect_partitioned,
             filter_pushdown::{FilterPushdownPhase, PushedDown},
             repartition::RepartitionExec,
             statistics::StatisticsContext,
         },
-        prelude::{col, lit},
+        physical_planner::DefaultPhysicalPlanner,
+        prelude::{SessionConfig, col, lit},
         scalar::ScalarValue,
     };
     use datafusion_datasource::{
@@ -1237,7 +1209,7 @@ mod tests {
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
             .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
+            .expect("planner must return DeltaScanExec");
 
         let filter = session.state().create_physical_expr(
             col("number").lt(lit(ScalarValue::TimestampMillisecond(Some(7), None))),
@@ -1271,7 +1243,7 @@ mod tests {
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
             .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
+            .expect("planner must return DeltaScanExec");
 
         let letter_idx = exec.schema().index_of("letter")?;
         assert!(exec.schema().field_with_name("letter").is_ok());
@@ -1449,41 +1421,6 @@ mod tests {
         assert_eq!(child_filters.len(), 1);
         assert_eq!(child_filters[0].len(), 1);
         assert!(matches!(child_filters[0][0].discriminant, PushedDown::Yes));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_gather_filters_for_pushdown_rejects_dv_data_filters() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let exec = scan
-            .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
-
-        assert!(
-            !exec.selection_vectors.is_empty(),
-            "fixture must select at least one deletion vector"
-        );
-        let int_idx = exec.schema().index_of("int")?;
-        let int: Arc<dyn PhysicalExpr> = Arc::new(Column::new("int", int_idx));
-        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
-            vec![int],
-            physical_lit(true),
-        ));
-
-        let description = exec.gather_filters_for_pushdown(
-            FilterPushdownPhase::Post,
-            vec![filter],
-            session.state().config().options(),
-        )?;
-
-        let child_filters = description.parent_filters();
-        assert_eq!(child_filters.len(), 1);
-        assert_eq!(child_filters[0].len(), 1);
-        assert!(matches!(child_filters[0][0].discriminant, PushedDown::No));
 
         Ok(())
     }
@@ -1919,16 +1856,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dv_scan_disables_limit_and_fetch_pushdown() -> TestResult {
+    async fn test_dv_scan_rejects_unsafe_pushdowns() -> TestResult {
         let table = open_fs_path(DV_TABLE_PATH);
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], Some(1)).await?;
         let exec = scan
             .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
+            .expect("planner must return DeltaScanExec");
 
-        assert!(!exec.selection_vectors.is_empty());
         assert!(!exec.supports_limit_pushdown());
         assert!(matches!(
             exec.cardinality_effect(),
@@ -1937,98 +1873,57 @@ mod tests {
         assert_eq!(exec.fetch(), None);
         assert!(exec.with_fetch(Some(1)).is_none());
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dv_scan_requires_single_input_partition() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let exec = scan
-            .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
-
-        let distribution = exec.input_distribution_requirements();
+        let int_idx = exec.schema().index_of("int")?;
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::new(Column::new("int", int_idx))],
+            physical_lit(true),
+        ));
+        let description = exec.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![filter],
+            session.state().config().options(),
+        )?;
         assert!(matches!(
-            distribution.child_distribution(0),
-            Some(Distribution::SinglePartition)
+            description.parent_filters()[0][0].discriminant,
+            PushedDown::No
         ));
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dv_scan_locks_whole_file_layout() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], None).await?;
-        let exec = scan
-            .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
-        let source_exec = exec
-            .input
-            .downcast_ref::<DataSourceExec>()
-            .expect("single-store fixture should produce a DataSourceExec");
-        let config = source_exec
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .expect("expected parquet FileScanConfig");
-
-        assert!(matches!(
-            config.output_partitioning,
-            Some(Partitioning::UnknownPartitioning(partitions))
-                if partitions == config.file_groups.len()
-        ));
-        assert!(
-            config
-                .file_groups
-                .iter()
-                .all(|group| { group.iter().all(|file| file.range.is_none()) })
+        let batches = collect(scan, session.task_ctx()).await?;
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            1,
+            "the limit must run after DV filtering removes four rows"
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_dv_scan_rejects_ranged_fragments_under_single_output_coalesce() -> TestResult {
+    async fn test_dv_scan_rejects_row_dropping_child_rewrites() -> TestResult {
         let table = open_fs_path(DV_TABLE_PATH);
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
         let exec = scan
             .downcast_ref::<DeltaScanExec>()
-            .expect("expected DeltaScanExec");
+            .expect("planner must return DeltaScanExec");
         let source_exec = exec
             .input
             .downcast_ref::<DataSourceExec>()
-            .expect("single-store fixture should produce a DataSourceExec");
+            .expect("fixture must produce one DataSourceExec");
         let config = source_exec
             .data_source()
             .downcast_ref::<FileScanConfig>()
-            .expect("expected parquet FileScanConfig");
+            .expect("DataSourceExec must hold a parquet FileScanConfig");
 
-        let whole_file = config.file_groups[0][0].clone();
-        let split_at = i64::try_from(whole_file.object_meta.size / 2)?;
-        let file_end = i64::try_from(whole_file.object_meta.size)?;
-        let mut first = whole_file.clone();
-        first.range = Some(FileRange {
+        let mut fragment = config.file_groups[0][0].clone();
+        fragment.range = Some(FileRange {
             start: 0,
-            end: split_at,
-        });
-        let mut second = whole_file;
-        second.range = Some(FileRange {
-            start: split_at,
-            end: file_end,
+            end: i64::try_from(fragment.object_meta.size / 2)?,
         });
         let fragmented_config = FileScanConfigBuilder::from(config.clone())
-            .with_file_groups(vec![
-                FileGroup::new(vec![first]),
-                FileGroup::new(vec![second]),
-            ])
-            .with_output_partitioning(Some(Partitioning::UnknownPartitioning(2)))
+            .with_file_groups(vec![FileGroup::new(vec![fragment])])
+            .with_output_partitioning(Some(Partitioning::UnknownPartitioning(1)))
             .build();
         let fragmented = DataSourceExec::from_data_source(fragmented_config);
         let coalesced: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(fragmented));
@@ -2039,109 +1934,192 @@ mod tests {
         );
         assert!(
             result.is_err(),
-            "single-output coalescing must not hide ranged DV file fragments"
+            "coalescing to one output must not hide ranged DV file fragments"
         );
 
-        Ok(())
-    }
+        let limited_config = FileScanConfigBuilder::from(config.clone())
+            .with_limit(Some(1))
+            .build();
+        let limited: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(limited_config);
+        let limited_result = Arc::new(exec.clone()).replace_children(
+            vec![limited],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        );
 
-    #[tokio::test]
-    async fn test_dv_scan_applies_limit_after_deleted_rows() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], Some(1)).await?;
-
-        let batches = collect(scan, session.task_ctx()).await?;
-        let row_count = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
-        assert_eq!(row_count, 1, "one live row exists after four deleted rows");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dv_scan_downgrades_physical_statistics() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let predicates = provider
-            .schema()
-            .fields()
-            .iter()
-            .map(|field| col(field.name()).is_not_null())
-            .collect::<Vec<_>>();
-        let scan = provider
-            .scan(&session.state(), None, &predicates, None)
-            .await?;
-
-        let statistics = StatisticsContext::new().compute(scan.as_ref(), &StatisticsArgs::new())?;
+        let parquet_source = config
+            .file_source
+            .downcast_ref::<ParquetSource>()
+            .expect("FileScanConfig must hold ParquetSource");
+        let filtered_config = FileScanConfigBuilder::from(config.clone())
+            .with_source(Arc::new(parquet_source.with_predicate(physical_lit(false))))
+            .build();
+        let filtered: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(filtered_config);
+        let filtered_result = Arc::new(exec.clone()).replace_children(
+            vec![filtered],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        );
         assert!(
-            !matches!(statistics.num_rows, Precision::Exact(_)),
-            "physical row count is not an exact live-row count"
-        );
-        for column in &statistics.column_statistics {
-            assert!(!matches!(column.null_count, Precision::Exact(_)));
-            assert!(!matches!(column.min_value, Precision::Exact(_)));
-            assert!(!matches!(column.max_value, Precision::Exact(_)));
-            assert!(!matches!(column.distinct_count, Precision::Exact(_)));
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dv_scan_explain_reports_containment_mode() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], None).await?;
-
-        let explain = displayable(scan.as_ref()).indent(false).to_string();
-        assert!(explain.contains("dv_mode=sequential"), "{explain}");
-        assert!(explain.contains("physical_row_index=false"), "{explain}");
-        assert!(
-            explain.contains("file_group_layout_locked=true"),
-            "{explain}"
+            limited_result.is_err() && filtered_result.is_err(),
+            "DeltaScanExec must reject child rewrites that remove rows: limit={}, predicate={}",
+            limited_result.is_err(),
+            filtered_result.is_err()
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_sequential_dv_plan_is_repeatable() -> TestResult {
+    async fn test_dv_scan_downgrades_all_exact_physical_statistics() -> TestResult {
         let table = open_fs_path(DV_TABLE_PATH);
         let provider = table.table_provider().await?;
         let session = Arc::new(create_session().into_inner());
         let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("planner must return DeltaScanExec");
 
-        let first = collect(Arc::clone(&scan), session.task_ctx()).await?;
-        let second = collect(scan, session.task_ctx()).await?;
-        let first_rows = first.iter().map(RecordBatch::num_rows).sum::<usize>();
-        let second_rows = second.iter().map(RecordBatch::num_rows).sum::<usize>();
-        assert_eq!(first_rows, 1);
-        assert_eq!(second_rows, first_rows);
+        let mut physical = Statistics::new_unknown(exec.input.schema().as_ref());
+        physical.num_rows = Precision::Exact(5);
+        physical.total_byte_size = Precision::Exact(1_006);
+        let first_column = physical
+            .column_statistics
+            .first_mut()
+            .expect("DV fixture must read at least one physical column");
+        first_column.byte_size = Precision::Exact(128);
+        first_column.sum_value = Precision::Exact(ScalarValue::Int64(Some(42)));
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_dv_scan_reports_file_and_row_metrics() -> TestResult {
-        let table = open_fs_path(DV_TABLE_PATH);
-        let provider = table.table_provider().await?;
-        let session = Arc::new(create_session().into_inner());
-        let scan = provider.scan(&session.state(), None, &[], None).await?;
-
-        collect(Arc::clone(&scan), session.task_ctx()).await?;
-        let metrics = scan.metrics().expect("DeltaScanExec metrics");
-        assert_eq!(metrics.sum_by_name("dv_files").unwrap().as_usize(), 1);
+        let logical = exec.map_statistics(physical)?;
+        assert_eq!(logical.num_rows, Precision::Inexact(5));
+        assert_eq!(logical.total_byte_size, Precision::Inexact(1_006));
         assert_eq!(
-            metrics.sum_by_name("dv_rows_checked").unwrap().as_usize(),
-            5
+            logical.column_statistics[0].byte_size,
+            Precision::Inexact(128)
         );
         assert_eq!(
-            metrics.sum_by_name("dv_rows_removed").unwrap().as_usize(),
-            4
+            logical.column_statistics[0].sum_value,
+            Precision::Inexact(ScalarValue::Int64(Some(42)))
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_optimized_multi_group_dv_scan_is_concurrently_repeatable() -> TestResult {
+        let table = open_fs_path(DV_TABLE_PATH);
+        let provider = table.table_provider().await?;
+        let config = SessionConfig::new().with_target_partitions(2);
+        let session = Arc::new(datafusion::prelude::SessionContext::new_with_config(config));
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("planner must return DeltaScanExec");
+        let source_exec = exec
+            .input
+            .downcast_ref::<DataSourceExec>()
+            .expect("fixture must produce one DataSourceExec");
+        let source_config = source_exec
+            .data_source()
+            .downcast_ref::<FileScanConfig>()
+            .expect("DataSourceExec must hold a parquet FileScanConfig");
+        let original_file = source_config.file_groups[0][0].clone();
+        let original_file_id = exec
+            .dv_state
+            .selection_vectors()
+            .and_then(|vectors| vectors.keys().next().cloned())
+            .expect("fixture must have one deletion vector mask");
+
+        let duplicate_file_id = "duplicate".to_string();
+        let source_url = url::Url::parse(&format!(
+            "{}{}",
+            source_config.object_store_url.as_str(),
+            original_file.object_meta.location.as_ref()
+        ))?;
+        let source_path = source_url.to_file_path().map_err(|_| {
+            std::io::Error::other(format!("fixture requires a file URL: {source_url}"))
+        })?;
+        let temp_dir = tempfile::tempdir()?;
+        let duplicate_path = temp_dir.path().join("duplicate.parquet");
+        std::fs::copy(&source_path, &duplicate_path)?;
+        let duplicate_location = object_store::path::Path::from_filesystem_path(&duplicate_path)?;
+
+        let mut duplicate_file = original_file.clone();
+        duplicate_file.object_meta.location = duplicate_location.clone();
+        duplicate_file.partition_values =
+            vec![crate::delta_datafusion::file_id::wrap_file_id_value(
+                duplicate_file_id.clone(),
+            )];
+        let grouped_config = FileScanConfigBuilder::from(source_config.clone())
+            .with_file_groups(vec![
+                FileGroup::new(vec![original_file]),
+                FileGroup::new(vec![duplicate_file]),
+            ])
+            .with_output_partitioning(Some(Partitioning::UnknownPartitioning(2)))
+            .build();
+        let grouped_input = DataSourceExec::from_data_source(grouped_config);
+
+        let mut selection_vectors = exec.dv_state.selection_vectors().unwrap().clone();
+        let duplicate_mask = selection_vectors
+            .get(&original_file_id)
+            .expect("fixture must provide the original mask")
+            .clone();
+        selection_vectors.insert(duplicate_file_id.clone(), duplicate_mask);
+        let mut identities = exec
+            .dv_state
+            .physical_file_identities()
+            .expect("fixture must provide sequential DV identities")
+            .clone();
+        identities.insert(
+            duplicate_file_id.clone(),
+            super::super::PhysicalFileIdentity {
+                object_store_url: source_config.object_store_url.clone(),
+                location: duplicate_location,
+            },
+        );
+        let dv_state = DvExecutionState::Sequential {
+            selection_vectors: Arc::new(selection_vectors),
+            physical_file_identities: Arc::new(identities),
+        };
+
+        let grouped_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanExec::new(
+            Arc::clone(&exec.scan_plan),
+            grouped_input,
+            Arc::clone(&exec.transforms),
+            dv_state,
+            Arc::clone(&exec.public_file_ids),
+            exec.partition_stats.clone(),
+            ExecutionPlanMetricsSet::new(),
+        ));
+
+        let optimized = DefaultPhysicalPlanner::default().optimize_physical_plan(
+            grouped_scan,
+            &session.state(),
+            |_, _| {},
+        )?;
+        let optimized_scan = optimized
+            .downcast_ref::<DeltaScanExec>()
+            .expect("optimizer must retain DeltaScanExec");
+        assert!(
+            optimized_scan
+                .input
+                .downcast_ref::<CoalescePartitionsExec>()
+                .is_some(),
+            "fixture must exercise multiple file groups under one coalescing node"
+        );
+
+        let (first, second) = tokio::join!(
+            collect(Arc::clone(&optimized), session.task_ctx()),
+            collect(optimized, session.task_ctx())
+        );
+        let expected = vec![
+            "+--------+-----+------------+",
+            "| letter | int | date       |",
+            "+--------+-----+------------+",
+            "| b      | 228 | 1978-12-01 |",
+            "| b      | 228 | 1978-12-01 |",
+            "+--------+-----+------------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &first?);
+        assert_batches_sorted_eq!(&expected, &second?);
 
         Ok(())
     }
@@ -2204,11 +2182,11 @@ mod tests {
         Ok((kernel_type, Arc::new(scan_plan)))
     }
 
-    fn selection_vectors_f1_f2() -> Arc<DashMap<String, Vec<bool>>> {
-        let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
-        selection_vectors.insert("f1".to_string(), vec![true, false]);
-        selection_vectors.insert("f2".to_string(), vec![false, true]);
-        selection_vectors
+    fn selection_vectors_f1_f2() -> HashMap<String, Vec<bool>> {
+        HashMap::from([
+            ("f1".to_string(), vec![true, false]),
+            ("f2".to_string(), vec![false, true]),
+        ])
     }
 
     fn value_and_file_id_batch(
@@ -2252,7 +2230,7 @@ mod tests {
     fn test_scan_stream(
         scan_plan: Arc<KernelScanPlan>,
         kernel_type: KernelDataType,
-        selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        selection_vectors: HashMap<String, Vec<bool>>,
         input_batches: Vec<RecordBatch>,
         file_id_column: Option<String>,
     ) -> DeltaScanStream {
@@ -2264,11 +2242,8 @@ mod tests {
             .unwrap_or_else(|| Arc::clone(&scan_plan.contract.output_schema));
         let input_file_id_column = scan_plan.contract.file_id_field.name().clone();
         let mut public_file_ids = super::super::PublicFileIdMap::default();
-        for selection_vector in selection_vectors.iter() {
-            public_file_ids.insert(
-                selection_vector.key().clone(),
-                selection_vector.key().clone(),
-            );
+        for file_id in selection_vectors.keys() {
+            public_file_ids.insert(file_id.clone(), file_id.clone());
         }
         for batch in &input_batches {
             if let Ok(file_id_idx) = file_id_column_idx(batch, &input_file_id_column) {
@@ -2294,13 +2269,7 @@ mod tests {
             input,
             baseline_metrics: BaselineMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
             transforms: Arc::new(HashMap::new()),
-            selection_vectors: selection_vectors.as_ref().clone(),
-            dv_file_ids: selection_vectors
-                .iter()
-                .map(|entry| entry.key().clone())
-                .collect(),
-            dv_rows_checked: Count::new(),
-            dv_rows_removed: Count::new(),
+            selection_vectors,
             public_file_ids: Arc::new(public_file_ids),
             input_file_id_column,
             file_id_column,
@@ -2356,9 +2325,8 @@ mod tests {
             retain_row_index(scan_plan, "row_ordinal"),
             Arc::clone(&exec.input),
             Arc::clone(&exec.transforms),
-            Arc::clone(&exec.selection_vectors),
+            exec.dv_state.clone(),
             Arc::clone(&exec.public_file_ids),
-            Arc::clone(&exec.physical_file_identities),
             exec.partition_stats.clone(),
             exec.metrics.clone(),
         );
@@ -2395,9 +2363,8 @@ mod tests {
             retain_row_index(scan_plan, "row_ordinal"),
             repartitioned_input,
             Arc::clone(&exec.transforms),
-            Arc::clone(&exec.selection_vectors),
+            exec.dv_state.clone(),
             Arc::clone(&exec.public_file_ids),
-            Arc::clone(&exec.physical_file_identities),
             exec.partition_stats.clone(),
             exec.metrics.clone(),
         );
@@ -2433,9 +2400,8 @@ mod tests {
             scan_plan,
             input,
             Arc::new(HashMap::new()),
-            Arc::new(DashMap::new()),
+            DvExecutionState::None,
             Arc::new(public_file_ids),
-            Arc::new(super::super::PhysicalFileIdentityMap::default()),
             HashMap::new(),
             ExecutionPlanMetricsSet::new(),
         );
@@ -2470,13 +2436,7 @@ mod tests {
         let scan_plan = retain_row_index(scan_plan, "row_ordinal");
         let batch = value_and_file_id_batch(&[10, 11], &[Some("f1"), Some("f1")], false)?;
 
-        let mut stream = test_scan_stream(
-            scan_plan,
-            kernel_type,
-            Arc::new(DashMap::new()),
-            Vec::new(),
-            None,
-        );
+        let mut stream = test_scan_stream(scan_plan, kernel_type, HashMap::new(), Vec::new(), None);
 
         assert!(stream.schema().column_with_name("row_ordinal").is_some());
         let outputs = stream.batch_project(batch)?;
@@ -2496,13 +2456,7 @@ mod tests {
             false,
         )?;
 
-        let mut stream = test_scan_stream(
-            scan_plan,
-            kernel_type,
-            Arc::new(DashMap::new()),
-            Vec::new(),
-            None,
-        );
+        let mut stream = test_scan_stream(scan_plan, kernel_type, HashMap::new(), Vec::new(), None);
 
         let outputs = stream.batch_project(batch)?;
         assert_eq!(outputs.len(), 2);
@@ -2524,7 +2478,7 @@ mod tests {
         let mut stream = test_scan_stream(
             scan_plan,
             kernel_type,
-            Arc::new(DashMap::new()),
+            HashMap::new(),
             vec![first, second],
             None,
         );
@@ -2656,7 +2610,7 @@ mod tests {
         let mut stream = test_scan_stream(
             Arc::clone(&scan_plan),
             kernel_type,
-            Arc::new(DashMap::new()),
+            HashMap::new(),
             Vec::new(),
             None,
         );
@@ -2680,7 +2634,7 @@ mod tests {
         let mut stream = test_scan_stream(
             Arc::clone(&scan_plan),
             kernel_type,
-            Arc::new(DashMap::new()),
+            HashMap::new(),
             Vec::new(),
             None,
         );
@@ -2853,7 +2807,7 @@ mod tests {
         let mut stream = test_scan_stream(
             scan_plan,
             kernel_type,
-            Arc::new(DashMap::new()),
+            HashMap::new(),
             vec![first, second],
             Some("file_id".to_string()),
         );
@@ -2902,16 +2856,11 @@ mod tests {
     #[test]
     fn test_dv_mask_exhaustion_across_batches() {
         use super::{DvMaskResult, consume_dv_mask};
-        use dashmap::DashMap;
 
-        let selection_vectors: DashMap<String, Vec<bool>> = DashMap::new();
         let file_id = "test_file.parquet".to_string();
-        selection_vectors.insert(file_id.clone(), vec![false, true]);
+        let mut selection_vectors = HashMap::from([(file_id.clone(), vec![false, true])]);
 
-        let result1 = {
-            let mut sv = selection_vectors.get_mut(&file_id).unwrap();
-            consume_dv_mask(&mut sv, 5)
-        };
+        let result1 = consume_dv_mask(selection_vectors.get_mut(&file_id).unwrap(), 5);
         assert_eq!(
             result1,
             DvMaskResult {
@@ -2923,8 +2872,8 @@ mod tests {
             selection_vectors.remove(&file_id);
         }
 
-        let result2 = if let Some(mut sv) = selection_vectors.get_mut(&file_id) {
-            consume_dv_mask(&mut sv, 5)
+        let result2 = if let Some(sv) = selection_vectors.get_mut(&file_id) {
+            consume_dv_mask(sv, 5)
         } else {
             DvMaskResult {
                 selection: None,
