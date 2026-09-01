@@ -7,12 +7,14 @@ use datafusion::catalog::Session;
 use datafusion::common::{HashSet, Result as DataFusionResult};
 use datafusion::datasource::MemTable;
 use datafusion::logical_expr::{Expr, LogicalPlan};
+use futures::TryStreamExt as _;
 
 use crate::errors::DeltaResult;
 use crate::kernel::{Add, EagerSnapshot};
 use crate::logstore::LogStoreRef;
 
 use super::DeltaSessionExt as _;
+use super::engine::DataFusionEngine;
 
 /// Wrapper result for the internal file-selection entrypoint.
 pub struct FindFilesResult {
@@ -88,4 +90,23 @@ pub async fn scan_files_where_matches(
 
 pub fn add_actions_partition_mem_table(snapshot: &EagerSnapshot) -> DeltaResult<Option<MemTable>> {
     super::try_materialized_add_actions_partition_mem_table(snapshot.snapshot())
+}
+
+/// Fully consume the standard metadata scan path for the internal benchmark.
+pub async fn scan_metadata_file_count(
+    snapshot: &EagerSnapshot,
+    session: &dyn Session,
+) -> DeltaResult<usize> {
+    let scan = snapshot
+        .snapshot()
+        .scan_builder()
+        .with_skip_stats(true)
+        .build()?;
+    let engine = DataFusionEngine::new_from_session(session);
+    let mut metadata = scan.scan_metadata(engine);
+    let mut file_count = 0;
+    while let Some(batch) = metadata.try_next().await? {
+        file_count = batch.visit_scan_files(file_count, |count, _| *count += 1)?;
+    }
+    Ok(file_count)
 }
