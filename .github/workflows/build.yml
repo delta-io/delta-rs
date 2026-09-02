@@ -135,3 +135,11 @@ jobs:
       - uses: ./.github/actions/upload-coverage
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run doc tests
+        shell: bash
+        run: |
+          # llvm-cov doesn't run doc tests, so run them separately
+          cargo test --features ${{ env.DEFAULT_FEATURES }} \
+            --workspace \
+            --doc
