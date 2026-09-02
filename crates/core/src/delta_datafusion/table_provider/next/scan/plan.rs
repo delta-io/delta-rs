@@ -309,13 +309,33 @@ impl KernelScanPlan {
             Arc::new(scan_builder.build()?)
         };
         let parquet_read_schema = if config.schema.is_some() {
-            config.physical_arrow_schema(
-                scan.snapshot().table_configuration(),
-                contract.scan_schema.as_ref(),
-            )?
+            let scan_physical_schema: Schema = scan.physical_schema().as_ref().try_into_arrow()?;
+            let logical_kernel_schema = table_config.logical_schema();
+            let mode = table_config.column_mapping_mode();
+
+            let pruned_fields = scan_physical_schema
+                .fields()
+                .iter()
+                .filter_map(|p_field| {
+                    let matching_kernel_field = logical_kernel_schema
+                        .fields()
+                        .find(|kf| kf.physical_name(mode) == p_field.name());
+
+                    let logical_override_field = matching_kernel_field
+                        .and_then(|kf| contract.scan_schema.field_with_name(kf.name()).ok())
+                        .or_else(|| contract.scan_schema.field_with_name(p_field.name()).ok());
+
+                    logical_override_field.map(|l_field| {
+                        prune_nested_fields(p_field, l_field, matching_kernel_field, mode)
+                    })
+                })
+                .collect_vec();
+
+            let pruned_physical_schema = Arc::new(Schema::new(pruned_fields));
+            config.physical_arrow_schema(table_config, &pruned_physical_schema)?
         } else {
             config.physical_arrow_schema(
-                scan.snapshot().table_configuration(),
+                table_config,
                 &scan.physical_schema().as_ref().try_into_arrow()?,
             )?
         };
@@ -340,6 +360,45 @@ impl KernelScanPlan {
 
     pub(crate) fn table_configuration(&self) -> &TableConfiguration {
         self.scan.snapshot().table_configuration()
+    }
+}
+
+fn prune_nested_fields(
+    physical_field: &Field,
+    logical_field: &Field,
+    kernel_field: Option<&delta_kernel::schema::StructField>,
+    mode: delta_kernel::table_features::ColumnMappingMode,
+) -> FieldRef {
+    match (physical_field.data_type(), logical_field.data_type()) {
+        (DataType::Struct(phys_children), DataType::Struct(logic_children)) => {
+            let kernel_struct = kernel_field.and_then(|kf| match kf.data_type() {
+                delta_kernel::schema::DataType::Struct(s) => Some(s.as_ref()),
+                _ => None,
+            });
+
+            let mut new_children = Vec::new();
+            for p_child in phys_children {
+                let matching_logic_child = logic_children.iter().find(|l_child| {
+                    if let Some(kf) = kernel_struct.and_then(|ks| ks.field(l_child.name())) {
+                        return kf.physical_name(mode) == p_child.name();
+                    }
+                    l_child.name() == p_child.name()
+                });
+
+                if let Some(l_child) = matching_logic_child {
+                    let k_child = kernel_struct.and_then(|ks| ks.field(l_child.name()));
+                    let pruned = prune_nested_fields(p_child, l_child, k_child, mode);
+                    new_children.push(pruned);
+                }
+            }
+
+            physical_field
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(new_children.into()))
+                .into()
+        }
+        _ => Arc::new(physical_field.clone()),
     }
 }
 
@@ -915,6 +974,32 @@ mod tests {
         assert!(!schema_has_view_types(
             scan_plan.contract.result_schema.as_ref()
         ));
+        // Under column mapping with schema override, logical names remain in contract.result_schema,
+        // while parquet_read_schema contains physical names and excludes partition columns.
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-3877fd94-0973-4941-ac6b-646849a1ff65")
+                .is_ok()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Super Name")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("Company Very Short")
+                .is_err()
+        );
+        assert!(
+            scan_plan
+                .parquet_read_schema
+                .field_with_name("col-173b4db9-b5ad-427f-9e75-516aae37fbbb")
+                .is_err()
+        );
 
         let config = DeltaScanConfig {
             schema_force_view_types: true,
@@ -1051,6 +1136,25 @@ mod tests {
 
         assert_eq!(scan_plan.contract.scan_schema, override_schema);
         assert_eq!(scan_plan.parquet_read_schema, override_schema);
+
+        let provider = Arc::new(
+            crate::delta_datafusion::table_provider::next::DeltaScan::new(
+                table.snapshot()?.snapshot().snapshot().clone(),
+                config,
+            )?
+            .with_log_store(table.log_store()),
+        );
+        let ctx = create_session().into_inner();
+        let batches = ctx.read_table(provider)?.collect().await?;
+        let expected = vec![
+            "+---------+",
+            "| s       |",
+            "+---------+",
+            "| {l: 10} |",
+            "| {l: 20} |",
+            "+---------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
 
         Ok(())
     }
