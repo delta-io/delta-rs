@@ -51,6 +51,7 @@ if TYPE_CHECKING:
         AddAction,
         CommitProperties,
         PostCommitHookProperties,
+        RemoveAction,
     )
     from deltalake.writer.properties import WriterProperties
 
@@ -1527,7 +1528,7 @@ class DeltaTable:
 
     def create_write_transaction(
         self,
-        actions: list[AddAction],
+        actions: list[AddAction | RemoveAction],
         mode: str,
         schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
@@ -1536,6 +1537,8 @@ class DeltaTable:
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
+        from deltalake.transaction import AddAction, RemoveAction
+
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
                 "create_write_transaction",
@@ -1550,8 +1553,12 @@ class DeltaTable:
         if not isinstance(schema, DeltaSchema):
             schema = DeltaSchema.from_arrow(schema)
 
+        add_actions = [a for a in actions if isinstance(a, AddAction)]
+        remove_actions = [a for a in actions if isinstance(a, RemoveAction)]
+
         self._table.create_write_transaction(
-            actions,
+            add_actions,
+            remove_actions,
             mode,
             partition_by or [],
             schema,

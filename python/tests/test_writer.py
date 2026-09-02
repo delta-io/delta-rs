@@ -3209,6 +3209,166 @@ def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
 
 
 @pytest.mark.pyarrow
+def test_create_write_transaction_with_remove_actions(tmp_path: pathlib.Path) -> None:
+    """
+    Calling create_write_transaction with a RemoveAction removes the old file
+    and an AddAction adds the new file, resulting in a single replacement file
+    with the expected data.
+    """
+    from arro3.io import write_parquet
+
+    from deltalake.transaction import AddAction, RemoveAction
+
+    schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=False),
+            Field("value", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema, name="test_remove")
+    assert dt.version() == 0
+
+    # Write initial data
+    data = Table.from_pydict(
+        {
+            "id": Array(["a"], DataType.string()),
+            "value": Array([1], DataType.int64()),
+        },
+        schema=schema,
+    )
+    write_deltalake(dt, data, mode="append")
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
+    assert 1 == len(dt.file_uris()), (
+        "There should only be one file in the table at this point"
+    )
+    old_uri = dt.file_uris()[0]
+    old_path = old_uri.replace(str(tmp_path), "").lstrip("/")
+
+    # Write a replacement parquet file and commit it via create_write_transaction
+    # with a remove for the old file and an add for the new one
+    new_data = Table.from_pydict(
+        {
+            "id": Array(["b"], DataType.string()),
+            "value": Array([2], DataType.int64()),
+        },
+        schema=schema,
+    )
+    new_file_path = tmp_path / "replacement.parquet"
+    write_parquet(new_data, new_file_path)
+
+    add = AddAction(
+        "replacement.parquet",
+        new_file_path.stat().st_size,
+        {},
+        0,
+        True,
+        "{}",
+    )
+    remove = RemoveAction(
+        path=old_path,
+        data_change=True,
+        deletion_timestamp=0,
+        extended_file_metadata=None,
+        partition_values=None,
+        size=None,
+        tags=None,
+    )
+
+    dt.create_write_transaction(actions=[remove, add], mode="append", schema=schema)
+
+    # Reload the table and verify the old file was removed, only the new one remains
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 2, (
+        "Expected a write to have occurred after create_write_transaction!"
+    )
+    uris = dt.file_uris()
+    assert 1 == len(uris), (
+        "There should be exactly one file after removing the old and adding a new one"
+    )
+    assert "replacement.parquet" in uris[0], (
+        "The remaining file should be the replacement"
+    )
+
+    # Verify the data matches the replacement file
+    loaded_data = Table.from_arrow(dt.to_pyarrow_table())
+    assert new_data == loaded_data, "The table contents do not match expectations"
+
+
+@pytest.mark.pyarrow
+def test_create_write_transaction_remove_wins_over_add_same_path(
+    tmp_path: pathlib.Path,
+) -> None:
+    """
+    When an AddAction and a RemoveAction target the same path within a single
+    commit, the remove should win — the file should not appear as live.
+    """
+    from deltalake.transaction import AddAction, RemoveAction
+
+    schema = Schema(
+        fields=[
+            Field("id", type=PrimitiveType("string"), nullable=False),
+            Field("value", type=PrimitiveType("long"), nullable=True),
+        ]
+    )
+    dt = DeltaTable.create(tmp_path, schema, name="test_same_path")
+    assert dt.version() == 0
+
+    # Write initial data
+    data = Table.from_pydict(
+        {
+            "id": Array(["a"], DataType.string()),
+            "value": Array([1], DataType.int64()),
+        },
+        schema=schema,
+    )
+    write_deltalake(dt, data, mode="append")
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 1, "Expected a write to have occurred!"
+    file_uri = dt.file_uris()[0]
+    file_path = file_uri.replace(str(tmp_path), "").lstrip("/")
+
+    # Submit both an add and a remove for the same path in one commit.
+    # The remove should take precedence, leaving no live files.
+    add = AddAction(
+        file_path,
+        (tmp_path / file_path).stat().st_size,
+        {},
+        0,
+        True,
+        "{}",
+    )
+    remove = RemoveAction(
+        path=file_path,
+        data_change=True,
+        deletion_timestamp=0,
+        extended_file_metadata=None,
+        partition_values=None,
+        size=None,
+        tags=None,
+    )
+
+    dt.create_write_transaction(actions=[add, remove], mode="append", schema=schema)
+
+    # Reload the table and verify the file was removed
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 2, (
+        "Expected a write to have occurred after create_write_transaction!"
+    )
+    uris = dt.file_uris()
+    assert 0 == len(uris), (
+        "Remove should win over add for the same path, leaving no live files"
+    )
+
+    dt = DeltaTable(tmp_path)
+    assert dt.version() == 2
+    uris = dt.file_uris()
+    assert len(uris) == 0, (
+        f"Expected 0 files (remove should win over add for same path), got {len(uris)}"
+    )
+
+
+@pytest.mark.pyarrow
 def test_write_date64_normalizes_to_date32(tmp_path: pathlib.Path):
     import pyarrow as pa
 

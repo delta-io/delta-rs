@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         AddAction,
         CommitProperties,
         PostCommitHookProperties,
+        RemoveAction,
     )
     from deltalake.writer.properties import (
         WriterProperties,
@@ -267,6 +268,7 @@ class RawDeltaTable:
     def create_write_transaction(
         self,
         add_actions: list[AddAction],
+        remove_actions: list[RemoveAction],
         mode: str,
         partition_by: list[str],
         schema: Schema,
@@ -324,6 +326,7 @@ def create_table_with_add_actions(
     table_uri: str,
     schema: Schema,
     add_actions: list[AddAction],
+    remove_actions: list[RemoveAction],
     mode: Literal["error", "append", "overwrite", "ignore"],
     partition_by: list[str],
     name: str | None,
