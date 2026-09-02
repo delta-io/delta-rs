@@ -19,3 +19,4 @@ mod integration_datafusion;
 mod nanosecond_timestamps;
 mod read_delta_log_test;
 mod read_delta_partitions_test;
+mod timestamp_statistics;

@@ -1117,8 +1117,10 @@ def test_writer_stats(existing_table: DeltaTable, sample_data_pyarrow: "pa.Table
     expected_maxs["decimal"] = 14.0
     expected_maxs["date32"] = "2022-01-05"
     if _nanosecond_timestamps_enabled():
-        expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000000004Z"
-        expected_maxs["timestamp_ns_ntz"] = "1970-01-01 00:00:00.000000004"
+        # Nanosecond timestamps are truncated to millisecond precision
+        # in the add action statistics.
+        expected_maxs["timestamp_ns"] = "1970-01-01T00:00:00.000Z"
+        expected_maxs["timestamp_ns_ntz"] = "1970-01-01 00:00:00.000"
 
     assert stats["maxValues"] == expected_maxs
 

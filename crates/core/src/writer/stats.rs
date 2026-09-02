@@ -6,12 +6,13 @@ use std::{
     ops::AddAssign,
 };
 
+use chrono::Timelike;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::basic::Type;
-use parquet::basic::{ConvertedType, DecimalType, IntType, LogicalType, TimestampType};
+use parquet::basic::{ConvertedType, DecimalType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -455,10 +456,23 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Float64(v) => serde_json::Value::from(v),
             StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                // Timestamps must be truncated to millisecond precision when writing
+                // to JSON for compatibility with the Delta Protocol.
+                let format = if v.nanosecond() == 0 {
+                    // Omit the sub-second component if it is zero
+                    "%Y-%m-%dT%H:%M:%SZ"
+                } else {
+                    "%Y-%m-%dT%H:%M:%S%.3fZ"
+                };
+                serde_json::Value::from(v.format(format).to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%d %H:%M:%S%.f").to_string())
+                let format = if v.nanosecond() == 0 {
+                    "%Y-%m-%d %H:%M:%S"
+                } else {
+                    "%Y-%m-%d %H:%M:%S%.3f"
+                };
+                serde_json::Value::from(v.format(format).to_string())
             }
             StatsScalar::Decimal { value, scale } => {
                 // For scale=0, serialize as integer since serde_json would otherwise
@@ -643,9 +657,10 @@ mod tests {
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
     };
+    use parquet::basic::{Compression, IntType, TimestampType};
     use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::properties::WriterProperties;
     use parquet::file::statistics::ValueStatistics;
-    use parquet::{basic::Compression, file::properties::WriterProperties};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::path::Path;
@@ -713,20 +728,40 @@ mod tests {
                 Value::from("1998-12-01"),
             ),
             (
-                simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723456),
                 Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::NANOS,
                 })),
-                Value::from("2022-01-01T12:34:56.789123456Z"),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01T12:34:56.789Z"),
             ),
             (
-                simple_parquet_stat!(Statistics::Int64, 1641040496789123),
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723456),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01 12:34:56.789"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723),
                 Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c: true,
                     unit: parquet::basic::TimeUnit::MICROS,
                 })),
-                Value::from("2022-01-01T12:34:56.789123Z"),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01T12:34:56.789Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789723),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNtz
+                    unit: parquet::basic::TimeUnit::MICROS,
+                })),
+                // Should be truncated to millisecond precision
+                Value::from("2022-01-01 12:34:56.789"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789),
@@ -735,6 +770,50 @@ mod tests {
                     unit: parquet::basic::TimeUnit::MILLIS,
                 })),
                 Value::from("2022-01-01T12:34:56.789Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNtz
+                    unit: parquet::basic::TimeUnit::MILLIS,
+                })),
+                Value::from("2022-01-01 12:34:56.789"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000000),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // No sub-second component
+                Value::from("2022-01-01T12:34:56Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000000),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // No sub-second component
+                Value::from("2022-01-01 12:34:56"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000500),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Sub-second component truncated to zero milliseconds
+                Value::from("2022-01-01T12:34:56.000Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496000000500),
+                Some(LogicalType::Timestamp(TimestampType {
+                    is_adjusted_to_u_t_c: false, // Maps to TimestampNanosNtz
+                    unit: parquet::basic::TimeUnit::NANOS,
+                })),
+                // Sub-second component truncated to zero milliseconds
+                Value::from("2022-01-01 12:34:56.000"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
