@@ -591,30 +591,36 @@ fn process_predicate<'a>(
 
     // Try to convert the expression into a kernel predicate
     if let Ok(kernel_predicate) = to_delta_predicate(expr) {
-        let (pushdown, parquet_predicate) = if only_partition_refs {
-            // All references are to partition columns so the kernel
-            // scan can fully handle the predicate and return exact results
-            (TableProviderFilterPushDown::Exact, None)
-        } else if any_partition_refs {
-            // Some references are to partition columns, so the kernel
-            // scan can only handle the predicate on best effort. Since the
-            // parquet scan cannot reference partition columns, we do not
-            // push down any predicate to parquet
-            (TableProviderFilterPushDown::Inexact, None)
-        } else {
-            // For non-partition predicates we can *attempt* Parquet pushdown, but it is not a
-            // correctness boundary (it may be partially applied or skipped). Keep this Inexact so
-            // DataFusion retains a post-scan Filter.
-            (
-                TableProviderFilterPushDown::Inexact,
-                parquet_pushdown_enabled.then_some(expr),
-            )
-        };
-        return ProcessedPredicate {
-            pushdown,
-            kernel_predicate: Some(kernel_predicate),
-            parquet_predicate,
-        };
+        if is_data_skipping_eligible(&kernel_predicate, config) {
+            let (pushdown, parquet_predicate) = if only_partition_refs {
+                // All references are to partition columns so the kernel
+                // scan can fully handle the predicate and return exact results
+                (TableProviderFilterPushDown::Exact, None)
+            } else if any_partition_refs {
+                // Some references are to partition columns, so the kernel
+                // scan can only handle the predicate on best effort. Since the
+                // parquet scan cannot reference partition columns, we do not
+                // push down any predicate to parquet
+                (TableProviderFilterPushDown::Inexact, None)
+            } else {
+                // For non-partition predicates we can *attempt* Parquet pushdown, but it is not a
+                // correctness boundary (it may be partially applied or skipped). Keep this Inexact so
+                // DataFusion retains a post-scan Filter.
+                (
+                    TableProviderFilterPushDown::Inexact,
+                    parquet_pushdown_enabled.then_some(expr),
+                )
+            };
+            return ProcessedPredicate {
+                pushdown,
+                kernel_predicate: Some(kernel_predicate),
+                parquet_predicate,
+            };
+        }
+        debug!(
+            "predicate references columns that are not eligible for data skipping, \
+                excluding it from the kernel scan predicate: {expr}"
+        );
     }
 
     // If there are any partition column references, we cannot
@@ -659,6 +665,27 @@ fn process_predicate<'a>(
         kernel_predicate: None,
         parquet_predicate: parquet_pushdown_enabled.then_some(expr),
     }
+}
+
+/// Whether kernel data skipping can resolve every column the predicate references.
+fn is_data_skipping_eligible(predicate: &Predicate, config: &TableConfiguration) -> bool {
+    fn fold(path: &[String]) -> Vec<String> {
+        path.iter().map(|part| part.to_lowercase()).collect()
+    }
+
+    let leaves = config.logical_schema().leaves(None);
+    let (names, types) = leaves.as_ref();
+    let skippable: HashSet<Vec<String>> = names
+        .iter()
+        .zip(types)
+        .filter(|(_, data_type)| matches!(data_type, KernelDataType::Primitive(_)))
+        .map(|(name, _)| fold(name))
+        .collect();
+
+    predicate
+        .references()
+        .iter()
+        .all(|reference| skippable.contains(&fold(reference)))
 }
 
 fn rewrite_expression(expr: Expr, config: &TableConfiguration) -> Result<Expr> {
@@ -747,6 +774,83 @@ mod tests {
         let rewritten = rewrite_expression(expr.clone(), config)?;
         let expected = col("col-173b4db9-b5ad-427f-9e75-516aae37fbbb").eq(lit("BME"));
         assert_eq!(rewritten, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_predicate_on_non_skippable_column() -> TestResult {
+        use crate::kernel::{ArrayType, MapType, StructField, StructType};
+        use crate::operations::create::CreateBuilder;
+        use datafusion::functions::core::expr_ext::FieldAccessor;
+
+        let tmp_dir = tempfile::tempdir()?;
+        let table = CreateBuilder::new()
+            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_columns(vec![
+                StructField::nullable("id", KernelDataType::INTEGER),
+                StructField::nullable(
+                    "m",
+                    MapType::new(KernelDataType::STRING, KernelDataType::STRING, true),
+                ),
+                StructField::nullable("l", ArrayType::new(KernelDataType::STRING, true)),
+                StructField::nullable(
+                    "s",
+                    StructType::try_new(vec![StructField::nullable(
+                        "name",
+                        KernelDataType::STRING,
+                    )])?,
+                ),
+            ])
+            .await?;
+        let snapshot = table.snapshot()?.snapshot();
+        let config = snapshot.table_configuration();
+        let scan_config = DeltaScanConfig::default();
+
+        let plan_for = |expr: &Expr| {
+            KernelScanPlan::try_new(
+                snapshot.snapshot(),
+                None,
+                std::slice::from_ref(expr),
+                &scan_config,
+                None,
+            )
+            .unwrap_or_else(|e| panic!("planning a scan for `{expr}` failed: {e}"))
+        };
+
+        let assert_kept_out_of_file_skipping = |expr: Expr| {
+            let scan_plan = plan_for(&expr);
+            assert!(
+                scan_plan.scan.physical_predicate().is_none(),
+                "predicate on a non-skippable column must not be pushed into the kernel scan: {expr}"
+            );
+            assert_eq!(
+                scan_plan.parquet_predicate.as_ref(),
+                Some(&expr),
+                "predicate must still reach the Parquet scan: {expr}"
+            );
+            assert_eq!(
+                supports_filters_pushdown(&[&expr], config, &scan_config),
+                vec![TableProviderFilterPushDown::Inexact],
+                "pushdown must stay inexact: {expr}"
+            );
+        };
+
+        assert_kept_out_of_file_skipping(col("m").is_not_null());
+        assert_kept_out_of_file_skipping(col("m").is_null());
+        assert_kept_out_of_file_skipping(col("l").is_not_null());
+        assert_kept_out_of_file_skipping(col("s").is_not_null());
+        assert_kept_out_of_file_skipping(and(col("m").is_not_null(), col("id").gt(lit(1))));
+
+        // Primitive leaves inside a struct are skippable, unlike the struct itself.
+        assert_eq!(
+            plan_for(&col("s").field("name").is_not_null())
+                .scan
+                .physical_predicate(),
+            Some(Arc::new(Predicate::is_not_null(Expression::column([
+                "s", "name"
+            ]))))
+        );
 
         Ok(())
     }
