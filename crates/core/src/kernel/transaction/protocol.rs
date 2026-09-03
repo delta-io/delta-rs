@@ -64,6 +64,8 @@ static WRITER_V6: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
         TableFeature::IdentityColumns,
     ])
 });
+const CLUSTERED_COMPACTION_FEATURES: &[TableFeature] =
+    &[TableFeature::DomainMetadata, TableFeature::ClusteredTable];
 
 pub struct ProtocolChecker {
     reader_features: HashSet<TableFeature>,
@@ -71,6 +73,16 @@ pub struct ProtocolChecker {
 }
 
 impl ProtocolChecker {
+    fn clustered_compaction_scope_applies(snapshot: &dyn TableReference) -> bool {
+        snapshot
+            .protocol()
+            .writer_features()
+            .is_some_and(|features| {
+                features.contains(&TableFeature::DomainMetadata)
+                    && features.contains(&TableFeature::ClusteredTable)
+            })
+    }
+
     /// Create a new protocol checker.
     pub fn new(
         reader_features: HashSet<TableFeature>,
@@ -220,6 +232,14 @@ impl ProtocolChecker {
 
     /// Check if delta-rs can write to the given delta table.
     pub fn can_write_to(&self, snapshot: &dyn TableReference) -> Result<(), TransactionError> {
+        self.can_write_to_with_additional_writer_features(snapshot, &[])
+    }
+
+    fn can_write_to_with_additional_writer_features(
+        &self,
+        snapshot: &dyn TableReference,
+        additional_writer_features: &[TableFeature],
+    ) -> Result<(), TransactionError> {
         // NOTE: writers must always support all required reader features
         self.can_read_from(snapshot)?;
         let min_writer_version = snapshot.protocol().min_writer_version();
@@ -238,14 +258,32 @@ impl ProtocolChecker {
         trace!("required writer features: {required_features:?}");
 
         if let Some(features) = required_features {
-            let mut diff = features.difference(&self.writer_features).peekable();
-            if diff.peek().is_some() {
-                return Err(TransactionError::UnsupportedTableFeatures(
-                    diff.cloned().collect(),
-                ));
+            let unsupported = features
+                .into_iter()
+                .filter(|feature| {
+                    !self.writer_features.contains(feature)
+                        && !additional_writer_features.contains(feature)
+                })
+                .collect::<Vec<_>>();
+            if !unsupported.is_empty() {
+                return Err(TransactionError::UnsupportedTableFeatures(unsupported));
             }
         };
         Ok(())
+    }
+
+    pub(crate) fn can_write_clustered_compaction(
+        &self,
+        snapshot: &dyn TableReference,
+    ) -> Result<(), TransactionError> {
+        if Self::clustered_compaction_scope_applies(snapshot) {
+            self.can_write_to_with_additional_writer_features(
+                snapshot,
+                CLUSTERED_COMPACTION_FEATURES,
+            )
+        } else {
+            self.can_write_to(snapshot)
+        }
     }
 
     pub fn can_commit(
@@ -254,7 +292,17 @@ impl ProtocolChecker {
         actions: &[Action],
         operation: &DeltaOperation,
     ) -> Result<(), TransactionError> {
-        self.can_write_to(snapshot)?;
+        self.can_commit_with_additional_writer_features(snapshot, actions, operation, &[])
+    }
+
+    fn can_commit_with_additional_writer_features(
+        &self,
+        snapshot: &dyn TableReference,
+        actions: &[Action],
+        operation: &DeltaOperation,
+        additional_writer_features: &[TableFeature],
+    ) -> Result<(), TransactionError> {
+        self.can_write_to_with_additional_writer_features(snapshot, additional_writer_features)?;
 
         // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#append-only-tables
         let append_only_enabled = if snapshot.protocol().min_writer_version() < 2 {
@@ -286,6 +334,25 @@ impl ProtocolChecker {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn can_commit_clustered_compaction(
+        &self,
+        snapshot: &dyn TableReference,
+        actions: &[Action],
+        operation: &DeltaOperation,
+    ) -> Result<(), TransactionError> {
+        if !matches!(operation, DeltaOperation::Optimize { .. })
+            || !Self::clustered_compaction_scope_applies(snapshot)
+        {
+            return self.can_commit(snapshot, actions, operation);
+        }
+        self.can_commit_with_additional_writer_features(
+            snapshot,
+            actions,
+            operation,
+            CLUSTERED_COMPACTION_FEATURES,
+        )
     }
 }
 
@@ -346,6 +413,19 @@ mod tests {
 
     fn metadata_action(configuration: Option<HashMap<String, Option<String>>>) -> Metadata {
         ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, configuration)
+    }
+
+    async fn writer_feature_snapshot(features: &[TableFeature]) -> DeltaTableState {
+        DeltaTableState::from_actions(vec![
+            Action::Protocol(
+                ProtocolInner::new(1, 7)
+                    .append_writer_features(features)
+                    .as_kernel(),
+            ),
+            metadata_action(None).into(),
+        ])
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -799,6 +879,57 @@ mod tests {
             assert!(checker.can_read_from(eager).is_ok());
             assert!(checker.can_write_to(eager).is_ok());
         }
+    }
+
+    #[tokio::test]
+    async fn test_clustered_compaction_features_are_scoped() {
+        let snapshot =
+            writer_feature_snapshot(&[TableFeature::DomainMetadata, TableFeature::ClusteredTable])
+                .await;
+        let eager = snapshot.snapshot();
+        let checker = ProtocolChecker::new(HashSet::new(), HashSet::new());
+
+        assert!(checker.can_write_to(eager).is_err());
+        assert!(checker.can_write_clustered_compaction(eager).is_ok());
+        let operation = DeltaOperation::Optimize {
+            target_size: 1024,
+            predicate: None,
+        };
+        assert!(checker.can_commit(eager, &[], &operation).is_err());
+        assert!(
+            checker
+                .can_commit_clustered_compaction(eager, &[], &operation)
+                .is_ok()
+        );
+        let append = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+        assert!(
+            checker
+                .can_commit_clustered_compaction(eager, &[], &append)
+                .is_err()
+        );
+
+        let missing_dependency = writer_feature_snapshot(&[TableFeature::ClusteredTable]).await;
+        assert!(
+            checker
+                .can_write_clustered_compaction(missing_dependency.snapshot())
+                .is_err()
+        );
+
+        let snapshot = writer_feature_snapshot(&[
+            TableFeature::DomainMetadata,
+            TableFeature::ClusteredTable,
+            TableFeature::RowTracking,
+        ])
+        .await;
+        assert!(matches!(
+            checker.can_write_clustered_compaction(snapshot.snapshot()),
+            Err(TransactionError::UnsupportedTableFeatures(features))
+                if features == vec![TableFeature::RowTracking]
+        ));
     }
 
     #[tokio::test]

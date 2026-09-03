@@ -20,7 +20,7 @@
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::num::NonZeroU64;
 use std::sync::Arc;
@@ -31,8 +31,8 @@ use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
 use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
-use delta_kernel::expressions::Scalar;
-use delta_kernel::table_features::ColumnMappingMode;
+use delta_kernel::expressions::{ColumnName, Scalar};
+use delta_kernel::table_features::{ColumnMappingMode, TableFeature};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -55,7 +55,9 @@ use crate::delta_datafusion::{
 };
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
-use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
+use crate::kernel::{
+    Action, Add, DataType, PartitionsExt, PrimitiveType, Remove, StructType, Version,
+};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::parquet_utils::default_writer_properties;
@@ -273,6 +275,77 @@ pub enum OptimizeType {
     ZOrder(Vec<String>),
 }
 
+fn is_clustered_table(snapshot: &EagerSnapshot) -> bool {
+    snapshot
+        .protocol()
+        .writer_features()
+        .is_some_and(|features| features.contains(&TableFeature::ClusteredTable))
+}
+
+fn validate_optimize_protocol(
+    snapshot: &EagerSnapshot,
+    optimize_type: &OptimizeType,
+) -> Result<(), DeltaTableError> {
+    if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
+        return Err(DeltaTableError::unsupported_column_mapping(
+            ColumnMappingOperation::Write,
+            "OPTIMIZE",
+        ));
+    }
+    if matches!(optimize_type, OptimizeType::Compact) && is_clustered_table(snapshot) {
+        PROTOCOL.can_write_clustered_compaction(snapshot)?;
+    } else {
+        PROTOCOL.can_write_to(snapshot)?;
+    }
+    Ok(())
+}
+
+fn validate_clustering_columns(
+    schema: &StructType,
+    columns: &[ColumnName],
+) -> Result<(), DeltaTableError> {
+    let mut seen = HashSet::new();
+    for column in columns {
+        if !seen.insert(column) {
+            return Err(DeltaTableError::Generic(format!(
+                "Duplicate clustering column: '{column}'"
+            )));
+        }
+        let field = schema.field_at(column)?;
+        let eligible = matches!(
+            field.data_type(),
+            DataType::Primitive(
+                PrimitiveType::Byte
+                    | PrimitiveType::Short
+                    | PrimitiveType::Integer
+                    | PrimitiveType::Long
+                    | PrimitiveType::Float
+                    | PrimitiveType::Double
+                    | PrimitiveType::Date
+                    | PrimitiveType::Timestamp
+                    | PrimitiveType::TimestampNtz
+                    | PrimitiveType::String
+                    | PrimitiveType::Decimal(_)
+            )
+        );
+        #[cfg(feature = "nanosecond-timestamps")]
+        let eligible = eligible
+            || matches!(
+                field.data_type(),
+                DataType::Primitive(
+                    PrimitiveType::TimestampNanos | PrimitiveType::TimestampNanosNtz
+                )
+            );
+        if !eligible {
+            return Err(DeltaTableError::Generic(format!(
+                "Clustering column '{column}' has unsupported type '{}'",
+                field.data_type()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Optimize a Delta table with given options
 ///
 /// If a target file size is not provided then `delta.targetFileSize` from the
@@ -420,13 +493,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
-            if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
-                return Err(DeltaTableError::unsupported_column_mapping(
-                    ColumnMappingOperation::Write,
-                    "OPTIMIZE",
-                ));
-            }
-            PROTOCOL.can_write_to(&snapshot)?;
+            validate_optimize_protocol(&snapshot, &this.optimize_type)?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -555,6 +622,7 @@ impl Default for OptimizeOperations {
 /// Encapsulates the operations required to optimize a Delta Table
 pub struct MergePlan {
     operations: OptimizeOperations,
+    clustered_compaction_columns: Option<Vec<ColumnName>>,
     /// Metrics collected during operation
     metrics: Metrics,
     /// Planner metadata copied into buffered and total metrics
@@ -609,6 +677,7 @@ pub struct MergeTaskParameters {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    required_stats_columns: Vec<ColumnName>,
 }
 
 /// A stream of record batches, with a ParquetError on failure.
@@ -713,7 +782,8 @@ impl MergePlan {
             writer_config,
             task_parameters.num_indexed_cols,
             task_parameters.stats_columns.clone(),
-        )?;
+        )?
+        .with_required_stats_columns(task_parameters.required_stats_columns.clone());
 
         let mut read_stream = read_stream.await?;
 
@@ -975,9 +1045,13 @@ impl MergePlan {
 
                 debug!("committing {} actions", actions.len());
 
-                let commit = CommitBuilder::from(properties)
+                let mut commit_builder = CommitBuilder::from(properties)
                     .with_actions(actions)
-                    .with_operation_id(operation_id)
+                    .with_operation_id(operation_id);
+                if let Some(columns) = &self.clustered_compaction_columns {
+                    commit_builder = commit_builder.with_clustered_compaction(columns.clone());
+                }
+                let commit = commit_builder
                     .with_post_commit_hook_handler(handle.cloned())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
@@ -1019,6 +1093,30 @@ pub async fn create_merge_plan(
     writer_properties: WriterProperties,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
+    validate_optimize_protocol(snapshot, &optimize_type)?;
+    let clustered_compact =
+        matches!(&optimize_type, OptimizeType::Compact) && is_clustered_table(snapshot);
+    let clustering_columns = if clustered_compact {
+        if !snapshot.metadata().partition_columns().is_empty() {
+            return Err(DeltaTableError::Generic(
+                "Clustered tables must not be partitioned".into(),
+            ));
+        }
+        let engine = log_store.engine(None);
+        let columns = snapshot
+            .snapshot()
+            .inner
+            .get_physical_clustering_columns(engine.as_ref())?
+            .ok_or_else(|| {
+                DeltaTableError::Generic(
+                    "Clustered table is missing active delta.clustering domain metadata".into(),
+                )
+            })?;
+        validate_clustering_columns(snapshot.schema().as_ref(), &columns)?;
+        Some(columns)
+    } else {
+        None
+    };
     let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
     let _ = optimize_target_size_to_i64(target_size)?;
     let partitions_keys = snapshot.metadata().partition_columns();
@@ -1026,7 +1124,8 @@ pub async fn create_merge_plan(
     let (operations, metrics, planner_stats) = match optimize_type {
         OptimizeType::Compact => {
             info!("building compaction plan");
-            build_compaction_plan(log_store, snapshot, filters, target_size).await?
+            build_compaction_plan(log_store, snapshot, filters, target_size, clustered_compact)
+                .await?
         }
         OptimizeType::ZOrder(zorder_columns) => {
             info!("building z-order plan");
@@ -1061,6 +1160,7 @@ pub async fn create_merge_plan(
 
     Ok(MergePlan {
         operations,
+        clustered_compaction_columns: clustering_columns.clone(),
         metrics,
         planner_stats,
         task_parameters: Arc::new(MergeTaskParameters {
@@ -1072,7 +1172,8 @@ pub async fn create_merge_plan(
                 .table_properties()
                 .data_skipping_stats_columns
                 .as_ref()
-                .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+                .map(|columns| columns.iter().map(ToString::to_string).collect()),
+            required_stats_columns: clustering_columns.unwrap_or_default(),
         }),
         read_table_version: snapshot.version(),
         read_session: Arc::new(session),
@@ -1205,6 +1306,7 @@ async fn build_compaction_plan(
     snapshot: &EagerSnapshot,
     filters: &[FilterLiteral<'_>],
     target_size: NonZeroU64,
+    preserve_clustering: bool,
 ) -> Result<(OptimizeOperations, Metrics, PlannerStats), DeltaTableError> {
     type PartitionFileEntry = (IndexMap<String, Scalar>, usize, Vec<OrderedFileCandidate>);
 
@@ -1239,13 +1341,16 @@ async fn build_compaction_plan(
         let stable_ordinal = entry.1;
         entry.1 += 1;
 
-        if object_meta.size > target_size.get() {
+        let add = file.to_add();
+        if (preserve_clustering && add.clustering_provider.is_some())
+            || object_meta.size > target_size.get()
+        {
             metrics.total_files_skipped += 1;
             continue;
         }
 
         entry.2.push(OrderedFileCandidate {
-            add: file.to_add(),
+            add,
             stable_ordinal,
             size_bytes: object_meta.size,
         });
@@ -1384,7 +1489,302 @@ async fn build_zorder_plan(
 #[cfg(test)]
 mod compact_planner_tests {
     use super::*;
+    use crate::kernel::{DomainMetadata, ProtocolExt as _, TableFeatures};
+    use crate::logstore::get_actions;
+    use crate::protocol::SaveMode;
+    use crate::writer::test_utils::TestResult;
+    use crate::writer::test_utils::datafusion::{get_data_sorted, write_batch};
+    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use arrow::util::pretty::pretty_format_batches;
+    use delta_kernel::table_features::TableFeature;
     use std::collections::HashMap;
+
+    fn clustering_domain(configuration: &str, removed: bool) -> DomainMetadata {
+        DomainMetadata {
+            domain: "delta.clustering".to_string(),
+            configuration: configuration.to_string(),
+            removed,
+        }
+    }
+
+    async fn rows(table: &DeltaTable) -> Result<String, Box<dyn std::error::Error + 'static>> {
+        Ok(
+            pretty_format_batches(&get_data_sorted(table, "modified, id, value").await)?
+                .to_string(),
+        )
+    }
+
+    async fn active_adds(
+        table: &DeltaTable,
+    ) -> Result<Vec<Add>, Box<dyn std::error::Error + 'static>> {
+        Ok(table
+            .snapshot()?
+            .snapshot()
+            .file_views(table.log_store().as_ref(), None)
+            .try_collect::<Vec<_>>()
+            .await?
+            .into_iter()
+            .map(|file| file.to_add())
+            .collect())
+    }
+
+    async fn merge_plan(table: &DeltaTable, optimize_type: OptimizeType) -> DeltaResult<MergePlan> {
+        create_merge_plan(
+            table.log_store().as_ref(),
+            optimize_type,
+            table.snapshot()?.snapshot(),
+            &[],
+            None,
+            default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap())),
+            create_session_state_with_spill_config(None, None),
+        )
+        .await
+    }
+
+    async fn table_with_provider_files(
+        provider_indices: &[usize],
+    ) -> Result<DeltaTable, Box<dyn std::error::Error + 'static>> {
+        let mut table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(get_delta_schema().fields().cloned())
+            .with_configuration_property(
+                crate::TableProperty::DataSkippingStatsColumns,
+                Some("modified,value"),
+            )
+            .await?;
+        let batch = get_record_batch(None, false);
+        for index in 0..5 {
+            table = write_batch(table, batch.clone()).await;
+            if provider_indices.contains(&index) {
+                let log_store = table.log_store();
+                let snapshot = table.snapshot()?.snapshot();
+                let mut owned = snapshot
+                    .file_views(log_store.as_ref(), None)
+                    .try_next()
+                    .await?
+                    .expect("write must create a file")
+                    .to_add();
+                owned.data_change = false;
+                owned.clustering_provider = Some("spark".to_string());
+                crate::writer::flush_and_commit(vec![Action::Add(owned)], &mut table, None).await?;
+            }
+        }
+
+        Ok(table)
+    }
+
+    async fn clustered_table_with_domain(
+        provider_indices: &[usize],
+        clustering_domain: Option<DomainMetadata>,
+    ) -> Result<DeltaTable, Box<dyn std::error::Error + 'static>> {
+        let table = table_with_provider_files(provider_indices)
+            .await?
+            .set_tbl_properties()
+            .with_properties(HashMap::from([(
+                crate::TableProperty::DataSkippingStatsColumns
+                    .as_ref()
+                    .to_string(),
+                "modified".to_string(),
+            )]))
+            .await?;
+
+        let log_store = table.log_store();
+        let snapshot = table.snapshot()?.snapshot();
+        let mut actions = vec![Action::Protocol(
+            snapshot.protocol().clone().append_writer_features(&[
+                TableFeature::DomainMetadata,
+                TableFeature::ClusteredTable,
+            ]),
+        )];
+        if let Some(domain) = clustering_domain {
+            actions.push(Action::DomainMetadata(domain));
+        }
+
+        let commit = CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                log_store.clone(),
+                DeltaOperation::AddFeature {
+                    name: vec![TableFeatures::DomainMetadata],
+                },
+            )
+            .await?;
+        Ok(DeltaTable::new_with_state(log_store, commit.snapshot()))
+    }
+
+    async fn clustered_table(
+        provider_indices: &[usize],
+    ) -> Result<DeltaTable, Box<dyn std::error::Error + 'static>> {
+        clustered_table_with_domain(
+            provider_indices,
+            Some(clustering_domain(
+                r#"{"clusteringColumns":[["value"]]}"#,
+                false,
+            )),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_compact_clustered_table_preserves_rows_stats_and_domains() -> TestResult {
+        let table = clustered_table(&[]).await?;
+        let rows_before = rows(&table).await?;
+        let version_before = table.version();
+
+        let (table, metrics) = table.optimize().await?;
+
+        assert_eq!(metrics.num_files_removed, 5);
+        assert_eq!(metrics.num_files_added, 1);
+        assert_eq!(table.version(), version_before.map(|version| version + 1));
+        assert_eq!(rows(&table).await?, rows_before);
+
+        let files = active_adds(&table).await?;
+        assert_eq!(files.len(), 1);
+        let output = &files[0];
+        assert_eq!(output.clustering_provider, None);
+        let stats: serde_json::Value = serde_json::from_str(output.stats.as_deref().unwrap())?;
+        for column in ["modified", "value"] {
+            assert!(stats.pointer(&format!("/minValues/{column}")).is_some());
+            assert!(stats.pointer(&format!("/maxValues/{column}")).is_some());
+            assert!(stats.pointer(&format!("/nullCount/{column}")).is_some());
+        }
+        assert!(stats.pointer("/minValues/id").is_none());
+        assert_eq!(
+            table
+                .snapshot()?
+                .table_config()
+                .data_skipping_stats_columns
+                .as_ref()
+                .map(|columns| columns.iter().map(ToString::to_string).collect::<Vec<_>>()),
+            Some(vec!["modified".to_string()])
+        );
+
+        let version = table.version().unwrap();
+        let bytes = table
+            .log_store()
+            .read_commit_entry(version)
+            .await?
+            .expect("optimize commit must exist");
+        assert!(
+            get_actions(version, &bytes)?
+                .iter()
+                .all(|action| !matches!(action, Action::DomainMetadata(_)))
+        );
+
+        let append = table
+            .write([get_record_batch(None, false)])
+            .with_save_mode(SaveMode::Append)
+            .await;
+        assert!(append.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compact_clustered_table_preserves_provider_owned_file() -> TestResult {
+        let table = clustered_table(&[2]).await?;
+        let rows_before = rows(&table).await?;
+        let files_before = active_adds(&table).await?;
+        let owned_path = files_before
+            .iter()
+            .find(|add| add.clustering_provider.as_deref() == Some("spark"))
+            .expect("fixture must contain one provider-owned file")
+            .path
+            .clone();
+
+        let (table, metrics) = table.optimize().await?;
+
+        assert_eq!(metrics.num_files_removed, 4);
+        assert_eq!(metrics.num_files_added, 2);
+        assert_eq!(metrics.total_files_skipped, 1);
+        assert_eq!(rows(&table).await?, rows_before);
+        let files_after = active_adds(&table).await?;
+        assert_eq!(files_after.len(), 3);
+        assert!(files_after.iter().any(|add| {
+            add.path == owned_path && add.clustering_provider.as_deref() == Some("spark")
+        }));
+        assert_eq!(
+            files_after
+                .iter()
+                .filter(|add| add.clustering_provider.is_none())
+                .count(),
+            2
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compact_clustered_table_with_only_provider_owned_files_is_noop() -> TestResult {
+        let table = clustered_table(&[0, 1, 2, 3, 4]).await?;
+        let version = table.version();
+
+        let (table, metrics) = table.optimize().await?;
+
+        assert_eq!(table.version(), version);
+        assert_eq!(metrics.total_files_skipped, 5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compact_clustered_table_without_active_columns() -> TestResult {
+        let table = clustered_table_with_domain(
+            &[],
+            Some(clustering_domain(r#"{"clusteringColumns":[]}"#, false)),
+        )
+        .await?;
+        let rows_before = rows(&table).await?;
+
+        let (table, metrics) = table.optimize().await?;
+
+        assert_eq!(metrics.num_files_removed, 5);
+        assert_eq!(metrics.num_files_added, 1);
+        assert_eq!(rows(&table).await?, rows_before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compact_non_clustered_table_ignores_clustering_provider() -> TestResult {
+        let table = table_with_provider_files(&[2]).await?;
+
+        let (_, metrics) = table.optimize().await?;
+
+        assert_eq!(metrics.num_files_removed, 5);
+        assert_eq!(metrics.num_files_added, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compact_clustered_table_rejects_invalid_clustering_domains() -> TestResult {
+        let domains = [
+            None,
+            Some(clustering_domain("{", false)),
+            Some(clustering_domain(
+                r#"{"clusteringColumns":[["value"]]}"#,
+                true,
+            )),
+            Some(clustering_domain(
+                r#"{"clusteringColumns":[["missing"]]}"#,
+                false,
+            )),
+        ];
+
+        for domain in domains {
+            let table = clustered_table_with_domain(&[], domain).await?;
+            assert!(merge_plan(&table, OptimizeType::Compact).await.is_err());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_merge_plan_rejects_zorder_for_clustered_table() -> TestResult {
+        let table = clustered_table(&[]).await?;
+        assert!(
+            merge_plan(&table, OptimizeType::ZOrder(vec!["value".to_string()]))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
 
     fn candidate(stable_ordinal: usize, size_bytes: u64) -> OrderedFileCandidate {
         OrderedFileCandidate {
