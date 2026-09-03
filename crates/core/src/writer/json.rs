@@ -408,6 +408,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                     .data_skipping_stats_columns
                     .as_ref()
                     .map(|cols| cols.iter().map(|c| c.to_string()).collect_vec()),
+                &[],
             )?);
         }
         debug!(actions_count = actions.len(), "flush completed");

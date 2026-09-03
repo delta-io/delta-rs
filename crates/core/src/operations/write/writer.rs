@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{ColumnName, Scalar};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use futures::{StreamExt, TryStreamExt};
 use indexmap::IndexMap;
@@ -464,6 +464,7 @@ pub struct PartitionWriter {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    required_stats_columns: Vec<ColumnName>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
 }
 
@@ -487,8 +488,14 @@ impl PartitionWriter {
             part_counter: 0,
             num_indexed_cols,
             stats_columns,
+            required_stats_columns: vec![],
             in_flight_writers: JoinSet::new(),
         })
+    }
+
+    pub(crate) fn with_required_stats_columns(mut self, columns: Vec<ColumnName>) -> Self {
+        self.required_stats_columns = columns;
+        self
     }
 
     fn create_writer(
@@ -625,6 +632,7 @@ impl PartitionWriter {
                     &metadata,
                     self.num_indexed_cols,
                     &self.stats_columns,
+                    &self.required_stats_columns,
                 )
                 .map_err(|err| WriteError::CreateAdd {
                     source: Box::new(err),
