@@ -5,6 +5,7 @@ use arrow::{
     datatypes::Int64Type,
 };
 use delta_kernel::{actions::Remove, schema::ToSchema};
+use object_store::path::{Path, PathPart};
 use percent_encoding::percent_decode_str;
 
 use crate::kernel::snapshot::iterators::get_string_value;
@@ -32,6 +33,15 @@ impl TombstoneView {
         let raw = get_string_value(self.data.column(*FIELD_INDEX), self.index)
             .expect("valid string field");
         percent_decode_str(raw).decode_utf8_lossy()
+    }
+
+    /// Returns an object store path using the same decoded representation as logical files.
+    pub(crate) fn object_store_path(&self) -> Path {
+        let path = self.path();
+        path.as_ref()
+            .split('/')
+            .map(|segment| PathPart::parse(segment).unwrap_or_else(|_| PathPart::from(segment)))
+            .collect()
     }
 
     /// Returns the deletion timestamp (milliseconds since epoch), if recorded.
@@ -70,5 +80,82 @@ impl TombstoneView {
             .column(*FIELD_INDEX)
             .as_primitive_opt::<Int64Type>()
             .map(|a| a.value(self.index))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::{
+        array::{ArrayRef, BooleanArray, StringArray, new_null_array},
+        datatypes::Schema,
+    };
+    use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
+    use delta_kernel::scan::scan_row_schema;
+    use std::sync::Arc;
+
+    fn tombstone_view(raw_path: &str) -> TombstoneView {
+        let kernel_schema = Remove::to_schema();
+        let schema: Schema = (&kernel_schema).try_into_arrow().unwrap();
+        let mut columns: Vec<ArrayRef> = schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 1))
+            .collect();
+        columns[schema.index_of("path").unwrap()] =
+            Arc::new(StringArray::from(vec![Some(raw_path)]));
+        columns[schema.index_of("dataChange").unwrap()] =
+            Arc::new(BooleanArray::from(vec![Some(true)]));
+
+        let batch = RecordBatch::try_new(Arc::new(schema), columns).unwrap();
+        TombstoneView::new(batch, 0)
+    }
+
+    #[test]
+    fn object_store_path_matches_logical_file_view() {
+        let raw_path = "part=a%20b/file.parquet";
+        let view = tombstone_view(raw_path);
+
+        assert_eq!(view.path(), "part=a b/file.parquet");
+        let expected = Path::parse(view.path().as_ref()).unwrap();
+        assert_eq!(view.object_store_path(), expected);
+        assert_eq!(view.object_store_path().as_ref(), "part=a b/file.parquet");
+
+        let logical_schema: Schema = scan_row_schema().as_ref().try_into_arrow().unwrap();
+        let mut logical_columns: Vec<ArrayRef> = logical_schema
+            .fields()
+            .iter()
+            .map(|field| new_null_array(field.data_type(), 1))
+            .collect();
+        logical_columns[logical_schema.index_of("path").unwrap()] =
+            Arc::new(StringArray::from(vec![Some(raw_path)]));
+        logical_columns[logical_schema.index_of("size").unwrap()] =
+            Arc::new(arrow::array::Int64Array::from(vec![Some(1)]));
+        logical_columns[logical_schema.index_of("modificationTime").unwrap()] =
+            Arc::new(arrow::array::Int64Array::from(vec![Some(1)]));
+        let logical_batch =
+            RecordBatch::try_new(Arc::new(logical_schema), logical_columns).unwrap();
+        let logical_view =
+            crate::kernel::snapshot::iterators::LogicalFileView::new(logical_batch, 0);
+        assert_eq!(view.object_store_path(), logical_view.object_store_path());
+    }
+
+    #[test]
+    fn object_store_path_falls_back_for_invalid_path() {
+        let view = tombstone_view("valid/../file.parquet");
+
+        assert!(Path::parse(view.path().as_ref()).is_err());
+        assert_eq!(
+            view.object_store_path().as_ref(),
+            "valid/%2E%2E/file.parquet"
+        );
+    }
+
+    #[test]
+    fn object_store_path_preserves_percent_encoding() {
+        let view = tombstone_view("part=a%2520b/file.parquet");
+
+        assert_eq!(view.path(), "part=a%20b/file.parquet");
+        assert_eq!(view.object_store_path().as_ref(), "part=a%20b/file.parquet");
     }
 }
