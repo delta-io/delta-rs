@@ -37,10 +37,10 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
-    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, ProtocolExt as _, ProtocolInner,
-    Remove, Version, resolve_snapshot,
+    Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView,
+    ProtocolExt as _, ProtocolInner, Remove, Snapshot, Version, resolve_snapshot,
 };
-use crate::logstore::LogStoreRef;
+use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
@@ -158,6 +158,77 @@ impl RestoreBuilder {
     }
 }
 
+async fn plan_restore_file_changes(
+    log_store: &dyn LogStore,
+    current: &Snapshot,
+    target: &Snapshot,
+    deletion_timestamp: i64,
+) -> DeltaResult<(Vec<Add>, Vec<Remove>)> {
+    let target_files: Vec<_> = target
+        .active_adds(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::RawJson,
+            },
+        )
+        .try_collect()
+        .await?;
+    let current_files: Vec<_> = current
+        .active_adds(
+            log_store,
+            ActiveAddOptions {
+                predicate: None,
+                stats: AddStatsPolicy::None,
+            },
+        )
+        .try_collect()
+        .await?;
+    let target_keys = HashSet::<_>::from_iter(target_files.iter().map(restore_file_key));
+    let current_keys = HashSet::<_>::from_iter(current_files.iter().map(restore_file_key));
+
+    let files_to_add = target_files
+        .iter()
+        .filter(|file| !current_keys.contains(&restore_file_key(file)))
+        .map(|file| {
+            let mut add = file.to_add();
+            add.data_change = true;
+            add
+        })
+        .collect();
+    let files_to_remove = current_files
+        .iter()
+        .filter(|file| !target_keys.contains(&restore_file_key(file)))
+        .map(|file| {
+            let add = file.to_add();
+            let mut remove = file.remove_action(true);
+            remove.deletion_timestamp = Some(deletion_timestamp);
+            remove.tags = add.tags;
+            remove.base_row_id = add.base_row_id;
+            remove.default_row_commit_version = add.default_row_commit_version;
+            remove
+        })
+        .collect();
+
+    Ok((files_to_add, files_to_remove))
+}
+
+fn restore_file_key(file: &LogicalFileView) -> (Path, Option<String>) {
+    let deletion_vector_id =
+        file.deletion_vector_descriptor()
+            .map(|deletion_vector| match deletion_vector.offset {
+                Some(offset) => format!(
+                    "{}{}@{offset}",
+                    deletion_vector.storage_type, deletion_vector.path_or_inline_dv
+                ),
+                None => format!(
+                    "{}{}",
+                    deletion_vector.storage_type, deletion_vector.path_or_inline_dv
+                ),
+            });
+    (file.object_store_path(), deletion_vector_id)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     log_store: LogStoreRef,
@@ -178,82 +249,39 @@ async fn execute(
     }
     let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
 
-    let version = match datetime_to_restore {
+    match datetime_to_restore {
         Some(datetime) => {
             table.load_with_datetime(datetime).await?;
-            table
-                .version()
-                .ok_or_else(|| DeltaTableError::NotInitialized)?
         }
         None => {
             table.load_version(version_to_restore.unwrap()).await?;
-            table
-                .version()
-                .ok_or_else(|| DeltaTableError::NotInitialized)?
         }
-    };
-
-    if version >= snapshot.version() {
-        return Err(DeltaTableError::from(RestoreError::TooLargeRestoreVersion(
-            version,
-            snapshot.version(),
-        )));
     }
 
+    let current_snapshot: &Snapshot = snapshot.snapshot();
     let snapshot_restored = table.snapshot()?;
-    let metadata_restored_version = snapshot_restored.metadata();
+    let target_snapshot: &Snapshot = snapshot_restored.snapshot().snapshot();
+    let version = target_snapshot.version();
 
-    let state_to_restore_files: Vec<_> = snapshot_restored
-        .snapshot()
-        .snapshot()
-        .active_adds(
-            log_store.as_ref(),
-            ActiveAddOptions {
-                predicate: None,
-                stats: AddStatsPolicy::None,
-            },
-        )
-        .try_collect()
-        .await?;
-    let latest_state_files: Vec<_> = snapshot
-        .snapshot()
-        .active_adds(
-            log_store.as_ref(),
-            ActiveAddOptions {
-                predicate: None,
-                stats: AddStatsPolicy::None,
-            },
-        )
-        .try_collect()
-        .await?;
-    let state_to_restore_files_set =
-        HashSet::<_>::from_iter(state_to_restore_files.iter().map(|f| f.path().to_string()));
-    let latest_state_files_set =
-        HashSet::<_>::from_iter(latest_state_files.iter().map(|f| f.path().to_string()));
-
-    let files_to_add: Vec<Add> = state_to_restore_files
-        .iter()
-        .filter(|a| !latest_state_files_set.contains(&a.path().to_string()))
-        .map(|f| {
-            let mut a = f.to_add();
-            a.data_change = true;
-            a
-        })
-        .collect();
+    if version >= current_snapshot.version() {
+        return Err(DeltaTableError::from(RestoreError::TooLargeRestoreVersion(
+            version,
+            current_snapshot.version(),
+        )));
+    }
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
-    let files_to_remove: Vec<Remove> = latest_state_files
-        .iter()
-        .filter(|f| !state_to_restore_files_set.contains(&f.path().to_string()))
-        .map(|f| {
-            let mut rm = f.remove_action(true);
-            rm.deletion_timestamp = Some(deletion_timestamp);
-            rm
-        })
-        .collect();
+    let (files_to_add, files_to_remove) = plan_restore_file_changes(
+        log_store.as_ref(),
+        current_snapshot,
+        target_snapshot,
+        deletion_timestamp,
+    )
+    .await?;
+    let metadata_restored_version = target_snapshot.metadata();
 
     if !ignore_missing_files {
         check_files_available(log_store.object_store(None).as_ref(), &files_to_add).await?;
@@ -267,36 +295,36 @@ async fn execute(
     let mut actions = vec![];
     let protocol = if protocol_downgrade_allowed {
         ProtocolInner {
-            min_reader_version: snapshot_restored.protocol().min_reader_version(),
-            min_writer_version: snapshot_restored.protocol().min_writer_version(),
-            writer_features: if snapshot.protocol().min_writer_version() < 7 {
+            min_reader_version: target_snapshot.protocol().min_reader_version(),
+            min_writer_version: target_snapshot.protocol().min_writer_version(),
+            writer_features: if current_snapshot.protocol().min_writer_version() < 7 {
                 None
             } else {
-                snapshot_restored.protocol().writer_features_set()
+                target_snapshot.protocol().writer_features_set()
             },
-            reader_features: if snapshot.protocol().min_reader_version() < 3 {
+            reader_features: if current_snapshot.protocol().min_reader_version() < 3 {
                 None
             } else {
-                snapshot_restored.protocol().reader_features_set()
+                target_snapshot.protocol().reader_features_set()
             },
         }
     } else {
         ProtocolInner {
             min_reader_version: max(
-                snapshot_restored.protocol().min_reader_version(),
-                snapshot.protocol().min_reader_version(),
+                target_snapshot.protocol().min_reader_version(),
+                current_snapshot.protocol().min_reader_version(),
             ),
             min_writer_version: max(
-                snapshot_restored.protocol().min_writer_version(),
-                snapshot.protocol().min_writer_version(),
+                target_snapshot.protocol().min_writer_version(),
+                current_snapshot.protocol().min_writer_version(),
             ),
-            writer_features: snapshot.protocol().writer_features_set(),
-            reader_features: snapshot.protocol().reader_features_set(),
+            writer_features: current_snapshot.protocol().writer_features_set(),
+            reader_features: current_snapshot.protocol().reader_features_set(),
         }
     };
     commit_properties
         .app_metadata
-        .insert("readVersion".to_owned(), snapshot.version().into());
+        .insert("readVersion".to_owned(), current_snapshot.version().into());
     commit_properties.app_metadata.insert(
         "operationMetrics".to_owned(),
         serde_json::to_value(&metrics)?,
@@ -384,14 +412,254 @@ impl std::future::IntoFuture for RestoreBuilder {
 }
 
 #[cfg(test)]
-#[cfg(feature = "datafusion")]
 mod tests {
+    use std::collections::HashMap;
 
-    use crate::DeltaResult;
+    use super::*;
+    use crate::kernel::{
+        DataType, DeletionVectorDescriptor, PrimitiveType, Snapshot, StorageType, StructField,
+    };
+    use crate::protocol::SaveMode;
+    #[cfg(feature = "datafusion")]
     use crate::writer::test_utils::{create_bare_table, get_record_batch};
+    use crate::{DeltaResult, TableProperty};
+
+    async fn commit_actions(table: &DeltaTable, actions: Vec<Action>) -> DeltaResult<()> {
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(table.snapshot()?),
+                table.log_store(),
+                DeltaOperation::Write {
+                    mode: SaveMode::Append,
+                    partition_by: None,
+                    predicate: None,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn metadata_rich_restore_table() -> DeltaResult<(DeltaTable, Add, Add)> {
+        let mut target_add = crate::test_utils::make_test_add(
+            "part=a/metadata-rich.parquet",
+            &[("part", "a")],
+            1_725_000_000_000,
+        );
+        target_add.size = 1234;
+        target_add.stats = Some(
+            r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
+        target_add.tags = Some(HashMap::from([
+            ("source".to_string(), Some("restore-target".to_string())),
+            ("nullable-tag".to_string(), None),
+        ]));
+        target_add.deletion_vector = Some(DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "AAAA".to_string(),
+            offset: None,
+            size_in_bytes: 0,
+            cardinality: 2,
+        });
+        target_add.base_row_id = Some(41);
+        target_add.default_row_commit_version = Some(3);
+        target_add.clustering_provider = Some("liquid".to_string());
+
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns(vec![
+                StructField::new(
+                    "id".to_string(),
+                    DataType::Primitive(PrimitiveType::Integer),
+                    false,
+                ),
+                StructField::new(
+                    "part".to_string(),
+                    DataType::Primitive(PrimitiveType::String),
+                    false,
+                ),
+            ])
+            .with_partition_columns(["part"])
+            .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+            .with_actions([Action::Add(target_add.clone())])
+            .await?;
+
+        let remove_target = Remove {
+            path: target_add.path.clone(),
+            data_change: true,
+            deletion_timestamp: Some(1_725_000_001_000),
+            extended_file_metadata: Some(true),
+            partition_values: Some(target_add.partition_values.clone()),
+            size: Some(target_add.size),
+            tags: target_add.tags.clone(),
+            deletion_vector: target_add.deletion_vector.clone(),
+            base_row_id: target_add.base_row_id,
+            default_row_commit_version: target_add.default_row_commit_version,
+        };
+        let mut current_add = crate::test_utils::make_test_add(
+            target_add.path.clone(),
+            &[("part", "a")],
+            1_725_000_002_000,
+        );
+        current_add.size = target_add.size;
+        current_add.stats = Some(
+            r#"{"numRecords":5,"minValues":{"id":1},"maxValues":{"id":5},"nullCount":{"id":0}}"#
+                .to_string(),
+        );
+        current_add.tags = Some(HashMap::from([
+            ("source".to_string(), Some("restore-current".to_string())),
+            ("nullable-tag".to_string(), None),
+        ]));
+        current_add.deletion_vector = Some(DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "BBBB".to_string(),
+            offset: None,
+            size_in_bytes: 0,
+            cardinality: 1,
+        });
+        current_add.base_row_id = Some(84);
+        current_add.default_row_commit_version = Some(4);
+        commit_actions(
+            &table,
+            vec![
+                Action::Remove(remove_target),
+                Action::Add(current_add.clone()),
+            ],
+        )
+        .await?;
+
+        Ok((table, target_add, current_add))
+    }
+
+    fn no_stats_config(require_files: bool) -> DeltaTableConfig {
+        DeltaTableConfig {
+            require_files,
+            skip_stats: true,
+            ..Default::default()
+        }
+    }
+
+    fn normalize_adds(mut adds: Vec<Add>) -> DeltaResult<Vec<serde_json::Value>> {
+        adds.sort_by(|left, right| left.path.cmp(&right.path));
+        adds.into_iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    fn normalize_removes(mut removes: Vec<Remove>) -> DeltaResult<Vec<serde_json::Value>> {
+        removes.sort_by(|left, right| left.path.cmp(&right.path));
+        removes
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
+    #[tokio::test]
+    async fn restore_plan_lazy_eager_parity_preserves_complete_actions() -> DeltaResult<()> {
+        let (table, target_add, current_add) = metadata_rich_restore_table().await?;
+        let log_store = table.log_store();
+        let eager_current =
+            EagerSnapshot::try_new(log_store.as_ref(), no_stats_config(true), None).await?;
+        let eager_target =
+            EagerSnapshot::try_new(log_store.as_ref(), no_stats_config(true), Some(0)).await?;
+        let lazy_current =
+            Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
+        let lazy_target =
+            Snapshot::try_new(log_store.as_ref(), no_stats_config(false), Some(0)).await?;
+        let deletion_timestamp = 1_725_000_003_000;
+
+        assert!(!lazy_current.has_materialized_files_for_test());
+        assert!(!lazy_target.has_materialized_files_for_test());
+        let (eager_adds, eager_removes) = plan_restore_file_changes(
+            log_store.as_ref(),
+            eager_current.snapshot(),
+            eager_target.snapshot(),
+            deletion_timestamp,
+        )
+        .await?;
+        let (lazy_adds, lazy_removes) = plan_restore_file_changes(
+            log_store.as_ref(),
+            &lazy_current,
+            &lazy_target,
+            deletion_timestamp,
+        )
+        .await?;
+
+        let lazy_adds = normalize_adds(lazy_adds)?;
+        assert_eq!(normalize_adds(eager_adds)?, lazy_adds);
+        assert_eq!(lazy_adds, vec![serde_json::to_value(target_add)?]);
+        assert_eq!(
+            normalize_removes(eager_removes)?,
+            normalize_removes(lazy_removes.clone())?
+        );
+        let expected_remove = Remove {
+            path: current_add.path,
+            data_change: true,
+            deletion_timestamp: Some(deletion_timestamp),
+            extended_file_metadata: Some(true),
+            partition_values: Some(current_add.partition_values),
+            size: Some(current_add.size),
+            tags: current_add.tags,
+            deletion_vector: current_add.deletion_vector,
+            base_row_id: current_add.base_row_id,
+            default_row_commit_version: current_add.default_row_commit_version,
+        };
+        assert_eq!(
+            normalize_removes(lazy_removes)?,
+            vec![serde_json::to_value(expected_remove)?]
+        );
+        assert!(!lazy_current.has_materialized_files_for_test());
+        assert!(!lazy_target.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_plan_to_metadata_only_version_removes_current_file() -> DeltaResult<()> {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new(
+                "id".to_string(),
+                DataType::Primitive(PrimitiveType::Integer),
+                false,
+            )])
+            .await?;
+        commit_actions(
+            &table,
+            vec![Action::Add(crate::test_utils::make_test_add(
+                "current.parquet",
+                &[],
+                1_725_000_000_000,
+            ))],
+        )
+        .await?;
+        let log_store = table.log_store();
+        let current = Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
+        let target = Snapshot::try_new(log_store.as_ref(), no_stats_config(false), Some(0)).await?;
+
+        assert_eq!(target.version(), 0);
+        assert_eq!(current.version(), 1);
+        assert!(!current.has_materialized_files_for_test());
+        assert!(!target.has_materialized_files_for_test());
+        let (adds, removes) =
+            plan_restore_file_changes(log_store.as_ref(), &current, &target, 123).await?;
+
+        assert!(adds.is_empty());
+        assert_eq!(removes.len(), 1);
+        assert_eq!(removes[0].path, "current.parquet");
+        assert_eq!(removes[0].deletion_timestamp, Some(123));
+        assert!(!current.has_materialized_files_for_test());
+        assert!(!target.has_materialized_files_for_test());
+
+        Ok(())
+    }
 
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn test_simple_restore_constraints() -> DeltaResult<()> {
         use crate::table::config::TablePropertiesExt as _;
