@@ -91,7 +91,10 @@ impl ParquetFileReaderFactory for BoundParquetReaderFactory {
         let Some((expected, count)) = self.files.get(&file.object_meta.location) else {
             return plan_err!("unplanned file in bound Parquet reader");
         };
-        if &file.object_meta != expected || !file.extensions.is_empty() {
+        if &file.object_meta != expected
+            || !file.extensions.is_empty()
+            || file.arrow_schema.is_some()
+        {
             return plan_err!(
                 "changed file metadata or reader-affecting extensions in bound Parquet reader"
             );

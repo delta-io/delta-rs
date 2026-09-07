@@ -111,6 +111,62 @@ impl Fixture {
         Url::from_directory_path(self.directory.path()).unwrap()
     }
 
+    /// Rewrite only the footer, as a writer that omits the optional ordinals would.
+    pub fn remove_row_group_ordinals(&mut self, file_id: usize) -> FixtureResult<()> {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+        use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataWriter, RowGroupMetaData};
+        use parquet::file::writer::TrackedWrite;
+        use std::io::Write;
+
+        let path = self
+            .directory
+            .path()
+            .join(format!("part-{file_id}.parquet"));
+        let bytes = fs::read(&path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes.clone()))?;
+        let original = reader.metadata();
+        let groups = original
+            .row_groups()
+            .iter()
+            .map(|group| {
+                let mut builder = RowGroupMetaData::builder(group.schema_descr_ptr())
+                    .set_column_metadata(group.columns().to_vec())
+                    .set_num_rows(group.num_rows())
+                    .set_total_byte_size(group.total_byte_size())
+                    .set_sorting_columns(group.sorting_columns().cloned());
+                if let Some(offset) = group.file_offset() {
+                    builder = builder.set_file_offset(offset);
+                }
+                builder.build()
+            })
+            .collect::<parquet::errors::Result<Vec<_>>>()?;
+        assert!(groups.iter().all(|group| group.ordinal().is_none()));
+        let metadata = ParquetMetaData::new(original.file_metadata().clone(), groups);
+        let footer_len =
+            u32::from_le_bytes(bytes[bytes.len() - 8..bytes.len() - 4].try_into()?) as usize;
+        let mut rewritten = Vec::new();
+        let mut output = TrackedWrite::new(&mut rewritten);
+        output.write_all(&bytes[..bytes.len() - 8 - footer_len])?;
+        ParquetMetaDataWriter::new_with_tracked(output, &metadata).finish()?;
+        fs::write(path, &rewritten)?;
+        self.adds[file_id]["size"] = json!(rewritten.len());
+        let log = self
+            .directory
+            .path()
+            .join("_delta_log/00000000000000000000.json");
+        let mut actions = fs::read_to_string(&log)?
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        let path = format!("part-{file_id}.parquet");
+        for action in &mut actions {
+            if action.get("add").and_then(|add| add["path"].as_str()) == Some(&path) {
+                action["add"] = self.adds[file_id].clone();
+            }
+        }
+        self.write_log(0, actions)
+    }
+
     pub fn live_coordinates(&self) -> Vec<(usize, u64, i64, i64)> {
         self.coordinates
             .iter()
@@ -178,5 +234,104 @@ impl Fixture {
                 .join("\n"),
         )?;
         Ok(())
+    }
+}
+
+/// Pause real Parquet object-store requests until their futures are cancelled.
+#[derive(Debug)]
+pub struct PausedStore {
+    inner: Arc<dyn object_store::ObjectStore>,
+    pub paused: std::sync::atomic::AtomicBool,
+    pub active: std::sync::atomic::AtomicUsize,
+    pub entered: tokio::sync::Notify,
+    pub changed: tokio::sync::Notify,
+}
+
+impl PausedStore {
+    pub fn new(inner: Arc<dyn object_store::ObjectStore>) -> Self {
+        Self {
+            inner,
+            paused: false.into(),
+            active: 0.into(),
+            entered: Default::default(),
+            changed: Default::default(),
+        }
+    }
+}
+
+impl std::fmt::Display for PausedStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "paused test store")
+    }
+}
+
+struct PendingRead<'a>(&'a PausedStore);
+impl Drop for PendingRead<'_> {
+    fn drop(&mut self) {
+        self.0
+            .active
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.changed.notify_one();
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for PausedStore {
+    async fn get_opts(
+        &self,
+        path: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        use std::sync::atomic::Ordering;
+        self.active.fetch_add(1, Ordering::SeqCst);
+        let _pending = PendingRead(self);
+        if path.as_ref().ends_with(".parquet")
+            && self.paused.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            std::future::pending::<()>().await;
+        }
+        self.inner.get_opts(path, options).await
+    }
+    async fn put_opts(
+        &self,
+        path: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        options: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        self.inner.put_opts(path, payload, options).await
+    }
+    async fn put_multipart_opts(
+        &self,
+        path: &object_store::path::Path,
+        options: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_opts(path, options).await
+    }
+    fn delete_stream(
+        &self,
+        paths: futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>>,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
+        self.inner.delete_stream(paths)
+    }
+    fn list(
+        &self,
+        path: Option<&object_store::path::Path>,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.inner.list(path)
+    }
+    async fn list_with_delimiter(
+        &self,
+        path: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(path).await
+    }
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 }

@@ -345,7 +345,13 @@ impl DeltaScanExec {
                     if planned_file.partition_values != file.partition_values {
                         return plan_err!("unplanned partition constants");
                     }
-                    if planned_file.object_meta != file.object_meta {
+                    if planned_file.object_meta != file.object_meta
+                        || planned_file.arrow_schema != file.arrow_schema
+                        || planned_file.statistics != file.statistics
+                        || planned_file.ordering != file.ordering
+                        || planned_file.metadata_size_hint != file.metadata_size_hint
+                        || planned_file.table_reference != file.table_reference
+                    {
                         return plan_err!("immutable planned file metadata changed");
                     }
                     if file.range.is_some() {
@@ -2047,6 +2053,38 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("DataSourceExec must hold a parquet FileScanConfig");
 
+        for change in ["schema", "statistics", "ordering", "hint"] {
+            let mut groups = config
+                .file_groups
+                .iter()
+                .map(|group| group.iter().cloned().collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let file = &mut groups[0][0];
+            match change {
+                "schema" => file.arrow_schema = Some(Arc::new(arrow_schema::Schema::empty())),
+                "statistics" => file.statistics = None,
+                "ordering" => {
+                    file.ordering = Some(
+                        datafusion::physical_expr::LexOrdering::new(vec![
+                            datafusion::physical_expr::PhysicalSortExpr::new_default(Arc::new(
+                                Column::new("value", 0),
+                            )),
+                        ])
+                        .unwrap(),
+                    )
+                }
+                _ => file.metadata_size_hint = Some(1),
+            }
+            let replacement = DataSourceExec::from_data_source(
+                FileScanConfigBuilder::from(config.clone())
+                    .with_file_groups(groups.into_iter().map(FileGroup::new).collect())
+                    .build(),
+            );
+            #[expect(deprecated, reason = "qualify both supported child-replacement APIs")]
+            let replaced = Arc::new(exec.clone()).with_new_children(vec![replacement]);
+            assert!(replaced.is_err(), "must reject changed per-file {change}");
+        }
+
         let mut fragment = config.file_groups[0][0].clone();
         fragment.range = Some(FileRange {
             start: 0,
@@ -2415,6 +2453,157 @@ mod tests {
             fixture_rows(&collect(first_plan, session.task_ctx()).await?),
             expected_first
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_cancellation_after_partial_consumption_preserves_visibility() -> TestResult {
+        use super::super::test_support::{FileSpec, Fixture};
+        use datafusion::physical_plan::execution_plan::reset_plan_states;
+        let fixture = Fixture::new(
+            vec![FileSpec {
+                rows: 161,
+                groups: vec![37, 53, 71],
+                deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
+                log_stats: true,
+            }],
+            8,
+        )?;
+        let table = crate::open_table(fixture.url()).await?;
+        let session = datafusion::prelude::SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(7),
+        );
+        session.register_table("t", table.table_provider().await?)?;
+        let plan = session
+            .sql("select * from t")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let expected = fixture
+            .live_coordinates()
+            .into_iter()
+            .map(|r| (r.2, r.3))
+            .collect::<Vec<_>>();
+        let mut cancelled = plan.execute(0, session.task_ctx())?;
+        let first = cancelled.next().await.unwrap()?;
+        assert!(first.num_rows() > 0 && first.num_rows() < expected.len());
+        assert!(
+            first.num_rows() <= 7,
+            "fixture must force multiple output batches"
+        );
+        drop(cancelled);
+        assert_eq!(
+            fixture_rows(&collect(reset_plan_states(plan.clone())?, session.task_ctx()).await?),
+            expected
+        );
+        assert_eq!(
+            fixture_rows(&collect(plan, session.task_ctx()).await?),
+            expected
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_cancellation_during_pending_object_store_read() -> TestResult {
+        use super::super::test_support::{FileSpec, Fixture, PausedStore};
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+        let fixture = Fixture::new(
+            vec![FileSpec {
+                rows: 161,
+                groups: vec![37, 53, 71],
+                deleted: Some([0, 37, 90].into_iter().collect()),
+                log_stats: true,
+            }],
+            8,
+        )?;
+        let store = Arc::new(PausedStore::new(Arc::new(
+            object_store::local::LocalFileSystem::new(),
+        )));
+        let table = crate::DeltaTableBuilder::from_url(fixture.url())?
+            .with_storage_backend(store.clone(), fixture.url())
+            .load()
+            .await?;
+        let session = datafusion::prelude::SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(7),
+        );
+        session
+            .runtime_env()
+            .register_object_store(&url::Url::parse("file:///")?, store.clone());
+        let plan = table
+            .table_provider()
+            .await?
+            .scan(&session.state(), None, &[], None)
+            .await?;
+        store.paused.store(true, Ordering::SeqCst);
+        let mut cancelled = plan.execute(0, session.task_ctx())?;
+        let mut next = Box::pin(cancelled.next());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = store.entered.notified() => {},
+                result = &mut next => panic!("read completed before cancellation: {result:?}"),
+            }
+        })
+        .await?;
+        assert_eq!(store.active.load(Ordering::SeqCst), 1);
+        drop(next);
+        drop(cancelled);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = store.changed.notified();
+                if store.active.load(Ordering::SeqCst) == 0 {
+                    break;
+                }
+                changed.await;
+            }
+        })
+        .await?;
+        store.paused.store(false, Ordering::SeqCst);
+        let expected = fixture
+            .live_coordinates()
+            .into_iter()
+            .map(|r| (r.2, r.3))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixture_rows(&collect(plan, session.task_ctx()).await?),
+            expected
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_scan_without_on_disk_row_group_ordinals() -> TestResult {
+        use super::super::test_support::{FileSpec, Fixture};
+        let mut fixture = Fixture::new(
+            vec![FileSpec {
+                rows: 161,
+                groups: vec![37, 53, 71],
+                deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
+                log_stats: true,
+            }],
+            8,
+        )?;
+        fixture.remove_row_group_ordinals(0)?;
+        let expected = fixture
+            .live_coordinates()
+            .into_iter()
+            .map(|r| (r.2, r.3))
+            .collect::<Vec<_>>();
+        let table = crate::open_table(fixture.url()).await?;
+        for batch_size in [1, 7, 8192] {
+            let session = datafusion::prelude::SessionContext::new_with_config(
+                SessionConfig::new().with_batch_size(batch_size),
+            );
+            let plan = table
+                .table_provider()
+                .await?
+                .scan(&session.state(), None, &[], None)
+                .await?;
+            assert_eq!(
+                fixture_rows(&collect(plan, session.task_ctx()).await?),
+                expected
+            );
+        }
         Ok(())
     }
 
