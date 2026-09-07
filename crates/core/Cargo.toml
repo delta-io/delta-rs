@@ -159,3 +159,8 @@ harness = false
 
 [package.metadata.cargo-machete]
 ignored = ["foyer", "alloc-stdlib", "brotli-decompressor"]
+
+[[bench]]
+name = "dv_physical_position"
+harness = false
+required-features = ["datafusion"]

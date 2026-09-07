@@ -62,13 +62,11 @@ pin_project! {
     /// [`ScanFileContext`] entries enriched with:
     ///
     /// - **File statistics**: Row counts, min/max values, null counts
-    /// - **Deletion vectors**: Asynchronously loaded and cached
+    /// - **Deletion vectors**: Expected descriptors captured before loading
     /// - **Partition values**: Extracted from file metadata
     /// - **Transforms**: Column mapping expressions for physical-to-logical translation
     pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
-
-        engine: Arc<dyn Engine>,
 
         table_root: Url,
 
@@ -78,16 +76,57 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
-
         #[pin]
         stream: S,
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct LoadedDeletionVector {
+    pub selected_id: usize,
+    pub descriptor: DvInfo,
+    pub file_url: Url,
+    pub keep_mask: Option<Vec<bool>>,
+    pub num_records: Option<u64>,
+    pub deleted_cardinality: Option<u64>,
+}
+
+/// Start loads only after the caller captures the complete selected population.
+pub(super) fn load_deletion_vectors(
+    engine: Arc<dyn Engine>,
+    table_root: &Url,
+    files: &[ScanFileContext],
+) -> ReceiverStreamBuilder<LoadedDeletionVector> {
+    let mut stream = ReceiverStreamBuilder::new(100);
+    for (selected_id, file) in files.iter().enumerate() {
+        if !file.expected_dv.has_vector() {
+            continue;
+        }
+        let engine = engine.clone();
+        let descriptor = file.expected_dv.clone();
+        let file_url = file.file_url.clone();
+        let num_records = file.num_records;
+        let deleted_cardinality = file.dv_cardinality;
+        let table_root = table_root.clone();
+        let tx = stream.tx();
+        stream.spawn_blocking(move || {
+            let keep_mask = descriptor.get_selection_vector(engine.as_ref(), &table_root)?;
+            let _ = tx.blocking_send(Ok(LoadedDeletionVector {
+                selected_id,
+                descriptor,
+                file_url,
+                keep_mask,
+                num_records,
+                deleted_cardinality,
+            }));
+            Ok(())
+        });
+    }
+    stream
+}
+
 impl<'a, S> ScanFileStream<'a, S> {
     pub(crate) fn new(
-        engine: Arc<dyn Engine>,
         scan: &Arc<Scan>,
         scan_config: DeltaScanConfig,
         file_selection: Option<&'a HashSet<String>>,
@@ -95,8 +134,6 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
-            engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
             stream,
@@ -135,7 +172,7 @@ where
                     scan_data
                 };
 
-                let ctx = match scan_data
+                let mut ctx = match scan_data
                     .visit_scan_files(ScanContext::new(this.table_root.clone()), visit_scan_file)
                     .map_err(|err| DataFusionError::from(DeltaTableError::from(err)))
                     .and_then(ScanContext::error_or)
@@ -144,31 +181,36 @@ where
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
 
-                // Spawn tasks to read the deletion vectors from disk.
-                for file in &ctx.files {
-                    if file.dv_info.has_vector() {
-                        let engine = this.engine.clone();
-                        let dv_info = file.dv_info.clone();
-                        let file_url = file.file_url.clone();
-                        let num_records = file.num_records;
-                        let table_root = this.table_root.clone();
-                        let tx = this.dv_stream.tx();
-
-                        let load_dv = move || {
-                            let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
-                            Ok(())
-                        };
-                        this.dv_stream.spawn_blocking(load_dv);
-                    }
-                }
-
                 this.metrics.num_scanned += ctx.count;
 
                 let (data, selection_vector) = scan_data.scan_files.into_parts();
                 let batch = ArrowEngineData::try_from_engine_data(data)?.into();
                 let scan_files =
                     filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
+
+                if ctx.files.len() != scan_files.num_rows() {
+                    return Poll::Ready(Some(Err(DeltaTableError::from(
+                        DataFusionError::Internal(format!(
+                            "scan replay produced {} file contexts for {} selected metadata rows",
+                            ctx.files.len(),
+                            scan_files.num_rows()
+                        )),
+                    ))));
+                }
+
+                for (file, row) in ctx.files.iter_mut().zip(0..scan_files.num_rows()) {
+                    file.dv_cardinality = LogicalFileView::new(scan_files.clone(), row)
+                        .deletion_vector_descriptor()
+                        .map(|descriptor| {
+                            u64::try_from(descriptor.cardinality).map_err(|_| {
+                                DataFusionError::Plan(
+                                    "deletion-vector descriptor has negative cardinality"
+                                        .to_string(),
+                                )
+                            })
+                        })
+                        .transpose()?;
+                }
 
                 let stats_projection = match StatsProjection::for_scan(this.kernel_scan.as_ref()) {
                     Ok(projection) => projection,
@@ -372,6 +414,9 @@ pub(crate) struct ScanFileContext {
     pub stats: Statistics,
     /// Partition values for the file.
     pub partitions: Option<StructData>,
+    pub num_records: Option<u64>,
+    pub expected_dv: DvInfo,
+    pub dv_cardinality: Option<u64>,
 }
 
 impl ScanFileContext {
@@ -383,6 +428,9 @@ impl ScanFileContext {
             transform: inner.transform,
             stats,
             partitions,
+            num_records: inner.num_records,
+            expected_dv: inner.dv_info,
+            dv_cardinality: inner.dv_cardinality,
         }
     }
 }
@@ -397,6 +445,8 @@ struct ScanFileContextInner {
     pub transform: Option<ExpressionRef>,
     /// Number of records in the file from Add-file stats.
     pub num_records: Option<u64>,
+
+    pub dv_cardinality: Option<u64>,
 
     pub dv_info: DvInfo,
 }
@@ -492,6 +542,7 @@ fn visit_scan_file(ctx: &mut ScanContext, scan_file: ScanFile) {
         file_url,
         size: scan_file.size as u64,
         num_records: scan_file.stats.map(|stats| stats.num_records),
+        dv_cardinality: None,
     });
     ctx.count += 1;
 }
