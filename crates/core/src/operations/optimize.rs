@@ -47,8 +47,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeErr
 use tracing::*;
 use uuid::Uuid;
 
-use super::write::writer::{PartitionWriter, PartitionWriterConfig};
 use super::{CustomExecuteHandler, Operation};
+use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,

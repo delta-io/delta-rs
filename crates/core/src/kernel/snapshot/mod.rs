@@ -1473,13 +1473,13 @@ impl EagerSnapshot {
 
     /// Get a [`LogDataHandler`] for the snapshot to inspect the currently loaded state of the log.
     pub fn log_data(&self) -> LogDataHandler<'_> {
-        match self.try_log_data() {
-            Ok(log_data) => log_data,
-            Err(err) => {
-                tracing::error!("unexpected error loading EagerSnapshot log data: {err}");
-                LogDataHandler::new(&[], self.snapshot.table_configuration())
-            }
-        }
+        // try_log_data() returns Ok(empty) for the legitimate NotInitializedWithFiles case
+        // (lazy snapshots), so any Err here is a genuine unexpected failure. Panicking loudly
+        // is intentionally safer than returning empty, which would cause conflict-checking
+        // callers to silently operate on a zero-file set and potentially allow conflicting
+        // commits through.
+        self.try_log_data()
+            .unwrap_or_else(|err| panic!("unexpected error loading EagerSnapshot log data: {err}"))
     }
 
     /// Stream the active files in the snapshot
