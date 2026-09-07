@@ -2587,6 +2587,74 @@ mod tests {
         }])
     }
 
+    /// Regression test for the COUNT(*) deletion-vector bug: the inner parquet
+    /// plan's row counts do not account for deleted rows, so a scan carrying
+    /// selection vectors must report `num_rows` as INEXACT — an exact value lets
+    /// DataFusion's AggregateStatistics optimizer short-circuit COUNT(*) with
+    /// the inflated (pre-deletion) count.
+    #[tokio::test]
+    async fn test_scan_statistics_num_rows_inexact_with_deletion_vectors() -> TestResult {
+        use datafusion::common::stats::Precision;
+
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let plan = provider.scan(&state, None, &[], None).await?;
+        // Stats flow through StatisticsContext (partition_statistics is
+        // deprecated in DF 55 and returns unknown for this node).
+        let stats = datafusion::physical_plan::statistics::StatisticsContext::new().compute(
+            plan.as_ref(),
+            &datafusion::physical_plan::statistics::StatisticsArgs::new(),
+        )?;
+
+        assert!(
+            !matches!(stats.num_rows, Precision::Exact(_)),
+            "num_rows must not be exact when deletion vectors are present \
+             (an exact pre-deletion count lets COUNT(*) short-circuit inflated), got {:?}",
+            stats.num_rows
+        );
+        assert!(
+            matches!(stats.num_rows, Precision::Inexact(_)),
+            "num_rows should be inexact (not absent) with statistics collection on, got {:?}",
+            stats.num_rows
+        );
+
+        Ok(())
+    }
+
+    /// End-to-end guard for the same bug: COUNT(*) over a table with deletion
+    /// vectors must return the live row count (10 raw - 2 deleted = 8), not the
+    /// raw parquet count.
+    #[tokio::test]
+    async fn test_count_star_excludes_deleted_rows() -> TestResult {
+        let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
+        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
+
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("dv_table", Arc::new(provider))?;
+
+        let batches = session
+            .sql("SELECT count(*) FROM dv_table")
+            .await?
+            .collect()
+            .await?;
+        let expected = vec![
+            "+----------+",
+            "| count(*) |",
+            "+----------+",
+            "| 8        |",
+            "+----------+",
+        ];
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_deletion_vectors_with_dv_table() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;

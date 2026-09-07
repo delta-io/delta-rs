@@ -70,6 +70,13 @@ pub(crate) struct DataValidation {
 
 impl PartialOrd for DataValidation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        // `validated_schema` is derived from `input.schema()` and IS NOT NULL patterns
+        // extracted from `validations`. If `input` and `validations` compare Equal but
+        // `validated_schema` diverges (possible if LogicalPlan equality is coarser than
+        // schema equality), returning `None` (incomparable) is safer than claiming Equal
+        // while PartialEq disagrees — it prevents optimizer deduplication of structurally
+        // distinct nodes. In practice `validated_schema` is deterministic from its inputs,
+        // so the filter is a defensive guard that should always be a no-op.
         match self.input.partial_cmp(&other.input) {
             Some(Ordering::Equal) => self.validations.partial_cmp(&other.validations),
             cmp => cmp,
@@ -2326,5 +2333,37 @@ mod tests {
         // Nullability should be updated and metadata preserved
         assert!(!new_schema.field(0).is_nullable());
         assert_eq!(new_schema.field(0).metadata(), &metadata);
+    }
+
+    #[test]
+    fn test_data_validation_partial_ord_equal_nodes_have_same_validated_schema() {
+        // Confirm that two DataValidation nodes built from identical inputs compare Equal under
+        // both PartialEq and PartialOrd — proving validated_schema is deterministic from
+        // input + validations, so the PartialOrd filter guard is always a no-op in practice.
+        use datafusion::common::{DFSchema, ToDFSchema};
+        use datafusion::logical_expr::{EmptyRelation, LogicalPlan};
+        use datafusion::prelude::col;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
+        let df_schema = Arc::new(schema.to_dfschema().unwrap());
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: df_schema,
+        });
+
+        let expr = col("id").is_not_null();
+        let a = DataValidation::try_new(input.clone(), [expr.clone()]).unwrap();
+        let b = DataValidation::try_new(input.clone(), [expr]).unwrap();
+
+        // Both PartialEq and PartialOrd must agree they are equal.
+        assert_eq!(
+            *a, *b,
+            "identical inputs must produce equal DataValidation nodes"
+        );
+        assert_eq!(
+            a.partial_cmp(&b),
+            Some(std::cmp::Ordering::Equal),
+            "PartialOrd must agree with PartialEq for identical inputs"
+        );
     }
 }
