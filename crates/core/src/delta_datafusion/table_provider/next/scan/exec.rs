@@ -2080,12 +2080,9 @@ mod tests {
                     .with_file_groups(groups.into_iter().map(FileGroup::new).collect())
                     .build(),
             );
-            assert!(
-                Arc::new(exec.clone())
-                    .with_new_children(vec![replacement])
-                    .is_err(),
-                "must reject changed per-file {change}"
-            );
+            #[expect(deprecated, reason = "qualify both supported child-replacement APIs")]
+            let replaced = Arc::new(exec.clone()).with_new_children(vec![replacement]);
+            assert!(replaced.is_err(), "must reject changed per-file {change}");
         }
 
         let mut fragment = config.file_groups[0][0].clone();
