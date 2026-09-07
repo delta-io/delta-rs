@@ -9,7 +9,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
@@ -19,6 +19,7 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
+use crate::datafile::{BatchStream, DataFileWriter, DeltaDataWriter};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
@@ -68,6 +69,29 @@ fn get_max_concurrency_tasks() -> usize {
     })
 }
 
+const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
+
+fn parse_writer_batch_concurrency(raw: Option<&str>) -> usize {
+    raw.and_then(|s| s.parse::<usize>().ok())
+        .filter(|size| *size > 0)
+        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+}
+
+/// How many record batches may be in flight on a write path. It bounds the
+/// producer→writer channel capacity in `write_streams` (and the change-data
+/// fan-in), and the `buffered()` drain depth in [`DeltaDataWriter::write_all`].
+/// Tunable via `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (default 10); read once.
+pub(crate) fn writer_batch_concurrency() -> usize {
+    static CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *CONCURRENCY.get_or_init(|| {
+        parse_writer_batch_concurrency(
+            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
 fn roll_on_row_group_boundary_default() -> bool {
     static ROLL_ON_ROW_GROUP_BOUNDARY: OnceLock<bool> = OnceLock::new();
     *ROLL_ON_ROW_GROUP_BOUNDARY.get_or_init(|| {
@@ -83,8 +107,42 @@ async fn upload_parquet_file(
     mut arrow_writer: AsyncArrowWriter<BufWriter>,
     path: Path,
 ) -> DeltaResult<(Path, usize, ParquetMetaData)> {
-    let metadata = arrow_writer.finish().await?;
+    let metadata = match arrow_writer.finish().await {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            // A failed completion leaves multipart parts behind that vacuum
+            // cannot see; abort them (best-effort) before surfacing the error.
+            //
+            // `BufWriter::abort` panics (by design) once shutdown has begun, and
+            // a `finish` that failed at the complete stage is exactly that state
+            // — the upload is no longer reachable to abort. Catch the panic so
+            // that case degrades to a leaked-parts warning instead of taking
+            // down the write task.
+            use futures::FutureExt as _;
+            let mut buf_writer = arrow_writer.into_inner();
+            let abort = std::panic::AssertUnwindSafe(buf_writer.abort()).catch_unwind();
+            match abort.await {
+                Ok(Ok(())) => {}
+                Ok(Err(abort_err)) => {
+                    warn!("failed to abort multipart upload after a failed finish: {abort_err}");
+                }
+                Err(_) => {
+                    warn!(
+                        "multipart upload failed during completion; its parts cannot be aborted \
+                         and are left for the object store's lifecycle cleanup"
+                    );
+                }
+            }
+            return Err(e.into());
+        }
+    };
     let file_size = arrow_writer.bytes_written();
+    // `bytes_written()` returns cumulative bytes flushed through AsyncArrowWriter,
+    // including all row groups. After `finish()`, the parquet footer is written and
+    // included in this counter (parquet-rs calls write_footer() then updates the
+    // internal byte count before returning the metadata). If this ever understates
+    // the physical object size, use `object_store.head(&path).size` as the source
+    // of truth instead.
     Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
@@ -203,6 +261,12 @@ pub struct DeltaWriter {
     object_store: ObjectStoreRef,
     /// configuration for the writers
     config: WriterConfig,
+    /// Physical file schema (table schema with partition columns removed), derived
+    /// once at construction. The per-batch write paths read this instead of calling
+    /// `WriterConfig::file_schema()`, which reallocates the schema on every call.
+    /// Invariant: it depends only on the config's table schema + partition columns,
+    /// so any future setter for those must refresh this field.
+    file_schema: ArrowSchemaRef,
     /// partition writers for individual partitions
     partition_writers: HashMap<Path, PartitionWriter>,
 }
@@ -210,9 +274,11 @@ pub struct DeltaWriter {
 impl DeltaWriter {
     /// Create a new instance of [`DeltaWriter`]
     pub fn new(object_store: ObjectStoreRef, config: WriterConfig) -> Self {
+        let file_schema = config.file_schema();
         Self {
             object_store,
             config,
+            file_schema,
             partition_writers: HashMap::new(),
         }
     }
@@ -228,56 +294,88 @@ impl DeltaWriter {
         values: &RecordBatch,
     ) -> DeltaResult<Vec<PartitionResult>> {
         Ok(divide_by_partition_values(
-            self.config.file_schema(),
-            self.config.partition_columns.clone(),
+            self.file_schema.clone(),
+            &self.config.partition_columns,
             values,
         )
         .map_err(|err| WriteError::Partitioning(err.to_string()))?)
     }
 
-    /// Write a batch to the partition induced by the partition_values. The record batch is expected
-    /// to be pre-partitioned and only contain rows that belong into the same partition.
-    /// However, it should still contain the partition columns.
+    /// Build a fresh [`PartitionWriter`] for the given partition values.
+    fn build_partition_writer(
+        &self,
+        partition_values: IndexMap<String, Scalar>,
+    ) -> DeltaResult<PartitionWriter> {
+        let prefix_override = match self.config.random_prefix_length {
+            Some(length) => Some(Path::parse(random_prefix(length))?),
+            None => None,
+        };
+        let config = PartitionWriterConfig::try_new(
+            self.file_schema.clone(),
+            partition_values,
+            Some(self.config.writer_properties.clone()),
+            self.config.target_file_size,
+            Some(self.config.write_batch_size),
+            None,
+            prefix_override,
+        )?;
+        PartitionWriter::try_with_config(
+            self.object_store.clone(),
+            config,
+            self.config.num_indexed_cols,
+            self.config.stats_columns.clone(),
+        )
+    }
+
+    /// Find-or-create the partition writer for `key` and stream `batch` into it.
+    /// `make_values` supplies the new writer's partition values and is called only
+    /// when a writer is created. The writer is inserted only after its first write
+    /// succeeds, so a failed first write leaves no half-open writer behind.
+    async fn write_keyed(
+        &mut self,
+        key: Path,
+        batch: &RecordBatch,
+        make_values: impl FnOnce() -> IndexMap<String, Scalar>,
+    ) -> DeltaResult<()> {
+        match self.partition_writers.get_mut(&key) {
+            Some(writer) => writer.write(batch).await?,
+            None => {
+                let mut writer = self.build_partition_writer(make_values())?;
+                if let Err(e) = writer.write(batch).await {
+                    // The writer was never inserted, so a later `DeltaWriter::abort`
+                    // can't reach it — clean up its upload here.
+                    if let Err(abort_err) = writer.abort().await {
+                        warn!("failed to abort an in-progress multipart upload: {abort_err}");
+                    }
+                    return Err(e);
+                }
+                let _ = self.partition_writers.insert(key, writer);
+            }
+        }
+        Ok(())
+    }
+
+    /// Write a batch to the partition induced by `partition_values`. The batch must
+    /// be pre-partitioned (all rows in one partition) but still include the
+    /// partition columns; they are stripped before encoding.
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
         partition_values: &IndexMap<String, Scalar>,
     ) -> DeltaResult<()> {
-        let partition_key = Path::parse(partition_values.hive_partition_path())?;
-
+        let key = Path::parse(partition_values.hive_partition_path())?;
         let record_batch =
             record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
+        self.write_keyed(key, &record_batch, || partition_values.clone())
+            .await
+    }
 
-        match self.partition_writers.get_mut(&partition_key) {
-            Some(writer) => {
-                writer.write(&record_batch).await?;
-            }
-            None => {
-                let prefix_override = match self.config.random_prefix_length {
-                    Some(length) => Some(Path::parse(random_prefix(length))?),
-                    None => None,
-                };
-                let config = PartitionWriterConfig::try_new(
-                    self.config.file_schema(),
-                    partition_values.clone(),
-                    Some(self.config.writer_properties.clone()),
-                    self.config.target_file_size,
-                    Some(self.config.write_batch_size),
-                    None,
-                    prefix_override,
-                )?;
-                let mut writer = PartitionWriter::try_with_config(
-                    self.object_store.clone(),
-                    config,
-                    self.config.num_indexed_cols,
-                    self.config.stats_columns.clone(),
-                )?;
-                writer.write(&record_batch).await?;
-                let _ = self.partition_writers.insert(partition_key, writer);
-            }
-        }
-
-        Ok(())
+    /// Fast path for unpartitioned tables: a single partition writer keyed by the
+    /// empty path, skipping the per-batch partition split and projection (an
+    /// identity for an unpartitioned schema) — the batch goes straight to the writer.
+    async fn write_unpartitioned(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        self.write_keyed(Path::default(), batch, IndexMap::new)
+            .await
     }
 
     /// Buffers record batches in-memory per partition up to appx. `target_file_size` for a partition.
@@ -286,6 +384,9 @@ impl DeltaWriter {
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
     pub async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        if self.config.partition_columns.is_empty() {
+            return self.write_unpartitioned(batch).await;
+        }
         for result in self.divide_by_partition_values(batch)? {
             self.write_partition(result.record_batch, &result.partition_values)
                 .await?;
@@ -293,24 +394,132 @@ impl DeltaWriter {
         Ok(())
     }
 
+    /// Approximate encoded (parquet) size written across all partitions and
+    /// not yet returned as `Add`s (which only surface at `close`).
+    pub(crate) fn buffered_size(&self) -> usize {
+        self.partition_writers
+            .values()
+            .map(PartitionWriter::buffered_size)
+            .sum()
+    }
+
+    /// Abandon the writer, aborting every partition's in-progress multipart
+    /// upload. Already-completed files are left as orphans for vacuum.
+    pub async fn abort(mut self) -> DeltaResult<()> {
+        let mut first_err = None;
+        for (_, writer) in std::mem::take(&mut self.partition_writers) {
+            if let Err(e) = writer.abort().await {
+                warn!("failed to abort an in-progress multipart upload: {e}");
+                first_err.get_or_insert(e);
+            }
+        }
+        first_err.map_or(Ok(()), Err)
+    }
+
+    /// Best-effort [`abort`](Self::abort) for synchronous callers: spawns the
+    /// cleanup on the current tokio runtime, or logs and leaks the upload
+    /// parts when there is none. `abort` warns per failed partition, so the
+    /// returned error needs no extra logging here.
+    pub(crate) fn abort_detached(self) {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                handle.spawn(async move {
+                    let _ = self.abort().await;
+                });
+            }
+            Err(_) => warn!(
+                "no tokio runtime available; abandoning in-progress multipart uploads without abort"
+            ),
+        }
+    }
+
     /// Close the writer and get the new [Add] actions.
     ///
     /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
-        let actions = futures::stream::iter(writers)
-            .map(|(_, writer)| async move {
-                let writer_actions = writer.close().await?;
-                Ok::<_, DeltaTableError>(writer_actions)
-            })
-            .buffered(num_cpus::get())
-            .try_fold(Vec::new(), |mut acc, actions| {
-                acc.extend(actions);
-                futures::future::ready(Ok(acc))
-            })
-            .await?;
-
+        // The common (unpartitioned) case has a single writer; close it directly and
+        // skip the concurrent-fan-out machinery (and the `num_cpus` probe).
+        if writers.len() <= 1 {
+            let mut actions = Vec::new();
+            for (_, writer) in writers {
+                actions.extend(writer.close().await?);
+            }
+            return Ok(actions);
+        }
+        // On error, keep draining the remaining closes rather than short-circuiting:
+        // cancelling them mid-upload would leak multipart parts vacuum can't see,
+        // while completed files are orphans it can reclaim.
+        let mut close_stream = futures::stream::iter(writers)
+            .map(|(_, writer)| writer.close())
+            .buffered(num_cpus::get());
+        let mut actions = Vec::new();
+        let mut first_err: Option<DeltaTableError> = None;
+        while let Some(result) = close_stream.next().await {
+            match result {
+                Ok(writer_actions) => actions.extend(writer_actions),
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
+            }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
+        }
         Ok(actions)
+    }
+}
+
+/// Per-batch write metrics accumulated while draining a batch stream.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct DrainMetrics {
+    /// Cumulative time spent inside [`DeltaWriter::write`] (ms).
+    pub write_time_ms: u64,
+    /// Total rows written.
+    pub rows_written: u64,
+}
+
+/// Write every batch from `batches` through `writer`, accumulating the total
+/// write time and row count. This is the single per-batch drain loop shared by
+/// the basic [`DeltaDataWriter::write_all`] and the DataFusion producer/consumer
+/// path (`write_streams`).
+pub(crate) async fn write_batches_timed<S>(
+    writer: &mut DeltaWriter,
+    mut batches: S,
+) -> DeltaResult<DrainMetrics>
+where
+    S: Stream<Item = DeltaResult<RecordBatch>> + Unpin,
+{
+    let mut metrics = DrainMetrics::default();
+    while let Some(batch) = batches.next().await {
+        let batch = batch?;
+        metrics.rows_written += batch.num_rows() as u64;
+        let wstart = std::time::Instant::now();
+        writer.write(&batch).await?;
+        metrics.write_time_ms += wstart.elapsed().as_millis() as u64;
+    }
+    Ok(metrics)
+}
+
+#[async_trait::async_trait]
+impl DeltaDataWriter for DeltaWriter {
+    async fn write_all(mut self: Box<Self>, batches: BatchStream) -> DeltaResult<Vec<Add>> {
+        // Batches are written in input-stream order, so the file order follows
+        // the input (which a caller that merges partition streams may itself
+        // interleave).
+        if let Err(e) = write_batches_timed(&mut self, batches).await {
+            // Abort rather than drop: dropping leaks the open multipart uploads.
+            // Log abort failures but always return the original write error — callers cannot
+            // meaningfully act on a secondary abort error, and leaked parts are cleaned
+            // up by vacuum's lifecycle policy.
+            if let Err(abort_err) = (*self).abort().await {
+                warn!(
+                    "failed to abort in-progress multipart uploads after write error: {abort_err}"
+                );
+            }
+            return Err(e);
+        }
+        (*self).close().await
     }
 }
 
@@ -422,7 +631,19 @@ impl LazyArrowWriter {
                     config.file_schema.clone(),
                     Some(config.writer_properties.clone()),
                 )?;
-                arrow_writer.write(batch).await?;
+                // A large first batch can complete row groups and start a multipart
+                // upload before this call returns. On failure, `self` is still
+                // `Initialized` — unreachable by the outer abort paths — so the
+                // upload must be aborted here before surfacing the error.
+                if let Err(e) = arrow_writer.write(batch).await {
+                    let mut buf_writer = arrow_writer.into_inner();
+                    if let Err(abort_err) = buf_writer.abort().await {
+                        warn!(
+                            "failed to abort multipart upload after a failed first write: {abort_err}"
+                        );
+                    }
+                    return Err(e.into());
+                }
                 *self = LazyArrowWriter::Writing(path.clone(), arrow_writer);
             }
             LazyArrowWriter::Writing(_, arrow_writer) => {
@@ -440,6 +661,16 @@ impl LazyArrowWriter {
                 arrow_writer.bytes_written() + arrow_writer.in_progress_size()
             }
         }
+    }
+
+    /// Abort the in-progress multipart upload, if any. Dropping the writer
+    /// instead would leak upload parts, which vacuum cannot see.
+    async fn abort(self) -> DeltaResult<()> {
+        if let LazyArrowWriter::Writing(_, arrow_writer) = self {
+            let mut buf_writer = arrow_writer.into_inner();
+            buf_writer.abort().await?;
+        }
+        Ok(())
     }
 
     fn in_progress_rows(&self) -> usize {
@@ -465,6 +696,9 @@ pub struct PartitionWriter {
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
+    /// Approximate encoded size of files already rolled to background upload;
+    /// keeps `buffered_size` monotonic across rolls.
+    rolled_bytes: usize,
 }
 
 impl PartitionWriter {
@@ -477,7 +711,7 @@ impl PartitionWriter {
     ) -> DeltaResult<Self> {
         let writer_id = uuid::Uuid::new_v4();
         let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
-        let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config)?;
+        let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
 
         Ok(Self {
             object_store,
@@ -488,6 +722,7 @@ impl PartitionWriter {
             num_indexed_cols,
             stats_columns,
             in_flight_writers: JoinSet::new(),
+            rolled_bytes: 0,
         })
     }
 
@@ -495,9 +730,8 @@ impl PartitionWriter {
         object_store: ObjectStoreRef,
         path: Path,
         config: &PartitionWriterConfig,
-    ) -> DeltaResult<LazyArrowWriter> {
-        let state = LazyArrowWriter::Initialized(path, object_store.clone(), config.clone());
-        Ok(state)
+    ) -> LazyArrowWriter {
+        LazyArrowWriter::Initialized(path, object_store, config.clone())
     }
 
     fn next_data_path(&mut self) -> Path {
@@ -513,14 +747,22 @@ impl PartitionWriter {
 
     fn reset_writer(&mut self) -> DeltaResult<()> {
         let next_path = self.next_data_path();
-        let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config)?;
+        let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config);
         let state = std::mem::replace(&mut self.writer, new_writer);
 
         if let LazyArrowWriter::Writing(path, arrow_writer) = state {
+            self.rolled_bytes += arrow_writer.bytes_written() + arrow_writer.in_progress_size();
             self.in_flight_writers
                 .spawn(upload_parquet_file(arrow_writer, path));
         }
         Ok(())
+    }
+
+    /// Approximate encoded (parquet) size written since creation: the
+    /// in-progress file plus already-rolled files. Monotonic, so usable as a
+    /// flush threshold.
+    fn buffered_size(&self) -> usize {
+        self.rolled_bytes + self.writer.estimated_size()
     }
 
     /// Rows the parquet writer will accept before its current row group completes, when the
@@ -559,6 +801,35 @@ impl PartitionWriter {
             .into());
         }
 
+        // Don't materialize the lazy writer for a 0-row batch — `close` would
+        // upload an empty file and emit a spurious `Add`.
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        let Some(target_file_size) = self.config.target_file_size else {
+            // No size target means no file rolling, but still slice at row-group
+            // boundaries: the async writer only uploads as row groups complete
+            // within a `write_batch` call, so one huge call would buffer every
+            // row group in memory first.
+            let step = self
+                .config
+                .writer_properties
+                .max_row_group_row_count()
+                .unwrap_or(self.config.write_batch_size)
+                .max(1);
+            let max_offset = batch.num_rows();
+            for offset in (0..max_offset).step_by(step) {
+                let length = usize::min(step, max_offset - offset);
+                self.writer
+                    .write_batch(&batch.slice(offset, length))
+                    .await?;
+            }
+            return Ok(());
+        };
+
+        // With a target file size we slice the batch so we can check the encoded
+        // size between chunks and roll a new file once the target is reached.
         let max_offset = batch.num_rows();
         let mut offset = 0;
         while offset < max_offset {
@@ -573,16 +844,14 @@ impl PartitionWriter {
                 .write_batch(&batch.slice(offset, length))
                 .await?;
             offset += length;
-            if let Some(target_file_size) = self.config.target_file_size {
-                let estimated_size = self.writer.estimated_size();
-                // flush currently buffered data to disk once we meet or exceed the target file
-                // size — with the group-aligned roll, only once the open row group completed.
-                if estimated_size as u64 >= target_file_size.get()
-                    && (boundary.is_none() || self.writer.in_progress_rows() == 0)
-                {
-                    debug!("Writing file with estimated size {estimated_size:?} in background.");
-                    self.reset_writer()?;
-                }
+            let estimated_size = self.writer.estimated_size();
+            // flush currently buffered data to disk once we meet or exceed the target file
+            // size — with the group-aligned roll, only once the open row group completed.
+            if estimated_size as u64 >= target_file_size.get()
+                && (boundary.is_none() || self.writer.in_progress_rows() == 0)
+            {
+                debug!("Writing file with estimated size {estimated_size:?} in background.");
+                self.reset_writer()?;
             }
         }
 
@@ -598,19 +867,26 @@ impl PartitionWriter {
                 .spawn(upload_parquet_file(arrow_writer, path));
         }
 
+        // On a failed upload, keep draining the siblings rather than returning
+        // early: dropping the JoinSet would cancel them mid-multipart, leaking
+        // parts vacuum can't see (completed files are orphans it can reclaim).
         let mut results = Vec::new();
+        let mut first_err: Option<DeltaTableError> = None;
         while let Some(result) = self.in_flight_writers.join_next().await {
             match result {
                 Ok(Ok(data)) => results.push(data),
                 Ok(Err(e)) => {
-                    return Err(e);
+                    first_err.get_or_insert(e);
                 }
                 Err(e) => {
-                    return Err(DeltaTableError::GenericError {
+                    first_err.get_or_insert(DeltaTableError::GenericError {
                         source: Box::new(e),
                     });
                 }
             }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
 
         sort_completed_writes_by_path(&mut results);
@@ -634,6 +910,34 @@ impl PartitionWriter {
 
         Ok(adds)
     }
+
+    /// Abandon the writer: let in-flight size-roll uploads finish (cancelling
+    /// mid-upload would leak parts vacuum cannot see; completed files are
+    /// orphans it can reclaim), then abort the open file's multipart upload.
+    pub async fn abort(mut self) -> DeltaResult<()> {
+        while let Some(result) = self.in_flight_writers.join_next().await {
+            // Outcome irrelevant: nothing from this writer is committed.
+            let _ = result;
+        }
+        self.writer.abort().await
+    }
+}
+
+// Expose the inherent `write`/`close` behind the [`DataFileWriter`] trait (the
+// per-file seam). Fully-qualified calls select the inherent methods.
+#[async_trait::async_trait]
+impl DataFileWriter for PartitionWriter {
+    async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        PartitionWriter::write(self, batch).await
+    }
+
+    async fn close(self: Box<Self>) -> DeltaResult<Vec<Add>> {
+        PartitionWriter::close(*self).await
+    }
+
+    async fn abort(self: Box<Self>) -> DeltaResult<()> {
+        PartitionWriter::abort(*self).await
+    }
 }
 
 #[cfg(test)]
@@ -650,6 +954,35 @@ mod tests {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::ColumnPath;
     use std::sync::Arc;
+
+    #[test]
+    fn writer_batch_concurrency_zero_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(Some("0")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn writer_batch_concurrency_positive_value_is_used() {
+        assert_eq!(parse_writer_batch_concurrency(Some("8")), 8);
+    }
+
+    #[test]
+    fn writer_batch_concurrency_invalid_value_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(Some("abc")),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
+
+    #[test]
+    fn writer_batch_concurrency_missing_value_falls_back_to_default() {
+        assert_eq!(
+            parse_writer_batch_concurrency(None),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
+        );
+    }
 
     fn get_delta_writer(
         object_store: ObjectStoreRef,
@@ -701,6 +1034,59 @@ mod tests {
             writer_properties.created_by(),
             format!("delta-rs version {}", crate_version())
         );
+    }
+
+    #[tokio::test]
+    async fn test_failed_first_write_cleans_up_without_panicking() {
+        use crate::test_utils::failing_store::FailingMultipartStore;
+        use arrow::array::Int64Array;
+        use std::sync::atomic::Ordering;
+
+        // Fail the multipart *creation*, so the failure surfaces inside the very
+        // first `write` call — while the lazy writer is still in its
+        // `Initialized` state, whose error path (unlike the `Writing` one) is
+        // handled inline rather than by the outer abort machinery.
+        let store = Arc::new(FailingMultipartStore::default());
+        store.fail_multipart_create.store(true, Ordering::Release);
+
+        // Two int64 columns × 1M rows ≈ 16MB encoded (uncompressed, no
+        // dictionary): the first `write` call completes a full row group
+        // (default cap 1M rows) and flushes it, forcing a multipart upload.
+        let rows = 1024 * 1024;
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]));
+        let values = || Arc::new(Int64Array::from_iter_values(0..rows as i64));
+        let batch = RecordBatch::try_new(schema, vec![values(), values()]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .set_dictionary_enabled(false)
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            Some(props),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(
+            store,
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap();
+
+        let result = writer.write(&batch).await;
+        assert!(result.is_err(), "injected multipart failure must surface");
+        // The first-write error path must leave the writer cleanly abortable —
+        // no leaked upload, no panic.
+        writer.abort().await.unwrap();
     }
 
     #[test]

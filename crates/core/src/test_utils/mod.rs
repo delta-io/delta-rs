@@ -3,6 +3,8 @@ mod factories;
 #[cfg(all(test, feature = "datafusion"))]
 pub(crate) mod datafusion;
 #[cfg(test)]
+pub(crate) mod failing_store;
+#[cfg(test)]
 pub(crate) mod object_store;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
