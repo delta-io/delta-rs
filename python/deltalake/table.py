@@ -562,6 +562,43 @@ class DeltaTable:
             allow_out_of_range=allow_out_of_range,
         )
 
+    def scan(
+        self,
+        columns: list[str] | None = None,
+        predicate: str | None = None,
+    ) -> RecordBatchReader:
+        """
+        Lazily read the table with the built-in DataFusion engine.
+
+        Returns an Arrow RecordBatchReader that streams batches as they are
+        produced; consume it with anything arrow-native (pyarrow, duckdb,
+        polars). Reads tables with column mapping or deletion vectors.
+        Row order is not guaranteed.
+
+        Parameters:
+            columns: Column names to project. If None, all columns are read.
+            predicate: SQL predicate evaluated per row by the engine; the
+                result contains exactly the matching rows, unlike
+                `file_pruning_predicate` on the file listing APIs, which only
+                skips whole files. DataFusion SQL, parsed with the generic
+                dialect and identifier normalization disabled, so unquoted
+                column names match case sensitively.
+
+        Returns:
+            RecordBatchReader: A lazy stream of record batches.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+
+            dt = DeltaTable("tmp/my_table")
+            reader = dt.scan(columns=["value"], predicate="year = '2021'")
+            for batch in reader:
+                ...
+            ```
+        """
+        return self._table.scan(columns=columns, predicate=predicate)
+
     def deletion_vectors(self) -> RecordBatchReader:
         """
         Return deletion vectors for data files in this table.
@@ -1176,29 +1213,35 @@ class DeltaTable:
         columns: list[str] | None = None,
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
-        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pyarrow.Table":
         """
         Build a PyArrow Table using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
+        `filters` both prunes files and filters rows: each file's partition
+        values and min/max statistics are attached to its dataset fragment, so
+        files that cannot contain matching rows are never read, and the
+        surviving rows are filtered exactly.
+
+        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
+        chain is equivalent, and passing `file_pruning_predicate` there prunes
+        during log replay, before any per-file fragment setup, which can matter
+        on tables with very large file counts:
 
         ```python
-        dt.to_pyarrow_table(
-            file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)]
-        )
+        dt.to_pyarrow_table(columns=cols, filters=[("year", "=", "2021")])
+
+        # equivalent, pruning pre-scan; the pruning predicate keeps whole
+        # surviving files, pass filter= to to_table for exact rows
+        dt.to_pyarrow_dataset(
+            file_pruning_predicate="year = 2021"
+        ).to_table(columns=cols)
         ```
 
         Args:
-            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
+            partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
-            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         try:
             from pyarrow.parquet import filters_to_expression  # pyarrow >= 10.0.0
@@ -1207,12 +1250,17 @@ class DeltaTable:
                 "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
             )
 
+        if partitions is not None:
+            warnings.warn(
+                "`partitions` is deprecated; use `filters` instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if filters is not None:
             filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
-            partitions=partitions,
+            file_pruning_predicate=partitions,
             filesystem=filesystem,
-            file_pruning_predicate=file_pruning_predicate,
         ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
@@ -1222,35 +1270,42 @@ class DeltaTable:
         filesystem: str | pa_fs.FileSystem | None = None,
         filters: FilterType | Expression | None = None,
         types_mapper: Callable[[pyarrow.DataType], Any] | None = None,
-        file_pruning_predicate: FilePruningPredicateType | None = None,
     ) -> "pd.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
-        `file_pruning_predicate` selects which *files* are read, pruning at the
-        file level before any data is scanned; see the `file_uris` docstring for
-        its syntax and pruning semantics. `filters` filters *rows* while scanning.
-        A pruning predicate on a non-partition column selects a superset of files,
-        so pair it with an equivalent `filters` expression when you need exact rows:
+        `filters` both prunes files and filters rows: each file's partition
+        values and min/max statistics are attached to its dataset fragment, so
+        files that cannot contain matching rows are never read, and the
+        surviving rows are filtered exactly.
+
+        This method is a thin wrapper over `to_pyarrow_dataset`. The unrolled
+        chain is equivalent, and passing `file_pruning_predicate` there prunes
+        during log replay, before any per-file fragment setup, which can matter
+        on tables with very large file counts:
 
         ```python
-        dt.to_pandas(file_pruning_predicate="value >= 100", filters=[("value", ">=", 100)])
+        dt.to_pandas(columns=cols, filters=[("year", "=", "2021")])
+
+        # equivalent, pruning pre-scan; the pruning predicate keeps whole
+        # surviving files, pass filter= to to_table for exact rows
+        dt.to_pyarrow_dataset(
+            file_pruning_predicate="year = 2021"
+        ).to_table(columns=cols).to_pandas()
         ```
 
         Args:
-            partitions: Deprecated. Pass tuple filters to `file_pruning_predicate` instead
+            partitions: Deprecated. Use `filters`, or `to_pyarrow_dataset` with `file_pruning_predicate`
             columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
             filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
             filters: A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression
             types_mapper: A function mapping a pyarrow DataType to a pandas ExtensionDtype
-            file_pruning_predicate: A SQL predicate string or tuple filters selecting the files to read
         """
         return self.to_pyarrow_table(
             partitions=partitions,
             columns=columns,
             filesystem=filesystem,
             filters=filters,
-            file_pruning_predicate=file_pruning_predicate,
         ).to_pandas(types_mapper=types_mapper)
 
     def update_incremental(self) -> None:

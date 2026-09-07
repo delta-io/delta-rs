@@ -45,7 +45,7 @@ In this example we restrict our query to the `country="US"` partition.
 ```python
 dt = DeltaTable("tmp/partitioned-table")
 
-pdf = dt.to_pandas(file_pruning_predicate=[("country", "=", "US")])
+pdf = dt.to_pandas(filters=[("country", "=", "US")])
 print(pdf)
 ```
 
@@ -56,21 +56,23 @@ print(pdf)
 ```
 
 A flat list of filter tuples is a conjunction: every filter must hold. To
-combine partitions with OR, pass a list of lists (an OR across the inner AND
-groups) or a SQL `predicate` string:
+combine partitions with OR, pass a list of lists, an OR across the inner AND
+groups:
 
 ```python
-pdf = dt.to_pandas(file_pruning_predicate=[[("country", "=", "US")], [("country", "=", "CA")]])
-pdf = dt.to_pandas(file_pruning_predicate="country = 'US' OR country = 'CA'")
+pdf = dt.to_pandas(filters=[[("country", "=", "US")], [("country", "=", "CA")]])
 ```
 
-The same filters work on [DeltaTable.file_uris()](../api/delta_table/index.md#deltalake.DeltaTable.file_uris)
-and [DeltaTable.partitions()](../api/delta_table/index.md#deltalake.DeltaTable.partitions),
-and may reference non-partition columns as well -- see
-[Querying Delta Tables](querying-delta-tables.md#selecting-files-with-predicates)
+To prune the file list itself, without reading data, use
+[DeltaTable.file_uris()](../api/delta_table/index.md#deltalake.DeltaTable.file_uris)
+or [DeltaTable.partitions()](../api/delta_table/index.md#deltalake.DeltaTable.partitions)
+with `file_pruning_predicate`, which takes the same tuple filters or a SQL
+string and may reference non-partition columns as well. See
+[Querying Delta Tables](querying-delta-tables.md#selecting-files-with-a-pruning-predicate)
 for the pruning semantics.
 
 ```python
+dt.file_uris(file_pruning_predicate="country = 'US' OR country = 'CA'")
 dt.partitions(file_pruning_predicate="country IN ('US', 'CA')")
 ```
 

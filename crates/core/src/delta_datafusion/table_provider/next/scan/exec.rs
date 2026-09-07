@@ -442,7 +442,14 @@ impl ExecutionPlan for DeltaScanExec {
         let stats = input_stats.first().ok_or_else(|| {
             internal_datafusion_err!("DeltaScanExec expects statistics for exactly one child")
         })?;
-        self.map_statistics(Statistics::clone(stats)).map(Arc::new)
+        let mut stats = self.map_statistics(Statistics::clone(stats))?;
+        // When deletion vectors are present, the inner parquet plan's row counts
+        // don't account for deleted rows. Mark num_rows as inexact so DataFusion's
+        // AggregateStatistics optimizer won't short-circuit COUNT(*) with inflated counts.
+        if !self.selection_vectors.is_empty() {
+            stats.num_rows = stats.num_rows.to_inexact();
+        }
+        Ok(Arc::new(stats))
     }
 
     fn gather_filters_for_pushdown(

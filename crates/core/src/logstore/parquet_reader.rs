@@ -28,6 +28,7 @@ use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataR
 /// ```no_run
 /// # use std::sync::Arc;
 /// # use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
+/// # use object_store::{ObjectStore, path::Path};
 /// # use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 /// # async fn run() {
 /// # let store: Arc<dyn ObjectStore> = todo!();
