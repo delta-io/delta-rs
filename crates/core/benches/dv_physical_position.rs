@@ -210,6 +210,37 @@ fn benchmark(c: &mut Criterion) {
                                     "warm_metadata"
                                 }
                             );
+                            // Sample live-reader metadata in a separate, untimed query.
+                            // Pausing a timer mid-stream would let asynchronous prefetch do
+                            // useful work outside the measurement and undercount latency.
+                            let active_footer_reference_bytes = runtime.block_on(async {
+                                let plan = if fresh {
+                                    context
+                                        .sql(&query)
+                                        .await
+                                        .unwrap()
+                                        .create_physical_plan()
+                                        .await
+                                        .unwrap()
+                                } else {
+                                    datafusion::physical_plan::execution_plan::reset_plan_states(
+                                        prepared.clone(),
+                                    )
+                                    .unwrap()
+                                };
+                                let mut stream =
+                                    execute_stream(plan.clone(), context.task_ctx()).unwrap();
+                                stream.next().await.transpose().unwrap();
+                                let mut snapshot = BTreeMap::new();
+                                metrics(&plan, &mut snapshot);
+                                while let Some(batch) = stream.next().await {
+                                    black_box(batch.unwrap());
+                                }
+                                snapshot
+                                    .get("active_footer_reference_bytes")
+                                    .copied()
+                                    .unwrap_or(0)
+                            });
                             c.bench_function(&name, |b| b.iter_custom(|iterations| {
                             let mut elapsed = Duration::ZERO;
                             let mut planning = Duration::ZERO;
@@ -219,8 +250,7 @@ fn benchmark(c: &mut Criterion) {
                             let before_bytes = store.bytes.load(Ordering::Relaxed);
                             let mut last_metrics = BTreeMap::new();
                             let mut last_plan = None;
-                            let mut active_footer_reference_bytes = 0;
-                            for iteration in 0..iterations {
+                            for _ in 0..iterations {
                                 if cold { cache.clear(); }
                                 let start = Instant::now();
                                 runtime.block_on(async {
@@ -233,13 +263,6 @@ fn benchmark(c: &mut Criterion) {
                                     let mut row_count = first.as_ref().map_or(0, |batch| batch.num_rows());
                                     let first_read_elapsed = first_start.elapsed();
                                     first_read += first_read_elapsed;
-                                    // Metrics accumulate on reused native sources. Snapshot once
-                                    // per sample batch, outside all measured stages.
-                                    if iteration == 0 {
-                                        let mut first_metrics = BTreeMap::new();
-                                        metrics(&plan, &mut first_metrics);
-                                        active_footer_reference_bytes = active_footer_reference_bytes.max(first_metrics.get("active_footer_reference_bytes").copied().unwrap_or(0));
-                                    }
                                     let stream_start = Instant::now();
                                     while let Some(batch) = stream.next().await { row_count += batch.unwrap().num_rows(); }
                                     let streaming_elapsed = stream_start.elapsed();
