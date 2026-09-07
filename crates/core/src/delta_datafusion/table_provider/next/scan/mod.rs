@@ -27,6 +27,7 @@ use arrow_array::{
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_schema::{DataType, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use chrono::{TimeZone as _, Utc};
+use dashmap::DashMap;
 use datafusion::{
     catalog::Session,
     common::{
@@ -172,17 +173,11 @@ pub(super) async fn execution_plan(
     get_data_scan_plan(session, scan_plan, replayed, limit).await
 }
 
-/// Materialize deletion vector keep masks for every file in the scan that has one.
+/// Load deletion-vector keep masks for the selected files.
 ///
-/// Deletion vectors are loaded as a side-effect of consuming [`ScanFileStream`].  We drain the
-/// full stream here (discarding file contexts, stats, and partition values) because the DV
-/// loading tasks are spawned lazily during stream poll.  A dedicated DV-only stream that skips
-/// stats parsing is possible but not yet warranted — this path is not latency-sensitive and the
-/// file-list is typically small.
-///
-/// [`ReceiverStreamBuilder::build`] returns a merged stream that includes a JoinSet checker;
-/// `.try_collect().await` below will not complete until every spawned DV-loading task has
-/// finished, so no results are lost.
+/// Drain [`ScanFileStream`] to start the DV loading tasks, then collect their
+/// results through [`ReceiverStreamBuilder::build`]. A successful collection
+/// waits for all DV tasks to finish.
 pub(super) async fn replay_deletion_vectors(
     engine: Arc<dyn Engine>,
     scan_plan: &KernelScanPlan,
@@ -200,9 +195,8 @@ pub(super) async fn replay_deletion_vectors(
     while stream.try_next().await?.is_some() {}
 
     let dv_stream = stream.dv_stream.build();
-    // Only files with `dv_info.has_vector()` spawn tasks, so every item should carry a DV.
-    // Guard with a typed error (instead of panic) in case that invariant drifts.
-    let dvs: HashMap<_, _> = dv_stream
+    // A DV task must return a keep mask.
+    let dvs: DashMap<_, _> = dv_stream
         .and_then(|(url, dv, num_records)| {
             ready(match dv {
                 Some(keep_mask) => normalize_dv_keep_mask_for_api(keep_mask, num_records, &url)
@@ -440,7 +434,7 @@ async fn get_data_scan_plan(
             physical_file_identities: Arc::new(physical_file_identities),
         }
     } else {
-        DvExecutionState::None
+        DvExecutionState::NotPresent
     };
 
     // Convert files into DataFusion `PartitionedFile`s grouped by object store.

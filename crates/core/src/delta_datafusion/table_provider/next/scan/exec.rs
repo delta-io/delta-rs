@@ -49,14 +49,14 @@ use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
 const DELTA_MATERIALIZED_PUSHDOWN_SENTINEL: &str =
     "__delta_rs_unpushable_delta_materialized_filter";
 
-/// DeltaScanExec uses these inputs to apply deletion vectors during a physical scan.
+/// Deletion-vector inputs for [`DeltaScanExec`].
 #[derive(Clone, Debug)]
 pub(super) enum DvExecutionState {
-    None,
+    NotPresent,
     Sequential {
-        /// The planner captures these masks. Each execution stream copies them before use.
+        /// Keep masks shared by plan clones. Each execution copies and consumes them.
         selection_vectors: Arc<HashMap<String, Vec<bool>>>,
-        /// The validator compares child files against this whole file ownership map.
+        /// Expected object store and path for each file ID in the child plan.
         physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
     },
 }
@@ -68,7 +68,7 @@ impl DvExecutionState {
 
     fn selection_vectors(&self) -> Option<&HashMap<String, Vec<bool>>> {
         match self {
-            Self::None => None,
+            Self::NotPresent => None,
             Self::Sequential {
                 selection_vectors, ..
             } => Some(selection_vectors),
@@ -77,7 +77,7 @@ impl DvExecutionState {
 
     fn physical_file_identities(&self) -> Option<&super::PhysicalFileIdentityMap> {
         match self {
-            Self::None => None,
+            Self::NotPresent => None,
             Self::Sequential {
                 physical_file_identities,
                 ..
@@ -561,7 +561,8 @@ impl ExecutionPlan for DeltaScanExec {
             input: self.input.execute(partition, context)?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             transforms: Arc::clone(&self.transforms),
-            // Each execution owns its cursors and copies the masks that the planner captured.
+            // Each stream consumes its masks as it reads batches. Deep-copy the masks
+            // once per execution to isolate repeated or concurrent scans.
             selection_vectors: self
                 .dv_state
                 .selection_vectors()
@@ -625,14 +626,7 @@ impl ExecutionPlan for DeltaScanExec {
         let stats = input_stats.first().ok_or_else(|| {
             internal_datafusion_err!("DeltaScanExec expects statistics for exactly one child")
         })?;
-        let mut stats = self.map_statistics(Statistics::clone(stats))?;
-        // When deletion vectors are present, the inner parquet plan's row counts
-        // don't account for deleted rows. Mark num_rows as inexact so DataFusion's
-        // AggregateStatistics optimizer won't short-circuit COUNT(*) with inflated counts.
-        if !self.selection_vectors.is_empty() {
-            stats.num_rows = stats.num_rows.to_inexact();
-        }
-        Ok(Arc::new(stats))
+        self.map_statistics(Statistics::clone(stats)).map(Arc::new)
     }
 
     fn gather_filters_for_pushdown(
@@ -2407,7 +2401,7 @@ mod tests {
             scan_plan,
             input,
             Arc::new(HashMap::new()),
-            DvExecutionState::None,
+            DvExecutionState::NotPresent,
             Arc::new(public_file_ids),
             HashMap::new(),
             ExecutionPlanMetricsSet::new(),
