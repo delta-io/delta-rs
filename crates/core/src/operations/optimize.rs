@@ -881,7 +881,11 @@ impl MergePlan {
                     .boxed()
             }
             OptimizeOperations::ZOrder(zorder_columns, bins) => {
-                debug!("Starting zorder with the columns: {zorder_columns:?} {bins:?}");
+                debug!(
+                    zorder_columns = ?zorder_columns,
+                    num_partitions = bins.len(),
+                    "starting zorder"
+                );
 
                 let exec_context = Arc::new(zorder::ZOrderExecContext::new(
                     zorder_columns,
@@ -1364,7 +1368,10 @@ async fn build_zorder_plan(
             .or_insert_with(|| (partition_values, MergeBin::new()))
             .1
             .add(file.to_add());
-        debug!("partition_files inside the zorder plan: {partition_files:?}");
+        debug!(
+            num_partitions = partition_files.len(),
+            "built zorder partition plan"
+        );
     }
     metrics.partitions_optimized = partition_files.len() as u64;
 
@@ -1597,7 +1604,7 @@ pub(super) mod zorder {
         fn zorder_key_datafusion(
             columns: &[ColumnarValue],
         ) -> Result<ColumnarValue, DataFusionError> {
-            debug!("zorder_key_datafusion: {columns:#?}");
+            debug!(num_columns = columns.len(), "zorder_key_datafusion invoked");
             let length = columns
                 .iter()
                 .map(|col| match col {

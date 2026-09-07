@@ -117,13 +117,13 @@ async fn collect_keep_version_paths(
     );
     let engine = log_store.engine(None);
     let mut keep_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
-    debug!("keep version {initial_version}: {keep_files:#?}");
+    debug!(version = %initial_version, num_files = keep_files.len(), "collected keep-version paths");
 
     for version in remaining_versions {
         log_store.refresh().await?;
         snapshot = snapshot.update(engine.clone(), Some(*version)).await?;
         let version_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
-        debug!("keep version {version}: {version_files:#?}");
+        debug!(version = %version, num_files = version_files.len(), "collected keep-version paths");
         keep_files.extend(version_files);
     }
 
