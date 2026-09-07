@@ -2207,9 +2207,8 @@ mod tests {
         let footer =
             parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new_with_options(
                 std::fs::File::open(fixture.directory.path().join("part-0.parquet"))?,
-                parquet::arrow::arrow_reader::ArrowReaderOptions::new().with_page_index_policy(
-                    parquet::file::metadata::PageIndexPolicy::Required,
-                ),
+                parquet::arrow::arrow_reader::ArrowReaderOptions::new()
+                    .with_page_index_policy(parquet::file::metadata::PageIndexPolicy::Required),
             )?;
         assert_eq!(
             footer
