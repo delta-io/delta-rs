@@ -657,6 +657,69 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn restore_file_key_preserves_valid_dv_identity() -> DeltaResult<()> {
+        // Use the Delta protocol examples with '@' in the inline data and UUID path.
+        // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#deletion-vector-descriptor-schema
+        let inline = DeletionVectorDescriptor {
+            storage_type: StorageType::Inline,
+            path_or_inline_dv: "wi5b=000010000siXQKl0rr91000f55c8Xg0@@D72lkbi5=-{L".into(),
+            offset: None,
+            size_in_bytes: 40,
+            cardinality: 6,
+        };
+        let persisted = DeletionVectorDescriptor {
+            storage_type: StorageType::UuidRelativePath,
+            path_or_inline_dv: "ab^-aqEH.-t@S}K{vb[*k^".into(),
+            offset: Some(4),
+            size_in_bytes: 40,
+            cardinality: 6,
+        };
+        let later = DeletionVectorDescriptor {
+            offset: Some(42),
+            ..persisted.clone()
+        };
+        let cases = [
+            (None, None),
+            (
+                Some(inline),
+                Some("iwi5b=000010000siXQKl0rr91000f55c8Xg0@@D72lkbi5=-{L"),
+            ),
+            (Some(persisted), Some("uab^-aqEH.-t@S}K{vb[*k^@4")),
+            (Some(later), Some("uab^-aqEH.-t@S}K{vb[*k^@42")),
+        ];
+        for (deletion_vector, expected_id) in cases {
+            let mut add = crate::test_utils::make_test_add("file.parquet", &[], 0);
+            add.stats = Some(r#"{"numRecords":30}"#.into());
+            add.deletion_vector = deletion_vector;
+            let table = DeltaTable::new_in_memory()
+                .create()
+                .with_columns([StructField::new("id", DataType::INTEGER, false)])
+                .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
+                .with_actions([Action::Add(add)])
+                .await?;
+            let log_store = table.log_store();
+            let snapshot =
+                Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
+            let files: Vec<_> = snapshot
+                .active_adds(
+                    log_store.as_ref(),
+                    ActiveAddOptions {
+                        predicate: None,
+                        stats: AddStatsPolicy::None,
+                    },
+                )
+                .try_collect()
+                .await?;
+            assert_eq!(files.len(), 1);
+
+            let key = restore_file_key(&files[0]);
+            assert_eq!(key.0, Path::parse("file.parquet")?);
+            assert_eq!(key.1.as_deref(), expected_id);
+        }
+        Ok(())
+    }
+
     /// Verify that restore respects constraints that were added/removed in previous version_to_restore
     /// <https://github.com/delta-io/delta-rs/issues/3352>
     #[cfg(feature = "datafusion")]
