@@ -414,6 +414,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
                 &metadata,
                 self.num_indexed_cols,
                 &self.stats_columns,
+                &[],
             )?);
         }
         Ok(actions)

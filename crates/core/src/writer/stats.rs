@@ -6,7 +6,7 @@ use std::{
     ops::AddAssign,
 };
 
-use delta_kernel::expressions::Scalar;
+use delta_kernel::expressions::{ColumnName, Scalar};
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -32,12 +32,14 @@ pub(crate) fn create_add(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    required_stats_columns: &[ColumnName],
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
         file_metadata,
         num_indexed_cols,
         stats_columns,
+        required_stats_columns,
     )?;
     let stats_string = serde_json::to_string(&stats)?;
 
@@ -96,6 +98,7 @@ pub(crate) fn stats_from_parquet_metadata(
         num_rows,
         num_indexed_cols,
         stats_columns,
+        &[],
     )
 }
 
@@ -104,6 +107,7 @@ fn stats_from_file_metadata(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    required_stats_columns: &[ColumnName],
 ) -> Result<Stats, DeltaWriterError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
 
@@ -116,6 +120,7 @@ fn stats_from_file_metadata(
         file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
+        required_stats_columns,
     )
 }
 
@@ -126,13 +131,14 @@ fn stats_from_metadata(
     num_rows: i64,
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
+    required_stats_columns: &[ColumnName],
 ) -> Result<Stats, DeltaWriterError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
     let dialect = sqlparser::dialect::GenericDialect {};
 
-    let idx_to_iterate = if let Some(stats_cols) = stats_columns {
+    let mut idx_to_iterate = if let Some(stats_cols) = stats_columns {
         let stats_cols = stats_cols
             .iter()
             .map(|v| {
@@ -197,6 +203,22 @@ fn stats_from_metadata(
             "delta.dataSkippingNumIndexedCols valid values are >=-1".to_string(),
         )));
     };
+
+    // Required columns (for example clustering columns) override the table's stats selection.
+    idx_to_iterate.extend(
+        schema_descriptor
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| {
+                required_stats_columns
+                    .iter()
+                    .any(|required| required.path() == column.path().parts())
+            })
+            .map(|(index, _)| index),
+    );
+    idx_to_iterate.sort_unstable();
+    idx_to_iterate.dedup();
 
     for idx in idx_to_iterate {
         let column_descr = schema_descriptor.column(idx);

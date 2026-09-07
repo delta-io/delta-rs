@@ -89,6 +89,7 @@ use serde_json::Value;
 use tracing::*;
 use uuid::Uuid;
 
+use delta_kernel::expressions::ColumnName;
 use delta_kernel::table_features::TableFeature;
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +99,7 @@ use crate::kernel::{
     Action, CommitInfo, EagerSnapshot, IsolationLevel, Metadata, Protocol, Transaction, Version,
 };
 use crate::logstore::ObjectStoreRef;
-use crate::logstore::{CommitOrBytes, LogStoreRef};
+use crate::logstore::{CommitOrBytes, LogStore, LogStoreRef};
 use crate::operations::CustomExecuteHandler;
 use crate::protocol::{DeltaOperation, operation_parameter_value};
 use crate::protocol::{cleanup_expired_logs_for, create_checkpoint_for};
@@ -118,6 +119,35 @@ mod state;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub(crate) const DEFAULT_RETRIES: usize = 15;
+
+fn validate_commit_protocol(
+    table: &dyn TableReference,
+    data: &CommitData,
+    clustered_compaction: bool,
+) -> Result<(), TransactionError> {
+    if clustered_compaction {
+        PROTOCOL.can_commit_clustered_compaction(table, &data.actions, &data.operation)
+    } else {
+        PROTOCOL.can_commit(table, &data.actions, &data.operation)
+    }
+}
+
+fn validate_clustered_compaction_state(
+    table: &dyn TableReference,
+    log_store: &dyn LogStore,
+    expected_columns: &[ColumnName],
+) -> DeltaResult<()> {
+    let engine = log_store.engine(None);
+    let current_columns = table
+        .eager_snapshot()
+        .snapshot()
+        .inner
+        .get_physical_clustering_columns(engine.as_ref())?;
+    if current_columns.as_deref() != Some(expected_columns) {
+        return Err(TransactionError::CommitConflict(CommitConflictError::MetadataChanged).into());
+    }
+    Ok(())
+}
 // These keys map to typed CommitInfo fields used by common Spark compatible writers. They are not
 // required by the protocol, but leaving them in flattened metadata can produce duplicate JSON keys.
 // Keep this list aligned with validate_reserved_commit_metadata in python/src/lib.rs.
@@ -632,6 +662,7 @@ pub struct CommitBuilder {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    clustered_compaction_columns: Option<Vec<ColumnName>>,
 }
 
 impl Default for CommitBuilder {
@@ -644,6 +675,7 @@ impl Default for CommitBuilder {
             post_commit_hook: None,
             post_commit_hook_handler: None,
             operation_id: Uuid::new_v4(),
+            clustered_compaction_columns: None,
         }
     }
 }
@@ -679,6 +711,11 @@ impl<'a> CommitBuilder {
         self
     }
 
+    pub(crate) fn with_clustered_compaction(mut self, columns: Vec<ColumnName>) -> Self {
+        self.clustered_compaction_columns = Some(columns);
+        self
+    }
+
     /// Set a custom execute handler, for pre and post execution
     pub fn with_post_commit_hook_handler(
         mut self,
@@ -709,6 +746,7 @@ impl<'a> CommitBuilder {
             post_commit_hook: self.post_commit_hook,
             post_commit_hook_handler: self.post_commit_hook_handler,
             operation_id: self.operation_id,
+            clustered_compaction_columns: self.clustered_compaction_columns,
         }
     }
 }
@@ -722,6 +760,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    clustered_compaction_columns: Option<Vec<ColumnName>>,
 }
 
 impl<'a> std::future::IntoFuture for PreCommit<'a> {
@@ -752,7 +791,18 @@ impl<'a> PreCommit<'a> {
 
         Box::pin(async move {
             if let Some(table_reference) = this.table_data {
-                PROTOCOL.can_commit(table_reference, &this.data.actions, &this.data.operation)?;
+                if let Some(columns) = &this.clustered_compaction_columns {
+                    validate_clustered_compaction_state(
+                        table_reference,
+                        this.log_store.as_ref(),
+                        columns,
+                    )?;
+                }
+                validate_commit_protocol(
+                    table_reference,
+                    &this.data,
+                    this.clustered_compaction_columns.is_some(),
+                )?;
             }
             let log_entry = this.data.get_bytes()?;
 
@@ -779,6 +829,7 @@ impl<'a> PreCommit<'a> {
                 post_commit: this.post_commit_hook,
                 post_commit_hook_handler: this.post_commit_hook_handler,
                 operation_id: this.operation_id,
+                clustered_compaction_columns: this.clustered_compaction_columns,
             })
         })
     }
@@ -794,6 +845,7 @@ pub struct PreparedCommit<'a> {
     post_commit: Option<PostCommitHookProperties>,
     post_commit_hook_handler: Option<Arc<dyn CustomExecuteHandler>>,
     operation_id: Uuid,
+    clustered_compaction_columns: Option<Vec<ColumnName>>,
 }
 
 impl PreparedCommit<'_> {
@@ -946,6 +998,18 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             .update(&this.log_store, Some(latest_version))
                             .await?;
                     }
+                    if let Some(expected) = &this.clustered_compaction_columns {
+                        validate_clustered_compaction_state(
+                            &read_snapshot,
+                            this.log_store.as_ref(),
+                            expected,
+                        )?;
+                    }
+                    validate_commit_protocol(
+                        &read_snapshot,
+                        &this.data,
+                        this.clustered_compaction_columns.is_some(),
+                    )?;
                     let version: Version = latest_version + 1;
                     Span::current().record("target_version", version);
 
@@ -1227,7 +1291,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::kernel::IsolationLevel;
+    use crate::DeltaTable;
+    use crate::kernel::{DataType, DomainMetadata, IsolationLevel, ProtocolExt as _, StructField};
     use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
     use crate::protocol::SaveMode;
     use object_store::{PutPayload, memory::InMemory};
@@ -1265,6 +1330,136 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_retry_rejects_concurrent_clustering_change() {
+        let mut table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([
+                StructField::new("id", DataType::INTEGER, true),
+                StructField::new("value", DataType::INTEGER, true),
+            ])
+            .await
+            .unwrap();
+        let log_store = table.log_store();
+        let snapshot = table.snapshot().unwrap().snapshot();
+        let protocol = snapshot
+            .protocol()
+            .clone()
+            .append_writer_features(&[TableFeature::DomainMetadata, TableFeature::ClusteredTable]);
+        crate::writer::flush_and_commit(
+            vec![
+                Action::Protocol(protocol),
+                Action::DomainMetadata(DomainMetadata {
+                    domain: "delta.clustering".to_string(),
+                    configuration: r#"{"clusteringColumns":[["value"]]}"#.to_string(),
+                    removed: false,
+                }),
+            ],
+            &mut table,
+            None,
+        )
+        .await
+        .unwrap();
+        let snapshot = table.snapshot().unwrap().snapshot();
+        let prepared = CommitBuilder::default()
+            .with_clustered_compaction(vec![ColumnName::new(["value"])])
+            .build(
+                Some(snapshot),
+                log_store.clone(),
+                DeltaOperation::Optimize {
+                    target_size: 1024,
+                    predicate: None,
+                },
+            )
+            .into_prepared_commit_future()
+            .await
+            .unwrap();
+
+        let concurrent = CommitData::new(
+            vec![Action::DomainMetadata(DomainMetadata {
+                domain: "delta.clustering".to_string(),
+                configuration: r#"{"clusteringColumns":[["id"]]}"#.to_string(),
+                removed: false,
+            })],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        )
+        .get_bytes()
+        .unwrap();
+        log_store
+            .write_commit_entry(
+                snapshot.version() + 1,
+                CommitOrBytes::LogBytes(concurrent),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+
+        let error = match prepared.await {
+            Ok(_) => panic!("concurrent clustering change must reject the retry"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("Metadata changed"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_rejects_concurrent_protocol_change() {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new("id", DataType::INTEGER, true)])
+            .await
+            .unwrap();
+        let log_store = table.log_store();
+        let snapshot = table.snapshot().unwrap().snapshot();
+        let prepared = CommitBuilder::default()
+            .build(
+                Some(snapshot),
+                log_store.clone(),
+                DeltaOperation::Optimize {
+                    target_size: 1024,
+                    predicate: None,
+                },
+            )
+            .into_prepared_commit_future()
+            .await
+            .unwrap();
+
+        let concurrent = CommitData::new(
+            vec![Action::Protocol(
+                snapshot.protocol().clone().append_writer_features(&[
+                    TableFeature::DomainMetadata,
+                    TableFeature::ClusteredTable,
+                ]),
+            )],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        )
+        .get_bytes()
+        .unwrap();
+        log_store
+            .write_commit_entry(
+                snapshot.version() + 1,
+                CommitOrBytes::LogBytes(concurrent),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+
+        let error = match prepared.await {
+            Ok(_) => panic!("concurrent protocol change must reject the retry"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("ClusteredTable"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
