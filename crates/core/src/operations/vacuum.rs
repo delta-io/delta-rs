@@ -825,6 +825,10 @@ fn is_skippable_root_prefix(path: &Path) -> bool {
 /// At the final level each child prefix is yielded immediately.
 /// Intermediate-level orphans are reported via `on_intermediate_orphan`.
 /// Every listed object increments `scanned`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Traversal state and metrics are explicit in this existing vacuum interface"
+)]
 fn expand_partition_prefixes(
     store: Arc<dyn ObjectStore>,
     partition_depth: usize,
@@ -933,6 +937,10 @@ fn expand_partition_prefixes(
 /// not just orphans). Only objects that pass `consider_orphan_for_deletion`
 /// are yielded. Inputs are owned/`Arc` so the stream is `'static` and can be
 /// driven from concurrent `buffer_unordered` tasks.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Traversal state and metrics are explicit in this existing vacuum interface"
+)]
 fn list_orphans_under_prefix(
     store: Arc<dyn ObjectStore>,
     prefix: Path,

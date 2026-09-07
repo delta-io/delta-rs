@@ -15,11 +15,12 @@
 
 use std::sync::Arc;
 
+use crate::logstore::parquet_reader::ParquetObjectReader;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::stream::{StreamExt as _, TryStreamExt as _};
 use object_store::ObjectStore;
 use object_store::path::Path;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};

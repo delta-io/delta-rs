@@ -634,18 +634,14 @@ mod tests {
     };
     use crate::writer::test_utils::get_delta_schema;
     use arrow::array::StructArray;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::datatypes::Field;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::prelude::SessionConfig;
-    use datafusion_proto::physical_plan::AsExecutionPlan;
-    use datafusion_proto::protobuf;
     use delta_kernel::schema::ArrayType;
     use futures::{StreamExt, TryStreamExt};
     use object_store::ObjectStoreExt as _;
     use serde_json::json;
     use std::ops::Range;
-    use url::Url;
 
     use super::*;
     use crate::delta_datafusion::table_provider::next::{FileSelection, MissingSelectedFilePolicy};
@@ -1432,7 +1428,7 @@ mod tests {
         assert_eq!(1, files.len());
         let object_store = table.object_store();
         let file_meta = object_store.head(&files[0]).await.unwrap();
-        let file_reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+        let file_reader = crate::logstore::parquet_reader::ParquetObjectReader::new(
             object_store,
             file_meta.location.clone(),
         )

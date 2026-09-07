@@ -286,7 +286,7 @@ impl RecordBatchWriter {
     /// widening write on a partitioned table is rejected as unsupported.
     /// A later [`flush_and_commit`](super::DeltaWriter::flush_and_commit) commits
     /// the evolved metadata along with the data; on the [`flush`](super::DeltaWriter::flush)
-    /// + manual-commit path, committing the evolved metadata is the caller's
+    /// followed by a manual commit path, committing the evolved metadata is the caller's
     /// responsibility.
     ///
     /// Validation errors fail only this call and leave the flush window untouched.
