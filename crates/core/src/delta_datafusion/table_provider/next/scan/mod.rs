@@ -639,19 +639,26 @@ async fn get_data_scan_plan(
         scan_plan.parquet_predicate.as_ref()
     };
     let file_id_field = scan_plan.contract.file_id_field.clone();
-    let known_logical: Schema = table_config.logical_schema().as_ref().try_into_arrow()?;
-    let known_physical: Schema = table_config.physical_schema().as_ref().try_into_arrow()?;
+    // Complete schemas are needed only to choose a collision-free hidden position
+    // field. Avoid converting them again on scans without a positional consumer.
+    let known_schemas = if has_deletion_vectors {
+        let logical: Schema = table_config.logical_schema().as_ref().try_into_arrow()?;
+        let physical: Schema = table_config.physical_schema().as_ref().try_into_arrow()?;
+        vec![
+            Arc::new(logical),
+            Arc::new(physical),
+            scan_plan.contract.scan_schema.clone(),
+            scan_plan.contract.output_schema.clone(),
+            scan_plan.parquet_predicate_schema.clone(),
+        ]
+    } else {
+        Vec::new()
+    };
     let mut physical_input_contract = PhysicalInputContract::try_new(
         &scan_plan.parquet_read_schema,
         file_id_field,
         has_deletion_vectors,
-        &[
-            Arc::new(known_logical),
-            Arc::new(known_physical),
-            scan_plan.contract.scan_schema.clone(),
-            scan_plan.contract.output_schema.clone(),
-            scan_plan.parquet_predicate_schema.clone(),
-        ],
+        &known_schemas,
     )?;
     physical_input_contract.log_counts = log_counts;
     physical_input_contract.store_bindings = store_bindings;

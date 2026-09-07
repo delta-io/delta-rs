@@ -345,7 +345,13 @@ impl DeltaScanExec {
                     if planned_file.partition_values != file.partition_values {
                         return plan_err!("unplanned partition constants");
                     }
-                    if planned_file.object_meta != file.object_meta {
+                    if planned_file.object_meta != file.object_meta
+                        || planned_file.arrow_schema != file.arrow_schema
+                        || planned_file.statistics != file.statistics
+                        || planned_file.ordering != file.ordering
+                        || planned_file.metadata_size_hint != file.metadata_size_hint
+                        || planned_file.table_reference != file.table_reference
+                    {
                         return plan_err!("immutable planned file metadata changed");
                     }
                     if file.range.is_some() {
@@ -2046,6 +2052,41 @@ mod tests {
             .data_source()
             .downcast_ref::<FileScanConfig>()
             .expect("DataSourceExec must hold a parquet FileScanConfig");
+
+        for change in ["schema", "statistics", "ordering", "hint"] {
+            let mut groups = config
+                .file_groups
+                .iter()
+                .map(|group| group.iter().cloned().collect::<Vec<_>>())
+                .collect::<Vec<_>>();
+            let file = &mut groups[0][0];
+            match change {
+                "schema" => file.arrow_schema = Some(Arc::new(arrow_schema::Schema::empty())),
+                "statistics" => file.statistics = None,
+                "ordering" => {
+                    file.ordering = Some(
+                        datafusion::physical_expr::LexOrdering::new(vec![
+                            datafusion::physical_expr::PhysicalSortExpr::new_default(Arc::new(
+                                Column::new("value", 0),
+                            )),
+                        ])
+                        .unwrap(),
+                    )
+                }
+                _ => file.metadata_size_hint = Some(1),
+            }
+            let replacement = DataSourceExec::from_data_source(
+                FileScanConfigBuilder::from(config.clone())
+                    .with_file_groups(groups.into_iter().map(FileGroup::new).collect())
+                    .build(),
+            );
+            assert!(
+                Arc::new(exec.clone())
+                    .with_new_children(vec![replacement])
+                    .is_err(),
+                "must reject changed per-file {change}"
+            );
+        }
 
         let mut fragment = config.file_groups[0][0].clone();
         fragment.range = Some(FileRange {

@@ -164,6 +164,9 @@ fn benchmark(c: &mut Criterion) {
                 config.options_mut().optimizer.repartition_file_min_size = 0;
                 config.options_mut().execution.parquet.pushdown_filters = true;
                 let context = SessionContext::new_with_config(config);
+                context
+                    .runtime_env()
+                    .register_object_store(&url::Url::parse("file:///").unwrap(), store.clone());
                 let provider = runtime
                     .block_on(async { table.table_provider().await })
                     .unwrap();
@@ -215,30 +218,38 @@ fn benchmark(c: &mut Criterion) {
                             let before_requests = store.requests.load(Ordering::Relaxed);
                             let before_bytes = store.bytes.load(Ordering::Relaxed);
                             let mut last_metrics = BTreeMap::new();
+                            let mut last_plan = None;
                             let mut active_footer_reference_bytes = 0;
-                            for _ in 0..iterations {
+                            for iteration in 0..iterations {
                                 if cold { cache.clear(); }
                                 let start = Instant::now();
                                 runtime.block_on(async {
                                     let plan = if fresh { context.sql(&query).await.unwrap().create_physical_plan().await.unwrap() } else { datafusion::physical_plan::execution_plan::reset_plan_states(prepared.clone()).unwrap() };
-                                    planning += start.elapsed();
+                                    let planning_elapsed = start.elapsed();
+                                    planning += planning_elapsed;
                                     let first_start = Instant::now();
                                     let mut stream = execute_stream(plan.clone(), context.task_ctx()).unwrap();
                                     let first = stream.next().await.transpose().unwrap();
                                     let mut row_count = first.as_ref().map_or(0, |batch| batch.num_rows());
-                                    first_read += first_start.elapsed();
-                                    let mut first_metrics = BTreeMap::new();
-                                    metrics(&plan, &mut first_metrics);
-                                    active_footer_reference_bytes = active_footer_reference_bytes.max(first_metrics.get("active_footer_reference_bytes").copied().unwrap_or(0));
+                                    let first_read_elapsed = first_start.elapsed();
+                                    first_read += first_read_elapsed;
+                                    // Metrics accumulate on reused native sources. Snapshot once
+                                    // per sample batch, outside all measured stages.
+                                    if iteration == 0 {
+                                        let mut first_metrics = BTreeMap::new();
+                                        metrics(&plan, &mut first_metrics);
+                                        active_footer_reference_bytes = active_footer_reference_bytes.max(first_metrics.get("active_footer_reference_bytes").copied().unwrap_or(0));
+                                    }
                                     let stream_start = Instant::now();
                                     while let Some(batch) = stream.next().await { row_count += batch.unwrap().num_rows(); }
-                                    streaming += stream_start.elapsed();
-                                    elapsed += start.elapsed();
+                                    let streaming_elapsed = stream_start.elapsed();
+                                    streaming += streaming_elapsed;
+                                    elapsed += planning_elapsed + first_read_elapsed + streaming_elapsed;
                                     assert_eq!(black_box(row_count), expected_rows);
-                                    last_metrics.clear();
-                                    metrics(&plan, &mut last_metrics);
+                                    last_plan = Some(plan);
                                 });
                             }
+                            if let Some(plan) = last_plan { metrics(&plan, &mut last_metrics); }
                             if let Ok(path) = std::env::var("DV_BENCH_TELEMETRY") {
                                 let retention: usize = cache.list_entries().values().map(|entry| entry.size_bytes).sum();
                                 let record = json!({"case":name,"iterations":iterations,"elapsed_ns":elapsed.as_nanos(),"planning_ns":planning.as_nanos(),"first_read_ns":first_read.as_nanos(),"stream_ns":streaming.as_nanos(),"object_store_requests":store.requests.load(Ordering::Relaxed)-before_requests,"object_store_bytes":store.bytes.load(Ordering::Relaxed)-before_bytes,"cache_retention_bytes":retention,"sampled_active_footer_reference_bytes":active_footer_reference_bytes,"cache_limit_bytes":cache.cache_limit(),"plan_metrics":last_metrics});
