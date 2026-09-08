@@ -55,6 +55,23 @@ target table.
 
 {{ code_example('operations', 'replace_where', ['replaceWhere'])}}
 
+## Upload backpressure
+
+When writing to a slow object store, completed Parquet files can be produced
+faster than they are uploaded. Each partition writer limits pending file uploads
+to two by default, waiting for an upload to finish before rolling another file.
+This also applies to the final partial file when the writer closes.
+
+Set `DELTARS_MAX_IN_FLIGHT_UPLOADS` to a positive integer before the first write
+to change this limit. An unset, invalid, or zero value uses the default of two.
+The setting is separate from `DELTARS_MAX_CONCURRENCY_TASKS`, which controls
+multipart concurrency **within each file**.
+
+This bounds pending file uploads per partition writer, not total process memory.
+The current file's encoding buffers, input batches, completed-file metadata, and
+other partition writers also consume memory. More active partitions or concurrent
+writers increase total memory usage.
+
 ## Using Writer Properties
 
 You can customize the Rust Parquet writer by using the

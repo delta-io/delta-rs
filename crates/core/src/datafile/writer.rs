@@ -1,7 +1,7 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use std::collections::HashMap;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -35,6 +35,7 @@ use parquet::file::metadata::ParquetMetaData;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
 const DEFAULT_UPLOAD_PART_SIZE: usize = 1024 * 1024 * 5;
 const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
+const DEFAULT_MAX_IN_FLIGHT_UPLOADS: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 fn upload_part_size() -> usize {
     static UPLOAD_SIZE: OnceLock<usize> = OnceLock::new();
@@ -66,6 +67,16 @@ fn get_max_concurrency_tasks() -> usize {
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_MAX_CONCURRENCY_TASKS)
+    })
+}
+
+fn max_in_flight_uploads() -> NonZeroUsize {
+    static MAX_UPLOADS: OnceLock<NonZeroUsize> = OnceLock::new();
+    *MAX_UPLOADS.get_or_init(|| {
+        std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOADS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_MAX_IN_FLIGHT_UPLOADS)
     })
 }
 
@@ -549,6 +560,8 @@ pub struct PartitionWriterConfig {
     write_batch_size: usize,
     /// Concurrency level for writing to object store
     max_concurrency_tasks: usize,
+    /// Maximum number of rolled files awaiting upload completion per partition.
+    max_in_flight_uploads: NonZeroUsize,
     /// Defer the `target_file_size` roll until the current row group is complete, so no
     /// file ends in a truncated row group. See
     /// [`PartitionWriterConfig::with_roll_on_row_group_boundary`].
@@ -587,8 +600,20 @@ impl PartitionWriterConfig {
             target_file_size,
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
+            max_in_flight_uploads: max_in_flight_uploads(),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
         })
+    }
+
+    /// Limit pending file uploads per partition, applying backpressure before rolling another file.
+    ///
+    /// Defaults to `DELTARS_MAX_IN_FLIGHT_UPLOADS`, or 2 when unset, invalid, or zero.
+    /// This is separate from `DELTARS_MAX_CONCURRENCY_TASKS`, which limits multipart tasks
+    /// within each file. The current file's encoding buffer and other partitions' writers
+    /// are additional to this limit; it is not a process-wide memory budget.
+    pub fn with_max_in_flight_uploads(mut self, limit: NonZeroUsize) -> Self {
+        self.max_in_flight_uploads = limit;
+        self
     }
 
     /// Defer the `target_file_size` file roll until the parquet writer's current row group is
@@ -696,6 +721,7 @@ pub struct PartitionWriter {
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
+    completed_writes: Vec<(Path, usize, ParquetMetaData)>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
     rolled_bytes: usize,
@@ -722,6 +748,7 @@ impl PartitionWriter {
             num_indexed_cols,
             stats_columns,
             in_flight_writers: JoinSet::new(),
+            completed_writes: Vec::new(),
             rolled_bytes: 0,
         })
     }
@@ -745,7 +772,33 @@ impl PartitionWriter {
         )
     }
 
-    fn reset_writer(&mut self) -> DeltaResult<()> {
+    fn record_upload(
+        &mut self,
+        result: Result<DeltaResult<(Path, usize, ParquetMetaData)>, tokio::task::JoinError>,
+    ) -> DeltaResult<()> {
+        let data = result.map_err(|e| DeltaTableError::GenericError {
+            source: Box::new(e),
+        })??;
+        self.completed_writes.push(data);
+        Ok(())
+    }
+
+    fn drain_finished_uploads(&mut self) -> DeltaResult<()> {
+        while let Some(result) = self.in_flight_writers.try_join_next() {
+            self.record_upload(result)?;
+        }
+        Ok(())
+    }
+
+    async fn reset_writer(&mut self) -> DeltaResult<()> {
+        self.drain_finished_uploads()?;
+        // Wait before replacing the active writer: a cancelled wait leaves its
+        // buffers and multipart upload reachable by `abort`.
+        while self.in_flight_writers.len() >= self.config.max_in_flight_uploads.get() {
+            if let Some(result) = self.in_flight_writers.join_next().await {
+                self.record_upload(result)?;
+            }
+        }
         let next_path = self.next_data_path();
         let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config);
         let state = std::mem::replace(&mut self.writer, new_writer);
@@ -793,6 +846,7 @@ impl PartitionWriter {
     /// The `close` method has to be invoked to write all data still buffered
     /// and get the list of all written files.
     pub async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        self.drain_finished_uploads()?;
         if batch.schema() != self.config.file_schema {
             return Err(WriteError::SchemaMismatch {
                 schema: batch.schema(),
@@ -851,7 +905,7 @@ impl PartitionWriter {
                 && (boundary.is_none() || self.writer.in_progress_rows() == 0)
             {
                 debug!("Writing file with estimated size {estimated_size:?} in background.");
-                self.reset_writer()?;
+                self.reset_writer().await?;
             }
         }
 
@@ -862,36 +916,32 @@ impl PartitionWriter {
     ///
     /// This will flush any remaining data and collect all Add actions from background tasks.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
-        if let LazyArrowWriter::Writing(path, arrow_writer) = self.writer {
-            self.in_flight_writers
-                .spawn(upload_parquet_file(arrow_writer, path));
+        // The final partial file obeys the same limit as size-triggered rolls.
+        // If an earlier upload failed, abort the active file and drain siblings.
+        if let Err(e) = self.reset_writer().await {
+            if let Err(abort_err) = self.abort().await {
+                warn!("failed to abort writer after upload error: {abort_err}");
+            }
+            return Err(e);
         }
 
         // On a failed upload, keep draining the siblings rather than returning
         // early: dropping the JoinSet would cancel them mid-multipart, leaking
         // parts vacuum can't see (completed files are orphans it can reclaim).
-        let mut results = Vec::new();
         let mut first_err: Option<DeltaTableError> = None;
         while let Some(result) = self.in_flight_writers.join_next().await {
-            match result {
-                Ok(Ok(data)) => results.push(data),
-                Ok(Err(e)) => {
-                    first_err.get_or_insert(e);
-                }
-                Err(e) => {
-                    first_err.get_or_insert(DeltaTableError::GenericError {
-                        source: Box::new(e),
-                    });
-                }
+            if let Err(e) = self.record_upload(result) {
+                first_err.get_or_insert(e);
             }
         }
         if let Some(e) = first_err {
             return Err(e);
         }
 
-        sort_completed_writes_by_path(&mut results);
+        sort_completed_writes_by_path(&mut self.completed_writes);
 
-        let adds = results
+        let adds = self
+            .completed_writes
             .into_iter()
             .map(|(path, file_size, metadata)| {
                 create_add(
@@ -939,6 +989,9 @@ impl DataFileWriter for PartitionWriter {
         PartitionWriter::abort(*self).await
     }
 }
+
+#[cfg(test)]
+mod backpressure_tests;
 
 #[cfg(test)]
 mod tests {
