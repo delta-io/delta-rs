@@ -894,7 +894,8 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     )
-    .with_random_prefix_length(random_prefix_length);
+    .with_random_prefix_length(random_prefix_length)
+    .with_upload_budget(normal_config.upload_budget().clone());
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {

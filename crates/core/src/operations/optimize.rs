@@ -48,7 +48,7 @@ use tracing::*;
 use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
-use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig};
+use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig, UploadBudget};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
@@ -609,6 +609,8 @@ pub struct MergeTaskParameters {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    /// Budget for rolled files awaiting upload, shared by every task of this optimize run.
+    upload_budget: UploadBudget,
 }
 
 /// A stream of record batches, with a ParquetError on failure.
@@ -707,7 +709,8 @@ impl MergePlan {
             None,
             None,
             None,
-        )?;
+        )?
+        .with_upload_budget(task_parameters.upload_budget.clone());
         let mut writer = PartitionWriter::try_with_config(
             object_store,
             writer_config,
@@ -1077,6 +1080,7 @@ pub async fn create_merge_plan(
                 .data_skipping_stats_columns
                 .as_ref()
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
+            upload_budget: UploadBudget::from_env(),
         }),
         read_table_version: snapshot.version(),
         read_session: Arc::new(session),
