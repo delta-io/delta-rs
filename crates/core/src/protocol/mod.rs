@@ -420,14 +420,14 @@ impl DeltaOperation {
     /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
         let value = serde_json::to_value(self)?;
-        if let Value::Object(mut operation) = value {
-            if let Some(Value::Object(parameters)) = operation.values_mut().next() {
-                return Ok(take(parameters)
-                    .into_iter()
-                    .filter(|item| !item.1.is_null())
-                    .map(|(key, value)| (key, operation_parameter_value(value)))
-                    .collect());
-            }
+        if let Value::Object(mut operation) = value
+            && let Some(Value::Object(parameters)) = operation.values_mut().next()
+        {
+            return Ok(take(parameters)
+                .into_iter()
+                .filter(|item| !item.1.is_null())
+                .map(|(key, value)| (key, operation_parameter_value(value)))
+                .collect());
         }
 
         Err(DeltaTableError::Generic(

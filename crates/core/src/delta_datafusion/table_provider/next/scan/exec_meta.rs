@@ -9,24 +9,20 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::RecordBatch;
-use arrow::compute::filter_record_batch;
 use arrow::datatypes::SchemaRef;
-use arrow_array::{BooleanArray, RecordBatchOptions};
+use arrow_array::RecordBatchOptions;
 use arrow_schema::{FieldRef, Fields, Schema};
-use dashmap::DashMap;
 use datafusion::common::config::ConfigOptions;
 use datafusion::common::error::{DataFusionError, Result};
 use datafusion::common::tree_node::TreeNodeRecursion;
-use datafusion::common::{HashMap, internal_datafusion_err, stats::Precision};
+use datafusion::common::{HashMap, stats::Precision};
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{
     Boundedness, CardinalityEffect, EmissionType, PlanProperties,
 };
 use datafusion::physical_plan::filter_pushdown::{FilterDescription, FilterPushdownPhase};
-use datafusion::physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
-};
+use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -36,8 +32,8 @@ use delta_kernel::schema::{Schema as KernelSchema, SchemaRef as KernelSchemaRef}
 use delta_kernel::{EvaluationHandler, ExpressionRef};
 use futures::stream::Stream;
 use itertools::Itertools as _;
-use tracing::debug;
 
+use super::deletion_vector::DeletionVectorIndex;
 use crate::delta_datafusion::table_provider::next::KernelScanPlan;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
@@ -71,7 +67,7 @@ pub(crate) struct DeltaScanMetaExec {
     /// Transforms to be applied to data eminating from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Deletion vectors for the table
-    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    deletion_vectors: Arc<DeletionVectorIndex>,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
     /// Execution metrics
@@ -130,7 +126,7 @@ impl DeltaScanMetaExec {
         scan_plan: Arc<KernelScanPlan>,
         input: Vec<VecDeque<(String, usize)>>,
         transforms: Arc<HashMap<String, ExpressionRef>>,
-        selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+        deletion_vectors: Arc<DeletionVectorIndex>,
         public_file_ids: Arc<super::PublicFileIdMap>,
         file_id_field: Option<FieldRef>,
         metrics: ExecutionPlanMetricsSet,
@@ -141,7 +137,7 @@ impl DeltaScanMetaExec {
             scan_plan,
             input,
             transforms,
-            selection_vectors,
+            deletion_vectors,
             public_file_ids,
             metrics,
             file_id_field,
@@ -150,9 +146,8 @@ impl DeltaScanMetaExec {
     }
 
     fn effective_row_count_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {
-        if let Some(selection) = self.selection_vectors.get(file_id) {
-            let (kept_rows, _) = effective_row_count(row_count, selection.value(), file_id)?;
-            Ok(kept_rows)
+        if self.deletion_vectors.has_vectors() {
+            self.deletion_vectors.live_row_count(file_id, row_count)
         } else {
             Ok(row_count)
         }
@@ -272,10 +267,8 @@ impl ExecutionPlan for DeltaScanMetaExec {
             scan_plan: Arc::clone(&self.scan_plan),
             input: self.input[partition].clone(),
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
-            dv_short_mask_padded_files_total: MetricBuilder::new(&self.metrics)
-                .counter("dv_short_mask_padded_files_total", partition),
             transforms: Arc::clone(&self.transforms),
-            selection_vectors: Arc::clone(&self.selection_vectors),
+            deletion_vectors: Arc::clone(&self.deletion_vectors),
             public_file_ids: Arc::clone(&self.public_file_ids),
             file_id_field: self.file_id_field.clone(),
             schema_adapter: super::SchemaAdapter::new(Arc::clone(
@@ -357,12 +350,10 @@ struct DeltaScanMetaStream {
     input: VecDeque<(String, usize)>,
     /// Execution metrics
     baseline_metrics: BaselineMetrics,
-    /// Count of file batches where short deletion-vector masks required padding.
-    dv_short_mask_padded_files_total: Count,
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
-    /// Selection vectors to be applied to data read from individual files
-    selection_vectors: Arc<DashMap<String, Vec<bool>>>,
+    /// Deletion vectors used to count visible rows in each file.
+    deletion_vectors: Arc<DeletionVectorIndex>,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
     /// Column name for the file id
@@ -381,29 +372,16 @@ impl DeltaScanMetaStream {
 
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
+        let live_row_count = if self.deletion_vectors.has_vectors() {
+            self.deletion_vectors.live_row_count(&file_id, row_count)?
+        } else {
+            row_count
+        };
         let batch = RecordBatch::try_new_with_options(
             EMPTY_SCHEMA.clone(),
             vec![],
-            &RecordBatchOptions::new().with_row_count(Some(row_count)),
+            &RecordBatchOptions::new().with_row_count(Some(live_row_count)),
         )?;
-
-        let batch = if let Some(selection) = self.selection_vectors.get(&file_id) {
-            let mask_len = selection.len();
-            let (batch, padded_rows) = apply_selection_vector(batch, selection.value(), &file_id)?;
-            if padded_rows > 0 {
-                self.dv_short_mask_padded_files_total.add(1);
-                debug!(
-                    file_id = file_id.as_str(),
-                    mask_len,
-                    row_count,
-                    padded_rows,
-                    "Padded short deletion-vector keep-mask in metadata scan"
-                );
-            }
-            batch
-        } else {
-            batch
-        };
 
         let result = if self
             .scan_plan
@@ -452,43 +430,6 @@ impl DeltaScanMetaStream {
     }
 }
 
-fn apply_selection_vector(
-    batch: RecordBatch,
-    selection: &[bool],
-    file_id: &str,
-) -> Result<(RecordBatch, usize)> {
-    let (_, n_rows_to_pad) = effective_row_count(batch.num_rows(), selection, file_id)?;
-    // Delta Kernel may emit short keep-masks; missing trailing entries are
-    // implicitly `true` (row is kept).
-    let filter = BooleanArray::from_iter(
-        selection
-            .iter()
-            .copied()
-            .chain(std::iter::repeat_n(true, n_rows_to_pad)),
-    );
-    Ok((filter_record_batch(&batch, &filter)?, n_rows_to_pad))
-}
-
-fn effective_row_count(
-    row_count: usize,
-    selection: &[bool],
-    file_id: &str,
-) -> Result<(usize, usize)> {
-    if selection.len() > row_count {
-        return Err(internal_datafusion_err!(
-            "Selection vector length ({}) exceeds row count ({}) for file '{}'. \
-             This indicates a bug in deletion vector processing.",
-            selection.len(),
-            row_count,
-            file_id
-        ));
-    }
-
-    let n_rows_to_pad = row_count - selection.len();
-    let kept_rows = selection.iter().filter(|keep| **keep).count() + n_rows_to_pad;
-    Ok((kept_rows, n_rows_to_pad))
-}
-
 impl Stream for DeltaScanMetaStream {
     type Item = Result<RecordBatch>;
 
@@ -518,8 +459,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow::array::RecordBatch;
-    use arrow_array::{Int64Array, RecordBatchOptions, StringArray};
-    use arrow_schema::{DataType, Field, Fields, Schema};
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
     use datafusion::{
         catalog::TableProvider,
         common::stats::Precision,
@@ -772,54 +713,6 @@ mod tests {
         );
 
         Ok(())
-    }
-
-    #[test]
-    fn test_apply_selection_vector_short_mask_pads_with_true() {
-        let batch = RecordBatch::try_new_with_options(
-            Arc::new(Schema::new(Fields::empty())),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(4)),
-        )
-        .unwrap();
-
-        // Short masks are valid: missing trailing entries are implicitly true.
-        let (filtered, padded_rows) =
-            apply_selection_vector(batch, &[false, true], "file:///f.parquet").unwrap();
-        assert_eq!(filtered.num_rows(), 3);
-        assert_eq!(padded_rows, 2);
-    }
-
-    #[test]
-    fn test_apply_selection_vector_no_padding_when_lengths_match() {
-        let batch = RecordBatch::try_new_with_options(
-            Arc::new(Schema::new(Fields::empty())),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(2)),
-        )
-        .unwrap();
-
-        let (filtered, padded_rows) =
-            apply_selection_vector(batch, &[true, false], "file:///f.parquet").unwrap();
-        assert_eq!(filtered.num_rows(), 1);
-        assert_eq!(padded_rows, 0);
-    }
-
-    #[test]
-    fn test_apply_selection_vector_longer_than_batch_errors() {
-        let batch = RecordBatch::try_new_with_options(
-            Arc::new(Schema::new(Fields::empty())),
-            vec![],
-            &RecordBatchOptions::new().with_row_count(Some(2)),
-        )
-        .unwrap();
-
-        let err = apply_selection_vector(batch, &[true, true, true], "file:///f.parquet")
-            .expect_err("selection vector longer than row count must error");
-        assert!(
-            err.to_string().contains("Selection vector length"),
-            "unexpected error: {err}"
-        );
     }
 
     #[tokio::test]
@@ -1145,8 +1038,22 @@ mod tests {
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected metadata-only scan");
 
-        let selection_vectors: Arc<DashMap<String, Vec<bool>>> = Arc::new(DashMap::new());
-        selection_vectors.insert("f2".to_string(), vec![true, false, true, false]);
+        let deletion_vectors = Arc::new(DeletionVectorIndex::try_new(
+            HashMap::from([(
+                "f2".to_string(),
+                super::super::deletion_vector::DeletionVectorEntry {
+                    keep_mask: vec![true, false, true, false],
+                    physical_record_count: 4,
+                    deleted_cardinality: 2,
+                },
+            )]),
+            HashMap::from([
+                ("f1".into(), Some(10)),
+                ("f2".into(), Some(4)),
+                ("f3".into(), Some(6)),
+                ("f4".into(), Some(2)),
+            ]),
+        )?);
         let public_file_ids = Arc::new(
             [
                 ("f1".to_string(), "f1".to_string()),
@@ -1167,7 +1074,7 @@ mod tests {
                 ("f4".to_string(), 2usize),
             ])],
             Arc::clone(&template.transforms),
-            selection_vectors,
+            deletion_vectors,
             public_file_ids,
             template.file_id_field.clone(),
             ExecutionPlanMetricsSet::new(),

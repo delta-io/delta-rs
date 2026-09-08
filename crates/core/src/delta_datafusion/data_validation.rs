@@ -2340,7 +2340,7 @@ mod tests {
         // Confirm that two DataValidation nodes built from identical inputs compare Equal under
         // both PartialEq and PartialOrd — proving validated_schema is deterministic from
         // input + validations, so the PartialOrd filter guard is always a no-op in practice.
-        use datafusion::common::{DFSchema, ToDFSchema};
+        use datafusion::common::ToDFSchema;
         use datafusion::logical_expr::{EmptyRelation, LogicalPlan};
         use datafusion::prelude::col;
 

@@ -281,13 +281,12 @@ impl RecordBatchWriter {
     /// stripped before encoding) but must otherwise conform to the writer's
     /// schema. Returns the writer's current arrow schema.
     ///
-    /// With [`WriteMode::MergeSchema`] new columns widen the writer's schema
-    /// (sealing the files written so far) and the merged schema is returned; a
-    /// widening write on a partitioned table is rejected as unsupported.
-    /// A later [`flush_and_commit`](super::DeltaWriter::flush_and_commit) commits
-    /// the evolved metadata along with the data; on the [`flush`](super::DeltaWriter::flush)
-    /// + manual-commit path, committing the evolved metadata is the caller's
-    /// responsibility.
+    /// With [`WriteMode::MergeSchema`], new columns widen the writer's schema and
+    /// seal the open files. Returns the merged schema. Schema changes on partitioned
+    /// tables are rejected.
+    /// [`flush_and_commit`](super::DeltaWriter::flush_and_commit) commits the updated
+    /// metadata with the data. Callers that use [`flush`](super::DeltaWriter::flush)
+    /// must commit the updated metadata themselves.
     ///
     /// Validation errors fail only this call and leave the flush window untouched.
     pub async fn write_partition(

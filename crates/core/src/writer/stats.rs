@@ -11,7 +11,7 @@ use delta_kernel::table_properties::DataSkippingNumIndexedCols;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use parquet::basic::Type;
-use parquet::basic::{ConvertedType, DecimalType, IntType, LogicalType, TimestampType};
+use parquet::basic::{ConvertedType, DecimalType, LogicalType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{
@@ -643,6 +643,7 @@ mod tests {
         protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
     };
+    use parquet::basic::{IntType, TimestampType};
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
     use parquet::{basic::Compression, file::properties::WriterProperties};

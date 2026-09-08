@@ -233,10 +233,8 @@ impl StatsProjection {
 
         let columns = requested_columns
             .iter()
-            .filter_map(|column| {
-                stats_schema_contains_data_column(stats_schema.as_ref(), column)
-                    .then(|| column.clone())
-            })
+            .filter(|&column| stats_schema_contains_data_column(stats_schema.as_ref(), column))
+            .cloned()
             .collect::<BTreeSet<_>>();
 
         if columns.is_empty() {

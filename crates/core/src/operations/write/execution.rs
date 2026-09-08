@@ -441,6 +441,7 @@ fn drop_internal_column(
     Ok(Arc::new(ProjectionExec::try_new(expressions, plan)?))
 }
 
+#[expect(clippy::too_many_arguments, reason = "Match the other write functions")]
 pub(crate) async fn write_exec_plan(
     session: &dyn Session,
     log_store: &dyn LogStore,

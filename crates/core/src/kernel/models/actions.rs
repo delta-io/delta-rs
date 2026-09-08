@@ -769,65 +769,55 @@ impl fmt::Display for TableFeatures {
     }
 }
 
-impl TryFrom<&TableFeatures> for TableFeature {
-    type Error = std::convert::Infallible;
-
-    fn try_from(value: &TableFeatures) -> Result<Self, Self::Error> {
-        TableFeature::try_from(value.as_ref())
+impl From<&TableFeatures> for TableFeature {
+    fn from(value: &TableFeatures) -> Self {
+        TableFeature::from(value.as_ref())
     }
 }
 
 impl TableFeatures {
-    /// Convert table feature to respective reader or/and write feature
+    /// Return the feature's reader and writer requirements.
     pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
-        let feature = TableFeature::try_from(self).ok();
+        let feature = TableFeature::from(self);
         match feature {
-            Some(feature) => {
-                // Classify features based on their type
-                // Writer-only features
-                match feature {
-                    TableFeature::AppendOnly
-                    | TableFeature::Invariants
-                    | TableFeature::CheckConstraints
-                    | TableFeature::ChangeDataFeed
-                    | TableFeature::GeneratedColumns
-                    | TableFeature::IdentityColumns
-                    | TableFeature::InCommitTimestamp
-                    | TableFeature::RowTracking
-                    | TableFeature::DomainMetadata
-                    | TableFeature::IcebergCompatV1
-                    | TableFeature::IcebergCompatV2
-                    | TableFeature::ClusteredTable
-                    | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
+            // Writer features
+            TableFeature::AppendOnly
+            | TableFeature::Invariants
+            | TableFeature::CheckConstraints
+            | TableFeature::ChangeDataFeed
+            | TableFeature::GeneratedColumns
+            | TableFeature::IdentityColumns
+            | TableFeature::InCommitTimestamp
+            | TableFeature::RowTracking
+            | TableFeature::DomainMetadata
+            | TableFeature::IcebergCompatV1
+            | TableFeature::IcebergCompatV2
+            | TableFeature::ClusteredTable
+            | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
-                    // ReaderWriter features
-                    TableFeature::CatalogManaged
-                    | TableFeature::CatalogOwnedPreview
-                    | TableFeature::ColumnMapping
-                    | TableFeature::DeletionVectors
-                    | TableFeature::TimestampWithoutTimezone
-                    | TableFeature::TypeWidening
-                    | TableFeature::TypeWideningPreview
-                    | TableFeature::V2Checkpoint
-                    | TableFeature::VacuumProtocolCheck
-                    | TableFeature::VariantType
-                    | TableFeature::VariantTypePreview
-                    | TableFeature::VariantShreddingPreview => {
-                        (Some(feature.clone()), Some(feature))
-                    }
+            // Reader and writer features
+            TableFeature::CatalogManaged
+            | TableFeature::CatalogOwnedPreview
+            | TableFeature::ColumnMapping
+            | TableFeature::DeletionVectors
+            | TableFeature::TimestampWithoutTimezone
+            | TableFeature::TypeWidening
+            | TableFeature::TypeWideningPreview
+            | TableFeature::V2Checkpoint
+            | TableFeature::VacuumProtocolCheck
+            | TableFeature::VariantType
+            | TableFeature::VariantTypePreview
+            | TableFeature::VariantShreddingPreview => (Some(feature.clone()), Some(feature)),
 
-                    // Optional ReaderWriter features
-                    #[cfg(feature = "nanosecond-timestamps")]
-                    TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
+            // Optional reader and writer features
+            #[cfg(feature = "nanosecond-timestamps")]
+            TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 
-                    // Unknown features
-                    TableFeature::Unknown(_) => (None, None),
-                    others => {
-                        panic!("This table has unsupported table features: {others:?}");
-                    }
-                }
+            // Unknown features
+            TableFeature::Unknown(_) => (None, None),
+            others => {
+                panic!("This table has unsupported table features: {others:?}");
             }
-            None => (None, None),
         }
     }
 }

@@ -152,14 +152,13 @@ impl AsyncFileReader for ParquetObjectReader {
                 .with_prefetch_hint(self.metadata_size_hint);
 
             // Override page index policies from ArrowReaderOptions if specified and not Skip.
-            if let Some(options) = options {
-                if options.column_index_policy() != PageIndexPolicy::Skip
-                    || options.offset_index_policy() != PageIndexPolicy::Skip
-                {
-                    metadata = metadata
-                        .with_column_index_policy(options.column_index_policy())
-                        .with_offset_index_policy(options.offset_index_policy());
-                }
+            if let Some(options) = options
+                && (options.column_index_policy() != PageIndexPolicy::Skip
+                    || options.offset_index_policy() != PageIndexPolicy::Skip)
+            {
+                metadata = metadata
+                    .with_column_index_policy(options.column_index_policy())
+                    .with_offset_index_policy(options.offset_index_policy());
             }
 
             let metadata = if let Some(file_size) = self.file_size {
@@ -170,16 +169,5 @@ impl AsyncFileReader for ParquetObjectReader {
 
             Ok(Arc::new(metadata))
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parquet_object_reader_new() {
-        // This test just verifies the struct can be instantiated
-        // Full integration tests are in the operations module
     }
 }
