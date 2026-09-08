@@ -14,35 +14,33 @@ def _datafusion_major_version() -> int | None:
         return None
 
 
-def test_datafusion_table_provider_incompatible_version_errors(tmp_path, monkeypatch):
-    # Force the runtime check to behave like an incompatible pre-53 datafusion install.
-    call_count = {"count": 0}
+@pytest.mark.parametrize("installed", ["53.0.0", "54.0.0", "56.0.0", "invalid"])
+def test_datafusion_table_provider_incompatible_version_errors(
+    tmp_path, monkeypatch, installed
+):
+    calls = []
 
     def fake_version(pkg: str) -> str:
-        assert pkg == "datafusion"
-        call_count["count"] += 1
-        if call_count["count"] == 1:
-            return "53.0.0"
-        return "54.0.0"
+        calls.append(pkg)
+        return installed
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
-
     table = Table(
         {"id": Array([1, 2, 3], Field("id", type=DataType.int64(), nullable=True))}
     )
     write_deltalake(tmp_path, table)
     dt = DeltaTable(tmp_path)
 
-    # Call the FFI export hook directly; DO NOT call SessionContext.register_* (that is what segfaults).
-    with pytest.raises(RuntimeError) as exc_info:
-        dt.__datafusion_table_provider__()  # type: ignore[attr-defined]
+    # Reject incompatible consumers before exporting a capsule or reading a session capsule.
+    class UnreachableSession:
+        def __datafusion_task_context_provider__(self):
+            pytest.fail(
+                "incompatible consumers must be rejected before accessing their session"
+            )
 
-    assert call_count["count"] == 1
-
-    msg = str(exc_info.value)
-    assert "datafusion" in msg
-    assert "datafusion==54" in msg
-    assert "QueryBuilder" in msg
+    with pytest.raises(RuntimeError, match="datafusion==55"):
+        dt.__datafusion_table_provider__(session=UnreachableSession())
+    assert calls == ["datafusion"]
 
 
 def test_datafusion_table_provider_not_installed_errors(tmp_path, monkeypatch):
@@ -71,7 +69,7 @@ def test_datafusion_table_provider_accepts_session_keyword_argument(
 ):
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "54.0.0"
+        return "55.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -93,7 +91,7 @@ def test_datafusion_table_provider_invalid_task_ctx_capsule_name_errors(
 
     def fake_version(pkg: str) -> str:
         assert pkg == "datafusion"
-        return "54.0.0"
+        return "55.0.0"
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
 
@@ -124,13 +122,10 @@ def test_datafusion_table_provider(tmp_path):
             "DataFusion Python integration tests are disabled by default; set DELTALAKE_RUN_DATAFUSION_TESTS=1"
         )
 
-    # This deltalake build exports a DataFusion 54.x FFI TableProvider; the
-    # installed datafusion-python wheel must match that major or the runtime
-    # guard rejects it. datafusion-python has no 54.x release yet, so skip until
-    # one is published rather than fail.
+    # Skip until matching wheels are available; the runtime guard requires major 55.
     datafusion_major = _datafusion_major_version()
-    if datafusion_major != 54:
-        pytest.skip("DataFusion Python integration requires datafusion==54.x wheels")
+    if datafusion_major != 55:
+        pytest.skip("DataFusion Python integration requires datafusion==55.x wheels")
     nrows = 5
     table = Table(
         {
