@@ -3,6 +3,8 @@
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
+#[cfg(feature = "datafusion-declarative-scan")]
+use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinSet;
@@ -109,6 +111,16 @@ impl<O: Send + 'static> ReceiverStreamBuilder<O> {
                 f()
             })
         });
+    }
+
+    /// Spawn an asynchronous producing task that will be aborted if this builder (or the stream
+    /// built from it) is dropped.
+    #[cfg(feature = "datafusion-declarative-scan")]
+    pub fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Output = DeltaResult<()>> + Send + 'static,
+    {
+        self.join_set.spawn(future);
     }
 
     /// Create a stream of all data written to `tx`

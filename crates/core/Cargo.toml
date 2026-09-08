@@ -19,6 +19,7 @@ deltalake-derive = { version = "1", path = "../derive" }
 
 delta_kernel.workspace = true
 delta_kernel_default_engine.workspace = true
+datafusion_executor = { workspace = true, optional = true }
 
 # Incompatible dependencies were introduced into our transitives:
 # <https://github.com/dropbox/rust-brotli/issues/256>
@@ -122,6 +123,11 @@ datafusion = [
     "datafusion-physical-expr-adapter",
     "datafusion-proto",
 ]
+datafusion-declarative-scan = [
+    "datafusion",
+    "dep:datafusion_executor",
+    "delta_kernel/declarative-plans",
+]
 datafusion-ext = ["datafusion"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
@@ -156,6 +162,11 @@ required-features = ["datafusion"]
 [[bench]]
 name = "json_parsing"
 harness = false
+
+[[bench]]
+name = "metadata_scan"
+harness = false
+required-features = ["datafusion"]
 
 [package.metadata.cargo-machete]
 ignored = ["foyer", "alloc-stdlib", "brotli-decompressor"]
