@@ -106,7 +106,7 @@ pub fn create_spec_partition_values<F: FileAction>(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "Keep the existing CDF pair expansion interface explicit"
+    reason = "Pass the CDF pair expansion inputs together"
 )]
 pub async fn extend_groups_with_pairs(
     schema: SchemaRef,

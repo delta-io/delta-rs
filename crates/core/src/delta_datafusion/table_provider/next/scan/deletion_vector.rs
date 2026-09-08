@@ -1,4 +1,4 @@
-//! Immutable deletion-vector lookup by absolute physical Parquet row position.
+//! Immutable deletion vector lookup by absolute physical Parquet row position.
 
 use arrow_array::{BooleanArray, Int64Array};
 use datafusion::common::{HashMap, Result, exec_err, plan_err};
@@ -18,19 +18,27 @@ pub(super) struct DeletionVectorIndex {
 }
 
 impl DeletionVectorIndex {
-    pub fn try_new(entries: HashMap<String, DeletionVectorEntry>) -> Result<Self> {
+    pub fn try_new(
+        entries: HashMap<String, DeletionVectorEntry>,
+        selected: HashMap<String, Option<u64>>,
+    ) -> Result<Self> {
         for (file_id, entry) in &entries {
+            if selected.get(file_id) != Some(&Some(entry.physical_record_count)) {
+                return plan_err!(
+                    "selected file row count does not match deletion vector for compact file id '{file_id}'"
+                );
+            }
             if entry.physical_record_count > i64::MAX as u64 {
                 return plan_err!("numRecords exceeds Parquet Int64 coordinates");
             }
             let mask_len = u64::try_from(entry.keep_mask.len()).map_err(|_| {
                 datafusion::common::DataFusionError::Plan(format!(
-                    "deletion-vector mask length overflows u64 for compact file id '{file_id}'"
+                    "deletion vector mask length overflows u64 for compact file id '{file_id}'"
                 ))
             })?;
             if mask_len > entry.physical_record_count {
                 return plan_err!(
-                    "deletion-vector mask length {mask_len} exceeds numRecords {} for compact file id '{file_id}'",
+                    "deletion vector mask length {mask_len} exceeds numRecords {} for compact file id '{file_id}'",
                     entry.physical_record_count
                 );
             }
@@ -39,40 +47,17 @@ impl DeletionVectorIndex {
             )
             .map_err(|_| {
                 datafusion::common::DataFusionError::Plan(format!(
-                    "deletion-vector cardinality overflows u64 for compact file id '{file_id}'"
+                    "deletion vector cardinality overflows u64 for compact file id '{file_id}'"
                 ))
             })?;
             if actual_deleted != entry.deleted_cardinality {
                 return plan_err!(
-                    "deletion-vector cardinality mismatch for compact file id '{file_id}': descriptor={}, actual={actual_deleted}",
+                    "deletion vector cardinality mismatch for compact file id '{file_id}': descriptor={}, actual={actual_deleted}",
                     entry.deleted_cardinality
                 );
             }
-            if entry.deleted_cardinality > entry.physical_record_count {
-                return plan_err!(
-                    "deletion-vector cardinality {} exceeds numRecords {} for compact file id '{file_id}'",
-                    entry.deleted_cardinality,
-                    entry.physical_record_count
-                );
-            }
         }
-        let selected = entries
-            .iter()
-            .map(|(id, entry)| (id.clone(), Some(entry.physical_record_count)))
-            .collect();
         Ok(Self { entries, selected })
-    }
-
-    pub fn with_selected_files(mut self, selected: HashMap<String, Option<u64>>) -> Result<Self> {
-        for (id, entry) in &self.entries {
-            if selected.get(id) != Some(&Some(entry.physical_record_count)) {
-                return plan_err!(
-                    "selected-file count does not match deletion vector for compact file id '{id}'"
-                );
-            }
-        }
-        self.selected = selected;
-        Ok(self)
     }
 
     pub fn has_vectors(&self) -> bool {
@@ -117,7 +102,7 @@ impl DeletionVectorIndex {
                         count
                     );
                 }
-                // The implicit-live tail is not an index into the materialized mask.
+                // Rows past the end of the mask are kept.
                 let keep = match entry {
                     Some(entry) if position < entry.keep_mask.len() as u64 => {
                         let index = usize::try_from(position).map_err(|_| datafusion::common::DataFusionError::Execution("materialized position overflows usize".into()))?;
@@ -138,7 +123,12 @@ impl DeletionVectorIndex {
         let Some(count) = self.selected.get(compact_file_id) else {
             return exec_err!("unknown selected compact file id '{compact_file_id}'");
         };
-        if count.is_some_and(|count| count != physical_record_count as u64) {
+        let supplied_record_count = u64::try_from(physical_record_count).map_err(|_| {
+            datafusion::common::DataFusionError::Execution(format!(
+                "physical record count overflows u64 for compact file id '{compact_file_id}'"
+            ))
+        })?;
+        if count.is_some_and(|count| count != supplied_record_count) {
             return exec_err!(
                 "physical record count mismatch for compact file id '{compact_file_id}'"
             );
@@ -146,17 +136,6 @@ impl DeletionVectorIndex {
         let Some(entry) = self.entries.get(compact_file_id) else {
             return Ok(physical_record_count);
         };
-        let supplied_record_count = u64::try_from(physical_record_count).map_err(|_| {
-            datafusion::common::DataFusionError::Execution(format!(
-                "physical record count overflows u64 for compact file id '{compact_file_id}'"
-            ))
-        })?;
-        if supplied_record_count != entry.physical_record_count {
-            return exec_err!(
-                "physical record count mismatch for compact file id '{compact_file_id}': expected {}, got {supplied_record_count}",
-                entry.physical_record_count
-            );
-        }
         usize::try_from(entry.physical_record_count - entry.deleted_cardinality).map_err(|_| {
             datafusion::common::DataFusionError::Execution(format!(
                 "live row count overflows usize for compact file id '{compact_file_id}'"
@@ -173,14 +152,17 @@ mod tests {
     use super::*;
 
     fn index(mask: Vec<bool>, records: u64, deleted: u64) -> Result<DeletionVectorIndex> {
-        DeletionVectorIndex::try_new(HashMap::from([(
-            "7".to_string(),
-            DeletionVectorEntry {
-                keep_mask: mask,
-                physical_record_count: records,
-                deleted_cardinality: deleted,
-            },
-        )]))
+        DeletionVectorIndex::try_new(
+            HashMap::from([(
+                "7".to_string(),
+                DeletionVectorEntry {
+                    keep_mask: mask,
+                    physical_record_count: records,
+                    deleted_cardinality: deleted,
+                },
+            )]),
+            HashMap::from([("7".to_string(), Some(records))]),
+        )
     }
 
     #[test]
@@ -214,6 +196,8 @@ mod tests {
             vec![Some(true), Some(false), Some(true), Some(true), Some(true),]
         );
         assert_eq!(index.live_row_count("7", 6)?, 5);
+        assert!(index.live_row_count("7", 5).is_err());
+        assert!(index.live_row_count("7", 7).is_err());
         Ok(())
     }
 

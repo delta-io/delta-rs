@@ -776,12 +776,11 @@ impl From<&TableFeatures> for TableFeature {
 }
 
 impl TableFeatures {
-    /// Convert table feature to respective reader or/and write feature
+    /// Return the feature's reader and writer requirements.
     pub fn to_reader_writer_features(&self) -> (Option<TableFeature>, Option<TableFeature>) {
         let feature = TableFeature::from(self);
-        // Classify features based on their type
-        // Writer-only features
         match feature {
+            // Writer features
             TableFeature::AppendOnly
             | TableFeature::Invariants
             | TableFeature::CheckConstraints
@@ -796,7 +795,7 @@ impl TableFeatures {
             | TableFeature::ClusteredTable
             | TableFeature::MaterializePartitionColumns => (None, Some(feature)),
 
-            // ReaderWriter features
+            // Reader and writer features
             TableFeature::CatalogManaged
             | TableFeature::CatalogOwnedPreview
             | TableFeature::ColumnMapping
@@ -810,7 +809,7 @@ impl TableFeatures {
             | TableFeature::VariantTypePreview
             | TableFeature::VariantShreddingPreview => (Some(feature.clone()), Some(feature)),
 
-            // Optional ReaderWriter features
+            // Optional reader and writer features
             #[cfg(feature = "nanosecond-timestamps")]
             TableFeature::TimestampNanos => (Some(feature.clone()), Some(feature)),
 

@@ -58,13 +58,9 @@ impl ReplayStats {
 pin_project! {
     /// Stream that processes kernel scan metadata into file contexts with statistics.
     ///
-    /// This stream consumes [`ScanMetadata`] from Delta Kernel's scan and produces
-    /// [`ScanFileContext`] entries enriched with:
-    ///
-    /// - **File statistics**: Row counts, min/max values, null counts
-    /// - **Deletion vectors**: Expected descriptors captured before loading
-    /// - **Partition values**: Extracted from file metadata
-    /// - **Transforms**: Column mapping expressions for physical-to-logical translation
+    /// Converts Delta Kernel's [`ScanMetadata`] into [`ScanFileContext`] entries
+    /// containing file statistics, deletion vector descriptors, partition values,
+    /// and column mapping expressions. Deletion vectors are loaded after replay.
     pub(crate) struct ScanFileStream<'a, S> {
         pub(crate) metrics: ReplayStats,
 
@@ -82,16 +78,12 @@ pin_project! {
 }
 
 #[derive(Debug)]
-pub(crate) struct LoadedDeletionVector {
+pub(super) struct LoadedDeletionVector {
     pub selected_id: usize,
-    pub descriptor: DvInfo,
-    pub file_url: Url,
     pub keep_mask: Option<Vec<bool>>,
-    pub num_records: Option<u64>,
-    pub deleted_cardinality: Option<u64>,
 }
 
-/// Start loads only after the caller captures the complete selected population.
+/// Load deletion vectors after the caller records all selected files.
 pub(super) fn load_deletion_vectors(
     engine: Arc<dyn Engine>,
     table_root: &Url,
@@ -104,20 +96,13 @@ pub(super) fn load_deletion_vectors(
         }
         let engine = engine.clone();
         let descriptor = file.expected_dv.clone();
-        let file_url = file.file_url.clone();
-        let num_records = file.num_records;
-        let deleted_cardinality = file.dv_cardinality;
         let table_root = table_root.clone();
         let tx = stream.tx();
         stream.spawn_blocking(move || {
             let keep_mask = descriptor.get_selection_vector(engine.as_ref(), &table_root)?;
             let _ = tx.blocking_send(Ok(LoadedDeletionVector {
                 selected_id,
-                descriptor,
-                file_url,
                 keep_mask,
-                num_records,
-                deleted_cardinality,
             }));
             Ok(())
         });
@@ -204,7 +189,7 @@ where
                         .map(|descriptor| {
                             u64::try_from(descriptor.cardinality).map_err(|_| {
                                 DataFusionError::Plan(
-                                    "deletion-vector descriptor has negative cardinality"
+                                    "deletion vector descriptor has negative cardinality"
                                         .to_string(),
                                 )
                             })

@@ -59,7 +59,7 @@ use delta_kernel::{
     scan::ScanMetadata,
     table_features::TableFeature,
 };
-use futures::{Stream, TryStreamExt as _, future::ready};
+use futures::{Stream, TryStreamExt as _};
 use itertools::Itertools as _;
 use object_store::{ObjectMeta, path::Path};
 use parquet::arrow::RowNumber;
@@ -97,22 +97,16 @@ mod test_support;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 type PublicFileIdMap = HashMap<String, String>;
-type PhysicalFileIdentityMap = HashMap<String, PhysicalFileIdentity>;
 type StoreBindings = HashMap<ObjectStoreUrl, Option<Arc<dyn object_store::ObjectStore>>>;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct PhysicalFileIdentity {
-    object_store_url: ObjectStoreUrl,
-    location: Path,
-}
 
 #[derive(Clone, Debug)]
 struct PhysicalInputContract {
     store_bindings: StoreBindings,
     log_counts: HashMap<String, Option<u64>>,
     footer_bounds: HashMap<String, Arc<std::sync::OnceLock<u64>>>,
-    sources: Vec<datafusion_datasource::file_scan_config::FileScanConfig>,
-    planned_files: HashMap<String, PartitionedFile>,
+    sources: Vec<Arc<dyn datafusion_datasource::source::DataSource>>,
+    /// Selected file metadata captured before constructing the child plan.
+    planned_files: HashMap<String, (ObjectStoreUrl, PartitionedFile)>,
     table_schema: TableSchema,
     file_id_field: FieldRef,
     physical_row_position_field: Option<FieldRef>,
@@ -131,7 +125,7 @@ impl PhysicalInputContract {
             .field_with_name(file_id_field.name())
             .is_ok()
         {
-            return plan_err!("compact file-id field collides with physical schema");
+            return plan_err!("compact file id field collides with physical schema");
         }
         let parquet_read_schema = Arc::new(relax_schema_nested_nullability(parquet_read_schema));
         let physical_row_position_field = include_physical_row_position.then(|| {
@@ -191,26 +185,9 @@ impl PhysicalInputContract {
                 .flat_map(|g| g.iter())
                 .any(|f| !f.extensions.is_empty())
             {
-                return plan_err!("unplanned reader-affecting file extensions");
+                return plan_err!("unplanned file extensions that affect the reader");
             }
-            for file in config.file_groups.iter().flat_map(|group| group.iter()) {
-                let Some(datafusion::scalar::ScalarValue::Dictionary(_, value)) =
-                    file.partition_values.first()
-                else {
-                    return plan_err!("planned file is missing compact identity");
-                };
-                let datafusion::scalar::ScalarValue::Utf8(Some(id)) = value.as_ref() else {
-                    return plan_err!("planned file has invalid compact identity");
-                };
-                if self
-                    .planned_files
-                    .insert(id.clone(), file.clone())
-                    .is_some()
-                {
-                    return plan_err!("duplicate planned compact file identity");
-                }
-            }
-            self.sources.push(config.clone());
+            self.sources.push(Arc::clone(source.data_source()));
         } else if let Some(union) = input.downcast_ref::<UnionExec>() {
             for child in union.inputs() {
                 self.bind_sources(child)?;
@@ -306,10 +283,10 @@ pub(super) async fn execution_plan(
     get_data_scan_plan(session, scan_plan, replayed, limit).await
 }
 
-/// Load deletion-vector keep masks for the selected files.
+/// Load deletion vector keep masks for the selected files.
 ///
-/// The complete selected-file registry is captured first, then its expected
-/// descriptors are loaded. The merged receiver waits for every loading task.
+/// Record all selected files before loading their deletion vectors.
+/// Wait for every loading task before returning the masks.
 pub(super) async fn replay_deletion_vectors(
     engine: Arc<dyn Engine>,
     scan_plan: &KernelScanPlan,
@@ -327,25 +304,19 @@ pub(super) async fn replay_deletion_vectors(
     while let Some(batch) = stream.try_next().await? {
         files.extend(batch);
     }
-    let dv_stream =
+    let mut dv_stream =
         replay::load_deletion_vectors(engine, scan_plan.scan.table_root(), &files).build();
-    // Only files with `dv_info.has_vector()` spawn tasks, so every item should carry a DV.
-    // Guard with a typed error (instead of panic) in case that invariant drifts.
-    let dvs: HashMap<_, _> = dv_stream
-        .and_then(|loaded| {
-            ready(match loaded.keep_mask {
-                Some(keep_mask) => {
-                    normalize_dv_keep_mask_for_api(keep_mask, loaded.num_records, &loaded.file_url)
-                        .map(|mask| (loaded.file_url.to_string(), mask))
-                        .map_err(DeltaTableError::from)
-                }
-                None => Err(DeltaTableError::generic(
-                    "Invariant violation: DV task spawned for file without deletion vector",
-                )),
-            })
-        })
-        .try_collect()
-        .await?;
+    let mut dvs = HashMap::new();
+    while let Some(loaded) = dv_stream.try_next().await? {
+        let file = files.get(loaded.selected_id).ok_or_else(|| {
+            internal_datafusion_err!("deletion vector result has unknown selected file id")
+        })?;
+        let keep_mask = loaded.keep_mask.ok_or_else(|| {
+            internal_datafusion_err!("missing keep mask for selected deletion vector file")
+        })?;
+        let mask = normalize_dv_keep_mask_for_api(keep_mask, file.num_records, &file.file_url)?;
+        dvs.insert(file.file_url.to_string(), mask);
+    }
 
     let mut vectors: Vec<_> = dvs
         .into_iter()
@@ -485,16 +456,15 @@ async fn replay_files(
             .entry(url.clone())
             .or_insert_with(|| session.runtime_env().object_store(&url).ok());
     }
-    let dv_stream =
+    let mut dv_stream =
         replay::load_deletion_vectors(engine, scan_plan.scan.table_root(), &files).build();
-    let loaded = dv_stream.try_collect::<Vec<_>>().await?;
-    let mut dvs_by_url = HashMap::new();
-    for dv in loaded {
-        if dvs_by_url.insert(dv.selected_id, dv).is_some() {
-            return plan_err!("duplicate deletion-vector loading result");
+    let mut dvs_by_id = HashMap::new();
+    while let Some(dv) = dv_stream.try_next().await? {
+        if dvs_by_id.insert(dv.selected_id, dv).is_some() {
+            return plan_err!("duplicate deletion vector loading result");
         }
     }
-    let dvs = build_deletion_vector_index(&files, dvs_by_url)?;
+    let dvs = build_deletion_vector_index(&files, dvs_by_id)?;
 
     let metrics = ExecutionPlanMetricsSet::new();
     MetricBuilder::new(&metrics)
@@ -513,12 +483,10 @@ async fn replay_files(
 
 /// Normalize a DV keep mask for `deletion_vectors()`.
 ///
-/// Kernel returns a sparse mask (up to the highest deleted row index). For API output we need one
-/// full mask per file, to do this we pad trailing entries with `true` up to `numRecords`. If `numRecords`
-/// is missing we fail, because we cannot know the correct full length.
+/// Kernel returns a mask ending at the highest deleted row index. Pad the mask
+/// with `true` up to `numRecords`. Return an error if `numRecords` is missing.
 ///
-/// This is API only. Scan execution keeps the sparse representation and performs immutable
-/// lookups by absolute physical Parquet row position.
+/// Scan execution uses the original mask and looks up rows by physical Parquet position.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,
     num_records: Option<u64>,
@@ -571,20 +539,6 @@ async fn get_data_scan_plan(
         .map(|(i, file)| (compact_internal_file_id(i), file.num_records))
         .collect();
 
-    let physical_file_identities = files
-        .iter()
-        .filter(|_| has_deletion_vectors)
-        .enumerate()
-        .map(|(file_index, file)| {
-            Ok((
-                compact_internal_file_id(file_index),
-                PhysicalFileIdentity {
-                    object_store_url: file.file_url.as_object_store_url(),
-                    location: Path::from_url_path(file.file_url.path())?,
-                },
-            ))
-        })
-        .try_collect::<_, PhysicalFileIdentityMap, DataFusionError>()?;
     let dvs = Arc::new(dvs);
     let parquet_limit = if has_deletion_vectors { None } else { limit };
 
@@ -592,6 +546,7 @@ async fn get_data_scan_plan(
     // Create one `DataSourceExec` plan for each store.
     // Add a compact scan file id as a partition value for file correlation.
     // The exec maps that id back to the public file path only when the file column is projected.
+    let mut planned_files = HashMap::new();
     let to_partitioned_file = |(file_index, f): (usize, ScanFileContext)| {
         if let Some(part_stata) = &f.partitions {
             update_partition_stats(part_stata, &f.stats, &mut partition_stats)?;
@@ -607,12 +562,17 @@ async fn get_data_scan_plan(
             version: None,
         }
         .into();
-        let file_value = wrap_file_id_value(compact_internal_file_id(file_index));
+        let file_id = compact_internal_file_id(file_index);
+        let file_value = wrap_file_id_value(file_id.clone());
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
-        partitioned_file.partition_values = vec![file_value.clone()];
+        partitioned_file.partition_values = vec![file_value];
         partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
-        Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
+        let store = f.file_url.as_object_store_url();
+        if has_deletion_vectors {
+            planned_files.insert(file_id, (store.clone(), partitioned_file.clone()));
+        }
+        Ok::<_, DataFusionError>((store, partitioned_file))
     };
 
     // Group the files by their object store url. Since datafusion assumes that all files in a
@@ -638,8 +598,8 @@ async fn get_data_scan_plan(
         scan_plan.parquet_predicate.as_ref()
     };
     let file_id_field = scan_plan.contract.file_id_field.clone();
-    // Complete schemas are needed only to choose a collision-free hidden position
-    // field. Avoid converting them again on scans without a positional consumer.
+    // Check both schemas when choosing a hidden position field name to avoid collisions.
+    // Scans without deletion vectors do not need these conversions.
     let known_schemas = if has_deletion_vectors {
         let logical: Schema = table_config.logical_schema().as_ref().try_into_arrow()?;
         let physical: Schema = table_config.physical_schema().as_ref().try_into_arrow()?;
@@ -661,7 +621,9 @@ async fn get_data_scan_plan(
     )?;
     physical_input_contract.log_counts = log_counts;
     physical_input_contract.store_bindings = store_bindings;
-    physical_input_contract.footer_bounds = physical_file_identities
+    physical_input_contract.planned_files = planned_files;
+    physical_input_contract.footer_bounds = physical_input_contract
+        .planned_files
         .keys()
         .map(|id| (id.clone(), Arc::new(std::sync::OnceLock::new())))
         .collect();
@@ -688,7 +650,6 @@ async fn get_data_scan_plan(
         exec::PhysicalScanContext {
             deletion_vectors: Arc::clone(&dvs),
             public_file_ids: Arc::clone(&public_file_ids),
-            physical_file_identities: Arc::new(physical_file_identities),
             physical_input_contract,
         },
         partition_stats,
@@ -741,40 +702,33 @@ fn compact_internal_file_id(file_index: usize) -> String {
 
 fn build_deletion_vector_index(
     files: &[ScanFileContext],
-    mut dvs_by_url: HashMap<usize, LoadedDeletionVector>,
+    mut dvs_by_id: HashMap<usize, LoadedDeletionVector>,
 ) -> Result<DeletionVectorIndex> {
     let mut entries = HashMap::new();
     for (file_index, file) in files.iter().enumerate() {
         if !file.expected_dv.has_vector() {
-            if dvs_by_url.contains_key(&file_index) {
-                return plan_err!("unexpected deletion vector for explicitly all-live file");
+            if dvs_by_id.contains_key(&file_index) {
+                return plan_err!("loaded deletion vector for a file with no descriptor");
             }
             continue;
         }
-        let loaded = dvs_by_url.remove(&file_index).ok_or_else(|| {
-            internal_datafusion_err!("missing expected deletion-vector loading result")
+        let loaded = dvs_by_id.remove(&file_index).ok_or_else(|| {
+            internal_datafusion_err!("missing expected deletion vector loading result")
         })?;
-        if loaded.file_url != file.file_url
-            || loaded.descriptor != file.expected_dv
-            || loaded.num_records != file.num_records
-            || loaded.deleted_cardinality != file.dv_cardinality
-        {
-            return plan_err!("deletion-vector loading metadata differs from selected file");
-        }
-        let num_records = loaded.num_records.ok_or_else(|| {
+        let num_records = file.num_records.ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "numRecords is required for deletion-vector file {}",
+                "numRecords is required for deletion vector file {}",
                 super::redact_url_for_error(&file.file_url)
             ))
         })?;
-        let deleted_cardinality = loaded.deleted_cardinality.ok_or_else(|| {
+        let deleted_cardinality = file.dv_cardinality.ok_or_else(|| {
             DataFusionError::Plan(format!(
-                "deletion-vector cardinality is required for file {}",
+                "deletion vector cardinality is required for file {}",
                 super::redact_url_for_error(&file.file_url)
             ))
         })?;
         let keep_mask = loaded.keep_mask.ok_or_else(|| {
-            internal_datafusion_err!("missing keep-mask for selected deletion-vector file")
+            internal_datafusion_err!("missing keep mask for selected deletion vector file")
         })?;
         entries.insert(
             compact_internal_file_id(file_index),
@@ -785,16 +739,16 @@ fn build_deletion_vector_index(
             },
         );
     }
-    if let Some(loaded) = dvs_by_url.values().next() {
+    if !dvs_by_id.is_empty() {
         return Err(internal_datafusion_err!(
-            "missing internal file id mapping for file with deletion vector: {}",
-            super::redact_url_for_error(&loaded.file_url)
+            "deletion vector result has unknown selected file id"
         ));
     }
     if entries.is_empty() {
         return Ok(DeletionVectorIndex::default());
     }
-    DeletionVectorIndex::try_new(entries)?.with_selected_files(
+    DeletionVectorIndex::try_new(
+        entries,
         files
             .iter()
             .enumerate()
@@ -1240,14 +1194,10 @@ mod tests {
         }
     }
 
-    fn registry_load(file: &ScanFileContext) -> LoadedDeletionVector {
+    fn registry_load() -> LoadedDeletionVector {
         LoadedDeletionVector {
             selected_id: 0,
-            descriptor: file.expected_dv.clone(),
-            file_url: file.file_url.clone(),
             keep_mask: Some(vec![false]),
-            num_records: file.num_records,
-            deleted_cardinality: file.dv_cardinality,
         }
     }
 
@@ -1256,9 +1206,9 @@ mod tests {
         let file = registry_fixture(true, Some(3));
         assert!(build_deletion_vector_index(&[file], HashMap::new()).is_err());
         let live = registry_fixture(false, None);
-        let load = registry_load(&registry_fixture(true, Some(3)));
+        let load = registry_load();
         assert!(build_deletion_vector_index(&[live], HashMap::from([(0, load)])).is_err());
-        let unknown = registry_load(&registry_fixture(true, Some(3)));
+        let unknown = registry_load();
         assert!(build_deletion_vector_index(&[], HashMap::from([(0, unknown)])).is_err());
     }
 
@@ -1267,7 +1217,7 @@ mod tests {
         let live = registry_fixture(false, None);
         assert!(!build_deletion_vector_index(&[live], HashMap::new())?.has_vectors());
         let dv = registry_fixture(true, Some(3));
-        let load = registry_load(&dv);
+        let load = registry_load();
         let index = build_deletion_vector_index(
             &[dv, registry_fixture(false, None)],
             HashMap::from([(0, load)]),
@@ -1293,16 +1243,13 @@ mod tests {
     }
 
     #[test]
-    fn registry_rejects_descriptor_count_and_mask_mismatches() {
-        for mutation in 0..4 {
+    fn registry_rejects_missing_and_inconsistent_masks() {
+        for keep_mask in [None, Some(vec![true])] {
             let file = registry_fixture(true, Some(3));
-            let mut loaded = registry_load(&file);
-            match mutation {
-                0 => loaded.num_records = Some(4),
-                1 => loaded.deleted_cardinality = Some(0),
-                2 => loaded.keep_mask = None,
-                _ => loaded.keep_mask = Some(vec![true]),
-            }
+            let loaded = LoadedDeletionVector {
+                selected_id: 0,
+                keep_mask,
+            };
             assert!(build_deletion_vector_index(&[file], HashMap::from([(0, loaded)])).is_err());
         }
     }

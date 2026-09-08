@@ -54,38 +54,31 @@ const DELTA_MATERIALIZED_PUSHDOWN_SENTINEL: &str =
 
 /// Physical execution plan for scanning Delta tables.
 ///
-/// Wraps a Parquet reader execution plan and applies Delta Lake protocol transformations
-/// to produce the logical table data. This includes:
-///
-/// - **Column mapping**: Translates physical column names to logical names
-/// - **Partition values**: Materializes partition column values from file paths
-/// - **Deletion vectors**: Filters deleted rows by immutable physical Parquet row position
-/// - **Schema evolution**: Handles missing columns and type coercion
+/// Reads Parquet data, filters deleted rows by physical row position, and applies
+/// column mapping, partition values, and schema evolution.
 ///
 /// # Data Flow
 ///
 /// 1. Inner [`input`](Self::input) plan reads raw Parquet data
-/// 2. Per-file [`transforms`](Self::transforms) convert physical to logical schema
-/// 3. [`deletion_vectors`](Self::deletion_vectors) filter deleted rows
-/// 4. Result is cast to the projected scan contract's result schema
+/// 2. [`deletion_vectors`](Self::deletion_vectors) filter deleted rows
+/// 3. File [`transforms`](Self::transforms) convert the physical schema to the logical schema
+/// 4. The result is cast to the projected scan schema
 #[derive(Clone, Debug)]
 pub struct DeltaScanExec {
     scan_plan: Arc<KernelScanPlan>,
     /// Execution plan yielding the raw data read from data files.
     input: Arc<dyn ExecutionPlan>,
-    /// Transforms to be applied to data eminating from individual files
+    /// Transforms applied to data read from individual files.
     transforms: Arc<HashMap<String, ExpressionRef>>,
     /// Immutable deletion vectors keyed by compact scan file id.
     deletion_vectors: Arc<DeletionVectorIndex>,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
-    /// Expected physical file ownership keyed by compact scan file id.
-    physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
-    /// Authoritative hidden physical input schema and resolved support-column indices.
+    /// Physical input schema and indices of the hidden file id and row position columns.
     physical_input_contract: Arc<super::PhysicalInputContract>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// User-visible file-id column name when projected in the output.
+    /// Public file id column name when projected in the output.
     file_id_column: Option<String>,
     /// plan properties
     properties: Arc<PlanProperties>,
@@ -96,7 +89,6 @@ pub struct DeltaScanExec {
 pub(super) struct PhysicalScanContext {
     pub(super) deletion_vectors: Arc<DeletionVectorIndex>,
     pub(super) public_file_ids: Arc<super::PublicFileIdMap>,
-    pub(super) physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
     pub(super) physical_input_contract: Arc<super::PhysicalInputContract>,
 }
 
@@ -156,7 +148,6 @@ impl DeltaScanExec {
         let PhysicalScanContext {
             deletion_vectors,
             public_file_ids,
-            physical_file_identities,
             physical_input_contract,
         } = context;
         Self::register_dv_file_metric(&metrics, &deletion_vectors);
@@ -178,7 +169,6 @@ impl DeltaScanExec {
             transforms,
             deletion_vectors,
             public_file_ids,
-            physical_file_identities,
             physical_input_contract,
             partition_stats,
             metrics,
@@ -227,7 +217,6 @@ impl DeltaScanExec {
             PhysicalScanContext {
                 deletion_vectors: Arc::clone(&self.deletion_vectors),
                 public_file_ids: Arc::clone(&self.public_file_ids),
-                physical_file_identities: Arc::clone(&self.physical_file_identities),
                 physical_input_contract: Arc::clone(&self.physical_input_contract),
             },
             self.partition_stats.clone(),
@@ -239,7 +228,7 @@ impl DeltaScanExec {
         self.deletion_vectors.has_vectors()
     }
 
-    pub(super) fn validate_dv_child_topology(&self, input: &Arc<dyn ExecutionPlan>) -> Result<()> {
+    fn validate_dv_child_topology(&self, input: &Arc<dyn ExecutionPlan>) -> Result<()> {
         fn scalar_file_id(value: &ScalarValue) -> Option<&str> {
             match value {
                 ScalarValue::Dictionary(_, value) => scalar_file_id(value),
@@ -252,7 +241,6 @@ impl DeltaScanExec {
 
         fn visit(
             plan: &Arc<dyn ExecutionPlan>,
-            expected: &super::PhysicalFileIdentityMap,
             observed: &mut HashSet<String>,
             contract: &super::PhysicalInputContract,
         ) -> Result<()> {
@@ -262,55 +250,41 @@ impl DeltaScanExec {
                 );
             }
             if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
-                return visit(coalesce.input(), expected, observed, contract);
+                return visit(coalesce.input(), observed, contract);
             }
             if let Some(union) = plan.downcast_ref::<UnionExec>() {
                 for input in union.inputs() {
-                    visit(input, expected, observed, contract)?;
+                    visit(input, observed, contract)?;
                 }
                 return Ok(());
             }
             let Some(source_exec) = plan.downcast_ref::<DataSourceExec>() else {
                 return plan_err!(
-                    "DeltaScanExec deletion-vector topology contains unsupported node {}",
+                    "DeltaScanExec deletion vector topology contains unsupported node {}",
                     plan.name()
                 );
             };
             let Some(config) = source_exec.data_source().downcast_ref::<FileScanConfig>() else {
                 return plan_err!(
-                    "DeltaScanExec deletion-vector topology requires FileScanConfig leaves"
+                    "DeltaScanExec deletion vector topology requires FileScanConfig leaves"
                 );
             };
-            let source = config
-                .file_source
-                .downcast_ref::<datafusion::datasource::physical_plan::ParquetSource>()
-                .ok_or_else(|| internal_datafusion_err!("expected native Parquet source"))?;
             let expected_source = contract
                 .sources
                 .iter()
+                .filter_map(|source| source.downcast_ref::<FileScanConfig>())
                 .find(|planned| planned.object_store_url == config.object_store_url)
                 .ok_or_else(|| internal_datafusion_err!("unplanned store binding"))?;
-            let original = expected_source
-                .file_source
-                .downcast_ref::<datafusion::datasource::physical_plan::ParquetSource>()
-                .ok_or_else(|| internal_datafusion_err!("lost planned Parquet source"))?;
-            let same_reader = source
-                .parquet_file_reader_factory()
-                .zip(original.parquet_file_reader_factory())
-                .is_some_and(|(a, b)| Arc::ptr_eq(a, b));
             let same_adapter = config
                 .expr_adapter_factory
                 .as_ref()
                 .zip(expected_source.expr_adapter_factory.as_ref())
                 .is_some_and(|(a, b)| Arc::ptr_eq(a, b));
             if !Arc::ptr_eq(&config.file_source, &expected_source.file_source)
-                || !same_reader
                 || !same_adapter
                 || plan.schema() != *contract.table_schema.table_schema()
             {
-                return plan_err!(
-                    "physical input reader, adapter, or support-field lineage changed"
-                );
+                return plan_err!("physical input reader, adapter, or support fields changed");
             }
             if !matches!(
                 config.output_partitioning,
@@ -330,15 +304,15 @@ impl DeltaScanExec {
             for group in &config.file_groups {
                 for file in group.iter() {
                     if !file.extensions.is_empty() {
-                        return plan_err!("unplanned reader-affecting file extensions");
+                        return plan_err!("unplanned file extensions that affect the reader");
                     }
                     let Some(file_id) = file.partition_values.first().and_then(scalar_file_id)
                     else {
                         return plan_err!(
-                            "DeltaScanExec deletion-vector file is missing a compact file id"
+                            "DeltaScanExec deletion vector file is missing a compact file id"
                         );
                     };
-                    let planned_file = contract
+                    let (expected_store, planned_file) = contract
                         .planned_files
                         .get(file_id)
                         .ok_or_else(|| internal_datafusion_err!("unplanned partition constants"))?;
@@ -356,24 +330,17 @@ impl DeltaScanExec {
                     }
                     if file.range.is_some() {
                         return plan_err!(
-                            "DeltaScanExec deletion-vector file id '{file_id}' has a byte range"
+                            "DeltaScanExec deletion vector file id '{file_id}' has a byte range"
                         );
                     }
-                    let Some(expected_file) = expected.get(file_id) else {
+                    if expected_store != &config.object_store_url {
                         return plan_err!(
-                            "DeltaScanExec deletion-vector topology contains unknown file id '{file_id}'"
-                        );
-                    };
-                    if expected_file.object_store_url != config.object_store_url
-                        || expected_file.location != file.object_meta.location
-                    {
-                        return plan_err!(
-                            "DeltaScanExec deletion-vector topology has an inconsistent mapping for file id '{file_id}'"
+                            "DeltaScanExec deletion vector topology has an inconsistent mapping for file id '{file_id}'"
                         );
                     }
                     if !observed.insert(file_id.to_owned()) {
                         return plan_err!(
-                            "DeltaScanExec deletion-vector topology has duplicate ownership for file id '{file_id}'"
+                            "DeltaScanExec deletion vector topology has duplicate ownership for file id '{file_id}'"
                         );
                     }
                 }
@@ -382,14 +349,9 @@ impl DeltaScanExec {
         }
 
         let mut observed = HashSet::new();
-        visit(
-            input,
-            &self.physical_file_identities,
-            &mut observed,
-            &self.physical_input_contract,
-        )?;
-        if observed.len() != self.physical_file_identities.len() {
-            return plan_err!("DeltaScanExec deletion-vector topology is missing selected files");
+        visit(input, &mut observed, &self.physical_input_contract)?;
+        if observed.len() != self.physical_input_contract.planned_files.len() {
+            return plan_err!("DeltaScanExec deletion vector topology is missing selected files");
         }
         Ok(())
     }
@@ -451,8 +413,8 @@ impl DeltaScanExec {
 
         stats.column_statistics = new_stats;
         if self.has_deletion_vectors() {
-            // Child statistics describe physical Parquet rows. Keep them conservative;
-            // metadata-only execution derives exact visible counts separately.
+            // Child statistics include deleted rows. Exact visible counts are available
+            // in metadata scans.
             stats = stats.to_inexact();
         }
         Ok(stats)
@@ -509,8 +471,8 @@ impl ExecutionPlan for DeltaScanExec {
         if self.scan_plan.contract.retained_row_index_field().is_some()
             || self.has_deletion_vectors()
         {
-            // Retained row indexes require ordered, stream-local state. Physical-position DVs
-            // retain the PR 0 single-partition containment until the PR 2 optimizer unlock.
+            // Row indexes use a counter per stream and require ordered input.
+            // Scans with deletion vectors still require a single input partition.
             InputDistributionRequirements::new(vec![Distribution::SinglePartition])
         } else {
             InputDistributionRequirements::new(vec![Distribution::UnspecifiedDistribution])
@@ -560,8 +522,7 @@ impl ExecutionPlan for DeltaScanExec {
         if self.scan_plan.contract.retained_row_index_field().is_some()
             || self.has_deletion_vectors()
         {
-            // Row ordinals retain stream-local counters. Physical-position DVs retain the PR 0
-            // repartition barrier until the PR 2 optimizer unlock is qualified.
+            // Repartitioning is disabled for row indexes and deletion vectors.
             return Ok(None);
         }
 
@@ -593,7 +554,7 @@ impl ExecutionPlan for DeltaScanExec {
                     );
                 }
                 return plan_err!(
-                    "DeltaScanExec contained deletion-vector scans require a single input partition, got {input_partition_count}"
+                    "DeltaScanExec scans with deletion vectors require a single input partition, got {input_partition_count}"
                 );
             }
         }
@@ -767,7 +728,7 @@ struct DeltaScanStream {
     baseline_metrics: BaselineMetrics,
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
-    /// Immutable deletion-vector lookup by physical row position.
+    /// Immutable deletion vector lookup by physical row position.
     deletion_vectors: Arc<DeletionVectorIndex>,
     physical_input_contract: Arc<super::PhysicalInputContract>,
     dv_rows_checked: Count,
@@ -799,7 +760,7 @@ impl DeltaScanStream {
         let file_id_idx = self.physical_input_contract.file_id_index;
         if batch.schema() != *self.physical_input_contract.table_schema.table_schema() {
             return internal_err!(
-                "physical input schema does not preserve compact file-id field '{}' and its support fields",
+                "physical input schema does not preserve compact file id field '{}' and its support fields",
                 self.physical_input_contract.file_id_field.name()
             );
         }
@@ -823,26 +784,16 @@ impl DeltaScanStream {
     ) -> Result<RecordBatch> {
         let input_row_count = batch.num_rows();
         let has_deletion_vector = self.deletion_vectors.has_vector(&file_id);
-        let mut batch = if self
-            .physical_input_contract
-            .physical_row_position_index
-            .is_some()
+        let mut batch = if let Some(position_idx) =
+            self.physical_input_contract.physical_row_position_index
         {
-            let position_idx = self
-                .physical_input_contract
-                .physical_row_position_index
-                .ok_or_else(|| {
-                    internal_datafusion_err!(
-                        "physical-position DV mode is missing its row-position field"
-                    )
-                })?;
             let positions = batch
                 .column(position_idx)
                 .as_any()
                 .downcast_ref::<arrow_array::Int64Array>()
                 .ok_or_else(|| {
                     internal_datafusion_err!(
-                        "physical row-position column is not a nullable Int64 array"
+                        "physical row position column is not a nullable Int64 array"
                     )
                 })?;
             if !has_deletion_vector {
@@ -852,13 +803,13 @@ impl DeltaScanStream {
                     .get(&file_id)
                     .and_then(|bound| bound.get())
                     .ok_or_else(|| {
-                        internal_datafusion_err!("missing reader-verified physical bounds")
+                        internal_datafusion_err!("reader has not verified the physical row count")
                     })?;
                 for position in positions.iter() {
                     if !position.is_some_and(|position| position >= 0 && (position as u64) < *count)
                     {
                         return internal_err!(
-                            "physical position outside reader-verified file population"
+                            "physical position outside file bounds verified by the reader"
                         );
                     }
                 }
@@ -2053,7 +2004,16 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("DataSourceExec must hold a parquet FileScanConfig");
 
-        for change in ["schema", "statistics", "ordering", "hint"] {
+        for change in [
+            "schema",
+            "statistics",
+            "ordering",
+            "hint",
+            "missing",
+            "duplicate",
+            "location",
+            "identity",
+        ] {
             let mut groups = config
                 .file_groups
                 .iter()
@@ -2073,16 +2033,30 @@ mod tests {
                         .unwrap(),
                     )
                 }
-                _ => file.metadata_size_hint = Some(1),
+                "hint" => file.metadata_size_hint = Some(1),
+                "missing" => groups[0].clear(),
+                "duplicate" => {
+                    let duplicate = file.clone();
+                    groups[0].push(duplicate);
+                }
+                "location" => {
+                    file.object_meta.location = object_store::path::Path::from("other.parquet")
+                }
+                _ => {
+                    file.partition_values =
+                        vec![crate::delta_datafusion::file_id::wrap_file_id_value(
+                            "unknown",
+                        )]
+                }
             }
             let replacement = DataSourceExec::from_data_source(
                 FileScanConfigBuilder::from(config.clone())
                     .with_file_groups(groups.into_iter().map(FileGroup::new).collect())
                     .build(),
             );
-            #[expect(deprecated, reason = "qualify both supported child-replacement APIs")]
+            #[expect(deprecated, reason = "test both supported APIs for replacing children")]
             let replaced = Arc::new(exec.clone()).with_new_children(vec![replacement]);
-            assert!(replaced.is_err(), "must reject changed per-file {change}");
+            assert!(replaced.is_err(), "must reject changed file {change}");
         }
 
         let mut fragment = config.file_groups[0][0].clone();
@@ -2166,15 +2140,11 @@ mod tests {
     async fn test_optimized_plan_reset_preserves_shared_visibility() -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
         use datafusion::physical_plan::execution_plan::reset_plan_states;
-        let fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([0, 1, 37, 90].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([0, 1, 37, 90].into_iter().collect()),
+            log_stats: true,
+        }])?;
         let table = crate::open_table(fixture.url()).await?;
         let context = datafusion::prelude::SessionContext::new();
         context.register_table("t", table.table_provider().await?)?;
@@ -2214,15 +2184,11 @@ mod tests {
     #[tokio::test]
     async fn test_reader_coordinate_matrix_against_generator_oracle() -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
-        let fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([0, 36, 37, 42, 89, 90, 144, 160].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([0, 36, 37, 42, 89, 90, 144, 160].into_iter().collect()),
+            log_stats: true,
+        }])?;
         let table = crate::open_table(fixture.url()).await?;
         let provider = table.table_provider().await?;
         let session = create_session().into_inner();
@@ -2370,16 +2336,13 @@ mod tests {
         assert_eq!(cases, 96);
         assert!(
             observed_group_pruning,
-            "fixture must execute row-group pruning"
+            "fixture must execute row group pruning"
         );
         assert!(
             observed_page_pruning,
-            "fixture must execute page-index pruning"
+            "fixture must execute page index pruning"
         );
-        assert!(
-            observed_ranges,
-            "private coordinate qualification must execute native ranged reads"
-        );
+        assert!(observed_ranges, "fixture must read byte ranges");
         Ok(())
     }
 
@@ -2387,15 +2350,11 @@ mod tests {
     async fn test_snapshot_visibility_is_frozen_across_concurrent_plans_and_advancement()
     -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
-        let mut fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([1].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let mut fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([1].into_iter().collect()),
+            log_stats: true,
+        }])?;
         let session = create_session().into_inner();
         let first_table = crate::open_table(fixture.url()).await?;
         let first_provider = first_table.table_provider().await?;
@@ -2447,7 +2406,7 @@ mod tests {
             fixture_rows(&collect(decoded_plan, session.task_ctx()).await?),
             expected_first
         );
-        // Cancellation must not consume visibility shared by subsequent streams.
+        // Cancelling a stream must leave deletion masks unchanged for later scans.
         drop(first_plan.execute(0, session.task_ctx())?);
         assert_eq!(
             fixture_rows(&collect(first_plan, session.task_ctx()).await?),
@@ -2460,15 +2419,11 @@ mod tests {
     async fn test_dv_cancellation_after_partial_consumption_preserves_visibility() -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
         use datafusion::physical_plan::execution_plan::reset_plan_states;
-        let fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
+            log_stats: true,
+        }])?;
         let table = crate::open_table(fixture.url()).await?;
         let session = datafusion::prelude::SessionContext::new_with_config(
             SessionConfig::new().with_batch_size(7),
@@ -2508,15 +2463,11 @@ mod tests {
         use super::super::test_support::{FileSpec, Fixture, PausedStore};
         use std::sync::atomic::Ordering;
         use std::time::Duration;
-        let fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([0, 37, 90].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([0, 37, 90].into_iter().collect()),
+            log_stats: true,
+        }])?;
         let store = Arc::new(PausedStore::new(Arc::new(
             object_store::local::LocalFileSystem::new(),
         )));
@@ -2574,15 +2525,11 @@ mod tests {
     #[tokio::test]
     async fn test_dv_scan_without_on_disk_row_group_ordinals() -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
-        let mut fixture = Fixture::new(
-            vec![FileSpec {
-                rows: 161,
-                groups: vec![37, 53, 71],
-                deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
-                log_stats: true,
-            }],
-            8,
-        )?;
+        let mut fixture = Fixture::new(vec![FileSpec {
+            groups: vec![37, 53, 71],
+            deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
+            log_stats: true,
+        }])?;
         fixture.remove_row_group_ordinals(0)?;
         let expected = fixture
             .live_coordinates()
@@ -2611,23 +2558,18 @@ mod tests {
     async fn test_generated_mixed_scan_checks_coordinates_and_logical_rows_independently()
     -> TestResult {
         use super::super::test_support::{FileSpec, Fixture};
-        let fixture = Fixture::new(
-            vec![
-                FileSpec {
-                    rows: 161,
-                    groups: vec![37, 53, 71],
-                    deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
-                    log_stats: true,
-                },
-                FileSpec {
-                    rows: 107,
-                    groups: vec![41, 66],
-                    deleted: None,
-                    log_stats: false,
-                },
-            ],
-            8,
-        )?;
+        let fixture = Fixture::new(vec![
+            FileSpec {
+                groups: vec![37, 53, 71],
+                deleted: Some([0, 36, 37, 89, 90, 160].into_iter().collect()),
+                log_stats: true,
+            },
+            FileSpec {
+                groups: vec![41, 66],
+                deleted: None,
+                log_stats: false,
+            },
+        ])?;
         let table = crate::open_table(fixture.url()).await?;
         let provider = table.table_provider().await?;
         let session = create_session().into_inner();
@@ -2704,7 +2646,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[expect(deprecated, reason = "qualify both supported child replacement APIs")]
+    #[expect(deprecated, reason = "test both supported child replacement APIs")]
     async fn test_dv_provenance_rejects_extensions_and_fabricated_positions() -> TestResult {
         use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
         use datafusion::physical_plan::projection::ProjectionExec;
@@ -2847,13 +2789,19 @@ mod tests {
         let original_file_id = exec.deletion_vectors.entries.keys().next().unwrap().clone();
 
         let duplicate_file_id = "duplicate".to_string();
-        let duplicate_location = original_file.object_meta.location.clone();
         let mut duplicate_file = original_file.clone();
-        duplicate_file.object_meta.location = duplicate_location.clone();
         duplicate_file.partition_values =
             vec![crate::delta_datafusion::file_id::wrap_file_id_value(
                 duplicate_file_id.clone(),
             )];
+        let mut grouped_contract = exec.physical_input_contract.as_ref().clone();
+        grouped_contract.planned_files.insert(
+            duplicate_file_id.clone(),
+            (
+                source_config.object_store_url.clone(),
+                duplicate_file.clone(),
+            ),
+        );
         let grouped_config = FileScanConfigBuilder::from(source_config.clone())
             .with_file_groups(vec![
                 FileGroup::new(vec![original_file]),
@@ -2863,9 +2811,7 @@ mod tests {
             .build();
         let grouped_input: Arc<dyn ExecutionPlan> =
             DataSourceExec::from_data_source(grouped_config);
-        let mut grouped_contract = exec.physical_input_contract.as_ref().clone();
         grouped_contract.sources.clear();
-        grouped_contract.planned_files.clear();
         grouped_contract.bind_sources(&grouped_input)?;
 
         let mut entries = exec.deletion_vectors.entries.clone();
@@ -2873,22 +2819,17 @@ mod tests {
             duplicate_file_id.clone(),
             entries[&original_file_id].clone(),
         );
-        let mut identities = exec.physical_file_identities.as_ref().clone();
-        identities.insert(
-            duplicate_file_id.clone(),
-            super::super::PhysicalFileIdentity {
-                object_store_url: source_config.object_store_url.clone(),
-                location: duplicate_location,
-            },
-        );
+        let selected = entries
+            .iter()
+            .map(|(id, entry)| (id.clone(), Some(entry.physical_record_count)))
+            .collect();
         let grouped_scan: Arc<dyn ExecutionPlan> = Arc::new(DeltaScanExec::new(
             Arc::clone(&exec.scan_plan),
             grouped_input,
             Arc::clone(&exec.transforms),
             PhysicalScanContext {
-                deletion_vectors: Arc::new(DeletionVectorIndex::try_new(entries)?),
+                deletion_vectors: Arc::new(DeletionVectorIndex::try_new(entries, selected)?),
                 public_file_ids: Arc::clone(&exec.public_file_ids),
-                physical_file_identities: Arc::new(identities),
                 physical_input_contract: Arc::new(grouped_contract),
             },
             exec.partition_stats.clone(),
@@ -3160,9 +3101,7 @@ mod tests {
             })
             .collect();
         let deletion_vectors = Arc::new(
-            DeletionVectorIndex::try_new(deletion_entries)
-                .unwrap()
-                .with_selected_files(selected)
+            DeletionVectorIndex::try_new(deletion_entries, selected)
                 .expect("valid test deletion vectors"),
         );
         let input_schema = input_batches
@@ -3204,10 +3143,10 @@ mod tests {
         next_position_by_file: &mut HashMap<String, i64>,
     ) -> RecordBatch {
         let file_id_idx =
-            file_id_column_idx(&batch, input_file_id_column).expect("valid compact file-id column");
+            file_id_column_idx(&batch, input_file_id_column).expect("valid compact file id column");
         let mut positions = Vec::with_capacity(batch.num_rows());
         for (file_id, run) in
-            split_by_file_id_runs(&batch, file_id_idx).expect("valid compact file-id runs")
+            split_by_file_id_runs(&batch, file_id_idx).expect("valid compact file id runs")
         {
             let next = next_position_by_file.entry(file_id).or_default();
             positions.extend(*next..*next + i64::try_from(run.num_rows()).unwrap());
@@ -3270,7 +3209,6 @@ mod tests {
             PhysicalScanContext {
                 deletion_vectors: Arc::clone(&exec.deletion_vectors),
                 public_file_ids: Arc::clone(&exec.public_file_ids),
-                physical_file_identities: Arc::clone(&exec.physical_file_identities),
                 physical_input_contract: Arc::clone(&exec.physical_input_contract),
             },
             exec.partition_stats.clone(),
@@ -3312,7 +3250,6 @@ mod tests {
             PhysicalScanContext {
                 deletion_vectors: Arc::clone(&exec.deletion_vectors),
                 public_file_ids: Arc::clone(&exec.public_file_ids),
-                physical_file_identities: Arc::clone(&exec.physical_file_identities),
                 physical_input_contract: Arc::clone(&exec.physical_input_contract),
             },
             exec.partition_stats.clone(),
@@ -3358,7 +3295,6 @@ mod tests {
             PhysicalScanContext {
                 deletion_vectors: Arc::new(DeletionVectorIndex::default()),
                 public_file_ids: Arc::new(public_file_ids),
-                physical_file_identities: Arc::new(super::super::PhysicalFileIdentityMap::default()),
                 physical_input_contract,
             },
             HashMap::new(),
@@ -3386,6 +3322,55 @@ mod tests {
             .map(RecordBatch::num_rows)
             .sum::<usize>();
         assert_eq!(row_count, 2, "repartitioned plan must return two rows");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_scan_assigns_surviving_row_ordinals_across_batches_and_files() -> TestResult {
+        use super::super::test_support::{FileSpec, Fixture};
+        let fixture = Fixture::new(vec![
+            FileSpec {
+                groups: vec![3, 3],
+                deleted: Some([0, 2, 4].into_iter().collect()),
+                log_stats: true,
+            },
+            FileSpec {
+                groups: vec![3],
+                deleted: Some([0].into_iter().collect()),
+                log_stats: true,
+            },
+        ])?;
+        let table = crate::open_table(fixture.url()).await?;
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .with_row_index_column("row_ordinal")
+            .await?;
+        let session = datafusion::prelude::SessionContext::new_with_config(
+            SessionConfig::new().with_batch_size(2),
+        );
+        session.register_table("t", provider)?;
+        let plan = session
+            .sql("select id, row_ordinal from t")
+            .await?
+            .create_physical_plan()
+            .await?;
+        for _ in 0..2 {
+            let batches = collect(plan.clone(), session.task_ctx()).await?;
+            assert_batches_sorted_eq!(
+                [
+                    "+----+-------------+",
+                    "| id | row_ordinal |",
+                    "+----+-------------+",
+                    "| 1  | 1           |",
+                    "| 3  | 2           |",
+                    "| 5  | 3           |",
+                    "| 7  | 1           |",
+                    "| 8  | 2           |",
+                    "+----+-------------+",
+                ],
+                &batches
+            );
+        }
         Ok(())
     }
 

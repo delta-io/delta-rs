@@ -1,5 +1,5 @@
-//! Deterministic fixture coordinates for scan regression tests.
-//! Expected visibility comes from the generator's declared positions, never reader output.
+//! Parquet fixtures with known row positions for scan regression tests.
+//! Expected rows are computed from the fixture definition.
 
 use arrow_array::{Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -15,7 +15,6 @@ use url::Url;
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 
 pub struct FileSpec {
-    pub rows: usize,
     pub groups: Vec<usize>,
     pub deleted: Option<BTreeSet<u64>>,
     pub log_stats: bool,
@@ -30,7 +29,8 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    pub fn new(specs: Vec<FileSpec>, page_rows: usize) -> FixtureResult<Self> {
+    pub fn new(specs: Vec<FileSpec>) -> FixtureResult<Self> {
+        const PAGE_ROWS: usize = 8;
         let directory = tempfile::tempdir()?;
         fs::create_dir(directory.path().join("_delta_log"))?;
         let has_dvs = specs.iter().any(|f| f.deleted.is_some());
@@ -58,15 +58,14 @@ impl Fixture {
             let file = fs::File::create(fixture.directory.path().join(&path))?;
             let properties = WriterProperties::builder()
                 .set_max_row_group_row_count(None)
-                .set_data_page_row_count_limit(page_rows)
-                .set_write_batch_size(page_rows.min(4))
+                .set_data_page_row_count_limit(PAGE_ROWS)
+                .set_write_batch_size(4)
                 .build();
             let mut writer = ArrowWriter::try_new(file, schema.clone(), Some(properties))?;
             let first_id = global_id;
             let mut position = 0;
-            let mut group = 0;
-            while position < spec.rows {
-                let count = spec.groups[group % spec.groups.len()].min(spec.rows - position);
+            let rows: usize = spec.groups.iter().sum();
+            for count in spec.groups {
                 let mut ids = Vec::with_capacity(count);
                 let mut values = Vec::with_capacity(count);
                 for row in position..position + count {
@@ -87,13 +86,12 @@ impl Fixture {
                 )?)?;
                 writer.flush()?;
                 position += count;
-                group += 1;
             }
             writer.close()?;
             let size = fs::metadata(fixture.directory.path().join(&path))?.len();
             let mut add = json!({"path":path,"partitionValues":{},"size":size,"modificationTime":0,"dataChange":true});
             if spec.log_stats {
-                add["stats"] = json!(json!({"numRecords":spec.rows,"minValues":{"id":first_id,"value":-(spec.rows as i64 - 1)},"maxValues":{"id":global_id - 1,"value":0},"nullCount":{"id":0,"value":0}}).to_string());
+                add["stats"] = json!(json!({"numRecords":rows,"minValues":{"id":first_id,"value":-(rows as i64 - 1)},"maxValues":{"id":global_id - 1,"value":0},"nullCount":{"id":0,"value":0}}).to_string());
             }
             if let Some(deleted) = &spec.deleted {
                 add["deletionVector"] = fixture.write_dv(file_id, 0, deleted)?;
@@ -237,7 +235,7 @@ impl Fixture {
     }
 }
 
-/// Pause real Parquet object-store requests until their futures are cancelled.
+/// Pause Parquet requests until their futures are cancelled.
 #[derive(Debug)]
 pub struct PausedStore {
     inner: Arc<dyn object_store::ObjectStore>,

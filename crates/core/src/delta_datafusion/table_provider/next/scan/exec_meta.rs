@@ -352,7 +352,7 @@ struct DeltaScanMetaStream {
     baseline_metrics: BaselineMetrics,
     /// Transforms to be applied to data read from individual files
     transforms: Arc<HashMap<String, ExpressionRef>>,
-    /// Selection vectors to be applied to data read from individual files
+    /// Deletion vectors used to count visible rows in each file.
     deletion_vectors: Arc<DeletionVectorIndex>,
     /// Public file paths keyed by compact scan file id.
     public_file_ids: Arc<super::PublicFileIdMap>,
@@ -1038,22 +1038,22 @@ mod tests {
             .downcast_ref::<DeltaScanMetaExec>()
             .expect("expected metadata-only scan");
 
-        let deletion_vectors = Arc::new(
-            DeletionVectorIndex::try_new(HashMap::from([(
+        let deletion_vectors = Arc::new(DeletionVectorIndex::try_new(
+            HashMap::from([(
                 "f2".to_string(),
                 super::super::deletion_vector::DeletionVectorEntry {
                     keep_mask: vec![true, false, true, false],
                     physical_record_count: 4,
                     deleted_cardinality: 2,
                 },
-            )]))?
-            .with_selected_files(HashMap::from([
+            )]),
+            HashMap::from([
                 ("f1".into(), Some(10)),
                 ("f2".into(), Some(4)),
                 ("f3".into(), Some(6)),
                 ("f4".into(), Some(2)),
-            ]))?,
-        );
+            ]),
+        )?);
         let public_file_ids = Arc::new(
             [
                 ("f1".to_string(), "f1".to_string()),

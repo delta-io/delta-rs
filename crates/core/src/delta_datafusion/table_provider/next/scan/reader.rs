@@ -1,4 +1,4 @@
-//! Bound Parquet readers and evidence for physical coordinates from the full footer.
+//! Parquet readers that validate file metadata and row counts from the full footer.
 
 use std::{ops::Range, sync::Arc};
 
@@ -40,15 +40,15 @@ pub(super) fn validate_footer(
     for (index, group) in metadata.row_groups().iter().enumerate() {
         if !missing_ordinals && group.ordinal().and_then(|n| usize::try_from(n).ok()) != Some(index)
         {
-            return Err("inconsistent row-group ordinals in complete footer".into());
+            return Err("inconsistent row group ordinals in complete footer".into());
         }
-        let count = u64::try_from(group.num_rows()).map_err(|_| "negative row-group count")?;
+        let count = u64::try_from(group.num_rows()).map_err(|_| "negative row group count")?;
         total = total
             .checked_add(count)
-            .ok_or("row-group population overflows u64")?;
+            .ok_or("row group population overflows u64")?;
     }
     if total != records {
-        return Err("row-group population differs from footer row count".into());
+        return Err("row group population differs from footer row count".into());
     }
     Ok(FooterEvidence { records })
 }
@@ -96,7 +96,7 @@ impl ParquetFileReaderFactory for BoundParquetReaderFactory {
             || file.arrow_schema.is_some()
         {
             return plan_err!(
-                "changed file metadata or reader-affecting extensions in bound Parquet reader"
+                "bound Parquet reader received changed file metadata or reader extensions"
             );
         }
         let cache = Arc::new(StoreMetadataCache::new(
@@ -124,8 +124,8 @@ impl ParquetFileReaderFactory for BoundParquetReaderFactory {
 }
 
 struct BoundReader {
-    // A sum over live reader references, not unique allocations or an RSS bound.
-    // Parquet's estimator includes shared substructures and excludes allocator overhead.
+    // Estimated metadata bytes held by each reader. Shared allocations are counted
+    // once per reader. Allocator overhead is excluded; this does not bound process memory.
     active_metadata: Gauge,
     reader: Box<dyn AsyncFileReader + Send>,
     cache: Arc<StoreMetadataCache>,
@@ -164,7 +164,7 @@ impl AsyncFileReader for BoundReader {
                     .map_err(ParquetError::General)?;
                 if self.count.is_some_and(|count| count != evidence.records) {
                     return Err(ParquetError::General(
-                        "log-declared numRecords differs from full footer".into(),
+                        "numRecords in the log differs from the footer row count".into(),
                     ));
                 }
                 for bound in &self.footer_bounds {
@@ -184,7 +184,7 @@ impl AsyncFileReader for BoundReader {
                     .any(|field| field.name() == hidden || field.name() == file_id)
                 {
                     return Err(ParquetError::General(
-                        "on-disk field collides with physical input support column".into(),
+                        "Parquet field collides with physical input support column".into(),
                     ));
                 }
             }
@@ -246,7 +246,7 @@ mod tests {
         let (b, meta_b) = fixture("bb").await;
         assert_eq!(
             meta_a, meta_b,
-            "fixture must defeat bare-path size/mtime validation"
+            "fixture must match the path, size, and modification time"
         );
         let cache: Arc<FileMetadataCache> = Arc::new(DefaultCache::new(1 << 20));
         let first = footer(a.clone(), meta_a.clone(), cache.clone()).await;

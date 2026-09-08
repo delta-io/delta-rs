@@ -827,7 +827,7 @@ fn is_skippable_root_prefix(path: &Path) -> bool {
 /// Every listed object increments `scanned`.
 #[expect(
     clippy::too_many_arguments,
-    reason = "Traversal state and metrics are explicit in this existing vacuum interface"
+    reason = "Pass the traversal state and metrics together"
 )]
 fn expand_partition_prefixes(
     store: Arc<dyn ObjectStore>,
@@ -939,7 +939,7 @@ fn expand_partition_prefixes(
 /// driven from concurrent `buffer_unordered` tasks.
 #[expect(
     clippy::too_many_arguments,
-    reason = "Traversal state and metrics are explicit in this existing vacuum interface"
+    reason = "Pass the traversal state and metrics together"
 )]
 fn list_orphans_under_prefix(
     store: Arc<dyn ObjectStore>,

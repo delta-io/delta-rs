@@ -1,5 +1,5 @@
-//! Store-qualified views of the session cache. The backing cache owns the single
-//! retention allowance, including entries from concurrent, independently planned scans.
+//! Parquet metadata cache keyed by object store and path.
+//! All scans share the session cache's capacity limit.
 
 use std::{
     any::Any,
@@ -24,8 +24,7 @@ pub(super) struct StoreMetadataCache {
 }
 
 struct TaggedMetadata {
-    // Weak retains the allocation identity, preventing address reuse without
-    // retaining an unregistered store's data for the cache entry's lifetime.
+    // Weak prevents reuse of the store's address while allowing the store to be dropped.
     store: Weak<dyn ObjectStore>,
     value: Arc<dyn FileMetadata>,
     object: ObjectMeta,
@@ -84,8 +83,8 @@ impl StoreMetadataCache {
     }
 
     fn key(&self, path: &Path) -> Path {
-        // The store allocation and canonical path qualify each key. Tagged values
-        // distinguish these entries from bare-path entries and verify full identity.
+        // Include the store address to distinguish identical paths in different stores.
+        // TaggedMetadata checks the store and object metadata when reading an entry.
         let address = Arc::as_ptr(&self.store) as *const () as usize;
         Path::from(format!("__delta_rs_metadata/{address:x}/{}", path.as_ref()))
     }
