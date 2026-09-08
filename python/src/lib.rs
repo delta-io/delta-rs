@@ -157,7 +157,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 54;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 55;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
