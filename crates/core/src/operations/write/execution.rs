@@ -211,7 +211,7 @@ mod tests {
 
 /// Cap on concurrent writer tasks. Each writer holds open multipart uploads
 /// and in-memory buffers, so more writers means higher memory and FD usage.
-/// Defaults to `num_cpus` (matching DataFusion's `target_partitions`),
+/// Defaults to `available_parallelism` (matching DataFusion's `target_partitions`),
 /// clamped to [1, 128]. Override via `DELTARS_MAX_CONCURRENT_WRITERS`.
 fn max_concurrent_writers() -> usize {
     static MAX_WRITERS: OnceLock<usize> = OnceLock::new();
@@ -219,7 +219,11 @@ fn max_concurrent_writers() -> usize {
         std::env::var("DELTARS_MAX_CONCURRENT_WRITERS")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or_else(num_cpus::get)
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+            })
             .clamp(1, 128)
     })
 }
