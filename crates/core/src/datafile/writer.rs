@@ -75,9 +75,9 @@ fn get_max_concurrency_tasks() -> usize {
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
 /// Parse a positive `usize` knob, falling back to `default` for a missing, empty,
-/// unparsable, or zero value.
+/// unparsable, or zero value. Surrounding whitespace is ignored.
 fn parse_positive_usize(raw: Option<&str>, default: usize) -> usize {
-    raw.and_then(|s| s.parse::<usize>().ok())
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default)
 }
@@ -100,78 +100,90 @@ pub(crate) fn writer_batch_concurrency() -> usize {
 
 /// Budget used when the process memory limit cannot be read.
 const DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
-/// Share of the process memory limit the default budget takes.
 const UPLOAD_BUDGET_MEMORY_DIVISOR: u64 = 4;
-/// Smallest default budget, as a multiple of `target_file_size`. A reservation runs
-/// slightly above the file it covers, so a budget under this admits one upload at a
-/// time and the writer stops overlapping encode with upload.
 const UPLOAD_BUDGET_MIN_FILES: u64 = 4;
-/// Largest default budget, as a multiple of `target_file_size`. Measured against a
-/// store slower than the encoder, this many files in flight reaches ~90% of the
-/// throughput of an unbounded budget, so a share of a large machine's memory would
-/// take on exposure that buys nothing. An explicit setting is still honoured.
 const UPLOAD_BUDGET_MAX_FILES: u64 = 32;
 
-/// Size for [`UploadBudget::for_write`]. `-1` asks for an unbounded budget, which
-/// [`UploadBudget::new`] clamps to [`Semaphore::MAX_PERMITS`].
-fn parse_upload_budget_bytes(raw: Option<&str>, default: usize) -> usize {
-    if raw.is_some_and(|value| value.trim() == "-1") {
-        return usize::MAX;
+/// An explicit `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES`: a positive byte count, or `-1`
+/// for unbounded. `None` when unset or unusable, so the caller falls back to the
+/// memory-derived default.
+fn explicit_upload_budget_bytes(raw: Option<&str>) -> Option<usize> {
+    let value = raw?.trim();
+    if value == "-1" {
+        return Some(usize::MAX);
     }
-    parse_positive_usize(raw, default)
+    value.parse::<usize>().ok().filter(|bytes| *bytes > 0)
 }
 
 /// Memory this process should size itself against: the cgroup limit when one is
 /// set, otherwise total system memory. `None` when neither can be read.
+///
+/// Probed once: it costs several procfs and cgroup reads, and `WriterConfig::new` runs
+/// per flush window on the streaming writers. A container resized mid-run therefore
+/// keeps its original limit, which only shifts an already-clamped ceiling.
 fn process_memory_limit() -> Option<u64> {
-    let mut system = System::new();
-    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
-    let limit = system
-        .cgroup_limits()
-        .map_or_else(|| system.total_memory(), |limits| limits.total_memory);
-    (limit > 0).then_some(limit)
+    static LIMIT: OnceLock<Option<u64>> = OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        let mut system = System::new();
+        system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+        let limit = system
+            .cgroup_limits()
+            .map_or_else(|| system.total_memory(), |limits| limits.total_memory);
+        (limit > 0).then_some(limit)
+    })
 }
 
-/// Default budget: a share of the process memory limit, held between enough files
-/// to overlap encode with upload and enough that more would not go faster. Returns
-/// the budget and whether the floor raised it, which means `target_file_size` is
-/// large for the memory available.
+/// Default budget: a share of the process memory limit, clamped to
+/// [`UPLOAD_BUDGET_MIN_FILES`]..[`UPLOAD_BUDGET_MAX_FILES`] times `target_file_size`.
+/// Below the floor only one upload fits at a time, so encode stops overlapping
+/// upload. Above the ceiling nothing goes faster: how many files keep a store busy
+/// depends on its request concurrency, and a four-request pool saturates at 8x while
+/// a deeply parallel one saturates at 32x.
+///
+/// Warns when the floor raises the share, which means `target_file_size` is large
+/// for the memory available.
 fn default_upload_budget_bytes(
     memory_limit: Option<u64>,
     target_file_size: Option<NonZeroU64>,
-) -> (usize, bool) {
+) -> usize {
     let target = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE).get();
     let floor = target.saturating_mul(UPLOAD_BUDGET_MIN_FILES);
-    let ceiling = target.saturating_mul(UPLOAD_BUDGET_MAX_FILES).max(floor);
+    let ceiling = target.saturating_mul(UPLOAD_BUDGET_MAX_FILES);
     let share = memory_limit.map_or(DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES as u64, |limit| {
         limit / UPLOAD_BUDGET_MEMORY_DIVISOR
     });
     let bytes = usize::try_from(share.clamp(floor, ceiling)).unwrap_or(usize::MAX);
-    (bytes, share < floor)
+    if share < floor {
+        warn!(
+            "target file size is large for the memory available; raising the upload \
+             budget to {bytes} bytes so uploads do not serialize"
+        );
+    }
+    bytes
 }
 
 /// Byte budget for data files whose upload is still in flight.
 ///
-/// When a [`PartitionWriter`] reaches its target file size it hands the finished
-/// parquet writer to a background upload task and starts the next file at once.
-/// Each such task holds the file's remaining bytes until the object store has
-/// accepted them, so without a bound a store slower than the encoder grows memory
-/// by one file per roll. A roll reserves the bytes its upload will hold before the
-/// upload is spawned and releases them when it ends; once the budget is spent,
-/// `write` waits instead of buffering another file, and that wait reaches the data
-/// source through the bounded batch channels.
+/// When a [`PartitionWriter`] reaches its target file size it closes that file, hands
+/// the upload to a background task, and starts the next file at once. Each upload
+/// holds its file's bytes until the store accepts them. Unbounded, a slow store
+/// therefore grows memory by one file every time the writer starts a new one.
 ///
-/// A budget belongs to one write: [`WriterConfig::new`] creates one, and every
-/// clone of that config, and every partition writer built from it, shares it.
+/// The writer reserves the bytes before it hands off, and the permit is released when
+/// the upload ends. Once the budget is spent, `write` waits rather than start another
+/// file, and that wait reaches the data source through the bounded batch channels.
+///
+/// A budget belongs to one write. [`WriterConfig::new`] creates one; every clone of
+/// that config, and every partition writer built from it, shares it.
 #[derive(Debug, Clone)]
-pub struct UploadBudget {
+pub(crate) struct UploadBudget {
     bytes: usize,
     semaphore: Arc<Semaphore>,
 }
 
 impl UploadBudget {
     /// A budget of `bytes`, clamped to `1..=Semaphore::MAX_PERMITS`.
-    pub fn new(bytes: usize) -> Self {
+    pub(crate) fn new(bytes: usize) -> Self {
         let bytes = bytes.clamp(1, Semaphore::MAX_PERMITS);
         Self {
             bytes,
@@ -181,55 +193,33 @@ impl UploadBudget {
 
     /// The budget for one write.
     ///
-    /// `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` wins when set to a positive byte count,
-    /// or to `-1` for an unbounded budget: that yields [`Semaphore::MAX_PERMITS`]
-    /// bytes (about 2 EiB) so reservations always succeed at once, which keeps one
-    /// code path rather than a branch that skips the semaphore. The variable is read
-    /// per write, so it can change between them.
-    ///
-    /// Otherwise the budget is a quarter of the process memory limit, floored at
-    /// [`UPLOAD_BUDGET_MIN_FILES`] times `target_file_size`. It is a ceiling rather
-    /// than an allocation: a store that keeps up never reaches it, so a generous
-    /// budget costs a healthy write nothing.
-    pub fn for_write(target_file_size: Option<NonZeroU64>) -> Self {
-        let (default, floor_applied) =
-            default_upload_budget_bytes(process_memory_limit(), target_file_size);
-        if floor_applied {
-            warn!(
-                "target file size is large for the memory available; raising the upload \
-                 budget to {default} bytes so uploads do not serialize"
-            );
-        }
-        Self::new(parse_upload_budget_bytes(
-            std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES")
-                .ok()
-                .as_deref(),
-            default,
-        ))
-    }
-
-    /// Size of the budget in bytes.
-    pub fn bytes(&self) -> usize {
-        self.bytes
+    /// `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` wins, and is read per write so it can
+    /// change between them. Otherwise see [`default_upload_budget_bytes`].
+    pub(crate) fn for_write(target_file_size: Option<NonZeroU64>) -> Self {
+        let raw = std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES").ok();
+        let bytes = explicit_upload_budget_bytes(raw.as_deref()).unwrap_or_else(|| {
+            default_upload_budget_bytes(process_memory_limit(), target_file_size)
+        });
+        Self::new(bytes)
     }
 
     /// Bytes not currently reserved by an in-flight upload.
-    pub fn available_bytes(&self) -> usize {
+    pub(crate) fn available_bytes(&self) -> usize {
         self.semaphore.available_permits()
     }
 
-    /// Reserve `bytes` for one upload, waiting until enough of the budget is free.
-    /// The reservation is released when the returned permit is dropped.
+    /// Reserve `bytes` for one upload, waiting until that much budget is free.
+    /// Dropping the returned permit releases it.
     ///
-    /// A file larger than the whole budget reserves all of it, so it still uploads,
-    /// alone. The semaphore API caps one reservation at `u32::MAX` bytes; a file
-    /// beyond that can exceed the budget.
+    /// A file larger than the whole budget takes all of it and uploads alone. The
+    /// semaphore caps one reservation at `u32::MAX` bytes, so a file beyond that can
+    /// exceed the budget.
     async fn reserve(&self, bytes: usize) -> OwnedSemaphorePermit {
         let permits = bytes.min(self.bytes.min(u32::MAX as usize)) as u32;
-        if self.available_bytes() < permits as usize {
+        let free = self.available_bytes();
+        if free < permits as usize {
             debug!(
-                "waiting for {permits} bytes of upload budget ({} of {} free)",
-                self.available_bytes(),
+                "waiting for {permits} bytes of upload budget ({free} of {} free)",
                 self.bytes
             );
         }
@@ -364,8 +354,8 @@ pub struct WriterConfig {
     /// When set, write data files under a random prefix directory of this length instead of
     /// Hive-style partition dirs — keeps physical (UUID) column names out of paths under CM.
     random_prefix_length: Option<usize>,
-    /// Budget for rolled files awaiting upload, shared by every writer built from
-    /// this config or a clone of it; see [`UploadBudget`].
+    /// [`UploadBudget`] for closed files still uploading. Every writer built from this
+    /// config, or from a clone of it, shares it.
     upload_budget: UploadBudget,
 }
 
@@ -397,9 +387,9 @@ impl WriterConfig {
         }
     }
 
-    /// Reserve upload memory from `budget` instead of the fresh one [`WriterConfig::new`]
-    /// makes, so writers that were not cloned from one config still share a bound.
-    pub fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
+    /// Draw on `budget` instead of the fresh one [`WriterConfig::new`] makes, so configs
+    /// that are not clones of each other still share one bound.
+    pub(crate) fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
         self.upload_budget = budget;
         self
     }
@@ -716,10 +706,9 @@ pub struct PartitionWriterConfig {
     /// file ends in a truncated row group. See
     /// [`PartitionWriterConfig::with_roll_on_row_group_boundary`].
     roll_on_row_group_boundary: bool,
-    /// Budget for rolled files awaiting upload, if the caller supplies one; see
-    /// [`UploadBudget`]. [`PartitionWriter::try_with_config`] takes it out and falls
-    /// back to a fresh env-sized budget, so it is `None` for the rest of the config's life.
-    upload_budget: Option<UploadBudget>,
+    /// [`UploadBudget`] for closed files still uploading. Cloning the config shares it,
+    /// so every file this writer closes draws on one bound.
+    upload_budget: UploadBudget,
 }
 
 impl PartitionWriterConfig {
@@ -755,14 +744,14 @@ impl PartitionWriterConfig {
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
-            upload_budget: None,
+            upload_budget: UploadBudget::for_write(target_file_size),
         })
     }
 
-    /// Reserve upload memory from `budget` instead of a fresh one from the env.
-    /// Writers that share a budget share its bound.
-    pub fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
-        self.upload_budget = Some(budget);
+    /// Draw on `budget` instead of the fresh one [`Self::try_new`] makes, so
+    /// configs that are not clones of each other still share one bound.
+    pub(crate) fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
+        self.upload_budget = budget;
         self
     }
 
@@ -838,14 +827,20 @@ impl LazyArrowWriter {
         }
     }
 
-    /// Upper bound on the bytes a background upload of this file holds after a roll.
+    /// Upper bound on the memory this file's upload still holds after the writer closes
+    /// it. Two things are outstanding at that moment.
     ///
-    /// Two parts. The in-progress row group is still in memory, so it counts at
-    /// `memory_size`, which parquet documents as at least the anticipated encoded
-    /// size. On top of that sit the upload parts the object store has not accepted:
-    /// the last flushed row group, whose parts all start at once, plus up to
-    /// `max_concurrency_tasks - 1` older ones. Parts can only exist for bytes
-    /// already flushed, so that term is capped at `bytes_written`.
+    /// First, the row group being built is still in memory. `memory_size` is parquet's
+    /// figure for it, which parquet documents as at least what that row group will
+    /// encode to.
+    ///
+    /// Second, bytes already sent to the object store that it has not acknowledged. The
+    /// multipart uploader sends them as parts of `upload_part_size` and keeps up to
+    /// `max_concurrency_tasks` of them in flight. Closing the file flushes the last row
+    /// group, which starts parts for all of it at once, so the worst case is that row
+    /// group plus `max_concurrency_tasks - 1` full parts left over from earlier ones.
+    /// The store cannot be holding bytes the writer never flushed, so this second term
+    /// is capped at `bytes_written`.
     fn pending_upload_bytes(&self, max_concurrency_tasks: usize) -> usize {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => 0,
@@ -895,8 +890,6 @@ pub struct PartitionWriter {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
-    /// Budget the file uploads this writer spawns reserve from.
-    upload_budget: UploadBudget,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
@@ -907,16 +900,10 @@ impl PartitionWriter {
     /// Create a new instance of [`PartitionWriter`] from [`PartitionWriterConfig`]
     pub fn try_with_config(
         object_store: ObjectStoreRef,
-        mut config: PartitionWriterConfig,
+        config: PartitionWriterConfig,
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
-        // Take the budget out of the config: it is a shared runtime handle, and the
-        // config is deep-cloned into every new file.
-        let upload_budget = config
-            .upload_budget
-            .take()
-            .unwrap_or_else(|| UploadBudget::for_write(config.target_file_size));
         let writer_id = uuid::Uuid::new_v4();
         let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
@@ -929,7 +916,6 @@ impl PartitionWriter {
             part_counter: 0,
             num_indexed_cols,
             stats_columns,
-            upload_budget,
             in_flight_writers: JoinSet::new(),
             rolled_bytes: 0,
         })
@@ -965,6 +951,7 @@ impl PartitionWriter {
         // Reserve before taking the file out, so a cancelled wait leaves the
         // writer intact and abortable.
         let permit = self
+            .config
             .upload_budget
             .reserve(self.pending_upload_bytes())
             .await;
@@ -1086,7 +1073,7 @@ impl PartitionWriter {
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let pending_bytes = self.pending_upload_bytes();
         if let LazyArrowWriter::Writing(path, arrow_writer) = self.writer {
-            let permit = self.upload_budget.reserve(pending_bytes).await;
+            let permit = self.config.upload_budget.reserve(pending_bytes).await;
             self.in_flight_writers
                 .spawn(upload_parquet_file(arrow_writer, path, permit));
         }
@@ -1214,6 +1201,26 @@ mod tests {
     }
 
     fn get_partition_writer(
+        object_store: ObjectStoreRef,
+        batch: &RecordBatch,
+        writer_properties: Option<WriterProperties>,
+        target_file_size: Option<NonZeroU64>,
+        write_batch_size: Option<usize>,
+    ) -> PartitionWriter {
+        partition_writer_sharing_budget(
+            object_store,
+            batch,
+            writer_properties,
+            target_file_size,
+            write_batch_size,
+            None,
+            None,
+        )
+    }
+
+    /// [`get_partition_writer`] plus the two knobs only the upload-budget tests set:
+    /// a path prefix, so sibling writers do not collide, and a shared budget.
+    fn partition_writer_sharing_budget(
         object_store: ObjectStoreRef,
         batch: &RecordBatch,
         writer_properties: Option<WriterProperties>,
@@ -1360,8 +1367,7 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer =
-            get_partition_writer(object_store.clone(), &batch, None, None, None, None, None);
+        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -1400,8 +1406,6 @@ mod tests {
             &batch,
             Some(properties),
             Some(NonZeroU64::new(10_000).unwrap()),
-            None,
-            None,
             None,
         );
         writer.write(&batch).await.unwrap();
@@ -1534,8 +1538,6 @@ mod tests {
             None,
             Some(NonZeroU64::new(10_000).unwrap()),
             None,
-            None,
-            None,
         );
         writer.write(&batch).await.unwrap();
 
@@ -1571,8 +1573,6 @@ mod tests {
             None,
             Some(NonZeroU64::new(9000).unwrap()),
             Some(10000),
-            None,
-            None,
         );
         writer.write(&batch).await.unwrap();
 
@@ -1655,51 +1655,52 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unbounded(Some("-1"), Semaphore::MAX_PERMITS)]
-    #[case::unbounded_padded(Some(" -1 "), Semaphore::MAX_PERMITS)]
-    #[case::explicit(Some("65536"), 65536)]
-    #[case::zero(Some("0"), DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
-    #[case::other_negative(Some("-2"), DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
-    #[case::missing(None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
-    fn upload_budget_size_from_env_value(#[case] raw: Option<&str>, #[case] expected: usize) {
-        let bytes = parse_upload_budget_bytes(raw, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES);
-        assert_eq!(UploadBudget::new(bytes).bytes(), expected);
+    #[case::unbounded(Some("-1"), Some(Semaphore::MAX_PERMITS))]
+    #[case::unbounded_padded(Some(" -1 "), Some(Semaphore::MAX_PERMITS))]
+    #[case::explicit(Some("65536"), Some(65536))]
+    // Unusable values fall through to the memory-derived default.
+    #[case::zero(Some("0"), None)]
+    #[case::other_negative(Some("-2"), None)]
+    #[case::unparsable(Some("plenty"), None)]
+    #[case::missing(None, None)]
+    fn upload_budget_size_from_env_value(
+        #[case] raw: Option<&str>,
+        #[case] expected: Option<usize>,
+    ) {
+        let bytes = explicit_upload_budget_bytes(raw);
+        assert_eq!(bytes.map(|b| UploadBudget::new(b).bytes), expected);
     }
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    const MIB_100: usize = 100 * 1024 * 1024;
+    /// The default `target_file_size`, which the cases below multiply.
+    const TARGET: usize = DEFAULT_TARGET_FILE_SIZE.get() as usize;
 
     #[rstest]
     // A quarter of the limit, when that sits between the floor and the ceiling.
-    #[case::small_container(Some(2 * GIB), None, 512 * 1024 * 1024, false)]
-    #[case::roomy(Some(8 * GIB), None, 2 * GIB as usize, false)]
+    #[case::small_container(Some(2 * GIB), None, 512 * 1024 * 1024)]
+    #[case::roomy(Some(8 * GIB), None, 2 * GIB as usize)]
     // The ceiling caps a big machine at 32 files; more does not go faster.
-    #[case::large_machine(Some(128 * GIB), None, 32 * MIB_100, false)]
+    #[case::large_machine(Some(128 * GIB), None, 32 * TARGET)]
     // The floor takes over when a quarter would admit fewer than four files.
-    #[case::large_files(Some(4 * GIB), NonZeroU64::new(GIB), 4 * GIB as usize, true)]
-    #[case::tiny_container(Some(256 * 1024 * 1024), None, 4 * MIB_100, true)]
+    #[case::large_files(Some(4 * GIB), NonZeroU64::new(GIB), 4 * GIB as usize)]
+    #[case::tiny_container(Some(256 * 1024 * 1024), None, 4 * TARGET)]
     // No readable limit falls back to the fixed default.
-    #[case::no_limit(None, None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES, false)]
+    #[case::no_limit(None, None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
     fn default_upload_budget_is_a_clamped_share_of_memory(
         #[case] limit: Option<u64>,
         #[case] target_file_size: Option<NonZeroU64>,
         #[case] expected_bytes: usize,
-        #[case] expected_floor_applied: bool,
     ) {
         assert_eq!(
             default_upload_budget_bytes(limit, target_file_size),
-            (expected_bytes, expected_floor_applied)
+            expected_bytes
         );
     }
 
     #[test]
     fn upload_budget_clamps_its_size() {
-        assert_eq!(UploadBudget::new(0).bytes(), 1);
-        assert_eq!(
-            UploadBudget::new(usize::MAX).bytes(),
-            Semaphore::MAX_PERMITS
-        );
+        assert_eq!(UploadBudget::new(0).bytes, 1);
     }
 
     #[test]
@@ -1743,7 +1744,7 @@ mod tests {
         let writer = DeltaWriter::new(Arc::new(object_store::memory::InMemory::new()), config);
         let partition = writer.build_partition_writer(IndexMap::new()).unwrap();
         assert!(Arc::ptr_eq(
-            &partition.upload_budget.semaphore,
+            &partition.config.upload_budget.semaphore,
             &writer.config.upload_budget.semaphore
         ));
     }
@@ -1757,7 +1758,7 @@ mod tests {
 
     /// `rows` pseudo-random 64-char strings (about 64 KiB of string data per
     /// 1024 rows) that compression cannot shrink, so a small `target_file_size`
-    /// rolls files quickly.
+    /// closes files quickly.
     fn incompressible_batch(rows: usize) -> RecordBatch {
         use rand::{RngExt, SeedableRng, rngs::StdRng};
 
@@ -1788,7 +1789,7 @@ mod tests {
         let budget = UploadBudget::new(700 * 1024);
         let batch = incompressible_batch(8192);
         let roll_at = Some(NonZeroU64::new(256 * 1024).unwrap());
-        let mut left = get_partition_writer(
+        let mut left = partition_writer_sharing_budget(
             store.clone(),
             &batch,
             None,
@@ -1797,7 +1798,7 @@ mod tests {
             Some(Path::from("left")),
             Some(&budget),
         );
-        let mut right = get_partition_writer(
+        let mut right = partition_writer_sharing_budget(
             store.clone(),
             &batch,
             None,
@@ -1828,7 +1829,7 @@ mod tests {
         );
         assert_eq!(
             budget.available_bytes(),
-            budget.bytes(),
+            budget.bytes,
             "every reservation must be released once its upload has landed"
         );
     }
@@ -1843,7 +1844,7 @@ mod tests {
         let store = Arc::new(SlowCountingStore::new(Duration::from_millis(10)));
         let budget = UploadBudget::new(1);
         let batch = incompressible_batch(8192);
-        let mut writer = get_partition_writer(
+        let mut writer = partition_writer_sharing_budget(
             store.clone(),
             &batch,
             None,

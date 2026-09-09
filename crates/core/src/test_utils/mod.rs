@@ -9,6 +9,73 @@ pub(crate) mod object_store;
 #[cfg(test)]
 pub(crate) mod slow_store;
 
+/// Implement [`ObjectStore`](object_store::ObjectStore) for a test double wrapping an
+/// `inner` store. `$custom` supplies the write-side methods it overrides; the reads
+/// are delegated.
+///
+/// It wraps the whole `impl` because `#[async_trait]` rewrites signatures before
+/// `macro_rules!` expands, so a macro emitting only the delegated methods would leave
+/// them undesugared. `object_store` keeps its own `as_ref_impl!` private.
+#[cfg(test)]
+macro_rules! impl_object_store_delegating_reads {
+    (for $ty:ty { $($custom:tt)* }) => {
+        #[async_trait::async_trait]
+        impl object_store::ObjectStore for $ty {
+            $($custom)*
+
+            async fn get_opts(
+                &self,
+                location: &object_store::path::Path,
+                options: object_store::GetOptions,
+            ) -> object_store::Result<object_store::GetResult> {
+                self.inner.get_opts(location, options).await
+            }
+
+            fn delete_stream(
+                &self,
+                locations: futures::stream::BoxStream<
+                    'static,
+                    object_store::Result<object_store::path::Path>,
+                >,
+            ) -> futures::stream::BoxStream<
+                'static,
+                object_store::Result<object_store::path::Path>,
+            > {
+                self.inner.delete_stream(locations)
+            }
+
+            fn list(
+                &self,
+                prefix: Option<&object_store::path::Path>,
+            ) -> futures::stream::BoxStream<
+                'static,
+                object_store::Result<object_store::ObjectMeta>,
+            > {
+                self.inner.list(prefix)
+            }
+
+            async fn list_with_delimiter(
+                &self,
+                prefix: Option<&object_store::path::Path>,
+            ) -> object_store::Result<object_store::ListResult> {
+                self.inner.list_with_delimiter(prefix).await
+            }
+
+            async fn copy_opts(
+                &self,
+                from: &object_store::path::Path,
+                to: &object_store::path::Path,
+                options: object_store::CopyOptions,
+            ) -> object_store::Result<()> {
+                self.inner.copy_opts(from, to, options).await
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+pub(crate) use impl_object_store_delegating_reads;
+
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
 #[cfg(test)]

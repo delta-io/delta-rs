@@ -95,13 +95,15 @@ write_deltalake(table_path, data, writer_properties=wp)
 
 ## Bounding memory when the object store is slow
 
-When a data file reaches its target size, the writer uploads it in the background and starts the next file right away. Each pending upload holds that file's bytes in memory until the object store has accepted them. If the store is slower than the writer, those pending uploads would pile up, so `deltalake` caps the bytes they may hold.
+When a data file reaches its target size, the writer uploads it in the background and starts the next file at once. Each pending upload holds that file's bytes until the store accepts them. A slow store would let them pile up, so `deltalake` caps the bytes they may hold.
 
-The cap defaults to a quarter of the memory the process may use, which is the container's memory limit where one is set and total system memory otherwise. That share is held between four and thirty two times `target_file_size`. Below four, only one upload could run at a time; above thirty two, a larger cap does not measurably go faster. If the lower bound has to raise the share, `deltalake` logs a warning that the target file size is large for the memory available.
+The cap is a ceiling, not a reservation. A store that keeps up never reaches it. Once uploads do fall behind, the write waits for one to land before it starts another file, and that backpressure reaches the data source.
 
-Set the environment variable `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` to a number of bytes to choose the cap yourself, or to `-1` to remove it entirely. It is read when a write starts, so it can differ between writes. Once the cap is reached, a write waits for an upload to land before it rolls another file, and that backpressure reaches the data source. A single file larger than the whole cap is still uploaded, on its own.
+By default the cap is a quarter of the memory the process may use — the container limit if there is one, otherwise total system memory — held between 4 and 32 times `target_file_size`. Below 4, uploads run one at a time. Above 32 they do not go faster, because how many keep a store busy depends on its request concurrency, and stores saturate well below 32. At the default 100 MiB `target_file_size` the upper bound is 3.2 GiB, so the memory share only lowers the cap under about 13 GiB of RAM. If the lower bound raises the share instead, `deltalake` warns that the target file size is large for the memory available.
 
-The cap covers one write call. Every writer in that call shares it, including the change data feed writer and all partition writers, so a partitioned write does not multiply it. Two writes running at the same time in one process each get their own.
+Set `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` to a byte count to choose the cap yourself, or to `-1` to remove it. `deltalake` reads it when a write starts, so it can differ between writes. Keep it above a few times `target_file_size`: a larger file takes the whole cap and still uploads, but then uploads run one at a time.
+
+One cap covers one write call. Every writer in it shares the cap, including the change data feed writer and all partition writers, so a partitioned write does not multiply it. Concurrent writes each get their own. Files still open, one per partition value, hold their current row group outside the cap.
 
 ``` python
 import os
@@ -112,7 +114,3 @@ from deltalake import write_deltalake
 
 write_deltalake("s3://bucket/my_table", data, mode="append")
 ```
-
-Data files that are still open, one per partition value the write meets, hold their current row group in memory separately from this cap.
-
-The cap is a ceiling, not a reservation. A store that keeps up never reaches it, so a generous cap costs a healthy write nothing; it only binds once uploads fall behind. If you set it yourself, keep it above a few times `target_file_size`, because a file larger than the whole cap takes all of it and uploads then run one at a time.
