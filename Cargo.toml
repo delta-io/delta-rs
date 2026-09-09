@@ -77,7 +77,6 @@ opentelemetry = { version = "0.31" }
 opentelemetry-otlp = { version = "0.31", features = ["http-proto"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-num_cpus = { version = "1" }
 
 [workspace.metadata.typos]
 files.extend-exclude = ["CHANGELOG.md", "crates/benchmarks/queries/tpcds/*.sql"]
