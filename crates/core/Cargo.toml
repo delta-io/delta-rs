@@ -68,6 +68,7 @@ futures = { workspace = true }
 num_cpus = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
+    "io-util",
     "process",
     "rt",
     "rt-multi-thread",
