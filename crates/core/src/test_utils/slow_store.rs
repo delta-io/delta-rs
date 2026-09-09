@@ -1,18 +1,18 @@
-//! An object store that delays every upload and records how many were in
-//! flight at once, for exercising the writers' upload bounds.
+//! An object store that delays every upload and records how many ran at once.
+//! It exercises the writers' upload bounds.
 
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, UploadPart,
+    MultipartUpload, PutMultipartOptions, PutOptions, PutPayload, PutResult, UploadPart,
 };
+
+use super::impl_object_store_delegating_reads;
 
 /// Wraps [`InMemory`]: every `put` sleeps `delay` before it lands, and every
 /// multipart upload sleeps `delay` on `complete`. An upload counts as in flight
@@ -23,7 +23,8 @@ pub(crate) struct SlowCountingStore {
     inner: InMemory,
     delay: Duration,
     in_flight: Arc<AtomicUsize>,
-    max_in_flight: Arc<AtomicUsize>,
+    /// Only ever touched through `&self`, so it needs no `Arc`.
+    max_in_flight: AtomicUsize,
 }
 
 impl SlowCountingStore {
@@ -32,7 +33,7 @@ impl SlowCountingStore {
             inner: InMemory::new(),
             delay,
             in_flight: Arc::default(),
-            max_in_flight: Arc::default(),
+            max_in_flight: AtomicUsize::default(),
         }
     }
 
@@ -91,62 +92,31 @@ impl Display for SlowCountingStore {
     }
 }
 
-#[async_trait::async_trait]
-impl ObjectStore for SlowCountingStore {
-    async fn put_opts(
-        &self,
-        location: &Path,
-        payload: PutPayload,
-        opts: PutOptions,
-    ) -> object_store::Result<PutResult> {
-        let _guard = self.track();
-        tokio::time::sleep(self.delay).await;
-        self.inner.put_opts(location, payload, opts).await
-    }
+impl_object_store_delegating_reads! {
+    for SlowCountingStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<PutResult> {
+            let _guard = self.track();
+            tokio::time::sleep(self.delay).await;
+            self.inner.put_opts(location, payload, opts).await
+        }
 
-    async fn put_multipart_opts(
-        &self,
-        location: &Path,
-        opts: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        let guard = self.track();
-        let inner = self.inner.put_multipart_opts(location, opts).await?;
-        Ok(Box::new(SlowUpload {
-            inner,
-            delay: self.delay,
-            _guard: guard,
-        }))
-    }
-
-    async fn get_opts(
-        &self,
-        location: &Path,
-        options: GetOptions,
-    ) -> object_store::Result<GetResult> {
-        self.inner.get_opts(location, options).await
-    }
-
-    fn delete_stream(
-        &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
-        self.inner.delete_stream(locations)
-    }
-
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        self.inner.list(prefix)
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    async fn copy_opts(
-        &self,
-        from: &Path,
-        to: &Path,
-        options: CopyOptions,
-    ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+        async fn put_multipart_opts(
+            &self,
+            location: &Path,
+            opts: PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+            let guard = self.track();
+            let inner = self.inner.put_multipart_opts(location, opts).await?;
+            Ok(Box::new(SlowUpload {
+                inner,
+                delay: self.delay,
+                _guard: guard,
+            }))
+        }
     }
 }
