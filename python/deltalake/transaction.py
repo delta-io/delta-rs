@@ -22,6 +22,17 @@ class AddAction:
     stats: str
 
 
+@dataclass
+class RemoveAction:
+    path: str
+    data_change: bool
+    deletion_timestamp: int | None
+    extended_file_metadata: bool | None
+    partition_values: Mapping[str, str | None] | None
+    size: int | None
+    tags: Mapping[str, str | None] | None
+
+
 @dataclass(init=True)
 class PostCommitHookProperties:
     """The post commit hook properties, only required for advanced usecases where you need to control this."""
@@ -102,6 +113,7 @@ def create_table_with_add_actions(
         table_uri=table_uri,
         schema=schema,
         add_actions=add_actions,
+        remove_actions=[],
         mode=mode,
         partition_by=partition_by or [],
         name=name,
