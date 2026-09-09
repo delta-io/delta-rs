@@ -1057,6 +1057,7 @@ pub async fn create_merge_plan(
     // rendered predicate strings land in operationParameters in the commit log;
     // the format is pinned, e.g. `key = 'value'` and `key IN ('a', 'b')`
     let rendered_filters: Vec<String> = filters.iter().map(literal_to_predicate_string).collect();
+    let upload_budget = UploadBudget::for_write(Some(target_size));
     let input_parameters = OptimizeInput {
         target_size,
         predicate: serde_json::to_string(&rendered_filters).ok(),
@@ -1080,7 +1081,7 @@ pub async fn create_merge_plan(
                 .data_skipping_stats_columns
                 .as_ref()
                 .map(|v| v.iter().map(|v| v.to_string()).collect::<Vec<String>>()),
-            upload_budget: UploadBudget::from_env(),
+            upload_budget,
         }),
         read_table_version: snapshot.version(),
         read_session: Arc::new(session),

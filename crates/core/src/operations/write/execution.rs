@@ -875,7 +875,7 @@ async fn write_cdc_plan(
     let cdf_schema = plan.schema().clone();
 
     // One budget for both destinations of a change-data write.
-    let upload_budget = UploadBudget::from_env();
+    let upload_budget = UploadBudget::for_write(target_file_size);
     let normal_config = WriterConfig::new(
         write_schema.clone(),
         partition_columns.clone(),

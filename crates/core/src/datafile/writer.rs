@@ -16,6 +16,7 @@ use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use sysinfo::{MemoryRefreshKind, System};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tracing::*;
@@ -25,6 +26,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
 use crate::parquet_utils::default_writer_properties;
+use crate::table::config::DEFAULT_TARGET_FILE_SIZE;
 use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -96,7 +98,57 @@ pub(crate) fn writer_batch_concurrency() -> usize {
     })
 }
 
+/// Budget used when the process memory limit cannot be read.
 const DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
+/// Share of the process memory limit the default budget takes.
+const UPLOAD_BUDGET_MEMORY_DIVISOR: u64 = 4;
+/// Smallest default budget, as a multiple of `target_file_size`. A reservation runs
+/// slightly above the file it covers, so a budget under this admits one upload at a
+/// time and the writer stops overlapping encode with upload.
+const UPLOAD_BUDGET_MIN_FILES: u64 = 4;
+/// Largest default budget, as a multiple of `target_file_size`. Measured against a
+/// store slower than the encoder, this many files in flight reaches ~90% of the
+/// throughput of an unbounded budget, so a share of a large machine's memory would
+/// take on exposure that buys nothing. An explicit setting is still honoured.
+const UPLOAD_BUDGET_MAX_FILES: u64 = 32;
+
+/// Size for [`UploadBudget::for_write`]. `-1` asks for an unbounded budget, which
+/// [`UploadBudget::new`] clamps to [`Semaphore::MAX_PERMITS`].
+fn parse_upload_budget_bytes(raw: Option<&str>, default: usize) -> usize {
+    if raw.is_some_and(|value| value.trim() == "-1") {
+        return usize::MAX;
+    }
+    parse_positive_usize(raw, default)
+}
+
+/// Memory this process should size itself against: the cgroup limit when one is
+/// set, otherwise total system memory. `None` when neither can be read.
+fn process_memory_limit() -> Option<u64> {
+    let mut system = System::new();
+    system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
+    let limit = system
+        .cgroup_limits()
+        .map_or_else(|| system.total_memory(), |limits| limits.total_memory);
+    (limit > 0).then_some(limit)
+}
+
+/// Default budget: a share of the process memory limit, held between enough files
+/// to overlap encode with upload and enough that more would not go faster. Returns
+/// the budget and whether the floor raised it, which means `target_file_size` is
+/// large for the memory available.
+fn default_upload_budget_bytes(
+    memory_limit: Option<u64>,
+    target_file_size: Option<NonZeroU64>,
+) -> (usize, bool) {
+    let target = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE).get();
+    let floor = target.saturating_mul(UPLOAD_BUDGET_MIN_FILES);
+    let ceiling = target.saturating_mul(UPLOAD_BUDGET_MAX_FILES).max(floor);
+    let share = memory_limit.map_or(DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES as u64, |limit| {
+        limit / UPLOAD_BUDGET_MEMORY_DIVISOR
+    });
+    let bytes = usize::try_from(share.clamp(floor, ceiling)).unwrap_or(usize::MAX);
+    (bytes, share < floor)
+}
 
 /// Byte budget for data files whose upload is still in flight.
 ///
@@ -127,15 +179,32 @@ impl UploadBudget {
         }
     }
 
-    /// A budget sized by `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` (default 512 MiB; zero
-    /// or unparsable values fall back to the default). Read on every call, so the
-    /// variable can change between writes.
-    pub fn from_env() -> Self {
-        Self::new(parse_positive_usize(
+    /// The budget for one write.
+    ///
+    /// `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` wins when set to a positive byte count,
+    /// or to `-1` for an unbounded budget: that yields [`Semaphore::MAX_PERMITS`]
+    /// bytes (about 2 EiB) so reservations always succeed at once, which keeps one
+    /// code path rather than a branch that skips the semaphore. The variable is read
+    /// per write, so it can change between them.
+    ///
+    /// Otherwise the budget is a quarter of the process memory limit, floored at
+    /// [`UPLOAD_BUDGET_MIN_FILES`] times `target_file_size`. It is a ceiling rather
+    /// than an allocation: a store that keeps up never reaches it, so a generous
+    /// budget costs a healthy write nothing.
+    pub fn for_write(target_file_size: Option<NonZeroU64>) -> Self {
+        let (default, floor_applied) =
+            default_upload_budget_bytes(process_memory_limit(), target_file_size);
+        if floor_applied {
+            warn!(
+                "target file size is large for the memory available; raising the upload \
+                 budget to {default} bytes so uploads do not serialize"
+            );
+        }
+        Self::new(parse_upload_budget_bytes(
             std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES")
                 .ok()
                 .as_deref(),
-            DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES,
+            default,
         ))
     }
 
@@ -324,7 +393,7 @@ impl WriterConfig {
             num_indexed_cols,
             stats_columns,
             random_prefix_length: None,
-            upload_budget: UploadBudget::from_env(),
+            upload_budget: UploadBudget::for_write(target_file_size),
         }
     }
 
@@ -847,7 +916,7 @@ impl PartitionWriter {
         let upload_budget = config
             .upload_budget
             .take()
-            .unwrap_or_else(UploadBudget::from_env);
+            .unwrap_or_else(|| UploadBudget::for_write(config.target_file_size));
         let writer_id = uuid::Uuid::new_v4();
         let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
@@ -1583,6 +1652,45 @@ mod tests {
                 }
             }
         };
+    }
+
+    #[rstest]
+    #[case::unbounded(Some("-1"), Semaphore::MAX_PERMITS)]
+    #[case::unbounded_padded(Some(" -1 "), Semaphore::MAX_PERMITS)]
+    #[case::explicit(Some("65536"), 65536)]
+    #[case::zero(Some("0"), DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
+    #[case::other_negative(Some("-2"), DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
+    #[case::missing(None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
+    fn upload_budget_size_from_env_value(#[case] raw: Option<&str>, #[case] expected: usize) {
+        let bytes = parse_upload_budget_bytes(raw, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES);
+        assert_eq!(UploadBudget::new(bytes).bytes(), expected);
+    }
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    const MIB_100: usize = 100 * 1024 * 1024;
+
+    #[rstest]
+    // A quarter of the limit, when that sits between the floor and the ceiling.
+    #[case::small_container(Some(2 * GIB), None, 512 * 1024 * 1024, false)]
+    #[case::roomy(Some(8 * GIB), None, 2 * GIB as usize, false)]
+    // The ceiling caps a big machine at 32 files; more does not go faster.
+    #[case::large_machine(Some(128 * GIB), None, 32 * MIB_100, false)]
+    // The floor takes over when a quarter would admit fewer than four files.
+    #[case::large_files(Some(4 * GIB), NonZeroU64::new(GIB), 4 * GIB as usize, true)]
+    #[case::tiny_container(Some(256 * 1024 * 1024), None, 4 * MIB_100, true)]
+    // No readable limit falls back to the fixed default.
+    #[case::no_limit(None, None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES, false)]
+    fn default_upload_budget_is_a_clamped_share_of_memory(
+        #[case] limit: Option<u64>,
+        #[case] target_file_size: Option<NonZeroU64>,
+        #[case] expected_bytes: usize,
+        #[case] expected_floor_applied: bool,
+    ) {
+        assert_eq!(
+            default_upload_budget_bytes(limit, target_file_size),
+            (expected_bytes, expected_floor_applied)
+        );
     }
 
     #[test]
