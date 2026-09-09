@@ -103,7 +103,9 @@ By default the cap is a quarter of the memory the process may use — the contai
 
 Set `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` to a byte count to choose the cap yourself, or to `-1` to remove it. `deltalake` reads it when a write starts, so it can differ between writes. Keep it above a few times `target_file_size`: a larger file takes the whole cap and still uploads, but then uploads run one at a time.
 
-One cap covers one write call. Every writer in it shares the cap, including the change data feed writer and all partition writers, so a partitioned write does not multiply it. Concurrent writes each get their own. Files still open, one per partition value, hold their current row group outside the cap.
+One cap covers one write call. Every writer in it shares the cap, including the change data feed writer and all partition writers, so more partition values do not raise the cap. Concurrent writes each get their own.
+
+The cap covers uploads only. A write also keeps one file open per partition value it meets, and each open file buffers its current row group outside the cap. Writing across many partition values can therefore use several times the cap: measured against a fast store with a 64 MiB cap, peak memory was 22 MiB for 1 partition value and 460 MiB for 512, none of it pending uploads. Write fewer partition values per call, or lower `max_row_group_size` in `WriterProperties`, to bound that part.
 
 ``` python
 import os
