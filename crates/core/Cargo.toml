@@ -65,7 +65,6 @@ percent-encoding-rfc3986 = { workspace = true }
 # runtime
 async-trait = { workspace = true }
 futures = { workspace = true }
-num_cpus = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
     "io-util",
