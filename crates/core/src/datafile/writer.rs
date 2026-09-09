@@ -16,7 +16,7 @@ use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
 use tracing::*;
 
@@ -72,10 +72,12 @@ fn get_max_concurrency_tasks() -> usize {
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
-fn parse_writer_batch_concurrency(raw: Option<&str>) -> usize {
+/// Parse a positive `usize` knob, falling back to `default` for a missing, empty,
+/// unparsable, or zero value.
+fn parse_positive_usize(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|s| s.parse::<usize>().ok())
-        .filter(|size| *size > 0)
-        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
 }
 
 /// How many record batches may be in flight on a write path. It bounds the
@@ -85,21 +87,16 @@ fn parse_writer_batch_concurrency(raw: Option<&str>) -> usize {
 pub(crate) fn writer_batch_concurrency() -> usize {
     static CONCURRENCY: OnceLock<usize> = OnceLock::new();
     *CONCURRENCY.get_or_init(|| {
-        parse_writer_batch_concurrency(
+        parse_positive_usize(
             std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
                 .ok()
                 .as_deref(),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE,
         )
     })
 }
 
 const DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES: usize = 512 * 1024 * 1024;
-
-fn parse_in_flight_upload_bytes(raw: Option<&str>) -> usize {
-    raw.and_then(|s| s.parse::<usize>().ok())
-        .filter(|bytes| *bytes > 0)
-        .unwrap_or(DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)
-}
 
 /// Byte budget for data files whose upload is still in flight.
 ///
@@ -110,8 +107,7 @@ fn parse_in_flight_upload_bytes(raw: Option<&str>) -> usize {
 /// by one file per roll. A roll reserves the bytes its upload will hold before the
 /// upload is spawned and releases them when it ends; once the budget is spent,
 /// `write` waits instead of buffering another file, and that wait reaches the data
-/// source through the bounded batch channels. This is the backpressure of Polars'
-/// sink permits with bytes as the unit, so small and large files tune alike.
+/// source through the bounded batch channels.
 ///
 /// A budget belongs to one write: [`WriterConfig::new`] creates one, and every
 /// clone of that config, and every partition writer built from it, shares it.
@@ -135,10 +131,11 @@ impl UploadBudget {
     /// or unparsable values fall back to the default). Read on every call, so the
     /// variable can change between writes.
     pub fn from_env() -> Self {
-        Self::new(parse_in_flight_upload_bytes(
+        Self::new(parse_positive_usize(
             std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES")
                 .ok()
                 .as_deref(),
+            DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES,
         ))
     }
 
@@ -159,27 +156,19 @@ impl UploadBudget {
     /// alone. The semaphore API caps one reservation at `u32::MAX` bytes; a file
     /// beyond that can exceed the budget.
     async fn reserve(&self, bytes: usize) -> OwnedSemaphorePermit {
-        let permits = bytes.clamp(1, self.bytes).min(u32::MAX as usize) as u32;
-        match Arc::clone(&self.semaphore).try_acquire_many_owned(permits) {
-            Ok(permit) => return permit,
-            Err(TryAcquireError::NoPermits) => debug!(
+        let permits = bytes.min(self.bytes.min(u32::MAX as usize)) as u32;
+        if self.available_bytes() < permits as usize {
+            debug!(
                 "waiting for {permits} bytes of upload budget ({} of {} free)",
                 self.available_bytes(),
                 self.bytes
-            ),
-            // The semaphore is private to the budget and never closed.
-            Err(TryAcquireError::Closed) => unreachable!("upload budget semaphore is never closed"),
+            );
         }
         Arc::clone(&self.semaphore)
             .acquire_many_owned(permits)
+            // The semaphore is private to the budget and never closed.
             .await
             .expect("upload budget semaphore is never closed")
-    }
-}
-
-impl Default for UploadBudget {
-    fn default() -> Self {
-        Self::from_env()
     }
 }
 
@@ -344,11 +333,6 @@ impl WriterConfig {
     pub fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
         self.upload_budget = budget;
         self
-    }
-
-    /// The budget writers built from this config reserve upload memory from.
-    pub fn upload_budget(&self) -> &UploadBudget {
-        &self.upload_budget
     }
 
     /// Write data files under a random prefix of `length` chars instead of Hive-style dirs
@@ -663,8 +647,10 @@ pub struct PartitionWriterConfig {
     /// file ends in a truncated row group. See
     /// [`PartitionWriterConfig::with_roll_on_row_group_boundary`].
     roll_on_row_group_boundary: bool,
-    /// Budget for rolled files awaiting upload; see [`UploadBudget`].
-    upload_budget: UploadBudget,
+    /// Budget for rolled files awaiting upload, if the caller supplies one; see
+    /// [`UploadBudget`]. [`PartitionWriter::try_with_config`] takes it out and falls
+    /// back to a fresh env-sized budget, so it is `None` for the rest of the config's life.
+    upload_budget: Option<UploadBudget>,
 }
 
 impl PartitionWriterConfig {
@@ -700,14 +686,14 @@ impl PartitionWriterConfig {
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
             roll_on_row_group_boundary: roll_on_row_group_boundary_default(),
-            upload_budget: UploadBudget::from_env(),
+            upload_budget: None,
         })
     }
 
     /// Reserve upload memory from `budget` instead of a fresh one from the env.
     /// Writers that share a budget share its bound.
     pub fn with_upload_budget(mut self, budget: UploadBudget) -> Self {
-        self.upload_budget = budget;
+        self.upload_budget = Some(budget);
         self
     }
 
@@ -786,19 +772,16 @@ impl LazyArrowWriter {
     /// Upper bound on the bytes a background upload of this file holds after a roll.
     ///
     /// Two parts. The in-progress row group is still in memory, so it counts at
-    /// `memory_size` (what the column buffers actually occupy) rather than
-    /// `in_progress_size` (what they are expected to encode to) — the former runs
-    /// well above the latter. On top of that sit the upload parts the object store
-    /// has not accepted: the last flushed row group, whose parts all start at once,
-    /// plus up to `max_concurrency_tasks - 1` older ones. Parts can only exist for
-    /// bytes already flushed, so that term is capped at `bytes_written`.
+    /// `memory_size`, which parquet documents as at least the anticipated encoded
+    /// size. On top of that sit the upload parts the object store has not accepted:
+    /// the last flushed row group, whose parts all start at once, plus up to
+    /// `max_concurrency_tasks - 1` older ones. Parts can only exist for bytes
+    /// already flushed, so that term is capped at `bytes_written`.
     fn pending_upload_bytes(&self, max_concurrency_tasks: usize) -> usize {
         match self {
             LazyArrowWriter::Initialized(_, _, _) => 0,
             LazyArrowWriter::Writing(_, arrow_writer) => {
-                let buffered = arrow_writer
-                    .memory_size()
-                    .max(arrow_writer.in_progress_size());
+                let buffered = arrow_writer.memory_size();
                 let last_row_group = arrow_writer
                     .flushed_row_groups()
                     .last()
@@ -843,6 +826,8 @@ pub struct PartitionWriter {
     num_indexed_cols: DataSkippingNumIndexedCols,
     /// Stats columns, specific columns to collect stats from, takes precedence over num_indexed_cols
     stats_columns: Option<Vec<String>>,
+    /// Budget the file uploads this writer spawns reserve from.
+    upload_budget: UploadBudget,
     in_flight_writers: JoinSet<DeltaResult<(Path, usize, ParquetMetaData)>>,
     /// Approximate encoded size of files already rolled to background upload;
     /// keeps `buffered_size` monotonic across rolls.
@@ -853,10 +838,16 @@ impl PartitionWriter {
     /// Create a new instance of [`PartitionWriter`] from [`PartitionWriterConfig`]
     pub fn try_with_config(
         object_store: ObjectStoreRef,
-        config: PartitionWriterConfig,
+        mut config: PartitionWriterConfig,
         num_indexed_cols: DataSkippingNumIndexedCols,
         stats_columns: Option<Vec<String>>,
     ) -> DeltaResult<Self> {
+        // Take the budget out of the config: it is a shared runtime handle, and the
+        // config is deep-cloned into every new file.
+        let upload_budget = config
+            .upload_budget
+            .take()
+            .unwrap_or_else(UploadBudget::from_env);
         let writer_id = uuid::Uuid::new_v4();
         let first_path = next_data_path(&config.prefix, 0, &writer_id, &config.writer_properties);
         let writer = Self::create_writer(object_store.clone(), first_path.clone(), &config);
@@ -869,6 +860,7 @@ impl PartitionWriter {
             part_counter: 0,
             num_indexed_cols,
             stats_columns,
+            upload_budget,
             in_flight_writers: JoinSet::new(),
             rolled_bytes: 0,
         })
@@ -880,6 +872,13 @@ impl PartitionWriter {
         config: &PartitionWriterConfig,
     ) -> LazyArrowWriter {
         LazyArrowWriter::Initialized(path, object_store, config.clone())
+    }
+
+    /// Bytes a background upload of the current file would hold; see
+    /// [`LazyArrowWriter::pending_upload_bytes`].
+    fn pending_upload_bytes(&self) -> usize {
+        self.writer
+            .pending_upload_bytes(self.config.max_concurrency_tasks)
     }
 
     fn next_data_path(&mut self) -> Path {
@@ -896,10 +895,10 @@ impl PartitionWriter {
     async fn reset_writer(&mut self) -> DeltaResult<()> {
         // Reserve before taking the file out, so a cancelled wait leaves the
         // writer intact and abortable.
-        let pending_bytes = self
-            .writer
-            .pending_upload_bytes(self.config.max_concurrency_tasks);
-        let permit = self.config.upload_budget.reserve(pending_bytes).await;
+        let permit = self
+            .upload_budget
+            .reserve(self.pending_upload_bytes())
+            .await;
         let next_path = self.next_data_path();
         let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config);
         let state = std::mem::replace(&mut self.writer, new_writer);
@@ -1016,11 +1015,9 @@ impl PartitionWriter {
     ///
     /// This will flush any remaining data and collect all Add actions from background tasks.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
-        let pending_bytes = self
-            .writer
-            .pending_upload_bytes(self.config.max_concurrency_tasks);
+        let pending_bytes = self.pending_upload_bytes();
         if let LazyArrowWriter::Writing(path, arrow_writer) = self.writer {
-            let permit = self.config.upload_budget.reserve(pending_bytes).await;
+            let permit = self.upload_budget.reserve(pending_bytes).await;
             self.in_flight_writers
                 .spawn(upload_parquet_file(arrow_writer, path, permit));
         }
@@ -1111,35 +1108,21 @@ mod tests {
     use object_store::ObjectStoreExt as _;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use parquet::schema::types::ColumnPath;
+    use rstest::rstest;
     use std::sync::Arc;
 
-    #[test]
-    fn writer_batch_concurrency_zero_falls_back_to_default() {
-        assert_eq!(
-            parse_writer_batch_concurrency(Some("0")),
-            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
-        );
-    }
-
-    #[test]
-    fn writer_batch_concurrency_positive_value_is_used() {
-        assert_eq!(parse_writer_batch_concurrency(Some("8")), 8);
-    }
-
-    #[test]
-    fn writer_batch_concurrency_invalid_value_falls_back_to_default() {
-        assert_eq!(
-            parse_writer_batch_concurrency(Some("abc")),
-            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
-        );
-    }
-
-    #[test]
-    fn writer_batch_concurrency_missing_value_falls_back_to_default() {
-        assert_eq!(
-            parse_writer_batch_concurrency(None),
-            DEFAULT_WRITER_BATCH_CHANNEL_SIZE
-        );
+    #[rstest]
+    #[case::zero(Some("0"), 7)]
+    #[case::negative(Some("-1"), 7)]
+    #[case::unparsable(Some("1GB"), 7)]
+    #[case::empty(Some(""), 7)]
+    #[case::missing(None, 7)]
+    #[case::positive(Some("8"), 8)]
+    fn parse_positive_usize_falls_back_only_on_a_non_positive_value(
+        #[case] raw: Option<&str>,
+        #[case] expected: usize,
+    ) {
+        assert_eq!(parse_positive_usize(raw, 7), expected);
     }
 
     fn get_delta_writer(
@@ -1167,17 +1150,22 @@ mod tests {
         writer_properties: Option<WriterProperties>,
         target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
+        prefix: Option<Path>,
+        budget: Option<&UploadBudget>,
     ) -> PartitionWriter {
-        let config = PartitionWriterConfig::try_new(
+        let mut config = PartitionWriterConfig::try_new(
             batch.schema(),
             IndexMap::new(),
             writer_properties,
             target_file_size,
             write_batch_size,
             None,
-            None,
+            prefix,
         )
         .unwrap();
+        if let Some(budget) = budget {
+            config = config.with_upload_budget(budget.clone());
+        }
         PartitionWriter::try_with_config(
             object_store,
             config,
@@ -1303,7 +1291,8 @@ mod tests {
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
-        let mut writer = get_partition_writer(object_store.clone(), &batch, None, None, None);
+        let mut writer =
+            get_partition_writer(object_store.clone(), &batch, None, None, None, None, None);
         writer.write(&batch).await.unwrap();
         let files = list(object_store.as_ref(), None).await.unwrap();
         assert_eq!(files.len(), 0);
@@ -1342,6 +1331,8 @@ mod tests {
             &batch,
             Some(properties),
             Some(NonZeroU64::new(10_000).unwrap()),
+            None,
+            None,
             None,
         );
         writer.write(&batch).await.unwrap();
@@ -1474,6 +1465,8 @@ mod tests {
             None,
             Some(NonZeroU64::new(10_000).unwrap()),
             None,
+            None,
+            None,
         );
         writer.write(&batch).await.unwrap();
 
@@ -1509,6 +1502,8 @@ mod tests {
             None,
             Some(NonZeroU64::new(9000).unwrap()),
             Some(10000),
+            None,
+            None,
         );
         writer.write(&batch).await.unwrap();
 
@@ -1591,35 +1586,6 @@ mod tests {
     }
 
     #[test]
-    fn in_flight_upload_bytes_zero_falls_back_to_default() {
-        assert_eq!(
-            parse_in_flight_upload_bytes(Some("0")),
-            DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES
-        );
-    }
-
-    #[test]
-    fn in_flight_upload_bytes_positive_value_is_used() {
-        assert_eq!(parse_in_flight_upload_bytes(Some("65536")), 65536);
-    }
-
-    #[test]
-    fn in_flight_upload_bytes_invalid_value_falls_back_to_default() {
-        assert_eq!(
-            parse_in_flight_upload_bytes(Some("1GB")),
-            DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES
-        );
-    }
-
-    #[test]
-    fn in_flight_upload_bytes_missing_value_falls_back_to_default() {
-        assert_eq!(
-            parse_in_flight_upload_bytes(None),
-            DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES
-        );
-    }
-
-    #[test]
     fn upload_budget_clamps_its_size() {
         assert_eq!(UploadBudget::new(0).bytes(), 1);
         assert_eq!(
@@ -1669,7 +1635,7 @@ mod tests {
         let writer = DeltaWriter::new(Arc::new(object_store::memory::InMemory::new()), config);
         let partition = writer.build_partition_writer(IndexMap::new()).unwrap();
         assert!(Arc::ptr_eq(
-            &partition.config.upload_budget.semaphore,
+            &partition.upload_budget.semaphore,
             &writer.config.upload_budget.semaphore
         ));
     }
@@ -1685,20 +1651,11 @@ mod tests {
     /// 1024 rows) that compression cannot shrink, so a small `target_file_size`
     /// rolls files quickly.
     fn incompressible_batch(rows: usize) -> RecordBatch {
-        let mut seed: u64 = 42;
+        use rand::{RngExt, SeedableRng, rngs::StdRng};
+
+        let mut rng = StdRng::seed_from_u64(42);
         let strings: Vec<String> = (0..rows)
-            .map(|_| {
-                seed = seed
-                    .wrapping_mul(6364136223846793005)
-                    .wrapping_add(1442695040888963407);
-                format!(
-                    "{:016x}{:016x}{:016x}{:016x}",
-                    seed,
-                    seed.rotate_left(13),
-                    seed.rotate_left(29),
-                    seed.rotate_left(47)
-                )
-            })
+            .map(|_| format!("{:032x}{:032x}", rng.random::<u128>(), rng.random::<u128>()))
             .collect();
         RecordBatch::try_new(
             string_schema(),
@@ -1706,32 +1663,6 @@ mod tests {
                 Arc::new(Int32Array::from((0..rows as i32).collect::<Vec<_>>())),
                 Arc::new(StringArray::from(strings)),
             ],
-        )
-        .unwrap()
-    }
-
-    fn budgeted_partition_writer(
-        object_store: ObjectStoreRef,
-        prefix: &str,
-        target_file_size: u64,
-        budget: &UploadBudget,
-    ) -> PartitionWriter {
-        let config = PartitionWriterConfig::try_new(
-            string_schema(),
-            IndexMap::new(),
-            None,
-            Some(NonZeroU64::new(target_file_size).unwrap()),
-            Some(1024),
-            None,
-            Some(Path::from(prefix)),
-        )
-        .unwrap()
-        .with_upload_budget(budget.clone());
-        PartitionWriter::try_with_config(
-            object_store,
-            config,
-            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
-            None,
         )
         .unwrap()
     }
@@ -1748,8 +1679,25 @@ mod tests {
         let store = Arc::new(SlowCountingStore::new(Duration::from_millis(50)));
         let budget = UploadBudget::new(700 * 1024);
         let batch = incompressible_batch(8192);
-        let mut left = budgeted_partition_writer(store.clone(), "left", 256 * 1024, &budget);
-        let mut right = budgeted_partition_writer(store.clone(), "right", 256 * 1024, &budget);
+        let roll_at = Some(NonZeroU64::new(256 * 1024).unwrap());
+        let mut left = get_partition_writer(
+            store.clone(),
+            &batch,
+            None,
+            roll_at,
+            Some(1024),
+            Some(Path::from("left")),
+            Some(&budget),
+        );
+        let mut right = get_partition_writer(
+            store.clone(),
+            &batch,
+            None,
+            roll_at,
+            Some(1024),
+            Some(Path::from("right")),
+            Some(&budget),
+        );
 
         for _ in 0..8 {
             left.write(&batch).await.unwrap();
@@ -1787,7 +1735,15 @@ mod tests {
         let store = Arc::new(SlowCountingStore::new(Duration::from_millis(10)));
         let budget = UploadBudget::new(1);
         let batch = incompressible_batch(8192);
-        let mut writer = budgeted_partition_writer(store.clone(), "", 256 * 1024, &budget);
+        let mut writer = get_partition_writer(
+            store.clone(),
+            &batch,
+            None,
+            Some(NonZeroU64::new(256 * 1024).unwrap()),
+            Some(1024),
+            None,
+            Some(&budget),
+        );
 
         for _ in 0..4 {
             writer.write(&batch).await.unwrap();
