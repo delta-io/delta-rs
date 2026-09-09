@@ -70,6 +70,7 @@ num_cpus = { workspace = true }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 tokio = { workspace = true, features = [
     "macros",
+    "io-util",
     "process",
     "rt",
     "rt-multi-thread",
