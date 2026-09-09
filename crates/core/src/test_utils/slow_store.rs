@@ -6,13 +6,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use futures::stream::BoxStream;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
-    MultipartUpload, PutMultipartOptions, PutOptions, PutPayload, PutResult, UploadPart,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, UploadPart,
 };
-
-use super::impl_object_store_delegating_reads;
 
 /// Wraps [`InMemory`]: every `put` sleeps `delay` before it lands, and every
 /// multipart upload sleeps `delay` on `complete`. An upload counts as in flight
@@ -92,31 +92,62 @@ impl Display for SlowCountingStore {
     }
 }
 
-impl_object_store_delegating_reads! {
-    for SlowCountingStore {
-        async fn put_opts(
-            &self,
-            location: &Path,
-            payload: PutPayload,
-            opts: PutOptions,
-        ) -> object_store::Result<PutResult> {
-            let _guard = self.track();
-            tokio::time::sleep(self.delay).await;
-            self.inner.put_opts(location, payload, opts).await
-        }
+#[async_trait::async_trait]
+impl ObjectStore for SlowCountingStore {
+    async fn put_opts(
+        &self,
+        location: &Path,
+        payload: PutPayload,
+        opts: PutOptions,
+    ) -> object_store::Result<PutResult> {
+        let _guard = self.track();
+        tokio::time::sleep(self.delay).await;
+        self.inner.put_opts(location, payload, opts).await
+    }
 
-        async fn put_multipart_opts(
-            &self,
-            location: &Path,
-            opts: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
-            let guard = self.track();
-            let inner = self.inner.put_multipart_opts(location, opts).await?;
-            Ok(Box::new(SlowUpload {
-                inner,
-                delay: self.delay,
-                _guard: guard,
-            }))
-        }
+    async fn put_multipart_opts(
+        &self,
+        location: &Path,
+        opts: PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        let guard = self.track();
+        let inner = self.inner.put_multipart_opts(location, opts).await?;
+        Ok(Box::new(SlowUpload {
+            inner,
+            delay: self.delay,
+            _guard: guard,
+        }))
+    }
+
+    async fn get_opts(
+        &self,
+        location: &Path,
+        options: GetOptions,
+    ) -> object_store::Result<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, object_store::Result<Path>>,
+    ) -> BoxStream<'static, object_store::Result<Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &Path,
+        to: &Path,
+        options: CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
     }
 }
