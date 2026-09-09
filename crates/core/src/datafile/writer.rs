@@ -74,8 +74,7 @@ fn get_max_concurrency_tasks() -> usize {
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
-/// Parse a positive `usize` knob, falling back to `default` for a missing, empty,
-/// unparsable, or zero value. Surrounding whitespace is ignored.
+/// Try parse a positive `usize` knob, falling back to `default`
 fn parse_positive_usize(raw: Option<&str>, default: usize) -> usize {
     raw.and_then(|s| s.trim().parse::<usize>().ok())
         .filter(|value| *value > 0)
@@ -104,9 +103,8 @@ const UPLOAD_BUDGET_MEMORY_DIVISOR: u64 = 4;
 const UPLOAD_BUDGET_MIN_FILES: u64 = 4;
 const UPLOAD_BUDGET_MAX_FILES: u64 = 32;
 
-/// An explicit `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES`: a positive byte count, or `-1`
-/// for unbounded. `None` when unset or unusable, so the caller falls back to the
-/// memory-derived default.
+/// An explicit `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES`: a positive byte value, or `-1`
+/// for unbounded.
 fn explicit_upload_budget_bytes(raw: Option<&str>) -> Option<usize> {
     let value = raw?.trim();
     if value == "-1" {
@@ -115,21 +113,17 @@ fn explicit_upload_budget_bytes(raw: Option<&str>) -> Option<usize> {
     value.parse::<usize>().ok().filter(|bytes| *bytes > 0)
 }
 
-/// Memory this process should size itself against: the cgroup limit when one is
+/// Memory this process should size itself against (read once): the cgroup limit when one is
 /// set, otherwise total system memory. `None` when neither can be read.
-///
-/// Probed once: it costs several procfs and cgroup reads, and `WriterConfig::new` runs
-/// per flush window on the streaming writers. A container resized mid-run therefore
-/// keeps its original limit, which only shifts an already-clamped ceiling.
-fn process_memory_limit() -> Option<u64> {
-    static LIMIT: OnceLock<Option<u64>> = OnceLock::new();
+fn process_memory_limit() -> Option<NonZeroU64> {
+    static LIMIT: OnceLock<Option<NonZeroU64>> = OnceLock::new();
     *LIMIT.get_or_init(|| {
         let mut system = System::new();
         system.refresh_memory_specifics(MemoryRefreshKind::nothing().with_ram());
         let limit = system
             .cgroup_limits()
             .map_or_else(|| system.total_memory(), |limits| limits.total_memory);
-        (limit > 0).then_some(limit)
+        NonZeroU64::new(limit)
     })
 }
 
@@ -143,20 +137,20 @@ fn process_memory_limit() -> Option<u64> {
 /// Warns when the floor raises the share, which means `target_file_size` is large
 /// for the memory available.
 fn default_upload_budget_bytes(
-    memory_limit: Option<u64>,
+    memory_limit: Option<NonZeroU64>,
     target_file_size: Option<NonZeroU64>,
 ) -> usize {
     let target = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE).get();
     let floor = target.saturating_mul(UPLOAD_BUDGET_MIN_FILES);
     let ceiling = target.saturating_mul(UPLOAD_BUDGET_MAX_FILES);
     let share = memory_limit.map_or(DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES as u64, |limit| {
-        limit / UPLOAD_BUDGET_MEMORY_DIVISOR
+        limit.get() / UPLOAD_BUDGET_MEMORY_DIVISOR
     });
     let bytes = usize::try_from(share.clamp(floor, ceiling)).unwrap_or(usize::MAX);
     if share < floor {
         warn!(
             "target file size is large for the memory available; raising the upload \
-             budget to {bytes} bytes so uploads do not serialize"
+             budget to {bytes} bytes so more than one upload can be in flight"
         );
     }
     bytes
@@ -164,14 +158,15 @@ fn default_upload_budget_bytes(
 
 /// Byte budget for data files whose upload is still in flight.
 ///
-/// When a [`PartitionWriter`] reaches its target file size it closes that file, hands
-/// the upload to a background task, and starts the next file at once. Each upload
+/// When a [`PartitionWriter`] reaches its target file size it closes that file, spawns
+/// a background task to upload it, and starts the next file at once. Each upload task
 /// holds its file's bytes until the store accepts them. Unbounded, a slow store
 /// therefore grows memory by one file every time the writer starts a new one.
 ///
-/// The writer reserves the bytes before it hands off, and the permit is released when
-/// the upload ends. Once the budget is spent, `write` waits rather than start another
-/// file, and that wait reaches the data source through the bounded batch channels.
+/// The writer reserves the bytes before it spawns the upload task, and releases them
+/// when that task ends. Once the budget is spent, `write` waits rather than start
+/// another file, and that wait reaches the data source through the bounded batch
+/// channels.
 ///
 /// A budget belongs to one write. [`WriterConfig::new`] creates one; every clone of
 /// that config, and every partition writer built from it, shares it.
@@ -193,8 +188,13 @@ impl UploadBudget {
 
     /// The budget for one write.
     ///
-    /// `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` wins, and is read per write so it can
-    /// change between them. Otherwise see [`default_upload_budget_bytes`].
+    /// `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` wins when set. Unlike the other knobs in
+    /// this file it is not cached, so every caller picks up the current value. That is
+    /// once per `write_deltalake` call, which builds one config and clones it, but once
+    /// per flush window for `RecordBatchWriter` and `JsonWriter`, which rebuild their
+    /// sink after each flush.
+    ///
+    /// Otherwise see [`default_upload_budget_bytes`].
     pub(crate) fn for_write(target_file_size: Option<NonZeroU64>) -> Self {
         let raw = std::env::var("DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES").ok();
         let bytes = explicit_upload_budget_bytes(raw.as_deref()).unwrap_or_else(|| {
@@ -1678,17 +1678,17 @@ mod tests {
 
     #[rstest]
     // A quarter of the limit, when that sits between the floor and the ceiling.
-    #[case::small_container(Some(2 * GIB), None, 512 * 1024 * 1024)]
-    #[case::roomy(Some(8 * GIB), None, 2 * GIB as usize)]
+    #[case::small_container(NonZeroU64::new(2 * GIB), None, 512 * 1024 * 1024)]
+    #[case::roomy(NonZeroU64::new(8 * GIB), None, 2 * GIB as usize)]
     // The ceiling caps a big machine at 32 files; more does not go faster.
-    #[case::large_machine(Some(128 * GIB), None, 32 * TARGET)]
+    #[case::large_machine(NonZeroU64::new(128 * GIB), None, 32 * TARGET)]
     // The floor takes over when a quarter would admit fewer than four files.
-    #[case::large_files(Some(4 * GIB), NonZeroU64::new(GIB), 4 * GIB as usize)]
-    #[case::tiny_container(Some(256 * 1024 * 1024), None, 4 * TARGET)]
+    #[case::large_files(NonZeroU64::new(4 * GIB), NonZeroU64::new(GIB), 4 * GIB as usize)]
+    #[case::tiny_container(NonZeroU64::new(256 * 1024 * 1024), None, 4 * TARGET)]
     // No readable limit falls back to the fixed default.
     #[case::no_limit(None, None, DEFAULT_MAX_IN_FLIGHT_UPLOAD_BYTES)]
     fn default_upload_budget_is_a_clamped_share_of_memory(
-        #[case] limit: Option<u64>,
+        #[case] limit: Option<NonZeroU64>,
         #[case] target_file_size: Option<NonZeroU64>,
         #[case] expected_bytes: usize,
     ) {
@@ -1839,8 +1839,8 @@ mod tests {
         use crate::test_utils::slow_store::SlowCountingStore;
         use std::time::Duration;
 
-        // A one-byte budget is smaller than any file. Rolls serialize instead of
-        // deadlocking, and every file still lands.
+        // A one-byte budget is smaller than any file. Uploads run one at a time
+        // instead of deadlocking, and every file still lands.
         let store = Arc::new(SlowCountingStore::new(Duration::from_millis(10)));
         let budget = UploadBudget::new(1);
         let batch = incompressible_batch(8192);
