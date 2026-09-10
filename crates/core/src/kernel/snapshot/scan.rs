@@ -343,7 +343,7 @@ mod tests {
             .build()?;
 
         let mut paths = Vec::new();
-        let mut metadata = scan.scan_metadata(log_store.engine(None));
+        let mut metadata = scan.scan_metadata(log_store.engine());
         while let Some(batch) = metadata.try_next().await? {
             paths = batch.visit_scan_files(paths, |paths, file| paths.push(file.path))?;
         }
@@ -367,7 +367,7 @@ mod tests {
 
         assert!(
             scan.scan_metadata_from(
-                log_store.engine(None),
+                log_store.engine(),
                 snapshot.version(),
                 Box::new(std::iter::once(malformed)),
                 None,

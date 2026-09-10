@@ -5,12 +5,9 @@
 //! (making a nullable column non-nullable) is intentionally not allowed here because it
 //! requires validating existing data and/or a default value, which is out of scope.
 
-use std::sync::Arc;
-
 use delta_kernel::schema::StructType;
 use futures::future::BoxFuture;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -18,6 +15,7 @@ use crate::kernel::{
     resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -31,16 +29,6 @@ pub struct DropColumnNotNullBuilder {
     log_store: LogStoreRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for DropColumnNotNullBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl DropColumnNotNullBuilder {
@@ -51,7 +39,6 @@ impl DropColumnNotNullBuilder {
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -64,12 +51,6 @@ impl DropColumnNotNullBuilder {
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -146,27 +127,23 @@ impl std::future::IntoFuture for DropColumnNotNullBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
             let (actions, operation) = plan_drop_column_not_null_actions(
                 snapshot.snapshot().metadata_state(),
                 &this.column_name,
             )?;
 
-            let commit = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
-                .await?;
+            let parent = this.log_store.clone();
+            let commit_properties = this.commit_properties;
+            let state = with_operation(&parent, |log_store| async move {
+                let commit = CommitBuilder::from(commit_properties)
+                    .with_actions(actions)
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+                Ok(commit.snapshot())
+            })
+            .await?;
 
-            this.post_execute(operation_id).await?;
-
-            Ok(DeltaTable::new_with_state(
-                this.log_store,
-                commit.snapshot(),
-            ))
+            Ok(DeltaTable::new_with_state(parent, state))
         })
     }
 }

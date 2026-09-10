@@ -156,7 +156,7 @@ impl DeltaTable {
 
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
-        self.log_store.object_store(None)
+        self.log_store.object_store()
     }
 
     /// Check if the [`DeltaTable`] exists
@@ -402,7 +402,7 @@ impl DeltaTable {
         let log_store = self.log_store();
         let prefix = log_store.log_path();
         let offset_path = commit_uri_from_version(None);
-        let object_store = log_store.object_store(None);
+        let object_store = log_store.object_store();
         let mut files = object_store.list_with_offset(Some(prefix), &offset_path);
 
         while let Some(obj_meta) = files.next().await {

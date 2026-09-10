@@ -9,7 +9,6 @@ use delta_kernel::table_features::TableFeature;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::{
     DataValidationExec, DeltaScanNext, DeltaSessionExt, Expression, constraints_to_exprs,
     create_session, expr::fmt_expr_to_sql, into_expr,
@@ -19,6 +18,7 @@ use crate::kernel::{
     EagerSnapshot, MetadataExt, ProtocolExt as _, ProtocolInner, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::protocol::DeltaOperation;
 use crate::table::Constraint;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -36,16 +36,6 @@ pub struct ConstraintBuilder {
     session: Option<Arc<dyn Session>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for ConstraintBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl ConstraintBuilder {
@@ -57,7 +47,6 @@ impl ConstraintBuilder {
             log_store,
             session: None,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -96,12 +85,6 @@ impl ConstraintBuilder {
         self.commit_properties = commit_properties;
         self
     }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
 }
 
 impl std::future::IntoFuture for ConstraintBuilder {
@@ -116,151 +99,144 @@ impl std::future::IntoFuture for ConstraintBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
             if this.check_constraints.is_empty() {
                 return Err(DeltaTableError::Generic(
                     "No check constraint (Name and Expression) provided".to_string(),
                 ));
             }
 
-            let mut metadata = snapshot.metadata().clone();
+            let parent = this.log_store.clone();
+            let state = with_operation(&parent, |log_store| async move {
+                let mut metadata = snapshot.metadata().clone();
 
-            let configuration_key_mapper: HashMap<String, String> = HashMap::from_iter(
-                this.check_constraints
-                    .keys()
-                    .map(|name| (name.clone(), format!("delta.constraints.{name}"))),
-            );
-
-            // Hold all the conflicted constraints
-            let preexisting_constraints =
-                configuration_key_mapper
-                    .iter()
-                    .filter(|(_, configuration_key)| {
-                        metadata
-                            .configuration()
-                            .contains_key(configuration_key.as_str())
-                    });
-
-            let session = this
-                .session
-                .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
-            session
-                .as_ref()
-                .ensure_object_store_registered(this.log_store.as_ref(), Some(operation_id))?;
-
-            let proivider = DeltaScanNext::builder()
-                .with_snapshot(snapshot.snapshot().clone())
-                .await?;
-            let schema = proivider.schema().to_dfschema()?;
-
-            // Create an Hashmap of the name to the processed expression
-            let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
-            for (name, _) in configuration_key_mapper.iter() {
-                let converted_expr = into_expr(
-                    this.check_constraints[name].clone(),
-                    &schema,
-                    session.as_ref(),
-                )?;
-                let constraint_sql = fmt_expr_to_sql(&converted_expr)?;
-                constraints_sql_mapper.insert(name, constraint_sql);
-            }
-
-            for (name, configuration_key) in preexisting_constraints {
-                // when the expression is different in the conflicted constraint --> error out due not knowing how to resolve it
-                if !metadata.configuration()[configuration_key].eq(&constraints_sql_mapper[name]) {
-                    return Err(DeltaTableError::Generic(format!(
-                        "Cannot add constraint '{name}': a constraint with this name already exists with a different expression. Existing: '{}', New: '{}'",
-                        metadata.configuration()[configuration_key],
-                        constraints_sql_mapper[name]
-                    )));
-                }
-                tracing::warn!(
-                    "Skipping constraint '{name}': identical constraint already exists with expression '{}'",
-                    constraints_sql_mapper[name]
+                let configuration_key_mapper: HashMap<String, String> = HashMap::from_iter(
+                    this.check_constraints
+                        .keys()
+                        .map(|name| (name.clone(), format!("delta.constraints.{name}"))),
                 );
-            }
-            let constraints_checker: Vec<Constraint> = constraints_sql_mapper
-                .values()
-                .map(|sql| Constraint::new("*", sql))
-                .collect();
 
-            let plan = DataValidationExec::try_new_with_predicates(
-                session.as_ref(),
-                proivider.scan(session.as_ref(), None, &[], None).await?,
-                constraints_to_exprs(session.as_ref(), &schema, &constraints_checker)?,
-            )?;
+                // Hold all the conflicted constraints
+                let preexisting_constraints =
+                    configuration_key_mapper
+                        .iter()
+                        .filter(|(_, configuration_key)| {
+                            metadata
+                                .configuration()
+                                .contains_key(configuration_key.as_str())
+                        });
 
-            // We must not just try to collect the plan here, because that would load
-            // everything into memory. Instead we stream the results and discard them.
-            let mut result_stream = execute_stream(plan, session.task_ctx())?;
-            while let Some(maybe_batch) = result_stream.next().await {
-                // No need to do anything with the data, if we get data back it means
-                // the constraints are satisfied. We do want to propagate any errors though.
-                let _result = maybe_batch?;
-            }
+                let session = this
+                    .session
+                    .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+                session
+                    .as_ref()
+                    .ensure_object_store_registered(log_store.as_ref())?;
 
-            // We have validated the table passes it's constraints, now to add the constraint to
-            // the table.
-            for (name, configuration_key) in configuration_key_mapper.iter() {
-                metadata = metadata.add_config_key(
-                    configuration_key.to_string(),
-                    constraints_sql_mapper[&name].clone(),
-                )?;
-            }
+                let proivider = DeltaScanNext::builder()
+                    .with_snapshot(snapshot.snapshot().clone())
+                    .await?;
+                let schema = proivider.schema().to_dfschema()?;
 
-            let old_protocol = snapshot.protocol();
-            let protocol = ProtocolInner {
-                min_reader_version: if old_protocol.min_reader_version() > 1 {
-                    old_protocol.min_reader_version()
-                } else {
-                    1
-                },
-                min_writer_version: if old_protocol.min_writer_version() > 3 {
-                    old_protocol.min_writer_version()
-                } else {
-                    3
-                },
-                reader_features: old_protocol.reader_features_set(),
-                writer_features: if old_protocol.min_writer_version() < 7 {
-                    old_protocol.writer_features_set()
-                } else {
-                    let current_features = old_protocol.writer_features_set();
-                    if let Some(mut features) = current_features {
-                        features.insert(TableFeature::CheckConstraints);
-                        Some(features)
-                    } else {
-                        current_features
+                // Create an Hashmap of the name to the processed expression
+                let mut constraints_sql_mapper = HashMap::with_capacity(this.check_constraints.len());
+                for (name, _) in configuration_key_mapper.iter() {
+                    let converted_expr = into_expr(
+                        this.check_constraints[name].clone(),
+                        &schema,
+                        session.as_ref(),
+                    )?;
+                    let constraint_sql = fmt_expr_to_sql(&converted_expr)?;
+                    constraints_sql_mapper.insert(name, constraint_sql);
+                }
+
+                for (name, configuration_key) in preexisting_constraints {
+                    // when the expression is different in the conflicted constraint --> error out due not knowing how to resolve it
+                    if !metadata.configuration()[configuration_key].eq(&constraints_sql_mapper[name]) {
+                        return Err(DeltaTableError::Generic(format!(
+                            "Cannot add constraint '{name}': a constraint with this name already exists with a different expression. Existing: '{}', New: '{}'",
+                            metadata.configuration()[configuration_key],
+                            constraints_sql_mapper[name]
+                        )));
                     }
-                },
-            }
-            .as_kernel();
-            // Put all the constraint into one commit
-            let operation = DeltaOperation::AddConstraint {
-                constraints: constraints_sql_mapper
-                    .into_iter()
-                    .map(|(name, sql)| Constraint::new(name, &sql))
-                    .collect(),
-            };
+                    tracing::warn!(
+                        "Skipping constraint '{name}': identical constraint already exists with expression '{}'",
+                        constraints_sql_mapper[name]
+                    );
+                }
+                let constraints_checker: Vec<Constraint> = constraints_sql_mapper
+                    .values()
+                    .map(|sql| Constraint::new("*", sql))
+                    .collect();
 
-            let actions = vec![metadata.into(), protocol.into()];
+                let plan = DataValidationExec::try_new_with_predicates(
+                    session.as_ref(),
+                    proivider.scan(session.as_ref(), None, &[], None).await?,
+                    constraints_to_exprs(session.as_ref(), &schema, &constraints_checker)?,
+                )?;
 
-            let commit = CommitBuilder::from(this.commit_properties)
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
-                .await?;
+                // We must not just try to collect the plan here, because that would load
+                // everything into memory. Instead we stream the results and discard them.
+                let mut result_stream = execute_stream(plan, session.task_ctx())?;
+                while let Some(maybe_batch) = result_stream.next().await {
+                    // No need to do anything with the data, if we get data back it means
+                    // the constraints are satisfied. We do want to propagate any errors though.
+                    let _result = maybe_batch?;
+                }
 
-            if let Some(handler) = this.custom_execute_handler {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
+                // We have validated the table passes it's constraints, now to add the constraint to
+                // the table.
+                for (name, configuration_key) in configuration_key_mapper.iter() {
+                    metadata = metadata.add_config_key(
+                        configuration_key.to_string(),
+                        constraints_sql_mapper[&name].clone(),
+                    )?;
+                }
 
-            Ok(DeltaTable::new_with_state(
-                this.log_store,
-                commit.snapshot(),
-            ))
+                let old_protocol = snapshot.protocol();
+                let protocol = ProtocolInner {
+                    min_reader_version: if old_protocol.min_reader_version() > 1 {
+                        old_protocol.min_reader_version()
+                    } else {
+                        1
+                    },
+                    min_writer_version: if old_protocol.min_writer_version() > 3 {
+                        old_protocol.min_writer_version()
+                    } else {
+                        3
+                    },
+                    reader_features: old_protocol.reader_features_set(),
+                    writer_features: if old_protocol.min_writer_version() < 7 {
+                        old_protocol.writer_features_set()
+                    } else {
+                        let current_features = old_protocol.writer_features_set();
+                        if let Some(mut features) = current_features {
+                            features.insert(TableFeature::CheckConstraints);
+                            Some(features)
+                        } else {
+                            current_features
+                        }
+                    },
+                }
+                .as_kernel();
+                // Put all the constraint into one commit
+                let operation = DeltaOperation::AddConstraint {
+                    constraints: constraints_sql_mapper
+                        .into_iter()
+                        .map(|(name, sql)| Constraint::new(name, &sql))
+                        .collect(),
+                };
+
+                let actions = vec![metadata.into(), protocol.into()];
+
+                let commit = CommitBuilder::from(this.commit_properties)
+                    .with_actions(actions)
+                    .build(Some(&snapshot), log_store, operation)
+                    .await?;
+                Ok(commit.snapshot())
+            })
+            .await?;
+
+            Ok(DeltaTable::new_with_state(parent, state))
         })
     }
 }

@@ -122,7 +122,7 @@ mod tests {
         assert_eq!(txn_version, Some(3));
 
         // Create a checkpoint and then load
-        checkpoints::create_checkpoint(&table, None).await.unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
         let table3 =
             DeltaTableBuilder::from_url(ensure_table_uri(tmp_path.to_str().unwrap()).unwrap())
                 .unwrap()

@@ -42,7 +42,6 @@ use delta_kernel::{Engine, table_configuration::TableConfiguration, table_featur
 use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use uuid::Uuid;
 
 pub use self::scan::DeltaScanExec;
 pub(crate) use self::scan::KernelScanPlan;
@@ -496,8 +495,6 @@ pub struct DeltaScan {
     file_skipping_predicate: Option<Vec<Expr>>,
     #[serde(skip)]
     log_store: Option<LogStoreRef>,
-    #[serde(skip)]
-    read_operation_id: Option<Uuid>,
     file_selection: Option<FileSelection>,
 }
 
@@ -539,7 +536,6 @@ impl DeltaScan {
             row_index_column: None,
             file_skipping_predicate: None,
             log_store: None,
-            read_operation_id: None,
             file_selection: None,
         })
     }
@@ -596,13 +592,6 @@ impl DeltaScan {
         self
     }
 
-    /// Scope runtime object store registration to a specific operation's temporary copy when
-    /// the caller needs operation local reads.
-    pub(crate) fn with_operation_id(mut self, operation_id: Uuid) -> Self {
-        self.read_operation_id = Some(operation_id);
-        self
-    }
-
     fn validate_supported_reader_features(
         snapshot: &SnapshotWrapper,
     ) -> std::result::Result<(), TransactionError> {
@@ -626,7 +615,7 @@ impl DeltaScan {
         Self::validate_supported_reader_features(&self.snapshot)
             .map_err(crate::DeltaTableError::from)?;
         if let Some(log_store) = &self.log_store {
-            super::update_datafusion_session(session, log_store.as_ref(), self.read_operation_id)?;
+            super::update_datafusion_session(session, log_store.as_ref())?;
         }
         Ok(())
     }
@@ -779,7 +768,7 @@ impl TableProvider for DeltaScan {
             )
         })?;
 
-        super::update_datafusion_session(state, log_store.as_ref(), self.read_operation_id)?;
+        super::update_datafusion_session(state, log_store.as_ref())?;
 
         let snapshot = match &self.snapshot {
             SnapshotWrapper::EagerSnapshot(esnap) => esnap.as_ref().clone(),
@@ -1154,7 +1143,7 @@ mod tests {
     #[derive(Debug)]
     struct RootRegistrationTrackingLogStore {
         inner: LogStoreRef,
-        root_calls: Arc<Mutex<Vec<Option<Uuid>>>>,
+        root_calls: Arc<Mutex<usize>>,
     }
 
     #[async_trait::async_trait]
@@ -1174,28 +1163,6 @@ mod tests {
             self.inner.read_commit_entry(version).await
         }
 
-        async fn write_commit_entry(
-            &self,
-            version: crate::kernel::Version,
-            commit_or_bytes: crate::logstore::CommitOrBytes,
-            operation_id: Uuid,
-        ) -> std::result::Result<(), TransactionError> {
-            self.inner
-                .write_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
-        async fn abort_commit_entry(
-            &self,
-            version: crate::kernel::Version,
-            commit_or_bytes: crate::logstore::CommitOrBytes,
-            operation_id: Uuid,
-        ) -> std::result::Result<(), TransactionError> {
-            self.inner
-                .abort_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
         async fn get_latest_version(
             &self,
             start_version: crate::kernel::Version,
@@ -1203,16 +1170,23 @@ mod tests {
             self.inner.get_latest_version(start_version).await
         }
 
-        fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn object_store::ObjectStore> {
-            self.inner.object_store(operation_id)
+        fn object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+            self.inner.object_store()
         }
 
-        fn root_object_store(
+        fn root_object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+            *self.root_calls.lock().unwrap() += 1;
+            self.inner.root_object_store()
+        }
+
+        fn committer(&self) -> Arc<dyn crate::logstore::Committer> {
+            self.inner.committer()
+        }
+
+        async fn begin_operation(
             &self,
-            operation_id: Option<Uuid>,
-        ) -> Arc<dyn object_store::ObjectStore> {
-            self.root_calls.lock().unwrap().push(operation_id);
-            self.inner.root_object_store(operation_id)
+        ) -> crate::DeltaResult<Option<crate::logstore::OperationContext>> {
+            self.inner.begin_operation().await
         }
 
         fn config(&self) -> &crate::logstore::LogStoreConfig {
@@ -1418,10 +1392,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_into_registers_operation_scoped_root_object_store() -> TestResult {
+    async fn test_insert_into_registers_root_object_store_of_log_store() -> TestResult {
         let table = create_in_memory_id_table().await?;
-        let root_calls = Arc::new(Mutex::new(Vec::new()));
-        let operation_id = Uuid::new_v4();
+        let root_calls = Arc::new(Mutex::new(0usize));
         let tracked_log_store: LogStoreRef = Arc::new(RootRegistrationTrackingLogStore {
             inner: table.log_store(),
             root_calls: root_calls.clone(),
@@ -1429,8 +1402,7 @@ mod tests {
         let provider = DeltaScan::builder()
             .with_log_store(tracked_log_store)
             .build()
-            .await?
-            .with_operation_id(operation_id);
+            .await?;
 
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
@@ -1441,8 +1413,8 @@ mod tests {
             .await?;
 
         assert!(
-            root_calls.lock().unwrap().contains(&Some(operation_id)),
-            "expected insert path to register the root object store with operation id {operation_id}",
+            *root_calls.lock().unwrap() > 0,
+            "expected insert path to register the root object store of the given log store",
         );
 
         Ok(())
@@ -1568,7 +1540,7 @@ mod tests {
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
         let snapshot = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(10))
+            .update(log_store.engine(), Some(10))
             .await?;
 
         drain_recorded_ops(&mut operations).await;

@@ -11,16 +11,13 @@
 use std::collections::HashMap;
 #[cfg(feature = "datafusion")]
 use std::num::NonZeroU64;
-use std::sync::Arc;
 
 #[cfg(feature = "datafusion")]
 use arrow::array::RecordBatch;
-use async_trait::async_trait;
 #[cfg(feature = "datafusion")]
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 use delta_kernel::table_properties::{DataSkippingNumIndexedCols, TableProperties};
 use url::Url;
-use uuid::Uuid;
 
 use self::{
     add_column::AddColumnBuilder, add_feature::AddTableFeatureBuilder, create::CreateBuilder,
@@ -39,7 +36,6 @@ use crate::DeltaTable;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::Expression;
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::logstore::LogStoreRef;
 use crate::operations::generate::GenerateBuilder;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
@@ -257,63 +253,6 @@ impl DeltaTable {
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
-    }
-}
-
-/// Hook for embedding custom behavior into the lifecycle of a Delta operation.
-///
-/// Implementors can run arbitrary async code around an operation's execution and its post-commit
-/// hook, e.g. to integrate external transaction coordination, metrics, or cleanup. Each callback
-/// receives the operation's [`LogStoreRef`] and a unique `operation_id`.
-#[async_trait]
-pub trait CustomExecuteHandler: Send + Sync {
-    /// Execute arbitrary code at the start of a delta operation.
-    async fn pre_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
-
-    /// Execute arbitrary code at the end of a delta operation.
-    async fn post_execute(&self, log_store: &LogStoreRef, operation_id: Uuid) -> DeltaResult<()>;
-
-    /// Execute arbitrary code at the start of the post commit hook.
-    async fn before_post_commit_hook(
-        &self,
-        log_store: &LogStoreRef,
-        file_operation: bool,
-        operation_id: Uuid,
-    ) -> DeltaResult<()>;
-
-    /// Execute arbitrary code at the end of the post commit hook.
-    async fn after_post_commit_hook(
-        &self,
-        log_store: &LogStoreRef,
-        file_operation: bool,
-        operation_id: Uuid,
-    ) -> DeltaResult<()>;
-}
-
-#[allow(unused)]
-/// The [Operation] trait defines common behaviors that all operations builders
-/// should have consistent
-pub(crate) trait Operation: std::future::IntoFuture {
-    fn log_store(&self) -> &LogStoreRef;
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>>;
-    async fn pre_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
-        if let Some(handler) = self.get_custom_execute_handler() {
-            handler.pre_execute(self.log_store(), operation_id).await
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn post_execute(&self, operation_id: Uuid) -> DeltaResult<()> {
-        if let Some(handler) = self.get_custom_execute_handler() {
-            handler.post_execute(self.log_store(), operation_id).await
-        } else {
-            Ok(())
-        }
-    }
-
-    fn get_operation_id(&self) -> uuid::Uuid {
-        Uuid::new_v4()
     }
 }
 

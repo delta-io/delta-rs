@@ -126,7 +126,7 @@ impl BlindDeltaTable {
 
     /// Get a reference to the object store.
     pub fn object_store(&self) -> ObjectStoreRef {
-        self.log_store.object_store(None)
+        self.log_store.object_store()
     }
 
     /// Get the table URL.
@@ -193,7 +193,7 @@ impl BlindDeltaTable {
         let add_files_batch = adds_to_record_batch(&adds)?;
 
         let kernel_snapshot = self.snapshot.inner.clone();
-        let engine = self.log_store.engine(None);
+        let engine = self.log_store.engine();
 
         let commit_version = spawn_blocking_with_span(move || {
             let committer = Box::new(FileSystemCommitter::new());

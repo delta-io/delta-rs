@@ -73,16 +73,15 @@ use bytes::{BufMut, BytesMut};
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use object_store::ObjectStoreExt as _;
 use object_store::path::{Path, PathPart};
 use tracing::log::*;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::logstore::object_store::PutPayload;
+use crate::logstore::with_operation;
 use crate::table::state::DeltaTableState;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -92,7 +91,6 @@ pub struct GenerateBuilder {
     /// A snapshot of the table state to be generated
     snapshot: Option<EagerSnapshot>,
     log_store: LogStoreRef,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 impl GenerateBuilder {
@@ -103,17 +101,7 @@ impl GenerateBuilder {
         Self {
             snapshot,
             log_store,
-            custom_execute_handler: None,
         }
-    }
-}
-
-impl super::Operation for GenerateBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
     }
 }
 
@@ -125,7 +113,7 @@ impl std::future::IntoFuture for GenerateBuilder {
         let this = self;
         Box::pin(async move {
             let snapshot =
-                resolve_snapshot(this.log_store(), this.snapshot.clone(), true, None).await?;
+                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
             let mut payloads = HashMap::new();
             let manifest_part = PathPart::parse("manifest").expect("This is not possible");
 
@@ -151,27 +139,31 @@ impl std::future::IntoFuture for GenerateBuilder {
                 }
 
                 if let Some(payload) = payloads.get_mut(&output_path) {
-                    let uri = this.log_store().to_uri(&path);
+                    let uri = this.log_store.to_uri(&path);
                     trace!("Prepare {uri} for the symlink_format_manifest");
                     payload.put(uri.as_bytes());
                     payload.put_u8(b'\n');
                 }
             }
             debug!("Total of {} manifest files prepared", payloads.len());
-            for (path, payload) in payloads.drain() {
-                debug!(
-                    "Generated manifest for {:?} is {} bytes",
-                    path,
-                    payload.len()
-                );
-                let payload = PutPayload::from(payload.freeze());
-                this.log_store()
-                    .object_store(None)
-                    .put(&path, payload)
-                    .await?;
-            }
+            // Manifests are file-only work: the scope publishes them on success.
+            let parent = this.log_store.clone();
+            with_operation(&parent, |log_store| async move {
+                let object_store = log_store.object_store();
+                for (path, payload) in payloads.drain() {
+                    debug!(
+                        "Generated manifest for {:?} is {} bytes",
+                        path,
+                        payload.len()
+                    );
+                    let payload = PutPayload::from(payload.freeze());
+                    object_store.put(&path, payload).await?;
+                }
+                Ok(())
+            })
+            .await?;
             Ok(DeltaTable::new_with_state(
-                this.log_store().clone(),
+                parent,
                 DeltaTableState::new(snapshot.clone()),
             ))
         })
@@ -203,7 +195,7 @@ mod tests {
         let generate = GenerateBuilder::new(table.log_store(), table.state.map(|s| s.snapshot));
         let table = generate.await?;
 
-        let store = table.log_store().object_store(None);
+        let store = table.log_store().object_store();
         let mut stream = store.list(None);
         let mut found = false;
         while let Some(meta) = stream.next().await.transpose().unwrap() {
@@ -246,7 +238,7 @@ mod tests {
         let generate = GenerateBuilder::new(table.log_store(), table.state.map(|s| s.snapshot));
         let table = generate.await?;
 
-        let store = table.log_store().object_store(None);
+        let store = table.log_store().object_store();
         let mut stream = store.list(None);
         let mut found = false;
         while let Some(meta) = stream.next().await.transpose().unwrap() {

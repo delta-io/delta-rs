@@ -21,7 +21,6 @@ use datafusion::{catalog::Session, common::HashSet, prelude::Expr};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use url::Url;
-use uuid::Uuid;
 
 use crate::delta_datafusion::table_provider::next::SnapshotWrapper;
 use crate::delta_datafusion::{DataFusionMixins as _, FindFilesExprProperties};
@@ -501,7 +500,6 @@ impl DeltaTable {
         crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
             session,
             self.log_store().as_ref(),
-            None,
         )
     }
 }
@@ -509,13 +507,8 @@ impl DeltaTable {
 pub(crate) fn update_datafusion_session(
     session: &dyn Session,
     log_store: &dyn LogStore,
-    operation_id: Option<Uuid>,
 ) -> DeltaResult<()> {
-    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(
-        session,
-        log_store,
-        operation_id,
-    )
+    crate::delta_datafusion::DeltaSessionExt::ensure_object_store_registered(session, log_store)
 }
 
 /// Physical scan wrapper used by DataFusion plan serialization.
