@@ -597,7 +597,7 @@ impl DeltaWriter {
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
         // The common (unpartitioned) case has a single writer; close it directly and
-        // skip the concurrent-fan-out machinery (and the `num_cpus` probe).
+        // skip the concurrent-fan-out machinery (and the `available_parallelism` probe).
         if writers.len() <= 1 {
             let mut actions = Vec::new();
             for (_, writer) in writers {
@@ -610,7 +610,11 @@ impl DeltaWriter {
         // while completed files are orphans it can reclaim.
         let mut close_stream = futures::stream::iter(writers)
             .map(|(_, writer)| writer.close())
-            .buffered(num_cpus::get());
+            .buffered(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+            );
         let mut actions = Vec::new();
         let mut first_err: Option<DeltaTableError> = None;
         while let Some(result) = close_stream.next().await {
