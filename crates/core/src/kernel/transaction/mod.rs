@@ -945,6 +945,11 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         read_snapshot
                             .update(&this.log_store, Some(latest_version))
                             .await?;
+                        PROTOCOL.can_commit(
+                            &read_snapshot,
+                            &this.data.actions,
+                            &this.data.operation,
+                        )?;
                     }
                     let version: Version = latest_version + 1;
                     Span::current().record("target_version", version);
@@ -1227,7 +1232,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::kernel::IsolationLevel;
+    use crate::DeltaTable;
+    use crate::kernel::{DataType, IsolationLevel, ProtocolExt as _, StructField};
     use crate::logstore::{LogStore, StorageConfig, default_logstore::DefaultLogStore};
     use crate::protocol::SaveMode;
     use object_store::{PutPayload, memory::InMemory};
@@ -1265,6 +1271,60 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_retry_rejects_concurrent_protocol_change() {
+        let table = DeltaTable::new_in_memory()
+            .create()
+            .with_columns([StructField::new("id", DataType::INTEGER, true)])
+            .await
+            .unwrap();
+        let log_store = table.log_store();
+        let snapshot = table.snapshot().unwrap().snapshot();
+        let prepared = CommitBuilder::default()
+            .build(
+                Some(snapshot),
+                log_store.clone(),
+                DeltaOperation::Optimize {
+                    target_size: 1024,
+                    predicate: None,
+                },
+            )
+            .into_prepared_commit_future()
+            .await
+            .unwrap();
+
+        let concurrent = CommitData::new(
+            vec![Action::Protocol(
+                snapshot.protocol().clone().append_writer_features(&[
+                    TableFeature::DomainMetadata,
+                    TableFeature::ClusteredTable,
+                ]),
+            )],
+            DeltaOperation::FileSystemCheck {},
+            HashMap::new(),
+            vec![],
+        )
+        .get_bytes()
+        .unwrap();
+        log_store
+            .write_commit_entry(
+                snapshot.version() + 1,
+                CommitOrBytes::LogBytes(concurrent),
+                Uuid::new_v4(),
+            )
+            .await
+            .unwrap();
+
+        let error = match prepared.await {
+            Ok(_) => panic!("concurrent protocol change must reject the retry"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("ClusteredTable"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
