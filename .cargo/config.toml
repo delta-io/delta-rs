@@ -9,3 +9,14 @@ rustflags = [
   "-C", "link-arg=-undefined",
   "-C", "link-arg=dynamic_lookup",
 ]
+
+# On OpenSUSE (and other distros) aarch64 a site script at
+# /usr/share/site/aarch64-unknown-linux-gnu rewrites every autoconf
+# `./configure` libdir from `lib` to `lib64`.  tikv-jemalloc-sys builds
+# bundled jemalloc via configure and then hardcodes a link-search path of
+# `{OUT_DIR}/lib`, so the built libjemalloc_pic.a lands in `lib64` but cargo
+# looks in `lib` → "could not find native static library `jemalloc_pic`".
+# Neutralising CONFIG_SITE keeps the jemalloc build's libdir as `lib`,
+# matching what tikv-jemalloc-sys's build.rs expects.
+[env]
+CONFIG_SITE = { value = "/dev/null", force = true }

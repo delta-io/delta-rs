@@ -825,9 +825,14 @@ impl RawDeltaTable {
     ) -> PyResult<String> {
         let (table, metrics) = py.detach(|| {
             let table = self._table.lock().map_err(to_rt_err)?.clone();
-            let mut cmd = table
-                .optimize()
-                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+            let mut cmd =
+                table
+                    .optimize()
+                    .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(|| {
+                        std::thread::available_parallelism()
+                            .map(|n| n.get())
+                            .unwrap_or(1)
+                    }));
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {
                 let session =
@@ -900,7 +905,11 @@ impl RawDeltaTable {
             let mut cmd = table
                 .clone()
                 .optimize()
-                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
+                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(1)
+                }))
                 .with_type(OptimizeType::ZOrder(z_order_columns));
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {

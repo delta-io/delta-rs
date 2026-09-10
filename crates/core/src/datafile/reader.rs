@@ -162,10 +162,12 @@ impl DeltaDataReader for ParquetTableReader {
 
         let file_reader = self.file_reader.clone();
         let files = Arc::clone(&self.files);
-        // Read up to `num_cpus` files concurrently and interleave their batches
+        // Read up to `available_parallelism` files concurrently and interleave their batches
         // (`flat_map_unordered`), overlapping per-file open/read latency. Row order
         // across files isn't preserved, which is fine for a no-predicate scan.
-        let concurrency = num_cpus::get().max(1);
+        let concurrency = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
         let stream = futures::stream::iter(0..files.len())
             .flat_map_unordered(concurrency, move |i| {
                 let (path, size) = files[i].clone();
