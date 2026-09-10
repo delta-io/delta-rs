@@ -292,8 +292,10 @@ impl std::future::IntoFuture for DeleteBuilder {
                         cdc: false,
                     },
                 )?;
-                update_datafusion_session(&session, &log_store)?;
-                session.ensure_log_store_registered(log_store.as_ref())?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&session, &this.log_store)?;
+                session.ensure_log_store_registered(this.log_store.as_ref())?;
 
                 let predicate = this
                     .predicate

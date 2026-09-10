@@ -446,13 +446,15 @@ impl OperationScope {
     /// Publish unpublished work and release the scope. When `finish` fails the scope is aborted
     /// and the `finish` error is returned.
     pub async fn finish(mut self) -> DeltaResult<()> {
-        let Some(inner) = self.inner.take() else {
+        // `inner` stays in `self` while the backend call is pending: when this future is dropped
+        // during the await, `Drop` still finds the transaction and aborts it.
+        let Some(inner) = &self.inner else {
             return Ok(());
         };
         inner.state.close();
         let dirty = inner.state.dirty.load(Ordering::SeqCst);
         debug!(dirty, "finishing operation scope");
-        match inner.transaction.finish(dirty).await {
+        let result = match inner.transaction.finish(dirty).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 if let Err(abort_err) = inner.transaction.abort().await {
@@ -460,24 +462,29 @@ impl OperationScope {
                 }
                 Err(err)
             }
-        }
+        };
+        self.inner = None;
+        result
     }
 
     /// Discard unpublished work and release the scope.
     pub async fn abort(mut self) -> DeltaResult<()> {
-        let Some(inner) = self.inner.take() else {
+        // As in `finish`, `inner` stays in `self` until the backend call returns.
+        let Some(inner) = &self.inner else {
             return Ok(());
         };
         inner.state.close();
         debug!("aborting operation scope");
-        inner.transaction.abort().await
+        let result = inner.transaction.abort().await;
+        self.inner = None;
+        result
     }
 }
 
 impl Drop for OperationScope {
     fn drop(&mut self) {
         // Reached only when the operation future was dropped or panicked before `finish` or
-        // `abort` ran.
+        // `abort` ran to completion.
         let Some(inner) = self.inner.take() else {
             return;
         };
@@ -529,16 +536,17 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
     use bytes::Bytes;
     use object_store::ObjectStoreExt as _;
     use object_store::path::Path;
 
     use super::*;
+    use crate::DeltaTable;
     use crate::kernel::{DataType, PrimitiveType, StructField};
     use crate::operations::create::CreateBuilder;
     use crate::test_utils::isolating_store::{IsolatingLogStore, ScopeEvent};
-    use crate::{DeltaTable, DeltaTableConfig};
 
     async fn create_table(store: &Arc<IsolatingLogStore>) -> DeltaTable {
         let log_store: LogStoreRef = store.clone();
@@ -896,6 +904,68 @@ mod tests {
                 },
             ]
         );
-        let _ = DeltaTableConfig::default();
+    }
+
+    /// A transaction whose `finish` never completes and whose first `abort` can hang, to drive a
+    /// scope whose future is dropped while a backend call is pending.
+    struct HangingTransaction {
+        hang_first_abort: bool,
+        abort_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl OperationTransaction for HangingTransaction {
+        async fn finish(&self, _dirty: bool) -> DeltaResult<()> {
+            std::future::pending().await
+        }
+
+        async fn abort(&self) -> DeltaResult<()> {
+            if self.abort_calls.fetch_add(1, Ordering::SeqCst) == 0 && self.hang_first_abort {
+                std::future::pending().await
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn hanging_scope(hang_first_abort: bool) -> (OperationScope, Arc<HangingTransaction>) {
+        let transaction = Arc::new(HangingTransaction {
+            hang_first_abort,
+            abort_calls: AtomicUsize::new(0),
+        });
+        let scope = OperationScope {
+            store: DeltaTable::new_in_memory().log_store(),
+            inner: Some(ScopeInner {
+                transaction: transaction.clone(),
+                state: Arc::new(ScopeState::default()),
+            }),
+        };
+        (scope, transaction)
+    }
+
+    /// The abort of a dropped scope runs as a spawned task; give it a chance to run.
+    async fn abort_calls_after_yielding(transaction: &HangingTransaction) -> usize {
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        transaction.abort_calls.load(Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn a_finish_dropped_while_pending_still_aborts_the_transaction() {
+        let (scope, transaction) = hanging_scope(false);
+        let mut finish = Box::pin(scope.finish());
+        assert!(futures::poll!(finish.as_mut()).is_pending());
+        drop(finish);
+        assert_eq!(abort_calls_after_yielding(&transaction).await, 1);
+    }
+
+    #[tokio::test]
+    async fn an_abort_dropped_while_pending_still_aborts_the_transaction() {
+        let (scope, transaction) = hanging_scope(true);
+        let mut abort = Box::pin(scope.abort());
+        assert!(futures::poll!(abort.as_mut()).is_pending());
+        drop(abort);
+        assert_eq!(abort_calls_after_yielding(&transaction).await, 2);
     }
 }

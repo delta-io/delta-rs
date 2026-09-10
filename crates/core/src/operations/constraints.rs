@@ -128,9 +128,11 @@ impl std::future::IntoFuture for ConstraintBuilder {
                 let session = this
                     .session
                     .unwrap_or_else(|| Arc::new(create_session().into_inner().state()));
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
                 session
                     .as_ref()
-                    .ensure_object_store_registered(log_store.as_ref())?;
+                    .ensure_object_store_registered(this.log_store.as_ref())?;
 
                 let proivider = DeltaScanNext::builder()
                     .with_snapshot(snapshot.snapshot().clone())

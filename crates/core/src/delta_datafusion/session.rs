@@ -57,6 +57,9 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// Ensure the session's `RuntimeEnv` has the object store registered for the log store's
     /// root URL.
     ///
+    /// Pass the table's long-lived store, never an operation-scoped one: the session outlives
+    /// the scope, and a scoped store refuses every call once its scope is closed.
+    ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// URL.
     ///
@@ -79,7 +82,8 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// path does not rely on these internal/special `delta-rs://...` URLs.
     ///
     /// This does not support fully-qualified file URLs (e.g. shallow clones). Prefer
-    /// `ensure_object_store_registered` in new code.
+    /// `ensure_object_store_registered` in new code. As there, pass the table's long-lived
+    /// store, never an operation-scoped one.
     ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// table's delta-rs object store URL.

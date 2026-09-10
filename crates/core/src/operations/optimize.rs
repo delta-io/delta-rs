@@ -425,6 +425,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     cdc: false,
                 },
             )?;
+            // Register the parent store before the write scope opens: the caller's session
+            // outlives the scope, and a scoped store refuses every call once the scope is closed.
+            update_datafusion_session(&session, &this.log_store)?;
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -802,6 +805,8 @@ impl MergePlan {
         let read_session = self.read_session.clone();
         info!("starting optimize execution");
         let object_store = log_store.object_store();
+        // `OptimizeBuilder` registers the parent store before it opens the write scope, so this
+        // only registers a store for callers that run a plan directly with an unscoped store.
         update_datafusion_session(read_session.as_ref(), log_store.as_ref())?;
 
         let mut stream = match operations {

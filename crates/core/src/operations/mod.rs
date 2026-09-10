@@ -36,7 +36,11 @@ use crate::DeltaTable;
 #[cfg(feature = "datafusion")]
 use crate::delta_datafusion::Expression;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::{Action, EagerSnapshot};
+use crate::logstore::{LogStoreRef, with_operation};
 use crate::operations::generate::GenerateBuilder;
+use crate::protocol::DeltaOperation;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::config::{DEFAULT_NUM_INDEX_COLS, TablePropertiesExt as _};
 
@@ -75,6 +79,29 @@ pub mod write;
 
 #[cfg(all(test, feature = "datafusion"))]
 mod session_fallback_policy_tests;
+
+/// Commit `actions` for `operation` inside an operation scope opened on `parent`, and return
+/// the table at the new version, backed by `parent`.
+///
+/// This is the whole write path of the metadata operations, which compute their actions from a
+/// snapshot before the scope opens.
+pub(crate) async fn commit_actions_in_scope(
+    parent: &LogStoreRef,
+    snapshot: &EagerSnapshot,
+    commit_properties: CommitProperties,
+    actions: Vec<Action>,
+    operation: DeltaOperation,
+) -> DeltaResult<DeltaTable> {
+    let state = with_operation(parent, |log_store| async move {
+        let commit = CommitBuilder::from(commit_properties)
+            .with_actions(actions)
+            .build(Some(snapshot), log_store, operation)
+            .await?;
+        Ok(commit.snapshot())
+    })
+    .await?;
+    Ok(DeltaTable::new_with_state(parent.clone(), state))
+}
 
 impl DeltaTable {
     /// Create a new [`DeltaTable`] instance from a URL.

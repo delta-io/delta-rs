@@ -1882,7 +1882,9 @@ impl std::future::IntoFuture for MergeBuilder {
                     },
                 )?;
 
-                update_datafusion_session(&state, log_store.as_ref())?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&state, this.log_store.as_ref())?;
 
                 execute(
                     this.predicate,

@@ -12,6 +12,7 @@ use std::time::Duration as StdDuration;
 use arrow::array::{Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use chrono::Duration;
+use datafusion::catalog::Session;
 use datafusion::logical_expr::{col, lit};
 use datafusion::prelude::SessionContext;
 use delta_kernel::schema::MetadataValue;
@@ -19,6 +20,7 @@ use std::future::{Future, IntoFuture};
 
 use deltalake_core::TableProperty;
 use deltalake_core::checkpoints::{cleanup_metadata, create_checkpoint};
+use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::kernel::transaction::CommitProperties;
 use deltalake_core::kernel::{DataType, PrimitiveType, StructField, TableFeatures};
 use deltalake_core::logstore::LogStoreRef;
@@ -754,4 +756,60 @@ async fn successful_post_commit_checkpoint_is_published_by_the_sibling_scope() {
             .await
             .contains("_delta_log/00000000000000000001.checkpoint.parquet")
     );
+}
+
+#[tokio::test]
+async fn a_caller_session_survives_finished_scopes() {
+    let store = IsolatingLogStore::new();
+    let table = table_with_data(&store).await;
+    // One session state shared by every operation and by the scan at the end. The object store
+    // registry lives in its runtime environment, so a store registered by one operation is what
+    // the next operation and the scan resolve.
+    let ctx: SessionContext = DeltaSessionContext::default().into();
+    let session: Arc<dyn Session> = Arc::new(ctx.state());
+
+    let (table, _) = table
+        .delete()
+        .with_session_state(session.clone())
+        .with_predicate(col("id").eq(lit(1)))
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(3));
+
+    // The first scope is closed. The same session must still drive a write, a delete, a merge
+    // and a scan: none of them may resolve a store that belongs to a closed scope.
+    let table = table
+        .write(vec![batch(&[7])])
+        .with_session_state(session.clone())
+        .await
+        .unwrap();
+    let (table, _) = table
+        .delete()
+        .with_session_state(session.clone())
+        .with_predicate(col("id").eq(lit(2)))
+        .await
+        .unwrap();
+    let source = ctx.read_batch(batch(&[8])).unwrap();
+    let (table, _) = table
+        .merge(source, col("target.id").eq(col("source.id")))
+        .with_session_state(session.clone())
+        .with_source_alias("source")
+        .with_target_alias("target")
+        .when_not_matched_insert(|i| {
+            i.set("id", col("source.id"))
+                .set("value", col("source.value"))
+        })
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(table.version(), Some(6));
+
+    let batches = ctx
+        .read_table(table.table_provider().await.unwrap())
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 6);
 }

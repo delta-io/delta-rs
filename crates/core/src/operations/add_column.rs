@@ -7,13 +7,13 @@ use itertools::Itertools;
 
 use crate::errors::ColumnMappingOperation;
 use crate::kernel::schema::merge_delta_struct;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{
     Action, EagerSnapshot, MetadataExt, ProtocolExt as _, SnapshotMetadataRef, StructField,
     StructTypeExt, resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
-use crate::logstore::with_operation;
+use crate::operations::commit_actions_in_scope;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -124,18 +124,14 @@ impl std::future::IntoFuture for AddColumnBuilder {
             let (actions, operation) =
                 plan_add_column_actions(snapshot.snapshot().metadata_state(), fields)?;
 
-            let parent = this.log_store.clone();
-            let commit_properties = this.commit_properties;
-            let state = with_operation(&parent, |log_store| async move {
-                let commit = CommitBuilder::from(commit_properties)
-                    .with_actions(actions)
-                    .build(Some(&snapshot), log_store, operation)
-                    .await?;
-                Ok(commit.snapshot())
-            })
-            .await?;
-
-            Ok(DeltaTable::new_with_state(parent, state))
+            commit_actions_in_scope(
+                &this.log_store,
+                &snapshot,
+                this.commit_properties,
+                actions,
+                operation,
+            )
+            .await
         })
     }
 }

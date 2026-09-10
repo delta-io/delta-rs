@@ -21,13 +21,11 @@ use async_trait::async_trait;
 use deltalake_core::kernel::Version;
 use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::logstore::{
-    CommitOrBytes, CommitResponse, Committer, OperationTransaction, PayloadKind,
-    commit_uri_from_version,
+    CommitOrBytes, CommitResponse, CommitStrategy, Committer, FileSystemCommitter,
+    OperationTransaction, PayloadKind, commit_uri_from_version,
 };
 use deltalake_core::{DeltaResult, DeltaTableError};
-use object_store::{
-    Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _, PutMode, PutOptions,
-};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _};
 use tracing::{debug, warn};
 
 use crate::client::{LakeFSClient, LakeFSLocation, MergeError};
@@ -41,21 +39,6 @@ pub const DIRTY_BRANCH_RETRIES: usize = 5;
 
 /// Base delay between two dirty-branch retries. The delay grows linearly with the attempt.
 pub const DIRTY_BRANCH_BACKOFF: Duration = Duration::from_millis(200);
-
-fn put_if_absent() -> PutOptions {
-    PutOptions {
-        mode: PutMode::Create,
-        ..Default::default()
-    }
-}
-
-fn payload_kind_mismatch() -> TransactionError {
-    let msg = "LakeFS commits require the commit bytes, not a temporary commit file".to_string();
-    TransactionError::LogStoreError {
-        source: Box::new(DeltaTableError::Generic(msg.clone())),
-        msg,
-    }
-}
 
 /// Delete `path` from `store`, treating a missing object as deleted.
 async fn delete_if_present(
@@ -109,6 +92,8 @@ pub struct LakeFSBranchCommitter {
     client: LakeFSClient,
     /// Store rooted at the table root on the transaction branch.
     branch_store: Arc<dyn ObjectStore>,
+    /// Stages `N.json` on the transaction branch with a create-only put.
+    staging: FileSystemCommitter,
     /// The source table location (`lakefs://{repo}/{source branch}/{table}`).
     location: LakeFSLocation,
     /// The transaction branch.
@@ -125,6 +110,7 @@ impl LakeFSBranchCommitter {
     ) -> Self {
         Self {
             client,
+            staging: FileSystemCommitter::new(branch_store.clone(), CommitStrategy::ConditionalPut),
             branch_store,
             location,
             branch,
@@ -146,23 +132,14 @@ impl Committer for LakeFSBranchCommitter {
         version: Version,
         payload: CommitOrBytes,
     ) -> Result<CommitResponse, TransactionError> {
-        let CommitOrBytes::LogBytes(bytes) = payload else {
-            return Err(payload_kind_mismatch());
-        };
-        let commit_path = commit_uri_from_version(Some(version));
-
-        // 1. Stage the commit file on the transaction branch.
-        match self
-            .branch_store
-            .put_opts(&commit_path, bytes.into(), put_if_absent())
-            .await
+        // 1. Stage the commit file on the transaction branch. The conditional put reports a
+        //    version that already exists on the branch before any LakeFS call is made.
+        if let conflict @ CommitResponse::Conflict { .. } =
+            self.staging.commit(version, payload).await?
         {
-            Ok(_) => {}
-            Err(ObjectStoreError::AlreadyExists { .. }) => {
-                return Ok(CommitResponse::Conflict { version });
-            }
-            Err(err) => return Err(TransactionError::from(err)),
+            return Ok(conflict);
         }
+        let commit_path = commit_uri_from_version(Some(version));
 
         // 2. Commit the branch, so that the data files and the commit file become one LakeFS commit.
         let table = &self.location.table;
@@ -229,7 +206,7 @@ impl Committer for LakeFSBranchCommitter {
     }
 
     fn payload_kind(&self) -> PayloadKind {
-        PayloadKind::Bytes
+        self.staging.payload_kind()
     }
 }
 
@@ -241,12 +218,13 @@ impl Committer for LakeFSBranchCommitter {
 /// everything staged on that branch.
 pub struct LakeFSSourceCommitter {
     client: LakeFSClient,
-    /// Store rooted at the table root on the source branch.
-    store: Arc<dyn ObjectStore>,
+    /// Stages `N.json` on the source branch with a create-only put.
+    staging: FileSystemCommitter,
     location: LakeFSLocation,
 }
 
 impl LakeFSSourceCommitter {
+    /// `store` must be rooted at the table root on the source branch.
     pub(crate) fn new(
         client: LakeFSClient,
         store: Arc<dyn ObjectStore>,
@@ -254,7 +232,7 @@ impl LakeFSSourceCommitter {
     ) -> Self {
         Self {
             client,
-            store,
+            staging: FileSystemCommitter::new(store, CommitStrategy::ConditionalPut),
             location,
         }
     }
@@ -267,23 +245,10 @@ impl Committer for LakeFSSourceCommitter {
         version: Version,
         payload: CommitOrBytes,
     ) -> Result<CommitResponse, TransactionError> {
-        let CommitOrBytes::LogBytes(bytes) = payload else {
-            return Err(payload_kind_mismatch());
-        };
-        match self
-            .store
-            .put_opts(
-                &commit_uri_from_version(Some(version)),
-                bytes.into(),
-                put_if_absent(),
-            )
-            .await
+        if let conflict @ CommitResponse::Conflict { .. } =
+            self.staging.commit(version, payload).await?
         {
-            Ok(_) => {}
-            Err(ObjectStoreError::AlreadyExists { .. }) => {
-                return Ok(CommitResponse::Conflict { version });
-            }
-            Err(err) => return Err(TransactionError::from(err)),
+            return Ok(conflict);
         }
 
         let table = &self.location.table;
@@ -313,7 +278,7 @@ impl Committer for LakeFSSourceCommitter {
     }
 
     fn payload_kind(&self) -> PayloadKind {
-        PayloadKind::Bytes
+        self.staging.payload_kind()
     }
 }
 
@@ -583,6 +548,24 @@ mod tests {
             "unexpected error: {message}"
         );
         merge.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn branch_commit_refuses_a_temporary_commit_file_before_any_lakefs_call() {
+        let mut server = mockito::Server::new_async().await;
+        let lakefs = server
+            .mock("POST", Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let store = Arc::new(InMemory::new());
+        let committer = branch_committer(&server, store.clone());
+        let payload = CommitOrBytes::TmpCommit(Path::from("_delta_log/_commit_x.json.tmp"));
+        let err = committer.commit(1, payload).await.unwrap_err();
+        assert!(err.to_string().contains("payload"), "{err}");
+        assert!(store.head(&commit_path(1)).await.is_err());
+        lakefs.assert_async().await;
     }
 
     #[tokio::test]

@@ -4,10 +4,10 @@ use futures::future::BoxFuture;
 use validator::Validate;
 
 use crate::DeltaTable;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{Action, EagerSnapshot, MetadataExt, SnapshotMetadataRef, resolve_snapshot};
 use crate::logstore::LogStoreRef;
-use crate::logstore::with_operation;
+use crate::operations::commit_actions_in_scope;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -123,18 +123,14 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             let (actions, operation) =
                 plan_update_table_metadata_actions(snapshot.snapshot().metadata_state(), update)?;
 
-            let parent = this.log_store.clone();
-            let commit_properties = this.commit_properties;
-            let state = with_operation(&parent, |log_store| async move {
-                let commit = CommitBuilder::from(commit_properties)
-                    .with_actions(actions)
-                    .build(Some(&snapshot), log_store, operation)
-                    .await?;
-                Ok(commit.snapshot())
-            })
-            .await?;
-
-            Ok(DeltaTable::new_with_state(parent, state))
+            commit_actions_in_scope(
+                &this.log_store,
+                &snapshot,
+                this.commit_properties,
+                actions,
+                operation,
+            )
+            .await
         })
     }
 }

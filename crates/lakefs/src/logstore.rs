@@ -49,7 +49,7 @@ pub fn lakefs_logstore(
         root_store,
         LogStoreConfig::new(location, options.clone()),
         client,
-    )))
+    )?))
 }
 
 /// [`LogStore`] for tables on a LakeFS branch.
@@ -62,6 +62,8 @@ pub struct LakeFSLogStore {
     root_store: ObjectStoreRef,
     config: LogStoreConfig,
     client: LakeFSClient,
+    /// The table location split into repository, source branch and table path.
+    location: LakeFSLocation,
 }
 
 impl LakeFSLogStore {
@@ -73,30 +75,34 @@ impl LakeFSLogStore {
     ///   with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `root_store` - A shared reference to an [`object_store::ObjectStore`] with "/"
     ///   pointing at root of the storage system.
-    /// * `location` - A url corresponding to the storage location of `storage`.
+    /// * `config` - The log store configuration. Its location must be a
+    ///   `lakefs://{repo}/{branch}/{table}` URL.
+    /// * `client` - The LakeFS API client used for branch operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeltaTableError::InvalidTableLocation`] when the configured location is not a
+    /// LakeFS URL.
     pub fn new(
         prefixed_store: ObjectStoreRef,
         root_store: ObjectStoreRef,
         config: LogStoreConfig,
         client: LakeFSClient,
-    ) -> Self {
-        Self {
+    ) -> DeltaResult<Self> {
+        let location = LakeFSLocation::parse(config.location().as_str())
+            .ok_or_else(|| DeltaTableError::InvalidTableLocation(config.location().to_string()))?;
+        Ok(Self {
             prefixed_store,
             root_store,
             config,
             client,
-        }
+            location,
+        })
     }
 
     /// The LakeFS client this store uses.
     pub fn client(&self) -> &LakeFSClient {
         &self.client
-    }
-
-    fn location(&self) -> DeltaResult<LakeFSLocation> {
-        LakeFSLocation::parse(self.config.location().as_str()).ok_or_else(|| {
-            DeltaTableError::InvalidTableLocation(self.config.location().to_string())
-        })
     }
 }
 
@@ -126,19 +132,16 @@ impl LogStore for LakeFSLogStore {
     /// LakeFS commit of the source branch. Operations that run inside a scope get a branch
     /// committer from [`LakeFSLogStore::begin_operation`] instead.
     fn committer(&self) -> Arc<dyn Committer> {
-        let location = self
-            .location()
-            .expect("a LakeFSLogStore is only built for lakefs:// locations");
         Arc::new(LakeFSSourceCommitter::new(
             self.client.clone(),
             self.prefixed_store.clone(),
-            location,
+            self.location.clone(),
         ))
     }
 
     /// Create a hidden transaction branch and return the write-side handles for it.
     async fn begin_operation(&self) -> DeltaResult<Option<OperationContext>> {
-        let location = self.location()?;
+        let location = &self.location;
         let branch = format!("delta-tx-{}", Uuid::new_v4());
         self.client
             .create_branch(&location.repo, &location.branch, &branch)
@@ -166,7 +169,7 @@ impl LogStore for LakeFSLogStore {
             )),
             transaction: Arc::new(LakeFSTransaction::new(
                 self.client.clone(),
-                location,
+                location.clone(),
                 branch,
             )),
         }))
@@ -205,6 +208,28 @@ mod tests {
                 "pass".into(),
             )),
         )
+        .unwrap()
+    }
+
+    #[test]
+    fn new_rejects_a_location_that_is_not_a_lakefs_url() {
+        let location = Url::parse("s3://bucket/table").unwrap();
+        let root = Arc::new(InMemory::new());
+        let err = LakeFSLogStore::new(
+            Arc::new(PrefixStore::new(root.clone(), "table")),
+            root,
+            LogStoreConfig::new(&location, StorageConfig::default()),
+            LakeFSClient::with_config(LakeFSConfig::new(
+                "http://localhost".into(),
+                "user".into(),
+                "pass".into(),
+            )),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, DeltaTableError::InvalidTableLocation(_)),
+            "{err}"
+        );
     }
 
     #[tokio::test]
