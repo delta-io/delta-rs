@@ -6,6 +6,8 @@ pub(crate) mod datafusion;
 pub(crate) mod failing_store;
 #[cfg(test)]
 pub(crate) mod object_store;
+#[cfg(test)]
+pub(crate) mod slow_store;
 
 use std::{collections::HashMap, path::PathBuf, process::Command};
 
