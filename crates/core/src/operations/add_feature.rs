@@ -9,9 +9,7 @@ use itertools::Itertools;
 use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::kernel::{
-    Action, EagerSnapshot, ProtocolExt as _, SnapshotMetadataRef, TableFeatures, resolve_snapshot,
-};
+use crate::kernel::{Action, EagerSnapshot, SnapshotMetadataRef, TableFeatures, resolve_snapshot};
 use crate::logstore::LogStoreRef;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
@@ -112,8 +110,48 @@ fn plan_add_table_feature_actions(
         }
     }
 
-    protocol = protocol.append_reader_features(&reader_features);
-    protocol = protocol.append_writer_features(&writer_features);
+    // Apply reader and writer features directly to ProtocolInner to avoid
+    // validation errors during intermediate conversions to kernel Protocol.
+    // The trick is to apply reader-writer features to both collections at once.
+    let mut inner = crate::kernel::models::actions::ProtocolInner::from_kernel(&protocol);
+
+    // Identify features that are both reader and writer features
+    let reader_writer_features: Vec<TableFeature> = reader_features
+        .iter()
+        .filter(|rf| writer_features.contains(rf))
+        .cloned()
+        .collect();
+
+    let reader_only_features: Vec<TableFeature> = reader_features
+        .iter()
+        .filter(|rf| !writer_features.contains(rf))
+        .cloned()
+        .collect();
+
+    let writer_only_features: Vec<TableFeature> = writer_features
+        .iter()
+        .filter(|wf| !reader_features.contains(wf))
+        .cloned()
+        .collect();
+
+    // Handle reader-writer features specially: ensure they're in both collections
+    if !reader_writer_features.is_empty() {
+        inner = inner.append_reader_features(&reader_writer_features);
+        inner = inner.append_writer_features(&reader_writer_features);
+    }
+
+    // Add reader-only features if any
+    if !reader_only_features.is_empty() {
+        inner = inner.append_reader_features(&reader_only_features);
+    }
+
+    // Add writer-only features if any
+    if !writer_only_features.is_empty() {
+        inner = inner.append_writer_features(&writer_only_features);
+    }
+
+    // Convert back to Protocol which will trigger validation with consistent state
+    protocol = inner.as_kernel();
 
     let operation = DeltaOperation::AddFeature {
         name: name.to_vec(),
