@@ -4,7 +4,6 @@ use crate::kernel::scalars::ScalarExt;
 use crate::writer::DeltaWriterError;
 use crate::{DeltaResult, DeltaTableError};
 use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow_ord::partition::partition;
 use arrow_row::{Row, RowConverter, SortField};
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 use arrow_select::take::take;
@@ -48,41 +47,24 @@ pub(crate) fn divide_by_partition_values(
         .map_err(|e| {
             DeltaTableError::generic(format!("partition column missing from batch: {e}"))
         })?;
-    let sort_columns = values.project(&projection).map_err(|e| {
+    let partition_col_values = values.project(&projection).map_err(|e| {
         DeltaTableError::generic(format!("failed to project partition columns: {e}"))
     })?;
 
-    let indices = group_by_partition_key(sort_columns.columns())?;
-
-    let sorted_partition_columns = partition_columns
-        .iter()
-        .map(|c| {
-            let idx = schema
-                .index_of(c)
-                .map_err(|e| DeltaTableError::generic(format!("partition column missing: {e}")))?;
-            take(values.column(idx), &indices, None).map_err(|e| {
-                DeltaTableError::generic(format!("failed to take partition column: {e}"))
-            })
-        })
-        .collect::<DeltaResult<Vec<ArrayRef>>>()?;
-
-    let partition_ranges = partition(sorted_partition_columns.as_slice()).map_err(|e| {
-        DeltaTableError::generic(format!("failed to compute partition ranges: {e}"))
-    })?;
+    let grouped_indices = group_by_partition_key(partition_col_values.columns())?;
 
     let mut partitions = Vec::new();
-    for range in partition_ranges.ranges() {
-        // Row indices of the original batch that fall into this partition.
-        let idx: UInt32Array = (range.start..range.end)
-            .map(|i| Some(indices.value(i)))
-            .collect();
-
-        let partition_key_iter = sorted_partition_columns
+    for indices in grouped_indices {
+        // Get partition column values for this group as a vector of Scalar values
+        let partition_key_iter = partition_col_values
+            .columns()
             .iter()
             .map(|col| {
-                Scalar::from_array(&col.slice(range.start, range.end - range.start), 0).ok_or_else(
-                    || DeltaTableError::generic("failed to read partition column value as Scalar"),
-                )
+                // All rows in indices share the same partition values,
+                // use the values from the first row (indices is non-empty by construction).
+                Scalar::from_array(col, indices.value(0) as usize).ok_or_else(|| {
+                    DeltaTableError::generic("failed to read partition column value as Scalar")
+                })
             })
             .collect::<DeltaResult<Vec<_>>>()?;
 
@@ -120,7 +102,9 @@ pub(crate) fn divide_by_partition_values(
 }
 
 /// Groups row indices by partition key: keys ascending, and rows within a key in input order.
-fn group_by_partition_key(arrays: &[ArrayRef]) -> DeltaResult<UInt32Array> {
+/// Returns a vector of index arrays, where each array is non-empty and provides the indices
+/// into the original batch for rows with equal partition values.
+fn group_by_partition_key(arrays: &[ArrayRef]) -> DeltaResult<Vec<UInt32Array>> {
     let fields = arrays
         .iter()
         .map(|a| SortField::new(a.data_type().clone()))
@@ -146,9 +130,10 @@ fn group_by_partition_key(arrays: &[ArrayRef]) -> DeltaResult<UInt32Array> {
     let mut grouped: Vec<_> = rows_by_key.into_iter().collect();
     grouped.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
 
-    Ok(UInt32Array::from_iter_values(
-        grouped.into_iter().flat_map(|(_, row_indices)| row_indices),
-    ))
+    Ok(grouped
+        .into_iter()
+        .map(|(_, row_indices)| UInt32Array::from_iter_values(row_indices))
+        .collect())
 }
 
 #[cfg(test)]
