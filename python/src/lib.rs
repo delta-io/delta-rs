@@ -2593,6 +2593,9 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
             }
             py_map.into_py_any(py)?
         }
+        IntervalYearMonth(_) | IntervalDayTime(_) => {
+            unimplemented!("Interval* types are not currently supported by the `deltalake` package")
+        }
     };
 
     Ok(val.into_bound(py))

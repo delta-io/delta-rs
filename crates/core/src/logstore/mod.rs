@@ -453,14 +453,7 @@ pub trait LogStore: Send + Sync + AsAny {
                 Ok(meta) => {
                     let file_url = dummy_url.join(meta.location.as_ref()).unwrap();
                     if let Ok(Some(parsed_path)) = ParsedLogPath::try_from(file_url)
-                        && matches!(
-                            parsed_path.file_type,
-                            LogPathFileType::Commit
-                                | LogPathFileType::SinglePartCheckpoint
-                                | LogPathFileType::UuidCheckpoint
-                                | LogPathFileType::MultiPartCheckpoint { .. }
-                                | LogPathFileType::CompactedCommit { .. }
-                        )
+                        && parsed_path.file_type != LogPathFileType::Unknown
                     {
                         return Ok(true);
                     }
