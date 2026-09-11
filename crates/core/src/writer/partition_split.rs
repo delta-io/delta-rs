@@ -81,7 +81,7 @@ pub(crate) fn divide_by_partition_values(
                 let col_idx = schema.index_of(f.name()).map_err(|e| {
                     DeltaTableError::generic(format!("output column missing from batch: {e}"))
                 })?;
-                take(values.column(col_idx).as_ref(), &idx, None).map_err(|e| {
+                take(values.column(col_idx).as_ref(), &indices, None).map_err(|e| {
                     DeltaTableError::generic(format!("failed to take data column: {e}"))
                 })
             })
@@ -238,6 +238,50 @@ mod tests {
             values_of(&out[1]),
             (0..rows).filter(|v| v % 2 == 0).collect::<Vec<_>>()
         );
+    }
+
+    /// Verify that rows with a null partition value are grouped together
+    #[test]
+    fn null_partition_values_form_their_own_group() {
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("region", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec![
+                    Some("US"),
+                    None,
+                    Some("EU"),
+                    None,
+                    Some("US"),
+                ])),
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            ],
+        )
+        .unwrap();
+
+        let out =
+            divide_by_partition_values(output_schema(), &["region".to_owned()], &batch).unwrap();
+
+        assert_eq!(out.len(), 3);
+        assert_eq!(
+            out[0].partition_values.get("region").unwrap(),
+            &Scalar::Null(delta_kernel::schema::DataType::STRING),
+            "nulls group together and sort before non-null keys"
+        );
+        assert_eq!(values_of(&out[0]), vec![2, 4]);
+        assert_eq!(
+            out[1].partition_values.get("region").unwrap(),
+            &Scalar::String("EU".to_owned())
+        );
+        assert_eq!(values_of(&out[1]), vec![3]);
+        assert_eq!(
+            out[2].partition_values.get("region").unwrap(),
+            &Scalar::String("US".to_owned())
+        );
+        assert_eq!(values_of(&out[2]), vec![1, 5]);
     }
 
     #[test]
