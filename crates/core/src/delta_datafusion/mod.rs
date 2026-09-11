@@ -1018,7 +1018,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.runtime_env().register_object_store(
             table.log_store().root_url(),
-            table.log_store().object_store(None),
+            table.log_store().object_store(),
         );
         ctx.register_table("test", provider).unwrap();
 

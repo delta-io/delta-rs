@@ -23,7 +23,6 @@
 use std::cmp::max;
 use std::collections::HashSet;
 use std::ops::BitXor;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
@@ -32,14 +31,13 @@ use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::{ObjectStore, ObjectStoreExt as _};
 use serde::Serialize;
-use uuid::Uuid;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
     Action, ActiveAddOptions, Add, AddStatsPolicy, EagerSnapshot, LogicalFileView,
     ProtocolExt as _, ProtocolInner, Remove, Snapshot, Version, resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
@@ -93,16 +91,6 @@ pub struct RestoreBuilder {
     protocol_downgrade_allowed: bool,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for RestoreBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl RestoreBuilder {
@@ -116,7 +104,6 @@ impl RestoreBuilder {
             ignore_missing_files: false,
             protocol_downgrade_allowed: false,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -148,12 +135,6 @@ impl RestoreBuilder {
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -238,8 +219,6 @@ async fn execute(
     ignore_missing_files: bool,
     protocol_downgrade_allowed: bool,
     mut commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-    operation_id: Uuid,
 ) -> DeltaResult<(RestoreMetrics, DeltaTableState)> {
     if !(version_to_restore
         .is_none()
@@ -284,7 +263,7 @@ async fn execute(
     let metadata_restored_version = target_snapshot.metadata();
 
     if !ignore_missing_files {
-        check_files_available(log_store.object_store(None).as_ref(), &files_to_add).await?;
+        check_files_available(log_store.object_store().as_ref(), &files_to_add).await?;
     }
 
     let metrics = RestoreMetrics {
@@ -344,9 +323,7 @@ async fn execute(
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
         .with_max_retries(0)
-        .with_operation_id(operation_id)
-        .with_post_commit_hook_handler(custom_execute_handler)
-        .build(Some(&snapshot), log_store.clone(), operation)
+        .build(Some(&snapshot), log_store, operation)
         .await?;
 
     Ok((metrics, commit.snapshot()))
@@ -376,37 +353,28 @@ impl std::future::IntoFuture for RestoreBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
-            let handle = this.custom_execute_handler.take();
-            let (metrics, new_state) = execute(
-                this.log_store.clone(),
-                snapshot,
-                this.version_to_restore,
-                this.datetime_to_restore,
-                this.ignore_missing_files,
-                this.protocol_downgrade_allowed,
-                this.commit_properties.clone(),
-                handle.clone(),
-                operation_id,
-            )
+            let parent = this.log_store.clone();
+            let (metrics, new_state) = with_operation(&parent, |log_store| async move {
+                execute(
+                    log_store,
+                    snapshot,
+                    this.version_to_restore,
+                    this.datetime_to_restore,
+                    this.ignore_missing_files,
+                    this.protocol_downgrade_allowed,
+                    this.commit_properties,
+                )
+                .await
+            })
             .await?;
 
-            if let Some(handler) = handle {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
-
-            Ok((
-                DeltaTable::new_with_state(this.log_store, new_state),
-                metrics,
-            ))
+            Ok((DeltaTable::new_with_state(parent, new_state), metrics))
         })
     }
 }

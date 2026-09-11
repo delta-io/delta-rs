@@ -116,7 +116,7 @@ pub async fn add_file(
     create_time: i64,
     commit_to_log: bool,
 ) {
-    let backend = table.log_store().object_store(None);
+    let backend = table.log_store().object_store();
     backend.put(path, data.clone().into()).await.unwrap();
 
     if commit_to_log {

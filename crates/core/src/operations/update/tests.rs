@@ -103,7 +103,7 @@ async fn test_update_predicate_left_in_data() -> DeltaResult<()> {
     use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 
     for pq in table.get_files_by_partitions(&[]).await? {
-        let store = table.log_store().object_store(None);
+        let store = table.log_store().object_store();
         let reader = ParquetObjectReader::new(store, pq);
         let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
         let schema = builder.schema();

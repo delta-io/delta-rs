@@ -40,7 +40,7 @@ impl PyQueryBuilder {
         let url = log_store.root_url();
 
         self.ctx
-            .register_object_store(url, log_store.root_object_store(None));
+            .register_object_store(url, log_store.root_object_store());
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let provider = Arc::new(DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?)

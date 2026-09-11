@@ -1,13 +1,11 @@
-use dashmap::DashMap;
+//! Slim HTTP client for the LakeFS branch, commit and merge API.
+
 use deltalake_core::DeltaResult;
-use deltalake_core::kernel::{Version, transaction::TransactionError};
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::debug;
-use url::Url;
-use uuid::Uuid;
 
 use crate::errors::LakeFSOperationError;
 
@@ -28,14 +26,64 @@ impl LakeFSConfig {
     }
 }
 
+/// Why a merge was rejected.
+#[derive(Debug)]
+pub enum MergeError {
+    /// The destination already contains a conflicting change (HTTP 409).
+    Conflict(String),
+    /// The destination branch has uncommitted changes (HTTP 400 with a dirty-branch reason).
+    DirtyBranch(String),
+    /// Any other failure.
+    Other(LakeFSOperationError),
+}
+
+impl From<LakeFSOperationError> for MergeError {
+    fn from(err: LakeFSOperationError) -> Self {
+        MergeError::Other(err)
+    }
+}
+
+/// The three parts of a `lakefs://{repo}/{branch}/{table}` URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LakeFSLocation {
+    pub repo: String,
+    pub branch: String,
+    pub table: String,
+}
+
+impl LakeFSLocation {
+    /// Split a `lakefs://{repo}/{branch}/{table}` URL into its parts.
+    pub fn parse(url: &str) -> Option<Self> {
+        let rest = url.strip_prefix("lakefs://")?;
+        let mut parts = rest.split('/');
+        let repo = parts.next()?.to_owned();
+        let branch = parts.next()?.to_owned();
+        let table = parts
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        if repo.is_empty() || branch.is_empty() {
+            return None;
+        }
+        Some(Self {
+            repo,
+            branch,
+            table,
+        })
+    }
+
+    /// The URL of the same table on another branch.
+    pub fn on_branch(&self, branch: &str) -> String {
+        format!("lakefs://{}/{branch}/{}", self.repo, self.table)
+    }
+}
+
 /// Slim LakeFS client for lakefs branch operations.
 #[derive(Debug, Clone)]
 pub struct LakeFSClient {
     /// configuration of the lakefs client
     config: LakeFSConfig,
     http_client: Client,
-    /// Holds the running delta lake operations, each operation propagates the operation ID into execution handler.
-    transactions: DashMap<Uuid, String>,
 }
 
 impl LakeFSClient {
@@ -44,27 +92,26 @@ impl LakeFSClient {
         Self {
             config,
             http_client,
-            transactions: DashMap::new(),
         }
     }
 
+    /// Create the hidden branch `branch` from `source_branch`.
     pub async fn create_branch(
         &self,
-        source_url: &Url,
-        operation_id: Uuid,
-    ) -> DeltaResult<(Url, String)> {
-        let (repo, source_branch, table) = self.decompose_url(source_url.to_string());
-
+        repo: &str,
+        source_branch: &str,
+        branch: &str,
+    ) -> DeltaResult<()> {
         let request_url = format!("{}/api/v1/repositories/{repo}/branches", self.config.host);
 
-        let transaction_branch = format!("delta-tx-{operation_id}");
         let body = json!({
-            "name": transaction_branch,
+            "name": branch,
             "source": source_branch,
             "force": false,
             "hidden": true,
         });
 
+        debug!("Creating LakeFS branch `{branch}` from `{source_branch}` in repo `{repo}`");
         let response = self
             .http_client
             .post(&request_url)
@@ -74,39 +121,26 @@ impl LakeFSClient {
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
-        // Handle the response
         match response.status() {
-            StatusCode::CREATED => {
-                // Branch created successfully
-                let new_url =
-                    Url::parse(&format!("lakefs://{repo}/{transaction_branch}/{table}")).unwrap();
-                Ok((new_url, transaction_branch))
-            }
+            StatusCode::CREATED => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
-
-                let error = LakeFSErrorResponse {
-                    message: format!(
-                        "Unknown error occurred during branch creation. Response code was {}, body: {}",
-                        status_code, body,
-                    )
-                    .to_string(),
-                };
-                Err(LakeFSOperationError::MergeFailed(error.message).into())
+                Err(LakeFSOperationError::CreateBranchFailed(format!(
+                    "Unknown error occurred during branch creation. Response code was {status_code}, body: {body}"
+                ))
+                .into())
             }
         }
     }
 
-    pub async fn delete_branch(
-        &self,
-        repo: String,
-        branch: String,
-    ) -> Result<(), TransactionError> {
+    /// Delete `branch`. A branch that no longer exists counts as deleted.
+    pub async fn delete_branch(&self, repo: &str, branch: &str) -> DeltaResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/branches/{branch}",
             self.config.host,
         );
+        debug!("Deleting LakeFS branch `{branch}` in repo `{repo}`");
         let response = self
             .http_client
             .delete(&request_url)
@@ -115,31 +149,25 @@ impl LakeFSClient {
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
-        debug!("Deleting LakeFS Branch.");
-        // Handle the response
         match response.status() {
-            StatusCode::NO_CONTENT => Ok(()),
+            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
-
-                let error = LakeFSErrorResponse {
-                    message: format!(
-                        "Unknown error occurred during branch deletion. Response code was {}, body: {}",
-                        status_code, body,
-                    )
-                    .to_string(),
-                };
-                Err(LakeFSOperationError::MergeFailed(error.message).into())
+                Err(LakeFSOperationError::DeleteBranchFailed(format!(
+                    "Unknown error occurred during branch deletion. Response code was {status_code}, body: {body}"
+                ))
+                .into())
             }
         }
     }
 
+    /// Commit the staging area of `branch`.
     pub async fn commit(
         &self,
-        repo: String,
-        branch: String,
-        commit_message: String,
+        repo: &str,
+        branch: &str,
+        commit_message: &str,
         allow_empty: bool,
     ) -> DeltaResult<()> {
         let request_url = format!(
@@ -162,36 +190,30 @@ impl LakeFSClient {
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
-        // Handle the response
         match response.status() {
             StatusCode::NO_CONTENT | StatusCode::CREATED => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
-
-                let error = LakeFSErrorResponse {
-                    message: format!(
-                        "Unknown error occurred during branch commit. Response code was {}, body: {}",
-                        status_code, body,
-                    )
-                    .to_string(),
-                };
-                Err(LakeFSOperationError::MergeFailed(error.message).into())
+                Err(LakeFSOperationError::CommitFailed(format!(
+                    "Unknown error occurred during branch commit. Response code was {status_code}, body: {body}"
+                ))
+                .into())
             }
         }
     }
 
+    /// Squash-merge `source_ref` into `target_branch`.
     pub async fn merge(
         &self,
-        repo: String,
-        target_branch: String,
-        transaction_branch: String,
-        commit_version: Version,
-        commit_message: String,
+        repo: &str,
+        target_branch: &str,
+        source_ref: &str,
+        commit_message: &str,
         allow_empty: bool,
-    ) -> Result<(), TransactionError> {
+    ) -> Result<(), MergeError> {
         let request_url = format!(
-            "{}/api/v1/repositories/{repo}/refs/{transaction_branch}/merge/{target_branch}",
+            "{}/api/v1/repositories/{repo}/refs/{source_ref}/merge/{target_branch}",
             self.config.host,
         );
 
@@ -202,7 +224,7 @@ impl LakeFSClient {
         });
 
         debug!(
-            "Merging LakeFS, source `{transaction_branch}` into target `{target_branch}` in repo: {repo}"
+            "Merging LakeFS, source `{source_ref}` into target `{target_branch}` in repo: {repo}"
         );
         let response = self
             .http_client
@@ -213,32 +235,41 @@ impl LakeFSClient {
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
-        // Handle the response;
         match response.status() {
             StatusCode::OK => Ok(()),
-            StatusCode::CONFLICT => Err(TransactionError::VersionAlreadyExists(commit_version)),
+            StatusCode::CONFLICT => {
+                let body = response.text().await.unwrap_or_default();
+                Err(MergeError::Conflict(body))
+            }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
+            StatusCode::BAD_REQUEST => {
+                let body = response.text().await.unwrap_or_default();
+                if body.to_ascii_lowercase().contains("dirty") {
+                    Err(MergeError::DirtyBranch(body))
+                } else {
+                    Err(LakeFSOperationError::MergeFailed(format!(
+                        "Merge was rejected. Response code was 400, body: {body}"
+                    ))
+                    .into())
+                }
+            }
             status_code => {
                 let body = response.text().await.unwrap_or_default();
-
-                let error = LakeFSErrorResponse {
-                    message: format!(
-                        "Unknown error occurred during merge. Response code was {}, body: {}",
-                        status_code, body,
-                    )
-                    .to_string(),
-                };
-                Err(LakeFSOperationError::MergeFailed(error.message).into())
+                Err(LakeFSOperationError::MergeFailed(format!(
+                    "Unknown error occurred during merge. Response code was {status_code}, body: {body}"
+                ))
+                .into())
             }
         }
     }
 
+    /// `true` when `compare_branch` differs from `base_branch`.
     pub async fn has_changes(
         &self,
         repo: &str,
         base_branch: &str,
         compare_branch: &str,
-    ) -> Result<bool, TransactionError> {
+    ) -> DeltaResult<bool> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/refs/{base_branch}/diff/{compare_branch}",
             self.config.host
@@ -255,7 +286,6 @@ impl LakeFSClient {
 
         match response.status() {
             StatusCode::OK => {
-                // Parse the response to check if there are any differences
                 #[derive(Deserialize, Debug)]
                 struct DiffResponse {
                     results: Vec<Value>,
@@ -266,248 +296,205 @@ impl LakeFSClient {
                     .await
                     .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
-                // If there are any results in the diff, there are changes
                 Ok(!diff.results.is_empty())
             }
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
-
-                let error = LakeFSErrorResponse {
-                    message: format!(
-                        "Unknown error occurred during branch diffing. Response code was {}, body: {}",
-                        status_code, body,
-                    )
-                    .to_string(),
-                };
-                Err(LakeFSOperationError::MergeFailed(error.message).into())
+                Err(LakeFSOperationError::DiffFailed(format!(
+                    "Unknown error occurred during branch diffing. Response code was {status_code}, body: {body}"
+                ))
+                .into())
             }
         }
     }
-
-    pub fn set_transaction(&self, id: Uuid, branch: String) {
-        self.transactions.insert(id, branch);
-        debug!("{}", format!("LakeFS Transaction `{id}` has been set."));
-    }
-
-    pub fn get_transaction(&self, id: Uuid) -> Result<String, TransactionError> {
-        let transaction_branch = self
-            .transactions
-            .get(&id)
-            .map(|v| v.to_string())
-            .ok_or(LakeFSOperationError::TransactionIdNotFound(id.to_string()))?;
-        debug!("{}", format!("LakeFS Transaction `{id}` has been grabbed."));
-        Ok(transaction_branch)
-    }
-
-    pub fn clear_transaction(&self, id: Uuid) {
-        self.transactions.remove(&id);
-        debug!("{}", format!("LakeFS Transaction `{id}` has been removed."));
-    }
-
-    pub fn decompose_url(&self, url: String) -> (String, String, String) {
-        let url_path = url
-            .strip_prefix("lakefs://")
-            .unwrap()
-            .split("/")
-            .collect::<Vec<&str>>();
-        let repo = url_path[0].to_owned();
-        let branch = url_path[1].to_owned();
-        let table = url_path[2..].join("/");
-
-        (repo, branch, table)
-    }
-}
-
-#[derive(Deserialize, Debug)]
-struct LakeFSErrorResponse {
-    message: String,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
-
     use super::*;
     use mockito;
     use reqwest::StatusCode;
-    use tokio::runtime::Runtime;
-    use uuid::Uuid;
 
-    #[inline]
-    fn rt() -> &'static Runtime {
-        static TOKIO_RT: OnceLock<Runtime> = OnceLock::new();
-        TOKIO_RT.get_or_init(|| Runtime::new().expect("Failed to create a tokio runtime."))
-    }
-
-    #[test]
-    fn test_create_branch() {
-        let mut server = mockito::Server::new();
-        let mock = server
-            .mock("POST", "/api/v1/repositories/test_repo/branches")
-            .with_status(StatusCode::CREATED.as_u16().into())
-            .with_body("")
-            .create();
-
-        let config = LakeFSConfig::new(
+    fn client(server: &mockito::ServerGuard) -> LakeFSClient {
+        LakeFSClient::with_config(LakeFSConfig::new(
             server.url(),
             "test_user".to_string(),
             "test_pass".to_string(),
-        );
-        let client = LakeFSClient::with_config(config);
-        let operation_id = Uuid::new_v4();
-        let source_url = Url::parse("lakefs://test_repo/main/table").unwrap();
-
-        let result = rt().block_on(async { client.create_branch(&source_url, operation_id).await });
-        assert!(result.is_ok());
-        let (new_url, branch_name) = result.unwrap();
-        assert_eq!(branch_name, format!("delta-tx-{operation_id}"));
-        assert!(new_url.as_str().contains("lakefs://test_repo"));
-        mock.assert();
+        ))
     }
 
-    #[test]
-    fn test_delete_branch() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_create_branch() {
+        let mut server = mockito::Server::new_async().await;
         let mock = server
+            .mock("POST", "/api/v1/repositories/test_repo/branches")
+            .match_body(mockito::Matcher::PartialJson(json!({
+                "name": "delta-tx-1234",
+                "source": "main",
+                "hidden": true,
+            })))
+            .with_status(StatusCode::CREATED.as_u16().into())
+            .with_body("")
+            .create_async()
+            .await;
+
+        client(&server)
+            .create_branch("test_repo", "main", "delta-tx-1234")
+            .await
+            .unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_branch_treats_missing_branch_as_deleted() {
+        let mut server = mockito::Server::new_async().await;
+        let deleted = server
             .mock(
                 "DELETE",
                 "/api/v1/repositories/test_repo/branches/delta-tx-1234",
             )
             .with_status(StatusCode::NO_CONTENT.as_u16().into())
-            .create();
+            .create_async()
+            .await;
+        let missing = server
+            .mock(
+                "DELETE",
+                "/api/v1/repositories/test_repo/branches/delta-tx-gone",
+            )
+            .with_status(StatusCode::NOT_FOUND.as_u16().into())
+            .create_async()
+            .await;
 
-        let config = LakeFSConfig::new(
-            server.url(),
-            "test_user".to_string(),
-            "test_pass".to_string(),
-        );
-        let client = LakeFSClient::with_config(config);
-
-        let result = rt().block_on(async {
-            client
-                .delete_branch("test_repo".to_string(), "delta-tx-1234".to_string())
-                .await
-        });
-        assert!(result.is_ok());
-        mock.assert();
+        let client = client(&server);
+        client
+            .delete_branch("test_repo", "delta-tx-1234")
+            .await
+            .unwrap();
+        client
+            .delete_branch("test_repo", "delta-tx-gone")
+            .await
+            .unwrap();
+        deleted.assert_async().await;
+        missing.assert_async().await;
     }
 
-    #[test]
-    fn test_commit() {
-        let mut server = mockito::Server::new();
+    #[tokio::test]
+    async fn test_commit() {
+        let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock(
                 "POST",
                 "/api/v1/repositories/test_repo/branches/delta-tx-1234/commits",
             )
             .with_status(StatusCode::CREATED.as_u16().into())
-            .create();
+            .create_async()
+            .await;
 
-        let config = LakeFSConfig::new(
-            server.url(),
-            "test_user".to_string(),
-            "test_pass".to_string(),
-        );
-        let client = LakeFSClient::with_config(config);
-
-        let result = rt().block_on(async {
-            client
-                .commit(
-                    "test_repo".to_string(),
-                    "delta-tx-1234".to_string(),
-                    "Test commit".to_string(),
-                    false,
-                )
-                .await
-        });
-        assert!(result.is_ok());
-        mock.assert();
+        client(&server)
+            .commit("test_repo", "delta-tx-1234", "Test commit", false)
+            .await
+            .unwrap();
+        mock.assert_async().await;
     }
 
-    #[test]
-    fn test_merge() {
-        let mut server = mockito::Server::new();
-        let mock = server.mock("POST", "/api/v1/repositories/test_repo/refs/test_transaction_branch/merge/test_target_branch")
+    #[tokio::test]
+    async fn test_merge_outcomes() {
+        let mut server = mockito::Server::new_async().await;
+        let ok = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/refs/tx-ok/merge/main",
+            )
             .with_status(StatusCode::OK.as_u16().into())
-            .create();
+            .create_async()
+            .await;
+        let conflict = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/refs/tx-conflict/merge/main",
+            )
+            .with_status(StatusCode::CONFLICT.as_u16().into())
+            .with_body(r#"{"message":"conflict found"}"#)
+            .create_async()
+            .await;
+        let dirty = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/refs/tx-dirty/merge/main",
+            )
+            .with_status(StatusCode::BAD_REQUEST.as_u16().into())
+            .with_body(r#"{"message":"cannot merge into a dirty branch"}"#)
+            .create_async()
+            .await;
+        let other = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/refs/tx-other/merge/main",
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR.as_u16().into())
+            .create_async()
+            .await;
 
-        let config = LakeFSConfig::new(
-            server.url(),
-            "test_user".to_string(),
-            "test_pass".to_string(),
-        );
-        let client = LakeFSClient::with_config(config);
-
-        let result = rt().block_on(async {
+        let client = client(&server);
+        assert!(
             client
-                .merge(
-                    "test_repo".to_string(),
-                    "test_target_branch".to_string(),
-                    "test_transaction_branch".to_string(),
-                    1,
-                    "Merge commit".to_string(),
-                    false,
-                )
+                .merge("test_repo", "main", "tx-ok", "m", false)
                 .await
-        });
-        assert!(result.is_ok());
-        mock.assert();
-    }
-
-    #[test]
-    fn test_decompose_url() {
-        let config = LakeFSConfig::new(
-            "http://localhost:8000".to_string(),
-            "user".to_string(),
-            "pass".to_string(),
+                .is_ok()
         );
-        let client = LakeFSClient::with_config(config);
-
-        let (repo, branch, table) =
-            client.decompose_url("lakefs://test_repo/test_branch/test_table".to_string());
-        assert_eq!(repo, "test_repo");
-        assert_eq!(branch, "test_branch");
-        assert_eq!(table, "test_table");
-
-        let (repo, branch, table) =
-            client.decompose_url("lakefs://test_repo/test_branch/data/test_table".to_string());
-        assert_eq!(repo, "test_repo");
-        assert_eq!(branch, "test_branch");
-        assert_eq!(table, "data/test_table");
+        assert!(matches!(
+            client
+                .merge("test_repo", "main", "tx-conflict", "m", false)
+                .await,
+            Err(MergeError::Conflict(_))
+        ));
+        assert!(matches!(
+            client
+                .merge("test_repo", "main", "tx-dirty", "m", false)
+                .await,
+            Err(MergeError::DirtyBranch(_))
+        ));
+        assert!(matches!(
+            client
+                .merge("test_repo", "main", "tx-other", "m", false)
+                .await,
+            Err(MergeError::Other(LakeFSOperationError::MergeFailed(_)))
+        ));
+        ok.assert_async().await;
+        conflict.assert_async().await;
+        dirty.assert_async().await;
+        other.assert_async().await;
     }
 
     #[test]
-    fn test_transaction_management() {
-        let config = LakeFSConfig::new(
-            "http://localhost".to_string(),
-            "user".to_string(),
-            "pass".to_string(),
+    fn test_parse_location() {
+        let location = LakeFSLocation::parse("lakefs://test_repo/test_branch/test_table").unwrap();
+        assert_eq!(location.repo, "test_repo");
+        assert_eq!(location.branch, "test_branch");
+        assert_eq!(location.table, "test_table");
+
+        let location =
+            LakeFSLocation::parse("lakefs://test_repo/test_branch/data/test_table/").unwrap();
+        assert_eq!(location.table, "data/test_table");
+        assert_eq!(
+            location.on_branch("delta-tx-1"),
+            "lakefs://test_repo/delta-tx-1/data/test_table"
         );
-        let client = LakeFSClient::with_config(config);
 
-        let transaction_id = Uuid::new_v4();
-        let branch_name = "test_branch".to_string();
-
-        client.set_transaction(transaction_id, branch_name.clone());
-        let retrieved_branch = client.get_transaction(transaction_id).unwrap();
-        assert_eq!(retrieved_branch, branch_name);
-
-        client.clear_transaction(transaction_id);
-        let result = client.get_transaction(transaction_id);
-        assert!(result.is_err());
+        assert!(LakeFSLocation::parse("s3://bucket/table").is_none());
+        assert!(LakeFSLocation::parse("lakefs://repo").is_none());
     }
 
-    #[test]
-    fn test_has_changes() {
-        // Test cases with different parameters
+    #[tokio::test]
+    async fn test_has_changes() {
         let test_cases = vec![
             ("with_changes", r#"{"results": [{"some": "change"}]}"#, true),
             ("without_changes", r#"{"results": []}"#, false),
         ];
 
         for (test_name, response_body, expected_has_changes) in test_cases {
-            let mut server = mockito::Server::new();
+            let mut server = mockito::Server::new_async().await;
             let mock = server
                 .mock(
                     "GET",
@@ -515,31 +502,18 @@ mod tests {
                 )
                 .with_status(StatusCode::OK.as_u16().into())
                 .with_body(response_body)
-                .create();
+                .create_async()
+                .await;
 
-            let config = LakeFSConfig::new(
-                server.url(),
-                "test_user".to_string(),
-                "test_pass".to_string(),
-            );
-            let client = LakeFSClient::with_config(config);
-
-            let result = rt().block_on(async {
-                client
-                    .has_changes("test_repo", "base_branch", "compare_branch")
-                    .await
-            });
-
-            assert!(
-                result.is_ok(),
-                "Test case '{test_name}' failed: API call returned error"
-            );
-            let has_changes = result.unwrap();
+            let has_changes = client(&server)
+                .has_changes("test_repo", "base_branch", "compare_branch")
+                .await
+                .unwrap_or_else(|e| panic!("Test case '{test_name}' failed: {e}"));
             assert_eq!(
                 has_changes, expected_has_changes,
                 "Test case '{test_name}' failed: expected has_changes to be {expected_has_changes}"
             );
-            mock.assert();
+            mock.assert_async().await;
         }
     }
 }

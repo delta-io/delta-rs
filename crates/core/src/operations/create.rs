@@ -2,16 +2,13 @@
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use delta_kernel::schema::{ColumnMetadataKey, MetadataValue};
 use delta_kernel::table_features::{ColumnMappingMode, assign_column_mapping_metadata};
 use futures::TryStreamExt as _;
 use futures::future::BoxFuture;
 use serde_json::Value;
-use uuid::Uuid;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
 use crate::kernel::{
@@ -19,6 +16,7 @@ use crate::kernel::{
     new_metadata,
 };
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
 use crate::table::config::TableProperty;
@@ -91,18 +89,6 @@ pub struct CreateBuilder {
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     raise_if_key_not_exists: bool,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for CreateBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        self.log_store
-            .as_ref()
-            .expect("Logstore shouldn't be none at this stage.")
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl Default for CreateBuilder {
@@ -127,7 +113,6 @@ impl CreateBuilder {
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
             raise_if_key_not_exists: true,
-            custom_execute_handler: None,
         }
     }
 
@@ -264,16 +249,10 @@ impl CreateBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
-
     /// Consume self into uninitialized table with corresponding create actions and operation meta
     pub(crate) async fn into_table_and_actions(
-        mut self,
-    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation, Uuid)> {
+        self,
+    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation)> {
         if self
             .actions
             .iter()
@@ -306,10 +285,6 @@ impl CreateBuilder {
                     .build()?,
             )
         };
-
-        self.log_store = Some(table.log_store());
-        let operation_id = self.get_operation_id();
-        self.pre_execute(operation_id).await?;
 
         let mut configuration: HashMap<String, String> = self
             .configuration
@@ -394,7 +369,7 @@ impl CreateBuilder {
                 .filter(|a| !matches!(a, Action::Protocol(_))),
         );
 
-        Ok((table, actions, operation, operation_id))
+        Ok((table, actions, operation))
     }
 }
 
@@ -405,10 +380,8 @@ impl std::future::IntoFuture for CreateBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let handler = this.custom_execute_handler.clone();
             let mode = &this.mode;
-            let (mut table, mut actions, operation, operation_id) =
-                this.clone().into_table_and_actions().await?;
+            let (mut table, mut actions, operation) = this.clone().into_table_and_actions().await?;
 
             let table_state = if table.log_store.is_delta_table_location().await? {
                 match mode {
@@ -435,24 +408,23 @@ impl std::future::IntoFuture for CreateBuilder {
                 None
             };
 
-            let version = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handler.clone())
-                .build(
-                    table_state.map(|f| f as &dyn TableReference),
-                    table.log_store.clone(),
-                    operation,
-                )
-                .await?
-                .version();
+            // The write scope opens after every early return above, so a table that already
+            // exists never leaves a stale isolated write set behind.
+            let parent = table.log_store();
+            let commit_properties = this.commit_properties.clone();
+            let version = with_operation(&parent, |log_store| async move {
+                Ok(CommitBuilder::from(commit_properties)
+                    .with_actions(actions)
+                    .build(
+                        table_state.map(|f| f as &dyn TableReference),
+                        log_store,
+                        operation,
+                    )
+                    .await?
+                    .version())
+            })
+            .await?;
             table.load_version(version).await?;
-
-            if let Some(handler) = handler {
-                handler
-                    .post_execute(&table.log_store(), operation_id)
-                    .await?;
-            }
             Ok(table)
         })
     }

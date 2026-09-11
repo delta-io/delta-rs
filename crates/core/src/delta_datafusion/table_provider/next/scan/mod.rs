@@ -1636,7 +1636,7 @@ mod tests {
         writer.close()?;
         let size = buffer.len() as i64;
 
-        let store = log_store.object_store(None);
+        let store = log_store.object_store();
         store
             .put(&Path::from("part-00000.parquet"), buffer.into())
             .await?;

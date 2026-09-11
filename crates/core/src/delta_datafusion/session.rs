@@ -12,7 +12,6 @@ use datafusion::{
     sql::planner::ParserOptions,
 };
 use url::Url;
-use uuid::Uuid;
 
 use crate::delta_datafusion::engine::AsObjectStoreUrl;
 use crate::delta_datafusion::planner::DeltaPlanner;
@@ -58,6 +57,9 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// Ensure the session's `RuntimeEnv` has the object store registered for the log store's
     /// root URL.
     ///
+    /// Pass the table's long-lived store, never an operation-scoped one: the session outlives
+    /// the scope, and a scoped store refuses every call once its scope is closed.
+    ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// URL.
     ///
@@ -67,11 +69,7 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// If the session already has a (stale/incorrect) object store registered for the URL, this
     /// method will not replace it; callers must explicitly override the mapping via
     /// `RuntimeEnv::register_object_store`.
-    fn ensure_object_store_registered(
-        &self,
-        log_store: &dyn LogStore,
-        operation_id: Option<Uuid>,
-    ) -> DeltaResult<()>;
+    fn ensure_object_store_registered(&self, log_store: &dyn LogStore) -> DeltaResult<()>;
 
     /// Ensure the session's `RuntimeEnv` has a per-table, prefixed object store registered.
     ///
@@ -84,7 +82,8 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
     /// path does not rely on these internal/special `delta-rs://...` URLs.
     ///
     /// This does not support fully-qualified file URLs (e.g. shallow clones). Prefer
-    /// `ensure_object_store_registered` in new code.
+    /// `ensure_object_store_registered` in new code. As there, pass the table's long-lived
+    /// store, never an operation-scoped one.
     ///
     /// This method is idempotent and will not overwrite an existing object store mapping for the
     /// table's delta-rs object store URL.
@@ -92,7 +91,7 @@ pub(crate) trait DeltaSessionExt: DataFusionSession {
         let object_store_url = log_store.object_store_url();
         if self.runtime_env().object_store(&object_store_url).is_err() {
             self.runtime_env()
-                .register_object_store(object_store_url.as_ref(), log_store.object_store(None));
+                .register_object_store(object_store_url.as_ref(), log_store.object_store());
         }
         Ok(())
     }
@@ -102,15 +101,11 @@ impl<T> DeltaSessionExt for T
 where
     T: DataFusionSession + ?Sized,
 {
-    fn ensure_object_store_registered(
-        &self,
-        log_store: &dyn LogStore,
-        operation_id: Option<Uuid>,
-    ) -> DeltaResult<()> {
+    fn ensure_object_store_registered(&self, log_store: &dyn LogStore) -> DeltaResult<()> {
         let url = log_store.root_url().as_object_store_url();
         if self.runtime_env().object_store(&url).is_err() {
             self.runtime_env()
-                .register_object_store(url.as_ref(), log_store.root_object_store(operation_id));
+                .register_object_store(url.as_ref(), log_store.root_object_store());
         }
         Ok(())
     }
@@ -435,10 +430,10 @@ mod tests {
         let session = create_session().state();
 
         session
-            .ensure_object_store_registered(table.log_store().as_ref(), None)
+            .ensure_object_store_registered(table.log_store().as_ref())
             .unwrap();
         session
-            .ensure_object_store_registered(table.log_store().as_ref(), None)
+            .ensure_object_store_registered(table.log_store().as_ref())
             .unwrap();
 
         let url = table.log_store().root_url().as_object_store_url();

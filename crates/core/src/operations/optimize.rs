@@ -45,9 +45,7 @@ use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
-use uuid::Uuid;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::delta_datafusion::{
     DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
@@ -57,6 +55,7 @@ use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties, DEFAULT_RETRIES, PROTOCOL};
 use crate::kernel::{Action, Add, DataType, PartitionsExt, Remove, StructType, Version};
 use crate::kernel::{EagerSnapshot, resolve_snapshot};
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef, ObjectStoreRef};
 use crate::parquet_utils::default_writer_properties;
 use crate::protocol::DeltaOperation;
@@ -298,16 +297,6 @@ pub struct OptimizeBuilder<'a> {
     session: Option<Arc<dyn Session>>,
     session_fallback_policy: SessionFallbackPolicy,
     min_commit_interval: Option<Duration>,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for OptimizeBuilder<'_> {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl<'a> OptimizeBuilder<'a> {
@@ -327,7 +316,6 @@ impl<'a> OptimizeBuilder<'a> {
             min_commit_interval: None,
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -383,12 +371,6 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
-
     /// Set the DataFusion session used for planning and execution.
     ///
     /// The provided `session` should wrap a concrete `datafusion::execution::context::SessionState`.
@@ -430,9 +412,6 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             }
             PROTOCOL.can_write_to(&snapshot)?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
             let writer_properties = this.writer_properties.unwrap_or_else(|| {
                 default_writer_properties(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
             });
@@ -446,6 +425,9 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     cdc: false,
                 },
             )?;
+            // Register the parent store before the write scope opens: the caller's session
+            // outlives the scope, and a scoped store refuses every call once the scope is closed.
+            update_datafusion_session(&session, &this.log_store)?;
             let plan = create_merge_plan(
                 &this.log_store,
                 this.optimize_type,
@@ -457,23 +439,25 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
             )
             .await?;
 
-            let metrics = plan
-                .execute(
-                    this.log_store.clone(),
-                    &snapshot,
-                    this.max_concurrent_tasks,
-                    this.min_commit_interval,
-                    this.commit_properties.clone(),
-                    operation_id,
-                    this.custom_execute_handler.as_ref(),
+            // Every rewrite task and every commit of this optimize run shares one write scope.
+            let parent = this.log_store.clone();
+            let max_concurrent_tasks = this.max_concurrent_tasks;
+            let min_commit_interval = this.min_commit_interval;
+            let commit_properties = this.commit_properties;
+            let snapshot_ref = &snapshot;
+            let metrics = with_operation(&parent, |log_store| async move {
+                plan.execute(
+                    log_store,
+                    snapshot_ref,
+                    max_concurrent_tasks,
+                    min_commit_interval,
+                    commit_properties,
                 )
-                .await?;
+                .await
+            })
+            .await?;
 
-            if let Some(handler) = this.custom_execute_handler {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
-            let mut table =
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
+            let mut table = DeltaTable::new_with_state(parent, DeltaTableState::new(snapshot));
             table.update_state().await?;
             Ok((table, metrics))
         })
@@ -621,7 +605,6 @@ struct SelectedFileScanFactory {
     snapshot: EagerSnapshot,
     log_store: LogStoreRef,
     scan_config: DeltaScanConfig,
-    read_operation_id: Option<Uuid>,
 }
 
 impl SelectedFileScanFactory {
@@ -629,7 +612,6 @@ impl SelectedFileScanFactory {
         snapshot: &EagerSnapshot,
         log_store: LogStoreRef,
         session: &dyn Session,
-        read_operation_id: Option<Uuid>,
     ) -> Result<Self, DeltaTableError> {
         Ok(Self {
             snapshot: snapshot.clone(),
@@ -638,7 +620,6 @@ impl SelectedFileScanFactory {
             // the same parquet/view type behavior as the rest of optimize.
             scan_config: DeltaScanConfig::new_from_session(session)
                 .with_schema(snapshot.input_schema()),
-            read_operation_id,
         })
     }
 
@@ -648,11 +629,6 @@ impl SelectedFileScanFactory {
     ) -> Result<DeltaScanNext, DeltaTableError> {
         let provider = DeltaScanNext::new(self.snapshot.clone(), self.scan_config.clone())?
             .with_log_store(self.log_store.clone());
-        let provider = if let Some(operation_id) = self.read_operation_id {
-            provider.with_operation_id(operation_id)
-        } else {
-            provider
-        };
         Ok(provider.with_adds(adds))
     }
 }
@@ -824,18 +800,14 @@ impl MergePlan {
         max_concurrent_tasks: usize,
         min_commit_interval: Option<Duration>,
         commit_properties: CommitProperties,
-        operation_id: Uuid,
-        handle: Option<&Arc<dyn CustomExecuteHandler>>,
     ) -> Result<Metrics, DeltaTableError> {
         let operations = std::mem::take(&mut self.operations);
         let read_session = self.read_session.clone();
         info!("starting optimize execution");
-        let object_store = log_store.object_store(Some(operation_id));
-        update_datafusion_session(
-            read_session.as_ref(),
-            log_store.as_ref(),
-            Some(operation_id),
-        )?;
+        let object_store = log_store.object_store();
+        // `OptimizeBuilder` registers the parent store before it opens the write scope, so this
+        // only registers a store for callers that run a plan directly with an unscoped store.
+        update_datafusion_session(read_session.as_ref(), log_store.as_ref())?;
 
         let mut stream = match operations {
             OptimizeOperations::Compact(bins) => {
@@ -846,7 +818,6 @@ impl MergePlan {
                     snapshot,
                     log_store.clone(),
                     read_session.as_ref(),
-                    Some(operation_id),
                 )?;
                 let task_parameters = self.task_parameters.clone();
 
@@ -899,7 +870,6 @@ impl MergePlan {
                     snapshot,
                     log_store.clone(),
                     read_session.as_ref(),
-                    Some(operation_id),
                 )?;
 
                 // For each rewrite evaluate the predicate and then modify each expression
@@ -916,7 +886,7 @@ impl MergePlan {
                             task_parameters.clone(),
                             partition,
                             files,
-                            log_store.object_store(Some(operation_id)),
+                            log_store.object_store(),
                             batch_stream,
                             false,
                         ));
@@ -983,8 +953,6 @@ impl MergePlan {
 
                 let commit = CommitBuilder::from(properties)
                     .with_actions(actions)
-                    .with_operation_id(operation_id)
-                    .with_post_commit_hook_handler(handle.cloned())
                     .with_max_retries(DEFAULT_RETRIES + commits_made)
                     .build(
                         Some(&snapshot),

@@ -91,7 +91,7 @@ impl CdfLoadBuilder {
     /// Create a new [`CdfLoadBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
         let parquet_metadata_cache = Arc::new(CachedParquetFileReaderFactory::new(
-            log_store.object_store(None),
+            log_store.object_store(),
             Arc::new(DefaultCache::new(METADATA_CACHE_SIZE)),
         ));
         Self {
@@ -511,7 +511,7 @@ impl CdfLoadBuilder {
                     .with_partition_values(new_part_values.clone());
 
                 if let Some(access_plan) = create_file_scan_plan(
-                    Arc::clone(&self.log_store.engine(None)),
+                    Arc::clone(&self.log_store.engine()),
                     action,
                     self.log_store.table_root_url(),
                     Arc::clone(&self.parquet_metadata_cache),
@@ -623,7 +623,7 @@ impl CdfLoadBuilder {
             .with_parquet_file_reader_factory(self.parquet_metadata_cache.clone());
 
         // Set up the partition to physical file mapping, this is a mostly unmodified version of what is done in load
-        let engine = self.log_store.engine(None);
+        let engine = self.log_store.engine();
         let metrics = metrics.unwrap_or_default();
 
         let cdc_file_groups = self

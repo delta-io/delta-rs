@@ -141,7 +141,7 @@ impl ParquetTableReader {
             files.push((view.object_store_path(), size));
         }
 
-        let store = log_store.object_store(None);
+        let store = log_store.object_store();
         Ok(Self {
             file_reader: ParquetFileReader::new(store),
             files: files.into(),
