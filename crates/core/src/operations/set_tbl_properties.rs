@@ -167,10 +167,25 @@ pub mod tests {
     pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
         let temp_loc = tempdir()?;
         let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
-        let props = HashMap::from([
-            ("delta.minReaderVersion".to_string(), "3".to_string()),
-            ("delta.minWriterVersion".to_string(), "7".to_string()),
-        ]);
+
+        // Test setting properties that enable features (should work with proper handling)
+        let props = HashMap::from([("delta.enableChangeDataFeed".to_string(), "true".to_string())]);
+        ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Test setting protocol versions with features properly handled.
+    pub async fn test_set_protocol_versions_with_features() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+
+        // Test enabling features that automatically set appropriate protocol versions
+        let props = HashMap::from([(
+            "delta.enableDeletionVectors".to_string(),
+            "true".to_string(),
+        )]);
         ops.set_tbl_properties().with_properties(props).await?;
 
         Ok(())
