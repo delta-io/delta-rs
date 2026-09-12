@@ -172,7 +172,11 @@ def test_operation_parameters_merge_without_duplicate_json_keys(
         ({"readVersion": 1.5}, "readVersion"),
         ({"readVersion": "1"}, "readVersion"),
         ({"isolationLevel": "NotAnIsolationLevel"}, "isolationLevel"),
+        ({"isolationLevel": 1}, "isolationLevel"),
+        ({"isBlindAppend": "true"}, "isBlindAppend"),
+        ({"userId": 123}, "userId"),
         ({"userName": 123}, "userName"),
+        ({"userMetadata": []}, "userMetadata"),
         ({"timestamp": 123}, "timestamp"),
         ({"operation": "WRITE"}, "operation"),
         ({"engineInfo": "custom-engine"}, "engineInfo"),
@@ -216,17 +220,29 @@ def test_valid_reserved_user_fields_are_visible_in_history(
         tmp_path,
         _table(),
         commit_properties=CommitProperties(
-            custom_metadata={"userName": "Jane Doe", "userId": "jane"}
+            custom_metadata={
+                "userName": "Jane Doe",
+                "userId": "jane",
+                "userMetadata": "ticket-4457",
+                "isolationLevel": "SnapshotIsolation",
+                "isBlindAppend": True,
+            }
         ),
     )
 
     history = DeltaTable(tmp_path).history(1)[0]
     assert history["userName"] == "Jane Doe"
     assert history["userId"] == "jane"
+    assert history["userMetadata"] == "ticket-4457"
+    assert history["isolationLevel"] == "SnapshotIsolation"
+    assert history["isBlindAppend"] is True
 
     raw_commit_info = _commit_info_from_log(tmp_path)
     assert raw_commit_info["userName"] == "Jane Doe"
     assert raw_commit_info["userId"] == "jane"
+    assert raw_commit_info["userMetadata"] == "ticket-4457"
+    assert raw_commit_info["isolationLevel"] == "SnapshotIsolation"
+    assert raw_commit_info["isBlindAppend"] is True
 
 
 def test_reserved_read_version_is_visible_in_history(
