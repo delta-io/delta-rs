@@ -51,6 +51,7 @@ if TYPE_CHECKING:
         AddAction,
         CommitProperties,
         PostCommitHookProperties,
+        RemoveAction,
     )
     from deltalake.writer.properties import WriterProperties
 
@@ -1527,7 +1528,7 @@ class DeltaTable:
 
     def create_write_transaction(
         self,
-        actions: list[AddAction],
+        actions: list[AddAction | RemoveAction],
         mode: str,
         schema: DeltaSchema | ArrowSchemaExportable,
         partition_by: list[str] | str | None = None,
@@ -1536,6 +1537,25 @@ class DeltaTable:
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> None:
+        """
+        Commit file actions to the table as a single transaction.
+
+        Files referenced by an `AddAction` must already exist in the table location.
+        A `RemoveAction` marks an existing file as removed and is only allowed with
+        `mode="append"`; `mode="overwrite"` derives its own remove actions from the
+        partition filters. A path cannot be both added and removed in the same
+        transaction, and tables with `delta.appendOnly=true` reject remove actions
+        that have `data_change=True`.
+
+        Args:
+            actions: `AddAction` and `RemoveAction` entries to commit together.
+            mode: save mode of the write, `"append"` or `"overwrite"`.
+            schema: schema of the files being added.
+            partition_by: partition columns of the table.
+            partition_filters: partitions to replace when `mode="overwrite"`.
+            commit_properties: properties of the transaction commit.
+            post_commithook_properties: properties for the post commit hook.
+        """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
                 "create_write_transaction",

@@ -34,6 +34,7 @@ from deltalake.exceptions import (
     SchemaMismatchError,
 )
 from deltalake.query import QueryBuilder
+from deltalake.transaction import AddAction, RemoveAction
 from deltalake.writer._utils import try_get_table_and_table_uri
 
 if TYPE_CHECKING:
@@ -3425,4 +3426,198 @@ def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
             "delta.minReaderVersion": "2",
             "delta.minWriterVersion": "5",
         },
+    )
+
+
+def _now_ms() -> int:
+    return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _append_ids(tmp_path: pathlib.Path, ids: list[int], **kwargs) -> DeltaTable:
+    data = Table.from_pydict({"id": Array(ids, DataType.int64())})
+    write_deltalake(tmp_path, data, mode="append", **kwargs)
+    return DeltaTable(tmp_path)
+
+
+def _compacted_add_action(tmp_path: pathlib.Path, ids: list[int]) -> AddAction:
+    from arro3.io import write_parquet
+
+    path = "part-compacted.parquet"
+    write_parquet(
+        Table.from_pydict({"id": Array(ids, DataType.int64())}), tmp_path / path
+    )
+    return AddAction(
+        path=path,
+        size=(tmp_path / path).stat().st_size,
+        partition_values={},
+        modification_time=_now_ms(),
+        data_change=False,
+        stats=json.dumps({"numRecords": len(ids)}),
+    )
+
+
+def _remove_actions(
+    dt: DeltaTable,
+    tmp_path: pathlib.Path,
+    data_change: bool = False,
+    with_metadata: bool = True,
+) -> list[RemoveAction]:
+    return [
+        RemoveAction(
+            path,
+            data_change,
+            _now_ms(),
+            size=(tmp_path / path).stat().st_size if with_metadata else None,
+            partition_values={} if with_metadata else None,
+        )
+        for path in _file_paths(dt)
+    ]
+
+
+def _commit_removes(tmp_path: pathlib.Path, version: int) -> list[dict]:
+    log_file = tmp_path / "_delta_log" / f"{version:020}.json"
+    entries = [json.loads(line) for line in log_file.read_text().splitlines() if line]
+    return [entry["remove"] for entry in entries if "remove" in entry]
+
+
+def _file_paths(dt: DeltaTable) -> list[str]:
+    return dt.get_add_actions(flatten=True)["path"].to_pylist()
+
+
+def _read_ids(dt: DeltaTable) -> list[int]:
+    table = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id from tbl order by id")
+        .read_all()
+    )
+    return table["id"].to_pylist()
+
+
+def test_create_write_transaction_add_and_remove_compaction(tmp_path: pathlib.Path):
+    for ids in ([1, 2], [3, 4], [5, 6]):
+        dt = _append_ids(tmp_path, ids)
+    old_files = _file_paths(dt)
+    assert len(old_files) == 3
+    version = dt.version()
+
+    add = _compacted_add_action(tmp_path, [1, 2, 3, 4, 5, 6])
+    removes = _remove_actions(dt, tmp_path)
+    dt.create_write_transaction([add, *removes], mode="append", schema=dt.schema())
+    dt.update_incremental()
+
+    assert dt.version() == version + 1
+    assert _file_paths(dt) == [add.path]
+    assert _read_ids(dt) == [1, 2, 3, 4, 5, 6]
+
+    commit_removes = _commit_removes(tmp_path, dt.version())
+    assert sorted(remove["path"] for remove in commit_removes) == sorted(old_files)
+    for remove in commit_removes:
+        assert remove["dataChange"] is False
+        assert remove["extendedFileMetadata"] is True
+        assert remove["size"] > 0
+        assert remove["partitionValues"] == {}
+
+
+def test_create_write_transaction_remove_without_metadata(tmp_path: pathlib.Path):
+    for ids in ([1], [2]):
+        dt = _append_ids(tmp_path, ids)
+
+    add = _compacted_add_action(tmp_path, [1, 2])
+    removes = _remove_actions(dt, tmp_path, with_metadata=False)
+    dt.create_write_transaction([add, *removes], mode="append", schema=dt.schema())
+    dt.update_incremental()
+
+    assert _file_paths(dt) == [add.path]
+    commit_removes = _commit_removes(tmp_path, dt.version())
+    assert len(commit_removes) == 2
+    for remove in commit_removes:
+        assert remove["extendedFileMetadata"] is False
+        assert "size" not in remove
+        assert "partitionValues" not in remove
+
+
+def test_create_write_transaction_remove_on_append_only_table(tmp_path: pathlib.Path):
+    dt = _append_ids(tmp_path, [1], configuration={"delta.appendOnly": "true"})
+    version = dt.version()
+
+    removes = _remove_actions(dt, tmp_path, data_change=True)
+    with pytest.raises(CommitFailedError, match="append-only"):
+        dt.create_write_transaction(removes, mode="append", schema=dt.schema())
+
+    assert DeltaTable(tmp_path).version() == version
+
+
+def test_create_write_transaction_remove_with_no_data_change_on_append_only_table(
+    tmp_path: pathlib.Path,
+):
+    _append_ids(tmp_path, [1], configuration={"delta.appendOnly": "true"})
+    dt = _append_ids(tmp_path, [2])
+    version = dt.version()
+
+    add = _compacted_add_action(tmp_path, [1, 2])
+    removes = _remove_actions(dt, tmp_path)
+    dt.create_write_transaction([add, *removes], mode="append", schema=dt.schema())
+    dt.update_incremental()
+
+    assert dt.version() == version + 1
+    assert _file_paths(dt) == [add.path]
+    assert _read_ids(dt) == [1, 2]
+
+
+def test_create_write_transaction_rejects_same_path_add_and_remove(
+    tmp_path: pathlib.Path,
+):
+    dt = _append_ids(tmp_path, [1])
+    version = dt.version()
+    path = "part-same.parquet"
+    add = AddAction(path, 1, {}, _now_ms(), False, "{}")
+    remove = RemoveAction(path, False, _now_ms())
+
+    with pytest.raises(ValueError, match="same file path"):
+        dt.create_write_transaction([add, remove], mode="append", schema=dt.schema())
+
+    assert DeltaTable(tmp_path).version() == version
+
+
+def test_create_write_transaction_rejects_remove_in_overwrite_mode(
+    tmp_path: pathlib.Path,
+):
+    dt = _append_ids(tmp_path, [1])
+    version = dt.version()
+    removes = _remove_actions(dt, tmp_path)
+
+    with pytest.raises(ValueError, match="overwrite"):
+        dt.create_write_transaction(removes, mode="overwrite", schema=dt.schema())
+
+    assert DeltaTable(tmp_path).version() == version
+
+
+def test_create_write_transaction_rejects_unknown_action_type(tmp_path: pathlib.Path):
+    dt = _append_ids(tmp_path, [1])
+
+    with pytest.raises(TypeError):
+        dt.create_write_transaction(
+            [{"path": "part-dict.parquet"}], mode="append", schema=dt.schema()
+        )
+
+
+def test_remove_action_constructor():
+    minimal = RemoveAction("part-a.parquet", False, 123)
+    assert minimal.path == "part-a.parquet"
+    assert minimal.data_change is False
+    assert minimal.deletion_timestamp == 123
+    assert minimal.size is None
+    assert minimal.partition_values is None
+    assert repr(minimal).startswith("RemoveAction(")
+
+    full = RemoveAction(
+        "part-b.parquet", True, 456, size=10, partition_values={"ds": "2026-01-01"}
+    )
+    assert full.data_change is True
+    assert full.size == 10
+    assert full.partition_values == {"ds": "2026-01-01"}
+    assert (
+        repr(full)
+        == "RemoveAction(path=part-b.parquet, data_change=True, deletion_timestamp=456, size=10, partition_values={'ds': '2026-01-01'})"
     )
