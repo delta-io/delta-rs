@@ -30,9 +30,7 @@ def print_log_dir(path):
 
 def valid_gc_data(version) -> Table:
     id_col = ArrowField("id", DataType.int32(), nullable=True)
-    gc = ArrowField("gc", DataType.int32(), nullable=True).with_metadata(
-        {"delta.generationExpression": "10"}
-    )
+    gc = ArrowField("gc", DataType.int32(), nullable=True)
     data = Table.from_pydict(
         {"id": Array([version, version], type=id_col), "gc": Array([10, 10], type=gc)},
     )
@@ -52,7 +50,6 @@ def test_failed_cleanup(tmp_path: pathlib.Path):
             mode="overwrite",
             data=data,
             configuration={
-                "delta.minWriterVersion": "7",
                 "delta.logRetentionDuration": "interval 0 day",
             },
         )
