@@ -184,3 +184,4 @@ def test_constraint_null_row_preview(tmp_path):
     message = str(exc_info.value)
     assert "1 rows failed validation check" in message
     assert "null-row" in message
+    assert "valid-row" not in message
