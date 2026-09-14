@@ -754,4 +754,103 @@ mod tests {
 
         Ok(())
     }
+
+    #[cfg(feature = "datafusion")]
+    async fn int_values(table: &DeltaTable) -> DeltaResult<Vec<i32>> {
+        use crate::delta_datafusion::DeltaSessionContext;
+
+        let ctx: datafusion::prelude::SessionContext = DeltaSessionContext::default().into();
+        table.update_datafusion_session(&ctx.state())?;
+        ctx.register_table("delta_table", table.table_provider().await?)?;
+
+        let batches = ctx
+            .sql("SELECT value FROM delta_table ORDER BY value")
+            .await?
+            .collect()
+            .await?;
+
+        let mut values = Vec::new();
+        for batch in batches {
+            let array = batch
+                .column_by_name("value")
+                .and_then(|column| column.as_any().downcast_ref::<arrow_array::Int32Array>())
+                .ok_or_else(|| DeltaTableError::generic("value column is not Int32"))?;
+            values.extend(
+                array
+                    .iter()
+                    .map(|value| value.expect("unexpected null value")),
+            );
+        }
+        Ok(values)
+    }
+
+    #[cfg(feature = "datafusion")]
+    fn dv_small_table_copy() -> DeltaResult<(tempfile::TempDir, std::path::PathBuf)> {
+        let tmp_dir = tempfile::tempdir()?;
+        let table_dir = tmp_dir.path().join("table-with-dv-small");
+        fs_extra::dir::copy(
+            crate::test_utils::TestTables::WithDvSmall.as_path(),
+            tmp_dir.path(),
+            &Default::default(),
+        )
+        .map_err(|err| DeltaTableError::generic(err.to_string()))?;
+        Ok((tmp_dir, table_dir))
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_restore_reverts_deletion_vector_delete() -> DeltaResult<()> {
+        let (_tmp_dir, table_dir) = dv_small_table_copy()?;
+        let table_url = crate::ensure_table_uri(table_dir.to_str().unwrap())?;
+        let table = crate::open_table(table_url.clone()).await?;
+
+        assert_eq!(int_values(&table).await?, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let (table, metrics) = table.restore().with_version_to_restore(0).await?;
+        assert_eq!(metrics.num_restored_file, 1);
+        assert_eq!(metrics.num_removed_file, 1);
+        assert_eq!(
+            int_values(&table).await?,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+
+        // A freshly opened handle must see the restored data as well.
+        let table = crate::open_table(table_url).await?;
+        assert_eq!(
+            int_values(&table).await?,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+
+        Ok(())
+    }
+
+    #[cfg(feature = "datafusion")]
+    #[tokio::test]
+    async fn test_restore_by_datetime_reverts_deletion_vector_delete() -> DeltaResult<()> {
+        let (_tmp_dir, table_dir) = dv_small_table_copy()?;
+        let table_url = crate::ensure_table_uri(table_dir.to_str().unwrap())?;
+        let table = crate::open_table(table_url.clone()).await?;
+
+        assert_eq!(int_values(&table).await?, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Between v0 (1677811178585) and v1 (1677811194429): resolves to v0.
+        let datetime =
+            DateTime::<Utc>::from_timestamp_millis(1_677_811_180_000).expect("valid timestamp");
+        let (table, metrics) = table.restore().with_datetime_to_restore(datetime).await?;
+        assert_eq!(metrics.num_restored_file, 1);
+        assert_eq!(metrics.num_removed_file, 1);
+        assert_eq!(
+            int_values(&table).await?,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+
+        // A freshly opened handle must see the restored data as well.
+        let table = crate::open_table(table_url).await?;
+        assert_eq!(
+            int_values(&table).await?,
+            vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        );
+
+        Ok(())
+    }
 }
