@@ -1340,6 +1340,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_validation_check_constraint_includes_null_row_in_preview() -> Result<()> {
+        let schema = create_test_schema(true);
+        let batch = create_test_batch(
+            schema.clone(),
+            vec![Some(10), None, Some(2)],
+            vec![Some("alpha"), Some("beta"), Some("gamma")],
+        );
+
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+
+        // `id > 5` evaluates to NULL for the second row, which still counts as a violation.
+        let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
+        let validated_exec =
+            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+
+        let result = collect(validated_exec, ctx.task_ctx()).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("2 rows failed validation"));
+        assert!(
+            err_msg.contains("beta"),
+            "expected the NULL violation row in the preview, got: {err_msg}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_validation_maintains_order() -> Result<()> {
         let schema = create_test_schema(true);
         let batch = create_test_batch(
