@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::AsArray;
-use arrow::compute::{filter_record_batch, not};
-use arrow_array::RecordBatch;
+use arrow::compute::filter_record_batch;
+use arrow_array::{BooleanArray, RecordBatch};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
@@ -738,12 +738,13 @@ where
                 match this.check_expression.evaluate(&batch)? {
                     ColumnarValue::Array(array) => {
                         let validity_mask = array.as_boolean();
-                        let invalid_count = validity_mask
+                        let invalid_mask: BooleanArray = validity_mask
                             .iter()
-                            .filter(|v| matches!(v, Some(false) | None))
-                            .count();
+                            .map(|v| Some(matches!(v, Some(false) | None)))
+                            .collect();
+                        let invalid_count = invalid_mask.true_count();
                         if invalid_count > 0 {
-                            let invalid_data = filter_record_batch(&batch, &not(validity_mask)?)?;
+                            let invalid_data = filter_record_batch(&batch, &invalid_mask)?;
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
