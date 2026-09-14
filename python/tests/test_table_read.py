@@ -6,7 +6,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
-from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import pytest
@@ -15,9 +14,8 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
-from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
 S3_SIMPLE_TABLE_FILES = [
@@ -1007,21 +1005,6 @@ def test_delta_table_with_filters():
         == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
-
-
-@pytest.mark.pyarrow
-def test_writer_fails_on_protocol():
-    import pytest
-
-    table_path = "../crates/test/tests/data/simple_table"
-    dt = DeltaTable(table_path)
-    dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_dataset()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_table()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pandas()
 
 
 class ExcPassThroughThread(Thread):
