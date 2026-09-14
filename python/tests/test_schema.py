@@ -253,3 +253,51 @@ def test_field_serialization():
     f = Field("fieldname", "binary", metadata={"key": "value"})
     assert f.name == "fieldname"
     assert f.metadata == {"key": "value"}
+
+
+# <https://github.com/delta-io/delta-rs/issues/1947>
+@pytest.mark.pyarrow
+def test_void_type_to_arrow():
+    import pyarrow as pa
+
+    void_type = PrimitiveType("void")
+    assert void_type.type == "void"
+    assert void_type.to_json() == '"void"'
+    assert void_type.to_arrow() == pa.null()
+    assert PrimitiveType.from_arrow(pa.null()) == void_type
+
+    field = Field("v", void_type, nullable=True)
+    arrow_field = field.to_arrow()
+    assert arrow_field.name == "v"
+    assert arrow_field.type == pa.null()
+    assert arrow_field.nullable is True
+
+    schema = Schema([Field("id", "integer", nullable=True), field])
+    arrow_schema = pa.schema(schema)
+    assert arrow_schema.field("id").type == pa.int32()
+    assert arrow_schema.field("v").type == pa.null()
+    assert arrow_schema.field("v").nullable is True
+
+    roundtripped = Schema.from_arrow(pa.schema([("id", pa.int32()), ("v", pa.null())]))
+    assert roundtripped.fields[1].type == void_type
+
+
+# <https://github.com/delta-io/delta-rs/issues/1947>
+@pytest.mark.pyarrow
+def test_void_type_nested_in_struct_to_arrow():
+    import pyarrow as pa
+
+    struct_type = StructType.from_json(
+        '{"type":"struct","fields":[{"name":"s","type":{"type":"struct","fields":['
+        '{"name":"a","type":"integer","nullable":true,"metadata":{}},'
+        '{"name":"v","type":"void","nullable":true,"metadata":{}}]},'
+        '"nullable":true,"metadata":{}}]}'
+    )
+
+    arrow_type = struct_type.to_arrow()
+    inner_struct = arrow_type.fields[0].type
+    assert inner_struct.fields[0].name == "a"
+    assert inner_struct.fields[0].type == pa.int32()
+    assert inner_struct.fields[1].name == "v"
+    assert inner_struct.fields[1].type == pa.null()
+    assert StructType.from_arrow(arrow_type) == struct_type
