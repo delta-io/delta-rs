@@ -360,6 +360,14 @@ mod tests {
             .with_configuration_property(TableProperty::EnableDeletionVectors, Some("true"))
             .with_actions([Action::Add(source_add.clone())])
             .await?;
+        let snapshot = table.snapshot().unwrap();
+        let protocol = snapshot.protocol();
+        assert_eq!(
+            protocol.min_writer_version(),
+            7,
+            "The table did not set the expected minWriterVersion"
+        );
+        println!("PROTOCOL: {protocol:?}");
 
         Ok((table, source_add))
     }
@@ -411,12 +419,16 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn fsck_removes_missing_deletion_vector_logical_file() -> DeltaResult<()> {
         let (table, source_add) = metadata_rich_missing_file_table().await?;
         let log_store = table.log_store();
 
-        let (table, metrics) = table.filesystem_check().await?;
+        let (table, metrics) = table
+            .filesystem_check()
+            .await
+            .expect("Failed to run filesystem check");
 
         assert_eq!(metrics.files_removed, vec![source_add.path]);
         let active_files: Vec<_> = table

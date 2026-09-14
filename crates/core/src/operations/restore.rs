@@ -557,6 +557,7 @@ mod tests {
             .map_err(Into::into)
     }
 
+    #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn restore_plan_lazy_eager_parity_preserves_complete_actions() -> DeltaResult<()> {
         let (table, target_add, current_add) = metadata_rich_restore_table().await?;
