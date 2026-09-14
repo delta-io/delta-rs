@@ -178,10 +178,16 @@ def test_constraint_null_row_preview(tmp_path):
         },
     )
 
+    expected = """Generic DeltaTable error: External error: Invalid data found: 1 rows failed validation check.
+Preview of invalid data:
+
++----------+------------+
+| id       | high price |
++----------+------------+
+| null-row |            |
++----------+------------+"""
+
     with pytest.raises(DeltaError) as exc_info:
         write_deltalake(tmp_path, invalid, mode="append")
 
-    message = str(exc_info.value)
-    assert "1 rows failed validation check" in message
-    assert "null-row" in message
-    assert "valid-row" not in message
+    assert str(exc_info.value) == expected
