@@ -72,7 +72,10 @@ impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
             require_files: true,
-            log_buffer_size: num_cpus::get() * 4,
+            log_buffer_size: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1)
+                * 4,
             log_batch_size: 1024,
             skip_stats: false,
             io_runtime: None,
