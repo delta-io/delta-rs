@@ -71,9 +71,6 @@ futures = { version = "0.3" }
 tokio = { version = "1" }
 typed-builder = { version = "0.23.0" }
 
-# aws sdk
-aws-smithy-types = { version = "=1.6.3" }
-
 # opentelemetry
 tracing-opentelemetry = { version = "0.32" }
 opentelemetry = { version = "0.31" }
