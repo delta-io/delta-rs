@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::AsArray;
-use arrow::compute::{filter_record_batch, not};
-use arrow_array::RecordBatch;
+use arrow::compute::filter_record_batch;
+use arrow_array::{BooleanArray, RecordBatch};
 use arrow_cast::pretty::pretty_format_batches;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
@@ -738,12 +738,13 @@ where
                 match this.check_expression.evaluate(&batch)? {
                     ColumnarValue::Array(array) => {
                         let validity_mask = array.as_boolean();
-                        let invalid_count = validity_mask
+                        let invalid_mask: BooleanArray = validity_mask
                             .iter()
-                            .filter(|v| matches!(v, Some(false) | None))
-                            .count();
+                            .map(|v| Some(matches!(v, Some(false) | None)))
+                            .collect();
+                        let invalid_count = invalid_mask.true_count();
                         if invalid_count > 0 {
-                            let invalid_data = filter_record_batch(&batch, &not(validity_mask)?)?;
+                            let invalid_data = filter_record_batch(&batch, &invalid_mask)?;
                             let invalid_slice =
                                 invalid_data.slice(0, invalid_data.num_rows().min(5));
                             let preview = pretty_format_batches(&[invalid_slice])?;
@@ -1335,6 +1336,35 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("2 rows failed validation"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_validation_check_constraint_includes_null_row_in_preview() -> Result<()> {
+        let schema = create_test_schema(true);
+        let batch = create_test_batch(
+            schema.clone(),
+            vec![Some(10), None, Some(2)],
+            vec![Some("alpha"), Some("beta"), Some("gamma")],
+        );
+
+        let ctx = SessionContext::new();
+        let memory_exec = get_memory_exec(&ctx.state(), schema, vec![batch]).await;
+
+        // `id > 5` evaluates to NULL for the second row, which still counts as a violation.
+        let predicates = vec![col("id").gt(datafusion::prelude::lit(5i32))];
+        let validated_exec =
+            DataValidationExec::try_new_with_predicates(&ctx.state(), memory_exec, predicates)?;
+
+        let result = collect(validated_exec, ctx.task_ctx()).await;
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("2 rows failed validation"));
+        assert!(
+            err_msg.contains("beta"),
+            "expected the NULL violation row in the preview, got: {err_msg}"
+        );
 
         Ok(())
     }
