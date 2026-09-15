@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow_schema::{DataType, Field, FieldRef, SchemaBuilder};
+use arrow_schema::{DataType, Field, FieldRef, Fields, SchemaBuilder};
 use datafusion::common::error::Result;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{HashMap, HashSet, plan_err};
@@ -29,7 +29,7 @@ use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::ColumnName;
 use delta_kernel::schema::{DataType as KernelDataType, StructField, StructType};
 use delta_kernel::table_configuration::TableConfiguration;
-use delta_kernel::table_features::TableFeature;
+use delta_kernel::table_features::{ColumnMappingMode, TableFeature};
 use delta_kernel::{Expression, Predicate, PredicateRef};
 use itertools::Itertools;
 use tracing::debug;
@@ -309,10 +309,24 @@ impl KernelScanPlan {
         } else {
             Arc::new(scan_builder.build()?)
         };
-        let parquet_read_schema = config.physical_arrow_schema(
-            scan.snapshot().table_configuration(),
-            &scan.physical_schema().as_ref().try_into_arrow()?,
-        )?;
+        let parquet_read_schema = if config.schema.is_some() {
+            // A schema override may narrow nested structs, which the wide
+            // kernel physical schema would otherwise restore. Narrow first,
+            // translating the override's logical names to physical names.
+            let physical = scan.physical_schema().as_ref().try_into_arrow()?;
+            let narrowed = narrow_physical_schema_to_selection(
+                &physical,
+                contract.scan_schema.as_ref(),
+                table_config.logical_schema().as_ref(),
+                table_config.column_mapping_mode(),
+            );
+            config.physical_arrow_schema(table_config, &narrowed)?
+        } else {
+            config.physical_arrow_schema(
+                scan.snapshot().table_configuration(),
+                &scan.physical_schema().as_ref().try_into_arrow()?,
+            )?
+        };
         let parquet_predicate_schema =
             build_parquet_predicate_schema(&parquet_read_schema, &contract.file_id_field);
         Ok(Self {
@@ -344,6 +358,72 @@ pub(crate) fn build_parquet_predicate_schema(
     let mut schema_builder = SchemaBuilder::from(predicate_schema.as_ref().clone());
     schema_builder.push(file_id_field.as_ref().clone().with_nullable(true));
     Arc::new(schema_builder.finish())
+}
+
+/// Narrow a kernel physical Arrow schema to the leaves selected by a schema
+/// override.
+///
+/// The selection carries logical names while the physical schema carries
+/// physical (column-mapped) names, so selection paths are translated through
+/// the kernel logical schema. Struct levels absent from the selection are
+/// dropped; anything that cannot be narrowed safely is passed through
+/// unchanged, which is always correct for reads — only less pruning.
+fn narrow_physical_schema_to_selection(
+    physical: &Schema,
+    selection: &Schema,
+    kernel_logical: &StructType,
+    mode: ColumnMappingMode,
+) -> Schema {
+    Schema::new(narrow_struct_fields(
+        physical.fields(),
+        selection.fields(),
+        kernel_logical,
+        mode,
+    ))
+}
+
+fn narrow_struct_fields(
+    physical_fields: &Fields,
+    selection_fields: &Fields,
+    kernel_struct: &StructType,
+    mode: ColumnMappingMode,
+) -> Vec<Field> {
+    selection_fields
+        .iter()
+        .filter_map(|selection| {
+            let kernel_field = kernel_struct.field(selection.name())?;
+            let physical_name = kernel_field.physical_name(mode);
+            let physical_field = physical_fields
+                .iter()
+                .find(|field| field.name().as_str() == physical_name)?;
+            Some(narrow_field(
+                physical_field,
+                selection,
+                kernel_field.data_type(),
+                mode,
+            ))
+        })
+        .collect()
+}
+
+fn narrow_field(
+    physical: &Field,
+    selection: &Field,
+    kernel_type: &KernelDataType,
+    mode: ColumnMappingMode,
+) -> Field {
+    let data_type = match (physical.data_type(), selection.data_type(), kernel_type) {
+        (
+            DataType::Struct(physical_children),
+            DataType::Struct(selection_children),
+            KernelDataType::Struct(kernel_struct),
+        ) => DataType::Struct(
+            narrow_struct_fields(physical_children, selection_children, kernel_struct, mode).into(),
+        ),
+        _ => physical.data_type().clone(),
+    };
+    Field::new(physical.name().clone(), data_type, physical.is_nullable())
+        .with_metadata(physical.metadata().clone())
 }
 
 impl DeltaScanConfig {
@@ -1166,6 +1246,71 @@ mod tests {
                 .parquet_read_schema
                 .field_with_name("day")
                 .is_err()
+        );
+
+        Ok(())
+    }
+
+    fn nested_struct_leaf_names(schema: &Schema, name: &str) -> Vec<String> {
+        let field = schema
+            .field_with_name(name)
+            .unwrap_or_else(|_| panic!("expected a field named {name}"));
+        match field.data_type() {
+            DataType::Struct(children) => children.iter().map(|f| f.name().clone()).collect(),
+            other => panic!("expected {name} to be a struct, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parquet_read_schema_preserves_nested_schema_override() -> TestResult {
+        use crate::DeltaTable;
+        use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StructArray};
+        use arrow_schema::Fields;
+
+        let struct_fields = Fields::from(vec![
+            Arc::new(Field::new("l", DataType::Int64, true)),
+            Arc::new(Field::new("b", DataType::Boolean, true)),
+        ]);
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Arc::new(Field::new(
+                "s",
+                DataType::Struct(struct_fields.clone()),
+                true,
+            ))])),
+            vec![Arc::new(StructArray::new(
+                struct_fields,
+                vec![
+                    Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+                    Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
+                ],
+                None,
+            ))],
+        )?;
+        let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+        let snapshot = table.snapshot()?.snapshot().snapshot();
+
+        // Override selects only the `l` leaf of the nested struct.
+        let override_schema = Arc::new(Schema::new(vec![Arc::new(Field::new(
+            "s",
+            DataType::Struct(Fields::from(vec![Arc::new(Field::new(
+                "l",
+                DataType::Int64,
+                true,
+            ))])),
+            true,
+        ))]));
+        let config = DeltaScanConfig::default().with_schema(override_schema);
+        let scan_plan = KernelScanPlan::try_new(snapshot, None, &[], &config, None)?;
+
+        // The contract narrows to the selected leaf ...
+        assert_eq!(
+            nested_struct_leaf_names(&scan_plan.contract.scan_schema, "s"),
+            vec!["l"]
+        );
+        // ... and the Parquet read schema must preserve that narrowing (#4678).
+        assert_eq!(
+            nested_struct_leaf_names(&scan_plan.parquet_read_schema, "s"),
+            vec!["l"]
         );
 
         Ok(())
