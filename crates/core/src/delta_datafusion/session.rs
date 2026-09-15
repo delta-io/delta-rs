@@ -358,7 +358,7 @@ impl DeltaSessionContext {
     }
 
     /// Create a DeltaSessionContext with the tuned defaults, applying `overrides` on top.
-    pub fn new_with_overrides(overrides: &HashMap<String, String>) -> DeltaResult<Self> {
+    pub fn session_overrides(overrides: &HashMap<String, String>) -> DeltaResult<Self> {
         let mut config: SessionConfig = DeltaSessionConfig::default().into();
         let options = config.options_mut();
         for (key, value) in overrides {
@@ -563,13 +563,13 @@ mod tests {
     }
 
     #[test]
-    fn new_with_overrides_layers_on_top_of_delta_defaults() {
+    fn session_overrides_layers_on_top_of_delta_defaults() {
         let overrides = HashMap::from([(
             "datafusion.execution.batch_size".to_string(),
             "7".to_string(),
         )]);
 
-        let state = DeltaSessionContext::new_with_overrides(&overrides)
+        let state = DeltaSessionContext::session_overrides(&overrides)
             .unwrap()
             .state();
 
@@ -581,9 +581,9 @@ mod tests {
     }
 
     #[test]
-    fn new_with_overrides_rejects_unknown_key() {
+    fn session_overrides_rejects_unknown_key() {
         let overrides = HashMap::from([("datafusion.not.a.real.key".to_string(), "1".to_string())]);
 
-        assert!(DeltaSessionContext::new_with_overrides(&overrides).is_err());
+        assert!(DeltaSessionContext::session_overrides(&overrides).is_err());
     }
 }
