@@ -13,6 +13,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
+aws-smithy-types = { workspace = true }
 aws-config = { version = "1.8", default-features = false, features = [
     "behavior-version-latest",
     "rt-tokio",
@@ -35,3 +36,6 @@ rustls = ["deltalake-core/rustls"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.cargo-machete]
+ignored = ["aws-smithy-types"]

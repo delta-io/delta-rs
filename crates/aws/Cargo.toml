@@ -17,6 +17,7 @@ deltalake-core = { version = "1.0", path = "../core" , default-features = false,
 
 # workspace dependencies
 async-trait = { workspace = true }
+aws-smithy-types = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 time = { workspace = true }
@@ -65,4 +66,4 @@ rustls = [
 ]
 
 [package.metadata.cargo-machete]
-ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "time"]
+ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "aws-smithy-types", "time"]
