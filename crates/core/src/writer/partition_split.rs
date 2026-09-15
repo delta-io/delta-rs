@@ -121,7 +121,8 @@ fn group_by_partition_key(arrays: &[ArrayRef]) -> DeltaResult<Vec<UInt32Array>> 
         ))
     })?;
 
-    let mut rows_by_key: HashMap<Row<'_>, Vec<u32>> = HashMap::new();
+    let mut rows_by_key: HashMap<Row<'_>, Vec<u32>, foldhash::fast::RandomState> =
+        HashMap::default();
     for (row_index, row) in (0..row_count).zip(&rows) {
         rows_by_key.entry(row).or_default().push(row_index);
     }
