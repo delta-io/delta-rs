@@ -91,6 +91,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       DEFAULT_FEATURES: "datafusion"
+      # Doc tests are built with the dev profile, whereas llvm-cov
+      # builds with the test profile.
+      # Make debug match test to avoid rebuilding all dependencies
+      # when running the doc tests.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
 
     steps:
       # v6.0.2
@@ -138,8 +143,17 @@ jobs:
 
       - name: Run doc tests
         shell: bash
+        # llvm-cov doesn't run doc tests on stable, so run them separately.
         run: |
-          # llvm-cov doesn't run doc tests, so run them separately
+          # Use the environment from llvm-cov and the same target dir and
+          # package selection, to avoid recompilation.
+          eval "$(cargo llvm-cov show-env --sh)"
           cargo test --features ${{ env.DEFAULT_FEATURES }} \
+            --target-dir target/llvm-cov-target \
             --workspace \
+            --exclude deltalake \
+            --exclude deltalake-azure \
+            --exclude deltalake-aws \
+            --exclude deltalake-hdfs \
+            --exclude deltalake-lakefs \
             --doc
