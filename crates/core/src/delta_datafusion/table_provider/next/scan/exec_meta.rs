@@ -357,9 +357,11 @@ const MAX_META_BATCH_BYTES: usize = 512 * 1024 * 1024;
 /// row's materialized bytes would push a full-width batch past
 /// [`MAX_META_BATCH_BYTES`] (kept 4x clear of Arrow's ~2GiB 32-bit offset
 /// limit). The `.max(1)` guarantees progress even for rows larger than the
-/// whole cap. Callers must pass `bytes_per_row >= 1`.
+/// whole cap; the inner `.max(1)` guards the division itself.
 fn capped_chunk_rows(batch_size: usize, bytes_per_row: usize) -> usize {
-    batch_size.min(MAX_META_BATCH_BYTES / bytes_per_row).max(1)
+    batch_size
+        .min(MAX_META_BATCH_BYTES / bytes_per_row.max(1))
+        .max(1)
 }
 
 static EMPTY_SCHEMA: LazyLock<SchemaRef> = LazyLock::new(|| Arc::new(Schema::new(Fields::empty())));
