@@ -26,9 +26,8 @@ impl PyQueryBuilder {
     #[pyo3(signature = (session_config = None))]
     pub fn new(session_config: Option<HashMap<String, String>>) -> PyResult<Self> {
         let delta_ctx = match session_config {
-            Some(overrides) => {
-                DeltaSessionContext::session_overrides(&overrides).map_err(PythonError::from)?
-            }
+            Some(overrides) => DeltaSessionContext::new_with_session_overrides(&overrides)
+                .map_err(PythonError::from)?,
             None => DeltaSessionContext::new(),
         };
         let ctx = delta_ctx.into_inner();
