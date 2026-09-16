@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::{
@@ -356,6 +357,18 @@ impl DeltaSessionContext {
         Self::new_with_config_and_runtime(config, runtime_env)
     }
 
+    /// Create a DeltaSessionContext with the tuned defaults, applying `overrides` on top.
+    pub fn new_with_session_overrides(overrides: &HashMap<String, String>) -> DeltaResult<Self> {
+        let mut config: SessionConfig = DeltaSessionConfig::default().into();
+        let options = config.options_mut();
+        for (key, value) in overrides {
+            options.set(key, value)?;
+        }
+
+        let runtime_env = RuntimeEnvBuilder::new().build_arc()?;
+        Ok(Self::new_with_config_and_runtime(config, runtime_env))
+    }
+
     fn new_with_config_and_runtime(config: SessionConfig, runtime_env: Arc<RuntimeEnv>) -> Self {
         let planner = DeltaPlanner::new();
         let state = SessionStateBuilder::new()
@@ -547,5 +560,30 @@ mod tests {
 
         assert_eq!(invoked.load(Ordering::SeqCst), 0);
         assert_eq!(kind, ResolvedSessionStateKind::CallerWasSessionState);
+    }
+
+    #[test]
+    fn new_with_session_overrides_layers_on_top_of_delta_defaults() {
+        let overrides = HashMap::from([(
+            "datafusion.execution.batch_size".to_string(),
+            "7".to_string(),
+        )]);
+
+        let state = DeltaSessionContext::new_with_session_overrides(&overrides)
+            .unwrap()
+            .state();
+
+        assert_eq!(state.config().batch_size(), 7);
+        // Delta's tuned defaults differ from DataFusion's own and must survive the override.
+        let options = state.config().options();
+        assert!(!options.sql_parser.enable_ident_normalization);
+        assert_eq!(options.optimizer.hash_join_inlist_pushdown_max_size, 0);
+    }
+
+    #[test]
+    fn new_with_session_overrides_rejects_unknown_key() {
+        let overrides = HashMap::from([("datafusion.not.a.real.key".to_string(), "1".to_string())]);
+
+        assert!(DeltaSessionContext::new_with_session_overrides(&overrides).is_err());
     }
 }
