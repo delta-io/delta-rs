@@ -603,6 +603,31 @@ def test_drop_column_not_null_already_nullable(tmp_path: pathlib.Path):
         dt.alter.drop_column_not_null("value")
 
 
+def test_drop_columns_requires_column_mapping(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    """Without column mapping a drop would require rewriting every data file, so it is
+    rejected. Column-mapped round-trips live in test_column_mapping.py."""
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError, match="requires column mapping"):
+        dt.alter.drop_columns("price")
+
+
+def test_drop_columns_nested_column_rejected(
+    tmp_path: pathlib.Path, sample_table: Table
+):
+    """Nested (dotted) column paths are not supported yet."""
+    write_deltalake(tmp_path, sample_table)
+
+    dt = DeltaTable(tmp_path)
+
+    with pytest.raises(DeltaError, match="only top-level columns"):
+        dt.alter.drop_columns("some_struct.nested")
+
+
 def test_set_column_metadata(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table)
 
