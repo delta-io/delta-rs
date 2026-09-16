@@ -29,7 +29,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
 use crate::parquet_utils::default_writer_properties;
-use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
+use crate::writer::partition_split::{PartitionResult, divide_by_partition_values};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
