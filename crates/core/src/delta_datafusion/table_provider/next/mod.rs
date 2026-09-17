@@ -2809,6 +2809,30 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_deletion_vectors_scan() -> TestResult<()> {
+        let mut table = open_fs_path("../test/tests/data/table_with_deletion_logs");
+        table.load().await?;
+
+        let provider = DeltaScan::new(
+            table.snapshot()?.snapshot().clone(),
+            DeltaScanConfig::default(),
+        )?;
+
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let deletion_vectors = provider.deletion_vectors(&state).await?;
+
+        assert_ne!(
+            true,
+            deletion_vectors.is_empty(),
+            "The deletion_vectors is apparently empty! That can't be right"
+        );
+
+        Ok(())
+    }
+
     async fn provider_for_partitioned_table() -> TestResult<(
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
