@@ -16,7 +16,6 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 
-use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Version};
 use crate::logstore::{
@@ -48,8 +47,6 @@ pub use columns::*;
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
-    /// the load options used during load
-    pub config: DeltaTableConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -61,7 +58,6 @@ impl Serialize for DeltaTable {
     {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.state)?;
-        seq.serialize_element(&self.config)?;
         seq.serialize_element(self.log_store.config())?;
         seq.end()
     }
@@ -88,9 +84,6 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let state = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let config = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
                 let storage_config: LogStoreConfig = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
@@ -100,11 +93,7 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 )
                 .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
-                let table = DeltaTable {
-                    state,
-                    config,
-                    log_store,
-                };
+                let table = DeltaTable { state, log_store };
                 Ok(table)
             }
         }
@@ -118,11 +107,10 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef) -> Self {
         Self {
             state: None,
             log_store,
-            config,
         }
     }
 
@@ -146,11 +134,9 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
     pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
-        let config = state.load_config().clone();
         Self {
             state: Some(state),
             log_store,
-            config,
         }
     }
 
@@ -209,9 +195,7 @@ impl DeltaTable {
         max_version: Option<Version>,
     ) -> Result<(), DeltaTableError> {
         let Some(state) = self.state.as_mut() else {
-            self.state = Some(
-                DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
-            );
+            self.state = Some(DeltaTableState::try_new(&self.log_store, max_version).await?);
             return Ok(());
         };
 
@@ -624,7 +608,6 @@ mod tests {
 
         let table = DeltaTableBuilder::from_url(url)
             .unwrap()
-            .without_files()
             .load()
             .await
             .unwrap();

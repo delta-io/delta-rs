@@ -43,7 +43,7 @@ use crate::kernel::{
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError, ObjectStoreError};
 
 /// Errors that can occur during restore
 #[derive(thiserror::Error, Debug)]
@@ -247,7 +247,7 @@ async fn execute(
     {
         return Err(DeltaTableError::from(RestoreError::InvalidRestoreParameter));
     }
-    let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+    let mut table = DeltaTable::new(log_store.clone());
 
     match datetime_to_restore {
         Some(datetime) => {
@@ -379,8 +379,7 @@ impl std::future::IntoFuture for RestoreBuilder {
         let mut this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -532,14 +531,6 @@ mod tests {
         Ok((table, target_add, current_add))
     }
 
-    fn no_stats_config(require_files: bool) -> DeltaTableConfig {
-        DeltaTableConfig {
-            require_files,
-            skip_stats: true,
-            ..Default::default()
-        }
-    }
-
     fn normalize_adds(mut adds: Vec<Add>) -> DeltaResult<Vec<serde_json::Value>> {
         adds.sort_by(|left, right| left.path.cmp(&right.path));
         adds.into_iter()
@@ -562,14 +553,10 @@ mod tests {
     async fn restore_plan_lazy_eager_parity_preserves_complete_actions() -> DeltaResult<()> {
         let (table, target_add, current_add) = metadata_rich_restore_table().await?;
         let log_store = table.log_store();
-        let eager_current =
-            EagerSnapshot::try_new(log_store.as_ref(), no_stats_config(true), None).await?;
-        let eager_target =
-            EagerSnapshot::try_new(log_store.as_ref(), no_stats_config(true), Some(0)).await?;
-        let lazy_current =
-            Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
-        let lazy_target =
-            Snapshot::try_new(log_store.as_ref(), no_stats_config(false), Some(0)).await?;
+        let eager_current = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
+        let eager_target = EagerSnapshot::try_new(log_store.as_ref(), Some(0)).await?;
+        let lazy_current = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let lazy_target = Snapshot::try_new(log_store.as_ref(), Some(0)).await?;
         let deletion_timestamp = 1_725_000_003_000;
 
         assert!(!lazy_current.has_materialized_files_for_test());
@@ -638,8 +625,8 @@ mod tests {
         )
         .await?;
         let log_store = table.log_store();
-        let current = Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
-        let target = Snapshot::try_new(log_store.as_ref(), no_stats_config(false), Some(0)).await?;
+        let current = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let target = Snapshot::try_new(log_store.as_ref(), Some(0)).await?;
 
         assert_eq!(target.version(), 0);
         assert_eq!(current.version(), 1);
@@ -700,8 +687,7 @@ mod tests {
                 .with_actions([Action::Add(add)])
                 .await?;
             let log_store = table.log_store();
-            let snapshot =
-                Snapshot::try_new(log_store.as_ref(), no_stats_config(false), None).await?;
+            let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
             let files: Vec<_> = snapshot
                 .active_adds(
                     log_store.as_ref(),

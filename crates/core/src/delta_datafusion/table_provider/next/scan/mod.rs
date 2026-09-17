@@ -931,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_empty_file_selection_does_not_poll_metadata_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let scan_plan =
             KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
         let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
@@ -954,7 +954,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_resolved_file_selection_plan_does_not_poll_metadata_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let scan_plan =
             KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
         let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
@@ -1658,7 +1658,7 @@ mod tests {
             )
             .await?;
 
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_log_store(log_store)

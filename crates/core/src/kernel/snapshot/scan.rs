@@ -208,7 +208,7 @@ mod tests {
             ])
             .with_partition_columns(["part"])
             .await?;
-        super::super::Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await
+        super::super::Snapshot::try_new(table.log_store().as_ref(), None).await
     }
 
     #[tokio::test]
@@ -337,7 +337,7 @@ mod tests {
             ])
             .await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         let predicate: PredicateRef =
             Arc::new(Expression::column(["part"]).eq(Scalar::String("a".to_string())));
         let scan = snapshot
@@ -365,7 +365,7 @@ mod tests {
             .with_columns([StructField::nullable("value", DataType::INTEGER)])
             .await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         let scan = snapshot.scan_builder().build()?;
         let malformed = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
 

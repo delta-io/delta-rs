@@ -46,7 +46,7 @@ use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
 use crate::logstore::{LogStore, LogStoreExt};
-use crate::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::{DeltaResult, DeltaTableError};
 
 pub use self::log_data::*;
 use self::stats_projection::FIELD_STATS;
@@ -212,8 +212,6 @@ impl<'a> ConflictReadSet<'a> {
 pub struct Snapshot {
     /// Log segment containing all log files in the snapshot
     pub(crate) inner: Arc<KernelSnapshot>,
-    /// Configuration for the current session
-    config: DeltaTableConfig,
     /// Optional materialized replay state owned by this snapshot.
     materialized_files: Option<Arc<MaterializedFiles>>,
 }
@@ -226,7 +224,6 @@ impl Snapshot {
     pub async fn try_new_with_engine(
         engine: Arc<dyn Engine>,
         table_root: Url,
-        config: DeltaTableConfig,
         version: Option<Version>,
     ) -> DeltaResult<Self> {
         let snapshot = match spawn_blocking_with_span(move || {
@@ -252,17 +249,12 @@ impl Snapshot {
 
         Ok(Self {
             inner: snapshot,
-            config,
             materialized_files: None,
         })
     }
 
     /// Create a new [`Snapshot`] instance
-    pub async fn try_new(
-        log_store: &dyn LogStore,
-        config: DeltaTableConfig,
-        version: Option<Version>,
-    ) -> DeltaResult<Self> {
+    pub async fn try_new(log_store: &dyn LogStore, version: Option<Version>) -> DeltaResult<Self> {
         // TODO: bundle operation_id with logstore ...
         let engine = log_store.engine(None);
 
@@ -274,7 +266,7 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, config, version).await
+        Self::try_new_with_engine(engine, table_root, version).await
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -325,7 +317,6 @@ impl Snapshot {
 
         let snapshot = Arc::new(Self {
             inner: snapshot,
-            config: self.config.clone(),
             materialized_files: None,
         });
         if snapshot.version() as u64 == current_version {
@@ -373,14 +364,10 @@ impl Snapshot {
             version = current_version,
             "rebuilding snapshot to adopt a newly available checkpoint at the current version"
         );
-        let snapshot = Snapshot::try_new_with_engine(
-            engine.clone(),
-            table_root,
-            self.config.clone(),
-            Some(current_version),
-        )
-        .await
-        .map(Arc::new)?;
+        let snapshot =
+            Snapshot::try_new_with_engine(engine.clone(), table_root, Some(current_version))
+                .await
+                .map(Arc::new)?;
 
         match self.materialized_files() {
             Some(materialized_files) => {
@@ -429,13 +416,8 @@ impl Snapshot {
         self.inner.table_configuration().protocol()
     }
 
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        &self.config
-    }
-
     fn materialization_mode(&self) -> SnapshotMaterializationMode {
-        SnapshotMaterializationMode::from_require_files(self.config.require_files)
+        SnapshotMaterializationMode::Eager
     }
 
     fn identity(&self) -> SnapshotIdentity {
@@ -449,11 +431,7 @@ impl Snapshot {
     }
 
     fn materialized_files_policy(&self) -> MaterializedFilesPolicy {
-        if self.config.skip_stats {
-            MaterializedFilesPolicy::FullTableWithoutStats
-        } else {
-            MaterializedFilesPolicy::FullTablePreserveRaw
-        }
+        MaterializedFilesPolicy::FullTablePreserveRaw
     }
 
     pub(crate) fn materialized_files(&self) -> Option<&Arc<MaterializedFiles>> {
@@ -616,10 +594,6 @@ impl Snapshot {
         {
             return cached;
         }
-        if predicate.is_some() && self.config.skip_stats {
-            return self.files_with_engine(log_store.engine(None), predicate);
-        }
-
         match self
             .materialized_files()
             .and_then(|materialized_files| materialized_files.full_table_seed())
@@ -681,12 +655,7 @@ impl Snapshot {
         predicate: Option<PredicateRef>,
         stats_mode: FileStatsMode,
     ) -> SendableRBStream {
-        self.files_with_engine_materialized_with_skip_stats(
-            engine,
-            predicate,
-            stats_mode,
-            self.config.skip_stats,
-        )
+        self.files_with_engine_materialized_with_skip_stats(engine, predicate, stats_mode, false)
     }
 
     fn files_with_engine_materialized_with_skip_stats(
@@ -696,7 +665,6 @@ impl Snapshot {
         stats_mode: FileStatsMode,
         skip_stats: bool,
     ) -> SendableRBStream {
-        self.warn_if_skip_stats_with_predicate(&predicate, skip_stats);
         let scan = match self.scan_for_files(predicate, skip_stats, stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
@@ -750,21 +718,6 @@ impl Snapshot {
         };
 
         Ok(FileStatsMaterialization::compatibility(stats_projection))
-    }
-
-    fn warn_if_skip_stats_with_predicate(
-        &self,
-        predicate: &Option<PredicateRef>,
-        skip_stats: bool,
-    ) {
-        if self.config.skip_stats && skip_stats && predicate.is_some() {
-            tracing::warn!(
-                "`DeltaTable` was opened with `skip_stats=true`, but this query has \
-                 a predicate. Every file in the table will be scanned. To avoid \
-                 this, open a separate `DeltaTable` without `skip_stats=true` for \
-                 query workloads."
-            );
-        }
     }
 
     fn files_with_stats_policy(
@@ -867,7 +820,7 @@ impl Snapshot {
             existing_predicate,
             FileMaterializationOptions {
                 stats_mode,
-                skip_stats: self.config.skip_stats,
+                skip_stats: false,
             },
         )
     }
@@ -881,7 +834,6 @@ impl Snapshot {
         existing_predicate: Option<PredicateRef>,
         options: FileMaterializationOptions,
     ) -> SendableRBStream {
-        self.warn_if_skip_stats_with_predicate(&predicate, options.skip_stats);
         let scan = match self.scan_for_files(predicate, options.skip_stats, options.stats_mode) {
             Ok(scan) => scan,
             Err(err) => return Box::pin(once(ready(Err(err)))),
@@ -933,7 +885,6 @@ impl Snapshot {
     fn with_materialized_files(&self, materialized_files: Option<Arc<MaterializedFiles>>) -> Self {
         Self {
             inner: self.inner.clone(),
-            config: self.config.clone(),
             materialized_files,
         }
     }
@@ -1036,7 +987,12 @@ impl Snapshot {
                     Ok(None)
                 }
             })
-            .buffered(self.config.log_buffer_size)
+            .buffered(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1)
+                    * 4,
+            )
             .boxed())
     }
 
@@ -1310,7 +1266,6 @@ async fn read_last_checkpoint_version(
 pub(crate) async fn resolve_snapshot(
     log_store: &dyn LogStore,
     maybe_snapshot: Option<EagerSnapshot>,
-    require_files: bool,
     version: Option<Version>,
 ) -> DeltaResult<EagerSnapshot> {
     if let Some(snapshot) = maybe_snapshot {
@@ -1321,28 +1276,16 @@ pub(crate) async fn resolve_snapshot(
                 "Provided snapshot version does not match the requested version".to_string(),
             ));
         }
-        if require_files {
-            snapshot.with_files(log_store).await
-        } else {
-            Ok(snapshot)
-        }
+        snapshot.with_files(log_store).await
     } else {
-        let config = DeltaTableConfig {
-            require_files,
-            ..Default::default()
-        };
-        EagerSnapshot::try_new(log_store, config, version).await
+        EagerSnapshot::try_new(log_store, version).await
     }
 }
 
 impl EagerSnapshot {
     /// Create a new [`EagerSnapshot`] instance
-    pub async fn try_new(
-        log_store: &dyn LogStore,
-        config: DeltaTableConfig,
-        version: Option<Version>,
-    ) -> DeltaResult<Self> {
-        let snapshot = Snapshot::try_new(log_store, config.clone(), version).await?;
+    pub async fn try_new(log_store: &dyn LogStore, version: Option<Version>) -> DeltaResult<Self> {
+        let snapshot = Snapshot::try_new(log_store, version).await?;
         Self::try_new_with_snapshot(log_store, snapshot.into()).await
     }
 
@@ -1360,22 +1303,10 @@ impl EagerSnapshot {
     }
 
     pub(crate) async fn with_files(self, log_store: &dyn LogStore) -> DeltaResult<Self> {
-        if self.snapshot.materialized_files().is_some()
-            && self.snapshot.materialization_mode() == SnapshotMaterializationMode::Eager
-        {
+        if self.snapshot.materialized_files().is_some() {
             return Ok(self);
         }
-        let mut config = self.snapshot.config.clone();
-        config.require_files = true;
-        Self::try_new_with_snapshot(
-            log_store,
-            Snapshot {
-                config,
-                ..(*self.snapshot).clone()
-            }
-            .into(),
-        )
-        .await
+        Self::try_new_with_snapshot(log_store, self.snapshot).await
     }
 
     /// Update the snapshot to the given version
@@ -1441,11 +1372,6 @@ impl EagerSnapshot {
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
         self.snapshot.protocol()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
     }
 
     /// Well known table configuration
@@ -1564,7 +1490,7 @@ mod tests {
     // use super::replay::tests::test_log_replay;
     use super::*;
     use crate::{
-        DeltaTable, DeltaTableConfig, TableProperty, checkpoints,
+        DeltaTable, TableProperty, checkpoints,
         kernel::schema::partitions::{
             FilterOp, FilterValue, conjunction_to_kernel_predicate, dnf_to_kernel_predicate,
         },
@@ -1610,7 +1536,6 @@ mod tests {
             Ok((
                 Self {
                     inner: snapshot,
-                    config: Default::default(),
                     materialized_files: None,
                 },
                 log_store,
@@ -1914,7 +1839,7 @@ mod tests {
     fn snapshot_materialized_files_wire_mut(
         value: &mut serde_json::Value,
     ) -> &mut serde_json::Map<String, serde_json::Value> {
-        snapshot_wire_fields_mut(value)[10]
+        snapshot_wire_fields_mut(value)[9]
             .as_object_mut()
             .expect("materialized file cache wire must be an object")
     }
@@ -1963,7 +1888,7 @@ mod tests {
     async fn test_snapshot() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual = serde_json::from_slice::<'_, Snapshot>(&bytes);
@@ -2007,7 +1932,7 @@ mod tests {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
-            let snapshot = Snapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+            let snapshot = Snapshot::try_new(&log_store, Some(version)).await?;
             let batches = snapshot
                 .files(&log_store, None)
                 .try_collect::<Vec<_>>()
@@ -2022,7 +1947,7 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_try_materialized_log_data_requires_materialized_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
 
         assert!(matches!(
             snapshot.try_materialized_log_data(),
@@ -2035,7 +1960,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_capability_metadata_state_does_not_materialize_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
 
         let metadata = snapshot.metadata_state();
 
@@ -2051,7 +1976,7 @@ mod tests {
     async fn snapshot_capability_active_adds_without_stats_streams_from_lazy_snapshot() -> TestResult
     {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Some(12)).await?;
 
         let files: Vec<_> = snapshot
             .active_adds(
@@ -2071,119 +1996,10 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn snapshot_capability_explicit_stats_override_skip_stats() -> TestResult {
-        let (_table_dir, table) = selective_stats_table().await?;
-        let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(
-            log_store.as_ref(),
-            DeltaTableConfig {
-                require_files: false,
-                skip_stats: true,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-        let predicate: PredicateRef = Arc::new(Expression::column(["value"]).eq(Scalar::Long(1)));
-
-        for policy in [AddStatsPolicy::RawJson, AddStatsPolicy::Parsed] {
-            let files: Vec<_> = snapshot
-                .active_adds(
-                    log_store.as_ref(),
-                    ActiveAddOptions {
-                        predicate: Some(predicate.clone()),
-                        stats: policy,
-                    },
-                )
-                .try_collect()
-                .await?;
-
-            assert_eq!(files.len(), 1);
-            assert!(files[0].stats().is_some());
-            assert_eq!(files[0].num_records(), Some(3));
-            if matches!(policy, AddStatsPolicy::Parsed) {
-                assert!(files[0].min_values().is_some());
-                assert!(files[0].max_values().is_some());
-                assert!(files[0].null_counts().is_some());
-            }
-        }
-
-        assert!(!snapshot.has_materialized_files_for_test());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn snapshot_capability_required_stats_replay_when_cache_lacks_stats() -> TestResult {
-        let (_table_dir, table) = selective_stats_table().await?;
-        let log_store = table.log_store();
-        let snapshot = Arc::new(
-            Snapshot::try_new(
-                log_store.as_ref(),
-                DeltaTableConfig {
-                    skip_stats: true,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await?,
-        )
-        .ensure_materialized_files(log_store.as_ref())
-        .await?;
-        let original_cache = snapshot
-            .materialized_files()
-            .cloned()
-            .expect("expected a cache without stats");
-
-        #[cfg(feature = "datafusion")]
-        let required_policies = [AddStatsPolicy::RawJson, AddStatsPolicy::Parsed];
-        #[cfg(not(feature = "datafusion"))]
-        let required_policies = [AddStatsPolicy::Parsed];
-
-        for policy in required_policies {
-            let files: Vec<_> = snapshot
-                .active_adds(
-                    log_store.as_ref(),
-                    ActiveAddOptions {
-                        predicate: None,
-                        stats: policy,
-                    },
-                )
-                .try_collect()
-                .await?;
-
-            assert_eq!(files.len(), 1);
-            assert!(files[0].stats().is_some());
-            assert_eq!(files[0].num_records(), Some(3));
-            assert_eq!(
-                files[0].min_values().is_some(),
-                matches!(policy, AddStatsPolicy::Parsed)
-            );
-        }
-
-        let current_cache = snapshot
-            .materialized_files()
-            .expect("replay removed the existing cache");
-        assert!(Arc::ptr_eq(&original_cache, current_cache));
-        assert_eq!(
-            current_cache.policy,
-            MaterializedFilesPolicy::FullTableWithoutStats
-        );
-        assert!(
-            snapshot
-                .try_materialized_log_data()?
-                .iter()
-                .all(|file| file.stats().is_none())
-        );
-
-        Ok(())
-    }
-
     #[tokio::test]
     async fn snapshot_capability_active_add_batches_match_stream_adapter() -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Some(12)).await?;
         let options = ActiveAddOptions {
             predicate: None,
             stats: AddStatsPolicy::None,
@@ -2209,64 +2025,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn lazy_and_materialized_snapshots_return_same_active_files() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let lazy_config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let lazy = Snapshot::try_new(&log_store, lazy_config, None).await?;
-        let materialized = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
-            .ensure_materialized_files(&log_store)
-            .await?;
-
-        let lazy_paths = active_add_paths(&lazy, &log_store).await?;
-        let materialized_paths = active_add_paths(materialized.as_ref(), &log_store).await?;
-
-        assert_eq!(lazy_paths.len(), 5);
-        assert_eq!(lazy_paths, materialized_paths);
-        assert!(!lazy.has_materialized_files_for_test());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn lazy_snapshot_roundtrip_preserves_loading_policy_after_materialization() -> TestResult
-    {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
-            .ensure_materialized_files(&log_store)
-            .await?;
-
-        assert!(snapshot.has_materialized_files_for_test());
-        assert!(!snapshot.load_config().require_files);
-
-        let bytes = serde_json::to_vec(snapshot.as_ref())?;
-        let actual: Snapshot = serde_json::from_slice(&bytes)?;
-
-        assert!(actual.has_materialized_files_for_test());
-        assert!(!actual.load_config().require_files);
-
-        let eager = EagerSnapshot {
-            snapshot: Arc::new(actual),
-        }
-        .with_files(&log_store)
-        .await?;
-
-        assert!(eager.snapshot().load_config().require_files);
-        assert!(eager.snapshot().has_materialized_files_for_test());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn snapshot_filters_and_rebuilds_same_version_wrong_table_cache() -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let target = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let target = Snapshot::try_new(log_store.as_ref(), Some(12)).await?;
         let expected = active_add_paths(&target, log_store.as_ref()).await?;
 
         let mut mismatched_cache = MaterializedFiles::full(&target, vec![]);
@@ -2303,7 +2064,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_capability_active_tombstones_delegates_to_snapshot_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         let tombstones = snapshot
             .active_tombstones(log_store.as_ref())
@@ -2319,7 +2080,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_capability_conflict_read_set_replays_lazy_snapshot() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         let read_set = snapshot.conflict_read_set(log_store.as_ref()).await?;
 
@@ -2333,11 +2094,10 @@ mod tests {
     async fn snapshot_capability_conflict_read_set_matches_materialized_stats() -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let log_store = table.log_store();
-        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
-        let materialized =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let materialized = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         let lazy_read_set = lazy.conflict_read_set(log_store.as_ref()).await?;
         let materialized_read_set = materialized.conflict_read_set(log_store.as_ref()).await?;
@@ -2357,68 +2117,13 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn snapshot_capability_conflict_read_set_replays_when_cache_lacks_stats() -> TestResult {
-        let (_table_dir, table) = selective_stats_table().await?;
-        let log_store = table.log_store();
-        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
-        let materialized = Arc::new(
-            Snapshot::try_new(
-                log_store.as_ref(),
-                DeltaTableConfig {
-                    skip_stats: true,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await?,
-        )
-        .ensure_materialized_files(log_store.as_ref())
-        .await?;
-        let original_cache = materialized
-            .materialized_files()
-            .cloned()
-            .expect("expected a cache without stats");
-
-        let lazy_read_set = lazy.conflict_read_set(log_store.as_ref()).await?;
-        let materialized_read_set = materialized.conflict_read_set(log_store.as_ref()).await?;
-        let lazy_log_data = lazy_read_set.log_data();
-        let materialized_log_data = materialized_read_set.log_data();
-        let lazy_files = lazy_log_data.iter().collect_vec();
-        let materialized_files = materialized_log_data.iter().collect_vec();
-
-        assert_eq!(lazy_files.len(), 1);
-        assert_eq!(materialized_files.len(), 1);
-        assert_eq!(lazy_files[0].path_raw(), materialized_files[0].path_raw());
-        assert_eq!(lazy_files[0].stats(), materialized_files[0].stats());
-        assert_eq!(
-            lazy_files[0].min_values(),
-            materialized_files[0].min_values()
-        );
-        assert!(materialized_files[0].min_values().is_some());
-        assert!(Arc::ptr_eq(
-            &original_cache,
-            materialized
-                .materialized_files()
-                .expect("conflict replay removed the cache")
-        ));
-        assert!(
-            materialized
-                .try_materialized_log_data()?
-                .iter()
-                .all(|file| file.stats().is_none())
-        );
-
-        Ok(())
-    }
-
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn snapshot_capability_active_adds_raw_json_preserves_row_counts_and_raw_stats()
     -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         let files: Vec<_> = snapshot
             .active_adds(
@@ -2445,7 +2150,7 @@ mod tests {
     -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let (log_store, mut operations) = recording_log_store(table.log_store());
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
         let original_cache = snapshot
             .snapshot()
             .materialized_files()
@@ -2491,64 +2196,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn snapshot_capability_none_reuses_no_stats_cache() -> TestResult {
-        let (_table_dir, table) = selective_stats_table().await?;
-        let (log_store, mut operations) = recording_log_store(table.log_store());
-        let snapshot = Arc::new(
-            Snapshot::try_new(
-                log_store.as_ref(),
-                DeltaTableConfig {
-                    skip_stats: true,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await?,
-        )
-        .ensure_materialized_files(log_store.as_ref())
-        .await?;
-        let original_cache = snapshot
-            .materialized_files()
-            .cloned()
-            .expect("expected materialized state without stats");
-        assert_eq!(
-            original_cache.policy,
-            MaterializedFilesPolicy::FullTableWithoutStats
-        );
-        drain_recorded_ops(&mut operations).await;
-
-        let files: Vec<_> = snapshot
-            .active_adds(
-                log_store.as_ref(),
-                ActiveAddOptions {
-                    predicate: None,
-                    stats: AddStatsPolicy::None,
-                },
-            )
-            .try_collect()
-            .await?;
-
-        assert_eq!(
-            files.iter().map(|file| file.path_raw()).collect_vec(),
-            ["part-00000.snappy.parquet"]
-        );
-        assert!(files.iter().all(|file| file.stats().is_none()));
-        assert!(drain_recorded_ops(&mut operations).await.is_empty());
-        assert!(Arc::ptr_eq(
-            &original_cache,
-            snapshot
-                .materialized_files()
-                .expect("compatible read removed the cache")
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn snapshot_capability_active_adds_parsed_preserves_full_stats() -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         let files: Vec<_> = snapshot
             .active_adds(
@@ -2593,7 +2244,7 @@ mod tests {
         .await?;
 
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         let files: Vec<_> = snapshot
             .active_adds(
                 log_store.as_ref(),
@@ -2654,7 +2305,7 @@ mod tests {
         .await?;
 
         let log_store = table.log_store();
-        let lazy = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
         let materialized = Arc::new(lazy.clone())
             .ensure_materialized_files(log_store.as_ref())
             .await?;
@@ -2686,51 +2337,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn eager_without_files_returns_empty_log_data_and_replays_files() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-
-        let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
-
-        assert_eq!(snapshot.log_data().num_files(), 0);
-        assert_eq!(
-            active_add_paths(snapshot.snapshot(), &log_store)
-                .await?
-                .len(),
-            5
-        );
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_eager_snapshot_try_log_data_is_non_panicking_without_files() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-
-        let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
-
-        assert_eq!(snapshot.try_log_data()?.num_files(), 0);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_snapshot_roundtrip_preserves_materialized_state() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?)
             .ensure_materialized_files(&log_store)
             .await?;
 
         let value = serde_json::to_value(snapshot.as_ref())?;
-        assert_eq!(value[10]["policy"], json!("FullTablePreserveRaw"));
+        assert_eq!(value[9]["policy"], json!("FullTablePreserveRaw"));
 
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let actual: Snapshot = serde_json::from_slice(&bytes)?;
@@ -2763,10 +2377,9 @@ mod tests {
             )])
             .await?;
         let log_store = table.log_store();
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         assert!(snapshot.materialized_files().is_some());
         assert_eq!(snapshot.try_materialized_log_data()?.num_files(), 0);
@@ -2811,74 +2424,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_snapshot_wire_drops_cache_on_stats_policy_mismatch() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        for source_skip_stats in [false, true] {
-            let config = DeltaTableConfig {
-                skip_stats: source_skip_stats,
-                ..Default::default()
-            };
-            let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
-                .ensure_materialized_files(&log_store)
-                .await?;
-            let expected = active_add_paths(snapshot.as_ref(), &log_store).await?;
-            let mut value = serde_json::to_value(snapshot.as_ref())?;
-            snapshot_config_wire_mut(&mut value).insert(
-                "skipStats".to_string(),
-                serde_json::Value::Bool(!source_skip_stats),
-            );
-
-            let actual: Snapshot = serde_json::from_value(value)?;
-
-            assert!(actual.materialized_files().is_none());
-            assert_eq!(active_add_paths(&actual, &log_store).await?, expected);
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_snapshot_wire_preserves_cache_without_stats() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, config, None).await?)
-            .ensure_materialized_files(&log_store)
-            .await?;
-
-        let value = serde_json::to_value(snapshot.as_ref())?;
-        assert_eq!(value[10]["policy"], json!("FullTableWithoutStats"));
-
-        let bytes = serde_json::to_vec(snapshot.as_ref())?;
-        let actual: Snapshot = serde_json::from_slice(&bytes)?;
-        let materialized_files = actual
-            .materialized_files()
-            .expect("snapshot round trip lost the cache without stats");
-
-        assert_eq!(
-            materialized_files.policy,
-            MaterializedFilesPolicy::FullTableWithoutStats
-        );
-        assert!(
-            actual
-                .try_materialized_log_data()?
-                .iter()
-                .all(|file| file.stats().is_none())
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_snapshot_wire_drops_same_version_wrong_table_cache_before_batch_decode()
     -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(12)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
         let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
         let mut value = serde_json::to_value(snapshot.as_ref())?;
         let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
@@ -2909,15 +2460,12 @@ mod tests {
 
         let owner_log_store = owner_table.log_store();
         let foreign_log_store = foreign_table.log_store();
-        let owner =
-            Arc::new(Snapshot::try_new(owner_log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(owner_log_store.as_ref())
-                .await?;
-        let foreign = Arc::new(
-            Snapshot::try_new(foreign_log_store.as_ref(), Default::default(), None).await?,
-        )
-        .ensure_materialized_files(foreign_log_store.as_ref())
-        .await?;
+        let owner = Arc::new(Snapshot::try_new(owner_log_store.as_ref(), None).await?)
+            .ensure_materialized_files(owner_log_store.as_ref())
+            .await?;
+        let foreign = Arc::new(Snapshot::try_new(foreign_log_store.as_ref(), None).await?)
+            .ensure_materialized_files(foreign_log_store.as_ref())
+            .await?;
 
         assert_eq!(owner.version(), foreign.version());
         assert_ne!(owner.identity().table_root, foreign.identity().table_root);
@@ -2927,7 +2475,7 @@ mod tests {
 
         let mut owner_value = serde_json::to_value(owner.as_ref())?;
         let foreign_value = serde_json::to_value(foreign.as_ref())?;
-        owner_value[10] = foreign_value[10].clone();
+        owner_value[9] = foreign_value[9].clone();
         snapshot_materialized_files_wire_mut(&mut owner_value).remove("identity");
 
         let actual: Snapshot = serde_json::from_value(owner_value)?;
@@ -2954,15 +2502,12 @@ mod tests {
 
         let owner_log_store = owner_table.log_store();
         let foreign_log_store = foreign_table.log_store();
-        let owner =
-            Arc::new(Snapshot::try_new(owner_log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(owner_log_store.as_ref())
-                .await?;
-        let foreign = Arc::new(
-            Snapshot::try_new(foreign_log_store.as_ref(), Default::default(), None).await?,
-        )
-        .ensure_materialized_files(foreign_log_store.as_ref())
-        .await?;
+        let owner = Arc::new(Snapshot::try_new(owner_log_store.as_ref(), None).await?)
+            .ensure_materialized_files(owner_log_store.as_ref())
+            .await?;
+        let foreign = Arc::new(Snapshot::try_new(foreign_log_store.as_ref(), None).await?)
+            .ensure_materialized_files(foreign_log_store.as_ref())
+            .await?;
 
         assert_eq!(owner.version(), foreign.version());
         assert_ne!(owner.identity().table_root, foreign.identity().table_root);
@@ -2975,7 +2520,7 @@ mod tests {
         // persistence input, so this exact historical shape is accepted for compatibility.
         let mut owner_value = serde_json::to_value(owner.as_ref())?;
         let foreign_value = serde_json::to_value(foreign.as_ref())?;
-        owner_value[10] = foreign_value[10].clone();
+        owner_value[9] = foreign_value[9].clone();
         let materialized_files = snapshot_materialized_files_wire_mut(&mut owner_value);
         materialized_files.remove("identity");
         materialized_files.remove("policy");
@@ -3004,10 +2549,9 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_wire_drops_cache_on_snapshot_identity_mismatch() -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(12)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
         let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
 
         for field in ["checkpoint_version", "protocol", "metadata"] {
@@ -3059,7 +2603,7 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_wire_rejects_malformed_batches() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?)
             .ensure_materialized_files(&log_store)
             .await?;
         let mut value = serde_json::to_value(snapshot.as_ref())?;
@@ -3081,7 +2625,7 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_wire_drops_unknown_policy_or_scope_before_batch_decode() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?)
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?)
             .ensure_materialized_files(&log_store)
             .await?;
         let expected = active_add_paths(snapshot.as_ref(), &log_store).await?;
@@ -3106,10 +2650,9 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_wire_drops_cache_on_version_mismatch() -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(12)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
         let expected = active_add_paths(snapshot.as_ref(), log_store.as_ref()).await?;
         let mut value = serde_json::to_value(snapshot.as_ref())?;
         let materialized_files = snapshot_materialized_files_wire_mut(&mut value);
@@ -3133,7 +2676,7 @@ mod tests {
     async fn test_eager_snapshot() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
 
-        let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(&log_store, None).await?;
 
         let bytes = serde_json::to_vec(&snapshot).unwrap();
         let actual = serde_json::from_slice::<'_, EagerSnapshot>(&bytes);
@@ -3146,8 +2689,7 @@ mod tests {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
         for version in 0..=12 {
-            let snapshot =
-                EagerSnapshot::try_new(&log_store, Default::default(), Some(version)).await?;
+            let snapshot = EagerSnapshot::try_new(&log_store, Some(version)).await?;
             let batches: Vec<_> = snapshot.file_views(&log_store, None).try_collect().await?;
             assert_eq!(batches.len(), version as usize);
         }
@@ -3161,10 +2703,9 @@ mod tests {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(12)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
         drain_recorded_ops(&mut operations).await;
 
         let eager =
@@ -3183,7 +2724,7 @@ mod tests {
     #[tokio::test]
     async fn test_eager_snapshot_serde_is_wrapper_only() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(&log_store, None).await?;
 
         let value = serde_json::to_value(&snapshot)?;
         let elements = value.as_array().expect("expected eager snapshot sequence");
@@ -3192,56 +2733,6 @@ mod tests {
         let actual: EagerSnapshot = serde_json::from_value(value)?;
         assert_eq!(actual.version(), snapshot.version());
         assert_eq!(actual.metadata().id(), snapshot.metadata().id());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_eager_snapshot_serde_rejects_invalid_materialized_cache() -> TestResult {
-        let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
-        let value = serde_json::to_value(&snapshot)?;
-        let mut wrong_table = value.clone();
-        set_materialized_files_wire_table_root(eager_snapshot_materialized_files_wire_mut(
-            &mut wrong_table,
-        ));
-        let mut identityless = value;
-        eager_snapshot_materialized_files_wire_mut(&mut identityless).remove("identity");
-
-        for invalid_value in [wrong_table, identityless] {
-            let error = serde_json::from_value::<EagerSnapshot>(invalid_value)
-                .expect_err("eager snapshot accepted an incompatible materialized cache");
-
-            assert!(
-                error
-                    .to_string()
-                    .contains("cannot deserialize eager snapshot without valid materialized files")
-            );
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_eager_snapshot_deserializes_legacy_lazy_payload_without_cache() -> TestResult {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(&log_store, config, None).await?;
-        let mut snapshot_value = serde_json::to_value(snapshot.snapshot())?;
-        snapshot_value
-            .as_array_mut()
-            .expect("snapshot wire must be a sequence")
-            .pop();
-        let legacy = json!([snapshot_value, Vec::<u8>::new()]);
-
-        let actual: EagerSnapshot = serde_json::from_value(legacy)?;
-
-        assert!(!actual.snapshot().has_materialized_files_for_test());
-        assert_eq!(actual.try_log_data()?.num_files(), 0);
 
         Ok(())
     }
@@ -3256,8 +2747,7 @@ mod tests {
                 true,
             )])
             .await?;
-        let snapshot =
-            EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(table.log_store().as_ref(), None).await?;
         let legacy = legacy_eager_snapshot_payload(&snapshot);
 
         let actual: EagerSnapshot = serde_json::from_value(legacy)?;
@@ -3271,7 +2761,7 @@ mod tests {
     #[tokio::test]
     async fn test_eager_snapshot_legacy_serde_preserves_materialized_state() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(&log_store, None).await?;
 
         assert!(snapshot.snapshot().has_materialized_files_for_test());
 
@@ -3290,118 +2780,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_file_views_skip_stats_same_paths() -> TestResult {
-        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let skip_cfg = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let with_skip = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
-        let full = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
-        let mut paths_skip: Vec<String> = with_skip
-            .file_views(base.as_ref(), None)
-            .map_ok(|v| v.path().to_string())
-            .try_collect()
-            .await?;
-        let mut paths_full: Vec<String> = full
-            .file_views(base.as_ref(), None)
-            .map_ok(|v| v.path().to_string())
-            .try_collect()
-            .await?;
-        paths_skip.sort();
-        paths_full.sort();
-        assert_eq!(paths_skip, paths_full);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_skip_stats_leaves_stats_parsed_null() -> TestResult {
-        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-
-        let default_eager =
-            EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
-        let default_stats: Vec<bool> = default_eager
-            .file_views(base.as_ref(), None)
-            .map_ok(|view| view.stats().is_some())
-            .try_collect()
-            .await?;
-        assert!(!default_stats.is_empty());
-        assert!(default_stats.iter().any(|b| *b));
-
-        let skip_cfg = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let skip_eager = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
-        let skip_stats: Vec<Option<String>> = skip_eager
-            .file_views(base.as_ref(), None)
-            .map_ok(|view| view.stats())
-            .try_collect()
-            .await?;
-        assert!(!skip_stats.is_empty());
-        assert!(skip_stats.iter().all(|s| s.is_none()));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_skip_stats_with_predicate_keeps_stats_omitted() -> TestResult {
-        use delta_kernel::expressions::Scalar;
-
-        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-
-        let skip_cfg = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let snapshot = Snapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
-
-        let predicate: PredicateRef =
-            Arc::new(Expression::column(["value"]).gt(Scalar::String("".to_string())));
-
-        let stats: Vec<Option<String>> = snapshot
-            .file_views(base.as_ref(), Some(predicate))
-            .map_ok(|view| view.stats())
-            .try_collect()
-            .await?;
-
-        assert!(!stats.is_empty());
-        assert!(stats.iter().all(|stats| stats.is_none()));
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_eager_skip_stats_with_predicate_keeps_stats_omitted() -> TestResult {
-        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-
-        let skip_cfg = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(base.as_ref(), skip_cfg, Some(12)).await?;
-
-        let predicate: PredicateRef =
-            Arc::new(Expression::column(["value"]).gt(Scalar::String("".to_string())));
-
-        let stats: Vec<Option<String>> = snapshot
-            .file_views(base.as_ref(), Some(predicate))
-            .map_ok(|view| view.stats())
-            .try_collect()
-            .await?;
-
-        assert!(!stats.is_empty());
-        assert!(stats.iter().all(|stats| stats.is_none()));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn snapshot_no_predicate_scan_preserves_raw_stats_but_keeps_narrow_parsed_stats()
     -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         let batches: Vec<_> = snapshot
             .files(log_store.as_ref(), None)
@@ -3443,8 +2826,7 @@ mod tests {
     #[tokio::test]
     async fn eager_snapshot_materialized_files_keep_full_parsed_stats() -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
-        let eager =
-            EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let eager = EagerSnapshot::try_new(table.log_store().as_ref(), None).await?;
 
         let log_data = eager.log_data();
         let files = log_data.iter().collect::<Vec<_>>();
@@ -3471,8 +2853,7 @@ mod tests {
     #[tokio::test]
     async fn snapshot_predicate_scan_projects_only_required_stats_fields() -> TestResult {
         let (_table_dir, table) = selective_stats_table().await?;
-        let snapshot =
-            Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(table.log_store().as_ref(), None).await?;
         let predicate: PredicateRef = Arc::new(Expression::column(["value"]).eq(Scalar::Long(1)));
 
         let batches: Vec<_> = snapshot
@@ -3513,7 +2894,7 @@ mod tests {
     #[tokio::test]
     async fn test_materialized_files_full_table_seed_shares_batches() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let batch = RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty()));
         let materialized_files = MaterializedFiles::full(&snapshot, vec![batch]);
 
@@ -3536,166 +2917,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn skip_stats_cache_seeds_update_replay() -> TestResult {
-        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
-        let log_store = table.log_store();
-        let config = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(0)).await?;
-
-        let initial_cache = snapshot
-            .snapshot()
-            .materialized_files()
-            .expect("eager snapshot must contain materialized files");
-        assert_canonical_no_stats_cache(initial_cache);
-        assert!(
-            initial_cache.full_table_seed().is_some(),
-            "new cache without statistics must support replay"
-        );
-
-        append_test_add_with_stats(
-            &mut table,
-            "part-00001.snappy.parquet",
-            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
-        )
-        .await?;
-        snapshot.update(log_store.as_ref(), Some(1)).await?;
-
-        assert_eq!(snapshot.version(), 1);
-        let mut files: Vec<_> = snapshot
-            .file_views(log_store.as_ref(), None)
-            .try_collect()
-            .await?;
-        files.sort_by_key(|file| file.path().into_owned());
-        assert_eq!(
-            files.iter().map(|file| file.path()).collect_vec(),
-            ["part-00000.snappy.parquet", "part-00001.snappy.parquet"]
-        );
-        assert!(files.iter().all(|file| file.stats().is_none()));
-
-        let updated_cache = snapshot
-            .snapshot()
-            .materialized_files()
-            .expect("updated eager snapshot must retain materialized files");
-        assert_canonical_no_stats_cache(updated_cache);
-        assert!(
-            updated_cache.full_table_seed().is_some(),
-            "updated cache without statistics must support replay"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn legacy_skip_stats_cache_reads_current_files_and_rebuilds_for_update() -> TestResult {
-        let (_table_dir, mut table) = table_with_initial_stats_add().await?;
-        let (log_store, mut operations) = recording_log_store(table.log_store());
-        let config = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config.clone(), Some(0)).await?;
-        let current_cache = snapshot
-            .snapshot()
-            .materialized_files()
-            .expect("eager snapshot must contain materialized files");
-        let mut legacy_cache = current_cache.as_ref().clone();
-        legacy_cache.batches = current_cache
-            .batches
-            .iter()
-            .map(without_stats_field)
-            .collect::<DeltaResult<Vec<_>>>()?
-            .into();
-        assert!(
-            legacy_cache
-                .batches
-                .iter()
-                .any(|batch| batch.num_rows() > 0)
-        );
-        assert!(
-            legacy_cache.full_table_seed().is_none(),
-            "cache without a stats field cannot seed replay"
-        );
-
-        let zero_row_cache = MaterializedFiles {
-            batches: vec![legacy_cache.batches[0].slice(0, 0)].into(),
-            ..legacy_cache.clone()
-        };
-        assert!(
-            zero_row_cache.full_table_seed().is_none(),
-            "empty batch without a stats field cannot seed replay"
-        );
-
-        let empty_table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([StructField::new(
-                "id",
-                DataType::Primitive(PrimitiveType::Integer),
-                true,
-            )])
-            .await?;
-        let empty_snapshot = Snapshot::try_new(
-            empty_table.log_store().as_ref(),
-            config,
-            empty_table.version(),
-        )
-        .await?;
-        let zero_batch_cache = MaterializedFiles::full(&empty_snapshot, vec![]);
-        assert!(
-            zero_batch_cache.full_table_seed().is_some(),
-            "cache with no batches can seed replay"
-        );
-
-        let cached_snapshot = Arc::new(
-            snapshot
-                .snapshot()
-                .with_materialized_files(Some(Arc::new(legacy_cache))),
-        );
-        let mut legacy_snapshot = EagerSnapshot {
-            snapshot: cached_snapshot,
-        };
-        drain_recorded_ops(&mut operations).await;
-
-        let files: Vec<_> = legacy_snapshot
-            .file_views(log_store.as_ref(), None)
-            .try_collect()
-            .await?;
-        let read_ops = drain_recorded_ops(&mut operations).await;
-        assert_eq!(files.len(), 1);
-        assert!(files.iter().all(|file| file.stats().is_none()));
-        assert!(
-            read_ops.iter().all(|op| !op.is_log_replay_read()),
-            "current version read must use the legacy cache; operations: {read_ops:?}"
-        );
-
-        append_test_add_with_stats(
-            &mut table,
-            "part-00001.snappy.parquet",
-            r#"{"numRecords":1,"minValues":{"id":2},"maxValues":{"id":2},"nullCount":{"id":0}}"#,
-        )
-        .await?;
-        legacy_snapshot.update(log_store.as_ref(), Some(1)).await?;
-
-        assert_eq!(legacy_snapshot.version(), 1);
-        let replacement_cache = legacy_snapshot
-            .snapshot()
-            .materialized_files()
-            .expect("full replay must replace the legacy cache");
-        assert_canonical_no_stats_cache(replacement_cache);
-        assert!(replacement_cache.full_table_seed().is_some());
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_eager_file_views_reuses_materialized_files_same_version() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), Some(12)).await?;
 
         drain_recorded_ops(&mut operations).await;
 
@@ -3718,8 +2944,7 @@ mod tests {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let mut snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(11)).await?;
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), Some(11)).await?;
         snapshot.update(log_store.as_ref(), Some(12)).await?;
 
         drain_recorded_ops(&mut operations).await;
@@ -3743,7 +2968,7 @@ mod tests {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Some(12)).await?;
 
         drain_recorded_ops(&mut operations).await;
 
@@ -3766,8 +2991,7 @@ mod tests {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let mut snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(12)).await?;
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), Some(12)).await?;
 
         drain_recorded_ops(&mut operations).await;
 
@@ -3792,40 +3016,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_eager_update_without_initial_files_does_not_create_partial_cache() -> TestResult {
-        let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let (log_store, mut operations) = recording_log_store(base);
-
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, Some(11)).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        snapshot.update(log_store.as_ref(), Some(12)).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        drain_recorded_ops(&mut operations).await;
-
-        let file_views: Vec<_> = snapshot
-            .file_views(log_store.as_ref(), None)
-            .try_collect()
-            .await?;
-        let replay_ops = drain_recorded_ops(&mut operations).await;
-
-        assert_eq!(file_views.len(), 12);
-        assert!(
-            replay_ops.iter().any(|op| op.is_log_replay_read()),
-            "expected file_views() without cached files to replay log state, got {replay_ops:?}",
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_eager_file_views_reuses_materialized_files_with_partition_predicate() -> TestResult
     {
         let base = TestTables::Delta0_8_0Partitioned
@@ -3833,8 +3023,8 @@ mod tests {
             .build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
-        let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
 
         let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
@@ -3880,7 +3070,7 @@ mod tests {
         let base = TestTables::Delta0_8_0Partitioned
             .table_builder()?
             .build_storage()?;
-        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(base.as_ref(), None).await?;
 
         let dnf = vec![
             vec![
@@ -3925,7 +3115,7 @@ mod tests {
         let base = TestTables::Delta0_8_0Partitioned
             .table_builder()?
             .build_storage()?;
-        let snapshot = Snapshot::try_new(base.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(base.as_ref(), None).await?;
 
         let predicate = Arc::new(conjunction_to_kernel_predicate(
             &[
@@ -3975,7 +3165,7 @@ mod tests {
         let (_table_dir, table) = selective_stats_table().await?;
         let (log_store, mut operations) = recording_log_store(table.log_store());
 
-        let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
         drain_recorded_ops(&mut operations).await;
 
         let predicate: PredicateRef = Arc::new(Expression::column(["value"]).eq(Scalar::Long(1)));
@@ -4004,8 +3194,7 @@ mod tests {
         let version = table.version().unwrap();
         checkpoints::create_checkpoint(&table, None).await?;
 
-        let snapshot =
-            EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let snapshot = EagerSnapshot::try_new(table.log_store().as_ref(), None).await?;
         assert_eq!(snapshot.version(), version);
 
         let paths = eager_file_paths(&snapshot, table.log_store().as_ref()).await?;
@@ -4026,8 +3215,7 @@ mod tests {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let snapshot =
-            Snapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Some(version)).await?;
         assert_eq!(snapshot.version(), version);
         assert_eq!(snapshot.checkpoint_version(), None);
 
@@ -4046,7 +3234,7 @@ mod tests {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         assert_eq!(snapshot.version(), version);
         assert_eq!(snapshot.checkpoint_version(), None);
 
@@ -4066,8 +3254,7 @@ mod tests {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let mut snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), Some(version)).await?;
         let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), None);
 
@@ -4088,8 +3275,7 @@ mod tests {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let mut snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
         let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), None);
 
@@ -4108,10 +3294,9 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_update_latest_same_version_without_changes_reuses_arc() -> TestResult {
         let log_store = TestTables::Checkpoints.table_builder()?.build_storage()?;
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
         let prior_snapshot = snapshot.clone();
         let prior_materialized = snapshot
             .materialized_files()
@@ -4135,8 +3320,7 @@ mod tests {
         let (_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let mut snapshot =
-            EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        let mut snapshot = EagerSnapshot::try_new(log_store.as_ref(), Some(version)).await?;
 
         checkpoints::create_checkpoint(&table, None).await?;
         snapshot.update(log_store.as_ref(), Some(version)).await?;
@@ -4173,8 +3357,7 @@ mod tests {
         let (_table_dir, table) = checkpoint_rebase_table().await?;
         let version = table.version().unwrap();
         let log_store = table.log_store();
-        let snapshot =
-            Snapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), Some(version)).await?;
 
         checkpoints::create_checkpoint(&table, None).await?;
         let checkpoint_paths = checkpoint_file_paths(log_store.as_ref(), version).await?;
@@ -4202,10 +3385,10 @@ mod tests {
     async fn test_cached_parsed_batches_short_circuit_guards() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
-        let plain = Snapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let plain = Snapshot::try_new(base.as_ref(), Some(12)).await?;
         assert!(plain.cached_parsed_batches().is_none());
 
-        let eager = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let eager = EagerSnapshot::try_new(base.as_ref(), Some(12)).await?;
         let cached_stream = eager
             .snapshot()
             .cached_parsed_batches()
@@ -4230,14 +3413,14 @@ mod tests {
     async fn test_file_views_no_predicate_matches_fresh_replay() -> TestResult {
         let base = TestTables::Checkpoints.table_builder()?.build_storage()?;
 
-        let eager = EagerSnapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let eager = EagerSnapshot::try_new(base.as_ref(), Some(12)).await?;
         let eager_paths: Vec<String> = eager
             .file_views(base.as_ref(), None)
             .map_ok(|view| view.path_raw().to_string())
             .try_collect()
             .await?;
 
-        let plain = Snapshot::try_new(base.as_ref(), Default::default(), Some(12)).await?;
+        let plain = Snapshot::try_new(base.as_ref(), Some(12)).await?;
         let plain_paths: Vec<String> = plain
             .file_views(base.as_ref(), None)
             .map_ok(|view| view.path_raw().to_string())

@@ -381,15 +381,12 @@ impl RawDeltaTable {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None, skip_stats = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None))]
     fn new(
         py: Python,
         table_uri: &str,
         version: Option<Version>,
         storage_options: Option<HashMap<String, String>>,
-        without_files: bool,
-        log_buffer_size: Option<usize>,
-        skip_stats: bool,
     ) -> PyResult<Self> {
         py.detach(|| {
             let table_url = deltalake::table::builder::parse_table_uri(table_uri)
@@ -403,17 +400,6 @@ impl RawDeltaTable {
             }
             if let Some(version) = version {
                 builder = builder.with_version(version)
-            }
-            if without_files {
-                builder = builder.without_files()
-            }
-            if skip_stats {
-                builder = builder.with_skip_stats(true)
-            }
-            if let Some(buf_size) = log_buffer_size {
-                builder = builder
-                    .with_log_buffer_size(buf_size)
-                    .map_err(PythonError::from)?;
             }
 
             let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
@@ -461,19 +447,11 @@ impl RawDeltaTable {
     }
 
     pub(crate) fn has_files(&self) -> PyResult<bool> {
-        self.with_table(|t| Ok(t.config.require_files))
+        Ok(true)
     }
 
-    pub fn table_config(&self) -> PyResult<(bool, usize, bool)> {
-        self.with_table(|t| {
-            let config = t.config.clone();
-            // Require_files inverted to reflect without_files
-            Ok((
-                !config.require_files,
-                config.log_buffer_size,
-                config.skip_stats,
-            ))
-        })
+    pub fn table_config(&self) -> PyResult<()> {
+        Ok(())
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
@@ -649,7 +627,7 @@ impl RawDeltaTable {
         &self,
         file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
-        if !self.with_table(|t| Ok(t.config.require_files))? {
+        if !self.with_table(|_t| Ok(true))? {
             return Err(DeltaError::new_err("Table is initiated without files."));
         }
 
@@ -1895,13 +1873,9 @@ impl RawDeltaTable {
 
                         let new_state = if result > 0 {
                             Some(
-                                DeltaTableState::try_new(
-                                    &table.log_store(),
-                                    table.config.clone(),
-                                    table.version(),
-                                )
-                                .await
-                                .map_err(PythonError::from)?,
+                                DeltaTableState::try_new(&table.log_store(), table.version())
+                                    .await
+                                    .map_err(PythonError::from)?,
                             )
                         } else {
                             None
