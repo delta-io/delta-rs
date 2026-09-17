@@ -516,7 +516,7 @@ class DeltaTable:
             self._table.load_version(version)
         elif isinstance(version, datetime):
             if version.tzinfo is None:
-                version = version.astimezone(timezone.utc)
+                version = version.replace(tzinfo=timezone.utc)
             self._table.load_with_datetime(version.isoformat())
         elif isinstance(version, str):
             self._table.load_with_datetime(version)
