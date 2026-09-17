@@ -437,9 +437,11 @@ impl DeltaScanMetaStream {
     }
 
     /// Rows per emitted batch for one file: the session `batch_size`, reduced
-    /// when a single row's materialized bytes would overflow Arrow's 32-bit
-    /// offsets at that width. Partition values repeat per row, so probing a
-    /// single row measures the steady-state per-row cost exactly.
+    /// when a full-width batch of the materialized partition values would
+    /// approach [`MAX_META_BATCH_BYTES`]. The reduction only binds for wide
+    /// values at large configured batch sizes, since the per-row budget
+    /// shrinks as `batch_size` grows. Probing one row measures the per-row
+    /// bytes exactly because partition values repeat per row.
     fn chunk_rows_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {
         if let Some(selection) = self.selection_vectors.get(file_id) {
             let (_, padded_rows) = effective_row_count(row_count, selection.value(), file_id)?;
@@ -1008,41 +1010,21 @@ mod tests {
         );
         for batch in &batches {
             let parts = batch.column_by_name("part").expect("part column");
-            match parts.data_type() {
-                // Partition columns are dictionary wrapped; every key must
-                // point at the single repeated value.
-                DataType::Dictionary(_, _) => {
-                    let dict = parts
-                        .as_any()
-                        .downcast_ref::<DictionaryArray<UInt16Type>>()
-                        .expect("partition dictionaries use UInt16 keys");
-                    assert!(dict.keys().iter().flatten().all(|k| k == 0));
-                    let values = dict.values();
-                    let first = match values.data_type() {
-                        DataType::Utf8 => values.as_string::<i32>().value(0).to_owned(),
-                        DataType::LargeUtf8 => values.as_string::<i64>().value(0).to_owned(),
-                        DataType::Utf8View => values.as_string_view().value(0).to_owned(),
-                        other => panic!("unexpected dictionary value type: {other:?}"),
-                    };
-                    assert_eq!(first, value);
-                }
-                DataType::Utf8 => {
-                    let arr = parts.as_string::<i32>();
-                    assert_eq!(arr.value(0), value);
-                    assert_eq!(arr.value(batch.num_rows() - 1), value);
-                }
-                DataType::LargeUtf8 => {
-                    let arr = parts.as_string::<i64>();
-                    assert_eq!(arr.value(0), value);
-                    assert_eq!(arr.value(batch.num_rows() - 1), value);
-                }
-                DataType::Utf8View => {
-                    let arr = parts.as_string_view();
-                    assert_eq!(arr.value(0), value);
-                    assert_eq!(arr.value(batch.num_rows() - 1), value);
-                }
-                other => panic!("unexpected part column type: {other:?}"),
-            }
+            // Partition columns are dictionary wrapped; every key must point
+            // at the single repeated value.
+            let dict = parts
+                .as_any()
+                .downcast_ref::<DictionaryArray<UInt16Type>>()
+                .expect("partition dictionaries use UInt16 keys");
+            assert!(dict.keys().iter().flatten().all(|k| k == 0));
+            let values = dict.values();
+            let first = match values.data_type() {
+                DataType::Utf8 => values.as_string::<i32>().value(0).to_owned(),
+                DataType::LargeUtf8 => values.as_string::<i64>().value(0).to_owned(),
+                DataType::Utf8View => values.as_string_view().value(0).to_owned(),
+                other => panic!("unexpected dictionary value type: {other:?}"),
+            };
+            assert_eq!(first, value);
         }
 
         Ok(())
