@@ -124,8 +124,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;

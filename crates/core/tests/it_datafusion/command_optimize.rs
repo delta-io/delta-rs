@@ -860,7 +860,7 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
         inner: table.log_store(),
         calls: calls.clone(),
     });
-    let mut tracked_table = DeltaTable::new(tracked_log_store, Default::default());
+    let mut tracked_table = DeltaTable::new(tracked_log_store);
     tracked_table.load().await?;
     let df_context: SessionContext = DeltaSessionContext::default().into();
     let plan = create_merge_plan(

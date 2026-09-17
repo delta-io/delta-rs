@@ -259,8 +259,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let plan = this.create_fsck_plan(snapshot.snapshot()).await?;
             if this.dry_run {
@@ -310,11 +309,11 @@ mod tests {
     use object_store::{ObjectStoreExt as _, PutPayload};
 
     use super::*;
+    use crate::TableProperty;
     use crate::kernel::{
         DataType, DeletionVectorDescriptor, EagerSnapshot, PrimitiveType, Snapshot, StorageType,
         StructField,
     };
-    use crate::{DeltaTableConfig, TableProperty};
 
     async fn metadata_rich_missing_file_table() -> DeltaResult<(DeltaTable, Add)> {
         let mut source_add = crate::test_utils::make_test_add(
@@ -378,45 +377,6 @@ mod tests {
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()
             .map_err(Into::into)
-    }
-
-    #[tokio::test]
-    async fn fsck_plan_lazy_eager_parity_preserves_remove_metadata() -> DeltaResult<()> {
-        let (table, source_add) = metadata_rich_missing_file_table().await?;
-        let log_store = table.log_store();
-        let eager = EagerSnapshot::try_new(
-            log_store.as_ref(),
-            DeltaTableConfig {
-                skip_stats: true,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-        let lazy = Snapshot::try_new(
-            log_store.as_ref(),
-            DeltaTableConfig {
-                require_files: false,
-                skip_stats: true,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-        let builder = FileSystemCheckBuilder::new(log_store.clone(), None);
-
-        assert!(!lazy.has_materialized_files_for_test());
-        let eager_plan = builder.create_fsck_plan(eager.snapshot()).await?;
-        let lazy_plan = builder.create_fsck_plan(&lazy).await?;
-
-        let lazy_files = normalize_adds(lazy_plan.files_to_remove.clone())?;
-        assert_eq!(normalize_adds(eager_plan.files_to_remove)?, lazy_files);
-        let mut expected = source_add;
-        expected.stats = None;
-        assert_eq!(lazy_files, vec![serde_json::to_value(expected)?]);
-        assert!(!lazy.has_materialized_files_for_test());
-
-        Ok(())
     }
 
     #[cfg(feature = "datafusion")]
@@ -519,15 +479,7 @@ mod tests {
             assert_eq!(metrics.files_removed, vec![physical_path]);
             assert_eq!(table.snapshot()?.version(), version + 1);
 
-            let snapshot = Snapshot::try_new(
-                log_store.as_ref(),
-                DeltaTableConfig {
-                    require_files: false,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await?;
+            let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
             let active_files: Vec<_> = snapshot
                 .active_adds(
                     log_store.as_ref(),

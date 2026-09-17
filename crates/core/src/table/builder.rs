@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake_derive::DeltaConfig;
 use object_store::DynObjectStore;
-use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
 
@@ -29,69 +27,6 @@ pub enum DeltaVersion {
     Timestamp(DateTime<Utc>),
 }
 
-/// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize, Clone, DeltaConfig)]
-#[serde(rename_all = "camelCase")]
-pub struct DeltaTableConfig {
-    /// Indicates whether DeltaTable should track files.
-    /// This defaults to `true`
-    ///
-    /// Some append-only applications might have no need of tracking any files.
-    /// Hence, DeltaTable will be loaded with significant memory reduction.
-    pub require_files: bool,
-
-    /// Controls how many files to buffer from the commit log when updating the table.
-    /// This defaults to 4 * number of cpus
-    ///
-    /// Setting a value greater than 1 results in concurrent calls to the storage api.
-    /// This can decrease latency if there are many files in the log since the
-    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
-    /// also be considered for optimal performance.
-    pub log_buffer_size: usize,
-
-    /// Control the number of records to read / process from the commit / checkpoint files
-    /// when processing record batches.
-    pub log_batch_size: usize,
-
-    /// Skip parsing file statistics while opening the table.
-    /// This defaults to `false`.
-    ///
-    /// Use this option for maintenance and append workflows that do not need file pruning.
-    /// Queries with predicates scan each file because the kernel disables statistics and
-    /// partition pruning.
-    #[serde(default)]
-    pub skip_stats: bool,
-
-    #[serde(skip_serializing, skip_deserializing)]
-    #[delta(skip)]
-    /// When a runtime handler is provided, all IO tasks are spawn in that handle
-    pub io_runtime: Option<IORuntime>,
-}
-
-impl Default for DeltaTableConfig {
-    fn default() -> Self {
-        Self {
-            require_files: true,
-            log_buffer_size: std::thread::available_parallelism()
-                .map(|n| n.get())
-                .unwrap_or(1)
-                * 4,
-            log_batch_size: 1024,
-            skip_stats: false,
-            io_runtime: None,
-        }
-    }
-}
-
-impl PartialEq for DeltaTableConfig {
-    fn eq(&self, other: &Self) -> bool {
-        self.require_files == other.require_files
-            && self.log_buffer_size == other.log_buffer_size
-            && self.log_batch_size == other.log_batch_size
-            && self.skip_stats == other.skip_stats
-    }
-}
-
 /// builder for configuring a delta table load.
 #[derive(Debug)]
 pub struct DeltaTableBuilder {
@@ -104,7 +39,7 @@ pub struct DeltaTableBuilder {
     version: DeltaVersion,
     storage_options: Option<HashMap<String, String>>,
     allow_http: Option<bool>,
-    table_config: DeltaTableConfig,
+    io_runtime: Option<IORuntime>,
 }
 
 impl DeltaTableBuilder {
@@ -133,38 +68,14 @@ impl DeltaTableBuilder {
             version: DeltaVersion::default(),
             storage_options: None,
             allow_http: None,
-            table_config: DeltaTableConfig::default(),
+            io_runtime: None,
         })
-    }
-
-    /// Sets `require_files=false` to the builder
-    pub fn without_files(mut self) -> Self {
-        self.table_config.require_files = false;
-        self
-    }
-
-    /// Sets `skip_stats` to the builder. See [`DeltaTableConfig::skip_stats`]
-    /// for the impact on predicated queries.
-    pub fn with_skip_stats(mut self, skip_stats: bool) -> Self {
-        self.table_config.skip_stats = skip_stats;
-        self
     }
 
     /// Sets `version` to the builder
     pub fn with_version(mut self, version: Version) -> Self {
         self.version = DeltaVersion::Version(version);
         self
-    }
-
-    /// Sets `log_buffer_size` to the builder
-    pub fn with_log_buffer_size(mut self, log_buffer_size: usize) -> DeltaResult<Self> {
-        if log_buffer_size == 0 {
-            return Err(DeltaTableError::Generic(String::from(
-                "Log buffer size should be positive",
-            )));
-        }
-        self.table_config.log_buffer_size = log_buffer_size;
-        Ok(self)
     }
 
     /// specify the timestamp given as ISO-8601/RFC-3339 timestamp
@@ -241,7 +152,7 @@ impl DeltaTableBuilder {
 
     /// Provide a custom runtime handle or runtime config
     pub fn with_io_runtime(mut self, io_runtime: IORuntime) -> Self {
-        self.table_config.io_runtime = Some(io_runtime);
+        self.io_runtime = Some(io_runtime);
         self
     }
 
@@ -262,7 +173,7 @@ impl DeltaTableBuilder {
         debug!("build_storage() with {}", self.table_url);
 
         let mut storage_config = StorageConfig::parse_options(self.storage_options())?;
-        if let Some(io_runtime) = self.table_config.io_runtime.clone() {
+        if let Some(io_runtime) = self.io_runtime.clone() {
             storage_config = storage_config.with_io_runtime(io_runtime);
         }
 
@@ -284,7 +195,7 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> DeltaResult<DeltaTable> {
-        Ok(DeltaTable::new(self.build_storage()?, self.table_config))
+        Ok(DeltaTable::new(self.build_storage()?))
     }
 
     /// Build the [`DeltaTable`] and load its state
