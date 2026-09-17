@@ -9,6 +9,8 @@ search:
 
 ::: deltalake.write_deltalake
 
+::: deltalake.TableProperty
+
 ::: deltalake.BloomFilterProperties
 
 ::: deltalake.ColumnProperties
@@ -18,5 +20,4 @@ search:
 ## Convert to Delta Tables
 
 ::: deltalake.convert_to_deltalake
-
 
