@@ -271,7 +271,7 @@ class DeltaTable:
 
     @staticmethod
     def is_deltatable(
-        table_uri: str | Path | os.PathLike,
+        table_uri: str | Path | os.PathLike[str],
         storage_options: dict[str, str] | None = None,
     ) -> bool:
         """
