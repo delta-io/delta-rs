@@ -273,7 +273,7 @@ class RawDeltaTable:
     ) -> Any: ...
     def create_write_transaction(
         self,
-        add_actions: list[AddAction],
+        actions: list[AddAction | RemoveAction],
         mode: str,
         partition_by: list[str],
         schema: Schema,
@@ -1062,7 +1062,7 @@ class DeltaFileSystemHandler:
         """Open an output stream for sequential writing."""
 
 class PyQueryBuilder:
-    def __init__(self) -> None: ...
+    def __init__(self, session_config: dict[str, str] | None = None) -> None: ...
     def register(self, table_name: str, delta_table: RawDeltaTable) -> None: ...
     def execute(self, sql: str) -> RecordBatchReader: ...
 
@@ -1105,4 +1105,20 @@ class Transaction:
 
     def __init__(
         self, app_id: str, version: int, last_updated: int | None = None
+    ) -> None: ...
+
+class RemoveAction:
+    path: str
+    data_change: bool
+    deletion_timestamp: int
+    size: int | None
+    partition_values: dict[str, str | None] | None
+
+    def __init__(
+        self,
+        path: str,
+        data_change: bool,
+        deletion_timestamp: int,
+        size: int | None = None,
+        partition_values: dict[str, str | None] | None = None,
     ) -> None: ...
