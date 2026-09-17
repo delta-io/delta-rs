@@ -179,6 +179,21 @@ class Metadata:
 
 
 class TableProperty(str, Enum):
+    """Delta table property keys.
+
+    Use these values as keys in the `configuration` argument to
+    [write_deltalake][deltalake.write_deltalake].
+
+    Example:
+        ```python
+        write_deltalake(
+            "path/to/table",
+            data,
+            configuration={TableProperty.APPEND_ONLY: "true"},
+        )
+        ```
+    """
+
     APPEND_ONLY = "delta.appendOnly"
     AUTO_OPTIMIZE_AUTO_COMPACT = "delta.autoOptimize.autoCompact"
     AUTO_OPTIMIZE_OPTIMIZE_WRITE = "delta.autoOptimize.optimizeWrite"
