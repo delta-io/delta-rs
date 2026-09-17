@@ -1864,3 +1864,36 @@ def test_read_bool_stats_in_polars(tmp_path):
         assert pdf.schema["max.b"] is not None, (
             "The boolean column stats should be there"
         )
+
+
+# <https://github.com/delta-io/delta-rs/issues/1947>
+@pytest.mark.pyarrow
+def test_read_table_with_void_column(tmp_path):
+    import pyarrow as pa
+
+    data = pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int32()),
+            "v": pa.nulls(3, pa.null()),
+        }
+    )
+    write_deltalake(str(tmp_path), data)
+
+    dt = DeltaTable(str(tmp_path))
+    # void columns are preserved in the Delta metadata schema
+    assert json.loads(dt.schema().to_json())["fields"] == [
+        {"name": "id", "type": "integer", "nullable": True, "metadata": {}},
+        {"name": "v", "type": "void", "nullable": True, "metadata": {}},
+    ]
+
+    # schema().to_arrow() must not raise "Invalid data type for Arrow: void"
+    arrow_schema = dt.schema().to_arrow()
+    assert arrow_schema.field(0).name == "id"
+    assert arrow_schema.field(0).type == pa.int32()
+    assert arrow_schema.field(1).name == "v"
+    assert arrow_schema.field(1).type == pa.null()
+
+    # reads synthesize the void column as all-null (kernel null-on-read semantics)
+    expected = {"id": [1, 2, 3], "v": [None, None, None]}
+    assert dt.to_pyarrow_table().to_pydict() == expected
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected

@@ -65,9 +65,9 @@ percent-encoding-rfc3986 = { workspace = true }
 # runtime
 async-trait = { workspace = true }
 futures = { workspace = true }
-num_cpus = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
+    "io-util",
     "process",
     "rt",
     "rt-multi-thread",
@@ -86,6 +86,7 @@ cfg-if = "1"
 dashmap = "6"
 dirs = "6.0"
 either = "1.8"
+foldhash = "0.2"
 indexmap = "2.2.1"
 itertools = "0.14"
 parking_lot = "0.12"
@@ -93,7 +94,7 @@ percent-encoding = "2"
 pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
 rand = "0.10"
-sqlparser = { version = "0.61.0" }
+sqlparser = "0.62"
 humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 

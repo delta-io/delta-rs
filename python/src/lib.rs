@@ -41,8 +41,8 @@ use deltalake::errors::DeltaTableError;
 use deltalake::kernel::scalars::ScalarExt;
 use deltalake::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use deltalake::kernel::{
-    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Transaction,
-    Version,
+    Action, Add, EagerSnapshot, IsolationLevel, LogicalFileView, MetadataExt as _, Remove,
+    Transaction, Version,
 };
 use deltalake::lakefs::LakeFSCustomExecuteHandler;
 use deltalake::logstore::LogStoreRef;
@@ -157,7 +157,7 @@ struct RawDeltaTableMetaData {
 
 type StringVec = Vec<String>;
 
-const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 54;
+const REQUIRED_DATAFUSION_PY_MAJOR: u32 = 55;
 static FALLBACK_TASK_CTX_PROVIDER: OnceLock<Arc<SessionContext>> = OnceLock::new();
 const MAX_OPTIMIZE_TARGET_SIZE: u64 = i64::MAX as u64;
 
@@ -836,9 +836,14 @@ impl RawDeltaTable {
     ) -> PyResult<String> {
         let (table, metrics) = py.detach(|| {
             let table = self._table.lock().map_err(to_rt_err)?.clone();
-            let mut cmd = table
-                .optimize()
-                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+            let mut cmd =
+                table
+                    .optimize()
+                    .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(|| {
+                        std::thread::available_parallelism()
+                            .map(|n| n.get())
+                            .unwrap_or(1)
+                    }));
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {
                 let session =
@@ -915,7 +920,11 @@ impl RawDeltaTable {
             let mut cmd = table
                 .clone()
                 .optimize()
-                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
+                .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get())
+                        .unwrap_or(1)
+                }))
                 .with_type(OptimizeType::ZOrder(z_order_columns));
 
             if max_spill_size.is_some() || max_temp_directory_size.is_some() {
@@ -1633,7 +1642,7 @@ impl RawDeltaTable {
 
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
-        add_actions,
+        actions,
         mode,
         partition_by,
         schema,
@@ -1644,7 +1653,7 @@ impl RawDeltaTable {
     fn create_write_transaction(
         &self,
         py: Python,
-        add_actions: Vec<PyAddAction>,
+        actions: Vec<PyFileAction>,
         mode: &str,
         partition_by: Vec<String>,
         schema: PyRef<PySchema>,
@@ -1661,10 +1670,32 @@ impl RawDeltaTable {
                 Ok(snapshot.schema().clone())
             })?;
 
-            let mut actions: Vec<Action> = add_actions
+            let mut add_paths = HashSet::new();
+            let mut remove_paths = HashSet::new();
+            let mut commit_actions: Vec<Action> = actions
                 .iter()
-                .map(|add| Action::Add(add.into()))
+                .map(|action| match action {
+                    PyFileAction::Add(add) => {
+                        add_paths.insert(add.path.as_str());
+                        Action::Add(add.into())
+                    }
+                    PyFileAction::Remove(remove) => {
+                        remove_paths.insert(remove.path.as_str());
+                        Action::Remove(remove.into())
+                    }
+                })
                 .collect();
+
+            if let Some(path) = add_paths.intersection(&remove_paths).next() {
+                return Err(PyValueError::new_err(format!(
+                    "Cannot add and remove the same file path in one transaction: {path}"
+                )));
+            }
+            if !remove_paths.is_empty() && matches!(mode, SaveMode::Overwrite) {
+                return Err(PyValueError::new_err(
+                    "RemoveAction is not supported with mode='overwrite'; overwrite already removes the existing files that match the partition filters",
+                ));
+            }
 
             match mode {
                 SaveMode::Overwrite => {
@@ -1693,7 +1724,7 @@ impl RawDeltaTable {
 
                     for old_add in add_actions {
                         let remove_action = Action::Remove(old_add.remove_action(true));
-                        actions.push(remove_action);
+                        commit_actions.push(remove_action);
                     }
 
                     // Update metadata with new schema
@@ -1709,7 +1740,7 @@ impl RawDeltaTable {
                             .with_schema(&schema)
                             .map_err(DeltaTableError::from)
                             .map_err(PythonError::from)?;
-                        actions.push(Action::Metadata(metadata));
+                        commit_actions.push(Action::Metadata(metadata));
                     }
                 }
                 _ => {
@@ -1732,7 +1763,7 @@ impl RawDeltaTable {
 
             rt().block_on(
                 CommitBuilder::from(properties)
-                    .with_actions(actions)
+                    .with_actions(commit_actions)
                     .build(Some(&self.cloned_state()?), self.log_store()?, operation)
                     .into_future(),
             )
@@ -2799,6 +2830,12 @@ impl From<&PyAddAction> for Add {
 }
 
 #[derive(FromPyObject)]
+pub enum PyFileAction {
+    Remove(PyRemoveAction),
+    Add(PyAddAction),
+}
+
+#[derive(FromPyObject)]
 pub struct BloomFilterProperties {
     pub set_bloom_filter_enabled: Option<bool>,
     pub fpp: Option<f64>,
@@ -2884,6 +2921,84 @@ impl From<&PyTransaction> for Transaction {
             app_id: value.app_id.clone(),
             version: value.version,
             last_updated: value.last_updated,
+        }
+    }
+}
+
+#[derive(Clone)]
+#[pyclass(
+    name = "RemoveAction",
+    module = "deltalake._internal",
+    get_all,
+    from_py_object
+)]
+pub struct PyRemoveAction {
+    path: String,
+    data_change: bool,
+    deletion_timestamp: i64,
+    size: Option<i64>,
+    partition_values: Option<HashMap<String, Option<String>>>,
+}
+
+#[pymethods]
+impl PyRemoveAction {
+    #[new]
+    #[pyo3(signature = (path, data_change, deletion_timestamp, size = None, partition_values = None))]
+    fn new(
+        path: String,
+        data_change: bool,
+        deletion_timestamp: i64,
+        size: Option<i64>,
+        partition_values: Option<HashMap<String, Option<String>>>,
+    ) -> Self {
+        Self {
+            path,
+            data_change,
+            deletion_timestamp,
+            size,
+            partition_values,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        let partition_values = self.partition_values.as_ref().map_or_else(
+            || "None".to_owned(),
+            |values| {
+                let mut entries: Vec<_> = values.iter().collect();
+                entries.sort();
+                let entries: Vec<String> = entries
+                    .into_iter()
+                    .map(|(key, value)| match value {
+                        Some(value) => format!("'{key}': '{value}'"),
+                        None => format!("'{key}': None"),
+                    })
+                    .collect();
+                format!("{{{}}}", entries.join(", "))
+            },
+        );
+        format!(
+            "RemoveAction(path={}, data_change={}, deletion_timestamp={}, size={}, partition_values={})",
+            self.path,
+            if self.data_change { "True" } else { "False" },
+            self.deletion_timestamp,
+            self.size.map_or("None".to_owned(), |n| n.to_string()),
+            partition_values,
+        )
+    }
+}
+
+impl From<&PyRemoveAction> for Remove {
+    fn from(action: &PyRemoveAction) -> Self {
+        Remove {
+            path: action.path.clone(),
+            data_change: action.data_change,
+            deletion_timestamp: Some(action.deletion_timestamp),
+            extended_file_metadata: Some(
+                action.size.is_some() && action.partition_values.is_some(),
+            ),
+            partition_values: action.partition_values.clone(),
+            size: action.size,
+            ..Default::default()
         }
     }
 }
@@ -3346,6 +3461,7 @@ fn _internal(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyQueryBuilder>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyTransaction>()?;
+    m.add_class::<PyRemoveAction>()?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;

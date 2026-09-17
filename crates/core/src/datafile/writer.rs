@@ -7,15 +7,20 @@ use std::sync::OnceLock;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
+use bytes::Bytes;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
+use futures::future::BoxFuture;
 use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
+use parquet::arrow::async_writer::AsyncFileWriter;
 use parquet::basic::Compression;
+use parquet::errors::ParquetError;
 use parquet::file::properties::WriterProperties;
+use tokio::io::AsyncWriteExt as _;
 use tokio::task::JoinSet;
 use tracing::*;
 
@@ -24,7 +29,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
 use crate::parquet_utils::default_writer_properties;
-use crate::writer::record_batch::{PartitionResult, divide_by_partition_values};
+use crate::writer::partition_split::{PartitionResult, divide_by_partition_values};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
@@ -104,7 +109,7 @@ fn roll_on_row_group_boundary_default() -> bool {
 /// Upload a parquet file to object store and return metadata for creating an Add action
 #[instrument(skip(arrow_writer), fields(rows = 0, size = 0))]
 async fn upload_parquet_file(
-    mut arrow_writer: AsyncArrowWriter<BufWriter>,
+    mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
     path: Path,
 ) -> DeltaResult<(Path, usize, ParquetMetaData)> {
     let metadata = match arrow_writer.finish().await {
@@ -439,7 +444,7 @@ impl DeltaWriter {
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
         // The common (unpartitioned) case has a single writer; close it directly and
-        // skip the concurrent-fan-out machinery (and the `num_cpus` probe).
+        // skip the concurrent-fan-out machinery (and the `available_parallelism` probe).
         if writers.len() <= 1 {
             let mut actions = Vec::new();
             for (_, writer) in writers {
@@ -452,7 +457,11 @@ impl DeltaWriter {
         // while completed files are orphans it can reclaim.
         let mut close_stream = futures::stream::iter(writers)
             .map(|(_, writer)| writer.close())
-            .buffered(num_cpus::get());
+            .buffered(
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(1),
+            );
         let mut actions = Vec::new();
         let mut first_err: Option<DeltaTableError> = None;
         while let Some(result) = close_stream.next().await {
@@ -611,21 +620,58 @@ impl PartitionWriterConfig {
     }
 }
 
+/// [`ParquetObjectWriter`] for writing to parquet to an [`object_store::ObjectStore`].
+///
+/// Copied from parquet 59.2, which deprecated it in favor of passing a
+/// [`BufWriter`] to [`AsyncArrowWriter`] directly (apache/arrow-rs#10354). That
+/// route goes through `AsyncWrite`; this one keeps [`BufWriter::put`], which
+/// "can write data without extra copying".
+struct ParquetObjectWriter(BufWriter);
+
+impl ParquetObjectWriter {
+    /// Abort the in-progress multipart upload, if any.
+    async fn abort(&mut self) -> object_store::Result<()> {
+        self.0.abort().await
+    }
+}
+
+impl AsyncFileWriter for ParquetObjectWriter {
+    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            self.0
+                .put(bs)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        })
+    }
+
+    fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
+        Box::pin(async move {
+            self.0
+                .shutdown()
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))
+        })
+    }
+}
+
 enum LazyArrowWriter {
     Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
-    Writing(Path, AsyncArrowWriter<BufWriter>),
+    Writing(Path, AsyncArrowWriter<ParquetObjectWriter>),
 }
 
 impl LazyArrowWriter {
     async fn write_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
         match self {
             LazyArrowWriter::Initialized(path, object_store, config) => {
-                let writer = BufWriter::with_capacity(
-                    Arc::clone(object_store),
-                    path.clone(),
-                    upload_part_size(),
-                )
-                .with_max_concurrency(config.max_concurrency_tasks);
+                let writer = ParquetObjectWriter(
+                    BufWriter::with_capacity(
+                        Arc::clone(object_store),
+                        path.clone(),
+                        upload_part_size(),
+                    )
+                    .with_max_concurrency(config.max_concurrency_tasks),
+                );
                 let mut arrow_writer = AsyncArrowWriter::try_new(
                     writer,
                     config.file_schema.clone(),
