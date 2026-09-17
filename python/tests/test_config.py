@@ -1,6 +1,7 @@
 import pytest
+from arro3.core import Table
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, TableProperty, write_deltalake
 
 
 @pytest.mark.parametrize(
@@ -30,3 +31,15 @@ def test_deprecated_load_options_are_ignored(tmp_path, sample_table, options):
         value is not None
         for value in expected_actions.column("num_records").to_pylist()
     )
+
+
+def test_table_property_as_configuration_key(tmp_path, sample_table: Table):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        configuration={TableProperty.APPEND_ONLY: "true"},
+    )
+
+    configuration = DeltaTable(tmp_path).metadata().configuration
+
+    assert configuration[TableProperty.APPEND_ONLY.value] == "true"
