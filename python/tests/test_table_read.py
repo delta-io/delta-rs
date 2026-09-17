@@ -1353,8 +1353,14 @@ def test_read_table_last_checkpoint_not_updated():
     assert dt.version() == 3
 
 
-def test_is_deltatable_valid_path():
-    table_path = "../crates/test/tests/data/simple_table"
+@pytest.mark.parametrize(
+    "table_path",
+    [
+        "../crates/test/tests/data/simple_table",
+        Path("../crates/test/tests/data/simple_table"),
+    ],
+)
+def test_is_deltatable_valid_path(table_path: str | Path):
     assert DeltaTable.is_deltatable(table_path)
 
 
