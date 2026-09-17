@@ -24,7 +24,7 @@ def convert_to_deltalake(
     uri: str | Path,
     mode: Literal["error", "ignore"] = "error",
     partition_by: Schema | None = None,
-    partition_strategy: Literal["hive"] | None = None,
+    partition_strategy: Literal["hive", "directory"] | None = None,
     name: str | None = None,
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
@@ -36,14 +36,15 @@ def convert_to_deltalake(
     """
     `Convert` parquet tables `to delta` tables.
 
-    Currently only HIVE partitioned tables are supported. `Convert to delta` creates
-    a transaction log commit with add actions, and additional properties provided such
-    as configuration, name, and description.
+    `Convert to delta` creates a transaction log commit with add actions, and additional
+    properties provided such as configuration, name, and description.
 
     Args:
         uri: URI of a table.
-        partition_by: Optional partitioning schema if table is partitioned.
-        partition_strategy: Optional partition strategy to read and convert
+        partition_by: Optional partitioning schema if table is partitioned. With the
+            `directory` strategy, the fields are mapped in order onto the directories of each file path.
+        partition_strategy: Optional partition strategy to read and convert. `hive` for paths like
+            `year=2020/month=1/part-0.parquet`, `directory` for paths like `2020/1/part-0.parquet`.
         mode: How to handle existing data. Default is to error if table already exists.
             If 'ignore', will not convert anything if table already exists.
         name: User-provided identifier for this table.
@@ -59,10 +60,11 @@ def convert_to_deltalake(
     if partition_by is not None and partition_strategy is None:
         raise ValueError("Partition strategy has to be provided with partition_by.")
 
-    if partition_strategy is not None and partition_strategy != "hive":
-        raise ValueError(
-            "Currently only `hive` partition strategy is supported to be converted."
-        )
+    if partition_strategy is not None and partition_strategy not in (
+        "hive",
+        "directory",
+    ):
+        raise ValueError("Partition strategy must be `hive` or `directory`.")
 
     if mode == "ignore" and try_get_deltatable(uri, storage_options) is not None:
         return
