@@ -164,7 +164,7 @@ def test_load_as_version_datetime_without_timezone(
     tmp_path: Path, sample_table: Table, monkeypatch: pytest.MonkeyPatch, tz: str
 ):
     if not hasattr(time, "tzset"):
-        pytest.skip("time.tzset is not avaiable on this platform")
+        pytest.skip("time.tzset is not available on this platform")
 
     for mode in ["error", "append", "append"]:
         write_deltalake(tmp_path, data=sample_table, mode=mode)
