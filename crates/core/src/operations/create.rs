@@ -306,7 +306,7 @@ impl CreateBuilder {
         let (storage_url, table) = if let Some(log_store) = self.log_store {
             (
                 normalize_table_url(log_store.root_url()),
-                DeltaTable::new(log_store, Default::default()),
+                DeltaTable::new(log_store),
             )
         } else {
             let storage_url =

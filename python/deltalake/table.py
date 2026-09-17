@@ -270,9 +270,6 @@ class DeltaTable:
             str(table_uri),
             version=version,
             storage_options=storage_options,
-            without_files=without_files,
-            log_buffer_size=log_buffer_size,
-            skip_stats=skip_stats,
         )
 
     @property

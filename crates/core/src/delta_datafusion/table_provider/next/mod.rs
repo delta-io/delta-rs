@@ -1451,7 +1451,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_into_serde_roundtrip_is_read_only() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_log_store(log_store.clone())
@@ -1484,7 +1484,7 @@ mod tests {
     #[tokio::test]
     async fn test_delta_scan_serde_accepts_missing_file_selection_field() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).build().await?;
         let mut serialized = serde_json::to_value(&provider)?;
 
@@ -1501,7 +1501,7 @@ mod tests {
     #[tokio::test]
     async fn test_query_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());
@@ -1522,10 +1522,9 @@ mod tests {
     async fn test_query_materialized_snapshot_avoids_log_replay() -> TestResult {
         let base = TestTables::Simple.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), None).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         drain_recorded_ops(&mut operations).await;
 
@@ -1560,10 +1559,9 @@ mod tests {
             .build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
 
-        let snapshot =
-            Arc::new(Snapshot::try_new(log_store.as_ref(), Default::default(), Some(9)).await?)
-                .ensure_materialized_files(log_store.as_ref())
-                .await?;
+        let snapshot = Arc::new(Snapshot::try_new(log_store.as_ref(), Some(9)).await?)
+            .ensure_materialized_files(log_store.as_ref())
+            .await?;
 
         let bytes = serde_json::to_vec(snapshot.as_ref())?;
         let snapshot: Snapshot = serde_json::from_slice(&bytes)?;
@@ -1713,7 +1711,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_simple_table() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::builder().with_snapshot(snapshot).await?;
 
         let session = Arc::new(create_session().into_inner());
@@ -1790,7 +1788,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
         let total_file_count = snapshot
             .file_views(log_store.as_ref(), None)
@@ -1864,7 +1862,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_from_file_paths_reads_selected_file() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
 
@@ -1926,7 +1924,7 @@ mod tests {
             .with_save_mode(crate::protocol::SaveMode::Overwrite)
             .await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
 
         let views = snapshot
             .file_views(log_store.as_ref(), None)
@@ -1987,7 +1985,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_applies_deletion_vectors() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2049,7 +2047,7 @@ mod tests {
     async fn test_scan_with_file_selection_mutated_add_uses_snapshot_deletion_vector_metadata()
     -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
 
         let (mut selected_add, expected_raw_rows, deleted_rows) = snapshot
             .file_views(log_store.as_ref(), None)
@@ -2101,7 +2099,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_strict_missing_files_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2138,7 +2136,7 @@ mod tests {
     #[tokio::test]
     async fn test_scan_with_file_selection_missing_policy_ignore_skips_missing() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let table_root = snapshot.inner.table_root().clone();
 
         let session = Arc::new(create_session().into_inner());
@@ -2173,7 +2171,7 @@ mod tests {
     async fn test_scan_with_empty_file_selection_returns_empty_scan() -> TestResult {
         let base = TestTables::Simple.table_builder()?.build_storage()?;
         let (log_store, mut operations) = recording_log_store(base);
-        let snapshot = Snapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         drain_recorded_ops(&mut operations).await;
 
         let session = Arc::new(create_session().into_inner());
@@ -2224,7 +2222,7 @@ mod tests {
     async fn test_scan_with_duplicate_file_selection_deduplicates() -> TestResult {
         let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2315,7 +2313,7 @@ mod tests {
     async fn test_selected_active_file_pruned_by_data_skipping_returns_empty_scan() -> TestResult {
         let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
         let log_store = table.log_store();
-        let snapshot = Arc::new(Snapshot::try_new(&log_store, Default::default(), None).await?);
+        let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2597,7 +2595,7 @@ mod tests {
         use datafusion::common::stats::Precision;
 
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2632,7 +2630,7 @@ mod tests {
     #[tokio::test]
     async fn test_count_star_excludes_deleted_rows() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2658,7 +2656,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_with_dv_table() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2677,7 +2675,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_selects_dv_file() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let expected = expected_dv_small()?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
             .with_file_paths([expected[0].filepath.clone()]);
@@ -2694,7 +2692,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_without_dv_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let selected_path = snapshot
             .file_views(log_store.as_ref(), None)
             .take(1)
@@ -2720,7 +2718,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_strict_missing_errors() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
@@ -2742,7 +2740,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_file_selection_ignore_missing_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let table_root = snapshot.inner.table_root().clone();
         let missing_path = table_root.join("__does_not_exist__.parquet")?.to_string();
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?
@@ -2763,7 +2761,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_without_dv_table_is_empty() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(snapshot, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2796,7 +2794,7 @@ mod tests {
     #[tokio::test]
     async fn test_deletion_vectors_with_eager_snapshot() -> TestResult {
         let log_store = TestTables::WithDvSmall.table_builder()?.build_storage()?;
-        let eager = EagerSnapshot::try_new(&log_store, Default::default(), None).await?;
+        let eager = EagerSnapshot::try_new(&log_store, None).await?;
         let provider = DeltaScan::new(eager, DeltaScanConfig::default())?;
 
         let session = Arc::new(create_session().into_inner());
@@ -2813,7 +2811,7 @@ mod tests {
     async fn test_deletion_vectors_scan() -> TestResult<()> {
         let mut table = open_fs_path("../test/tests/data/table_with_deletion_logs");
         table.load().await?;
-        let fresh = Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let fresh = Snapshot::try_new(table.log_store().as_ref(), None).await?;
         let session = Arc::new(create_session().into_inner());
         let state = session.state_ref().read().clone();
         let mut expected = vec![true; 100];

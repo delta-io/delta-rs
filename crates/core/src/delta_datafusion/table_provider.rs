@@ -400,9 +400,7 @@ impl TableProviderBuilder {
             None => {
                 if let Some(log_store) = log_store.as_ref() {
                     SnapshotWrapper::Snapshot(
-                        Snapshot::try_new(log_store, Default::default(), table_version)
-                            .await?
-                            .into(),
+                        Snapshot::try_new(log_store, table_version).await?.into(),
                     )
                 } else {
                     return Err(DataFusionError::Plan(
@@ -728,7 +726,7 @@ mod tests {
     use crate::test_utils::object_store::{
         drain_recorded_object_store_operations as drain_recorded_ops, recording_log_store,
     };
-    use crate::{DeltaTable, DeltaTableConfig, DeltaTableError};
+    use crate::{DeltaTable, DeltaTableError};
     use arrow::array::{ArrayRef, Int64Array, StringArray, StringViewArray};
     use arrow::datatypes::{DataType as ArrowDataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -909,7 +907,7 @@ mod tests {
             .unwrap();
         let (log_store, mut operations) = recording_log_store(base);
 
-        let mut table = DeltaTable::new(log_store.clone(), DeltaTableConfig::default());
+        let mut table = DeltaTable::new(log_store.clone());
         table.load().await.unwrap();
 
         drain_recorded_ops(&mut operations).await;
@@ -1047,7 +1045,7 @@ mod tests {
             .build_storage()
             .unwrap();
         let snapshot = Arc::new(
-            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::Snapshot::try_new(&log_store, None)
                 .await
                 .unwrap(),
         );

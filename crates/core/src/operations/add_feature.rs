@@ -169,8 +169,7 @@ impl std::future::IntoFuture for AddTableFeatureBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             if this.name.is_empty() {
                 return Err(DeltaTableError::Generic("No features provided".to_string()));

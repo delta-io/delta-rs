@@ -121,8 +121,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             if snapshot
                 .snapshot()
                 .metadata_state()
@@ -166,7 +165,7 @@ impl std::future::IntoFuture for AddColumnBuilder {
 #[cfg(test)]
 mod tests {
     use crate::kernel::{DataType, PrimitiveType};
-    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
+    use crate::writer::test_utils::TestResult;
 
     use super::*;
 
@@ -176,29 +175,5 @@ mod tests {
 
     fn added_field() -> StructField {
         StructField::new("added", DataType::Primitive(PrimitiveType::String), true)
-    }
-
-    #[tokio::test]
-    async fn add_column_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        AddColumnBuilder::new(log_store, Some(snapshot.clone()))
-            .with_fields([added_field()])
-            .await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
     }
 }

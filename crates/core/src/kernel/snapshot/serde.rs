@@ -14,8 +14,6 @@ use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
 use url::Url;
 
-use crate::DeltaTableConfig;
-
 use super::{
     EagerSnapshot, MaterializedFiles, MaterializedFilesPolicy, MaterializedFilesScope, Snapshot,
     SnapshotIdentity, SnapshotMaterializationMode,
@@ -282,7 +280,6 @@ impl Serialize for Snapshot {
         seq.serialize_element(&latest_crc_file)?;
         seq.serialize_element(&latest_commit_file)?;
 
-        seq.serialize_element(&self.config)?;
         let materialized_files = self
             .materialized_files()
             .map(|value| MaterializedFilesWire::try_from_materialized(value))
@@ -364,10 +361,35 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
         let latest_commit_file: Option<FileMetaSerde> = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(8, &self))?;
-        let config: DeltaTableConfig = seq
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(9, &self))?;
-        let materialized_files: Option<MaterializedFilesWire> = seq.next_element()?.unwrap_or(None);
+        // Position 9 is either MaterializedFilesWire (new format) or the old DeltaTableConfig
+        // (format before DeltaTableConfig removal). Detect by trying to parse as Value first,
+        // then attempting MaterializedFilesWire deserialization only if it looks like the new format.
+        let pos9: Option<serde_json::Value> = seq.next_element()?.unwrap_or(None);
+        let (materialized_files, extra_slot) = match pos9 {
+            None => (None, false),
+            Some(v) => {
+                // Old config format had camelCase keys: requireFiles, logBufferSize, etc.
+                // New materialized_files format has: identity, policy, batches, etc.
+                let is_old_config = v.get("requireFiles").is_some()
+                    || v.get("require_files").is_some()
+                    || v.get("logBufferSize").is_some();
+                if is_old_config {
+                    // Old format: config was at 9, materialized_files at 10
+                    (None, true)
+                } else {
+                    // New format: materialized_files at 9
+                    let mf: Option<MaterializedFilesWire> =
+                        serde_json::from_value(v).map_err(de::Error::custom)?;
+                    (mf, false)
+                }
+            }
+        };
+        let materialized_files = if extra_slot {
+            // Old format: read position 10 as materialized_files
+            seq.next_element()?.unwrap_or(None)
+        } else {
+            materialized_files
+        };
 
         let ascending_commit_files = ascending_commit_files
             .into_iter()
@@ -435,7 +457,6 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         let snapshot = Snapshot {
             inner: Arc::new(snapshot),
-            config,
             materialized_files: None,
         };
         let materialized_files = materialized_files
@@ -499,13 +520,6 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
                 }
                 _ => snapshot,
             };
-        if snapshot.materialization_mode() == SnapshotMaterializationMode::Eager
-            && snapshot.materialized_files().is_none()
-        {
-            return Err(de::Error::custom(
-                "cannot deserialize eager snapshot without valid materialized files",
-            ));
-        }
         Ok(EagerSnapshot { snapshot })
     }
 }
