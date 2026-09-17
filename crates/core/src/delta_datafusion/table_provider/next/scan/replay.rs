@@ -388,6 +388,7 @@ impl ScanFileContext {
 }
 
 /// Metadata to read a data file from object storage.
+#[derive(Debug)]
 struct ScanFileContextInner {
     /// Fully qualified URL of the file.
     pub file_url: Url,
