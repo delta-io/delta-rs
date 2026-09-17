@@ -5,6 +5,7 @@ from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
+import time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -157,6 +158,34 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     dt = DeltaTable(table_path)
     dt.load_as_version(datetime.fromisoformat(date_value))
     assert dt.version() == expected_version
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
+def test_load_as_version_datetime_without_timezone(
+    tmp_path: Path, sample_table: Table, monkeypatch: pytest.MonkeyPatch, tz: str
+):
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is not avaiable on this platform")
+
+    for mode in ["error", "append", "append"]:
+        write_deltalake(tmp_path, data=sample_table, mode=mode)
+
+    log_path = tmp_path / "_delta_log"
+    log_mtime_pairs = [
+        ("00000000000000000000.json", datetime(2020, 1, 1, 0, tzinfo=timezone.utc)),
+        ("00000000000000000001.json", datetime(2020, 1, 1, 8, tzinfo=timezone.utc)),
+        ("00000000000000000002.json", datetime(2020, 1, 1, 18, tzinfo=timezone.utc)),
+    ]
+    for file_name, dt in log_mtime_pairs:
+        ts = dt.timestamp()
+        os.utime(log_path / file_name, (ts, ts))
+
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+
+    dt = DeltaTable(tmp_path)
+    dt.load_as_version(datetime(2020, 1, 1, 12))
+
+    assert dt.version() == 1
 
 
 @pytest.mark.parametrize(
