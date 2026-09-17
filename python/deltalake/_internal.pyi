@@ -353,7 +353,7 @@ def write_to_deltalake(
 def convert_to_deltalake(
     uri: str,
     partition_schema: Schema | None,
-    partition_strategy: Literal["hive"] | None,
+    partition_strategy: Literal["hive", "directory"] | None,
     name: str | None,
     description: str | None,
     configuration: Mapping[str, str | None] | None,

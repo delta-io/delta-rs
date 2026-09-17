@@ -1,6 +1,6 @@
 //! Command for converting a Parquet table to a Delta table in place
 // https://github.com/delta-io/delta/blob/1d5dd774111395b0c4dc1a69c94abc169b1c83b6/spark/src/main/scala/org/apache/spark/sql/delta/commands/ConvertToDeltaCommand.scala
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::TryFromIntError;
 use std::str::{FromStr, Utf8Error};
 use std::sync::Arc;
@@ -58,6 +58,14 @@ enum Error {
     MissingPartitionSchema,
     #[error("Partition column provided by the user does not exist in the parquet files")]
     PartitionColumnNotExist,
+    #[error(
+        "Expected {expected} partition directories in the path of {path} for the directory partition strategy, found {found}"
+    )]
+    PartitionDepthMismatch {
+        expected: usize,
+        found: usize,
+        path: String,
+    },
     #[error("The given location is already a delta table location")]
     DeltaTableAlready,
     #[error("Location must be provided to convert a Parquet table to a Delta table")]
@@ -81,13 +89,15 @@ impl From<Error> for DeltaTableError {
 }
 
 /// The partition strategy used by the Parquet table
-/// Currently only hive-partitioning is supported for Parquet paths
 #[non_exhaustive]
 #[derive(Default)]
 pub enum PartitionStrategy {
-    /// Hive-partitioning
+    /// Hive-partitioning: every directory in a file path is named `column=value`
     #[default]
     Hive,
+    /// Directory-partitioning: every directory in a file path is a bare value, mapped in order
+    /// onto the partition schema (`2020/01/part-0.parquet` with partition columns `year`, `month`)
+    Directory,
 }
 
 impl FromStr for PartitionStrategy {
@@ -96,6 +106,7 @@ impl FromStr for PartitionStrategy {
     fn from_str(s: &str) -> DeltaResult<Self> {
         match s.to_ascii_lowercase().as_str() {
             "hive" => Ok(PartitionStrategy::Hive),
+            "directory" => Ok(PartitionStrategy::Directory),
             _ => Err(DeltaTableError::Generic(format!(
                 "Invalid partition strategy provided {s}"
             ))),
@@ -108,7 +119,7 @@ pub struct ConvertToDeltaBuilder {
     log_store: Option<LogStoreRef>,
     location: Option<String>,
     storage_options: Option<HashMap<String, String>>,
-    partition_schema: HashMap<String, StructField>,
+    partition_schema: IndexMap<String, StructField>,
     partition_strategy: PartitionStrategy,
     mode: SaveMode,
     name: Option<String>,
@@ -181,6 +192,9 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Specify the partition schema of the Parquet table
+    ///
+    /// With [`PartitionStrategy::Directory`], the fields are mapped in order onto the directories
+    /// of each file path
     pub fn with_partition_schema(
         mut self,
         partition_schema: impl IntoIterator<Item = StructField>,
@@ -193,7 +207,6 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Specify the partition strategy of the Parquet table
-    /// Currently only hive-partitioning is supported for Parquet paths
     pub fn with_partition_strategy(mut self, strategy: PartitionStrategy) -> Self {
         self.partition_strategy = strategy;
         self
@@ -304,11 +317,9 @@ impl ConvertToDeltaBuilder {
         let mut arrow_schemas = Vec::new();
         let mut actions = Vec::new();
         // partition columns that were defined by caller and are expected to apply on this table
-        let mut expected_partitions: HashMap<String, StructField> = self.partition_schema.clone();
-        // A HashSet of all unique partition columns in a Parquet table
-        let mut partition_columns = HashSet::new();
-        // A vector of StructField of all unique partition columns in a Parquet table
-        let mut partition_schema_fields = HashMap::new();
+        let mut expected_partitions: IndexMap<String, StructField> = self.partition_schema.clone();
+        // The schema of all unique partition columns in a Parquet table, in the order they were first seen
+        let mut partition_schema_fields: IndexMap<String, StructField> = IndexMap::new();
 
         // Obtain settings on which columns to skip collecting stats on if any
         let (num_indexed_cols, stats_columns) =
@@ -318,46 +329,43 @@ impl ConvertToDeltaBuilder {
             // A HashMap from partition column to value for this parquet file only
             let mut partition_values = HashMap::new();
             let location = file.location.clone().to_string();
-            let mut iter = location.split('/').peekable();
-            let mut subpath = iter.next();
+            // Every path segment but the last one (the file name) is a partition directory
+            let segments: Vec<&str> = location.split('/').collect();
+            let directories = &segments[..segments.len() - 1];
 
-            // Get partitions from subpaths. Skip the last subpath
-            while iter.peek().is_some() {
-                let curr_path = subpath.unwrap();
-                let (key, value) = curr_path
-                    .split_once('=')
-                    .ok_or(Error::MissingPartitionSchema)?;
+            if matches!(self.partition_strategy, PartitionStrategy::Directory)
+                && directories.len() != self.partition_schema.len()
+            {
+                return Err(Error::PartitionDepthMismatch {
+                    expected: self.partition_schema.len(),
+                    found: directories.len(),
+                    path: location,
+                });
+            }
 
-                if partition_columns.insert(key.to_string()) {
-                    if let Some(schema) = expected_partitions.remove(key) {
-                        partition_schema_fields.insert(key.to_string(), schema);
-                    } else {
-                        // Return an error if the schema of a partition column is not provided by user
-                        return Err(Error::MissingPartitionSchema);
+            for (position, directory) in directories.iter().enumerate() {
+                let (key, value) = match self.partition_strategy {
+                    PartitionStrategy::Hive => directory
+                        .split_once('=')
+                        .ok_or(Error::MissingPartitionSchema)?,
+                    PartitionStrategy::Directory => {
+                        // Safety: the number of directories was checked against the partition schema above
+                        let (key, _) = self.partition_schema.get_index(position).unwrap();
+                        (key.as_str(), *directory)
                     }
+                };
+
+                if !partition_schema_fields.contains_key(key) {
+                    // Return an error if the schema of a partition column is not provided by user
+                    let schema = expected_partitions
+                        .shift_remove(key)
+                        .ok_or(Error::MissingPartitionSchema)?;
+                    partition_schema_fields.insert(key.to_string(), schema);
                 }
 
                 // Safety: we just checked that the key is present in the map
                 let field = partition_schema_fields.get(key).unwrap();
-                let scalar = if value == NULL_PARTITION_VALUE_DATA_PATH {
-                    Ok(delta_kernel::expressions::Scalar::Null(
-                        field.data_type().clone(),
-                    ))
-                } else {
-                    let decoded = percent_decode_str(value).decode_utf8()?;
-                    match field.data_type() {
-                        DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
-                        _ => Err(delta_kernel::Error::Generic(format!(
-                            "Expected primitive type, found: {:?}",
-                            field.data_type()
-                        ))),
-                    }
-                }
-                .map_err(|_| Error::MissingPartitionSchema)?;
-
-                partition_values.insert(key.to_string(), scalar);
-
-                subpath = iter.next();
+                partition_values.insert(key.to_string(), parse_partition_value(field, value)?);
             }
 
             let object_reader =
@@ -431,7 +439,7 @@ impl ConvertToDeltaBuilder {
         let mut builder = CreateBuilder::new()
             .with_log_store(self.log_store().clone())
             .with_columns(schema_fields.into_iter().cloned())
-            .with_partition_columns(partition_columns.into_iter())
+            .with_partition_columns(partition_schema_fields.keys().cloned())
             .with_actions(actions)
             .with_save_mode(self.mode)
             .with_configuration(self.configuration)
@@ -444,6 +452,27 @@ impl ConvertToDeltaBuilder {
         }
         Ok((builder, operation_id))
     }
+}
+
+/// Parse the value of a partition directory into a scalar of the partition column's type
+fn parse_partition_value(
+    field: &StructField,
+    value: &str,
+) -> Result<delta_kernel::expressions::Scalar, Error> {
+    if value == NULL_PARTITION_VALUE_DATA_PATH {
+        return Ok(delta_kernel::expressions::Scalar::Null(
+            field.data_type().clone(),
+        ));
+    }
+    let decoded = percent_decode_str(value).decode_utf8()?;
+    match field.data_type() {
+        DataType::Primitive(p) => p.parse_scalar(decoded.as_ref()),
+        _ => Err(delta_kernel::Error::Generic(format!(
+            "Expected primitive type, found: {:?}",
+            field.data_type()
+        ))),
+    }
+    .map_err(|_| Error::MissingPartitionSchema)
 }
 
 impl std::future::IntoFuture for ConvertToDeltaBuilder {
@@ -495,6 +524,29 @@ mod tests {
 
     fn schema_field(key: &str, primitive: PrimitiveType, nullable: bool) -> StructField {
         StructField::new(key.to_string(), DataType::Primitive(primitive), nullable)
+    }
+
+    // Write one-row Parquet files with an `id` column at the given paths under `root`
+    fn write_parquet_files(root: &std::path::Path, relative_paths: &[&str]) {
+        let schema = Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "id",
+            ArrowDataType::Int32,
+            true,
+        )]));
+        for (id, relative_path) in relative_paths.iter().enumerate() {
+            let path = root.join(relative_path);
+            fs::create_dir_all(path.parent().unwrap()).expect("Failed to create directories");
+            let batch = RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int32Array::from(vec![id as i32]))],
+            )
+            .expect("Failed to create record batch");
+            let file = File::create(&path).expect("Failed to create parquet file");
+            let mut writer = ArrowWriter::try_new(file, schema.clone(), None)
+                .expect("Failed to create parquet writer");
+            writer.write(&batch).expect("Failed to write batch");
+            writer.close().expect("Failed to close writer");
+        }
     }
 
     // Copy all Parquet files in the source location to a temp dir (with Delta log removed)
@@ -970,6 +1022,103 @@ mod tests {
             .with_location("../test/tests/data/delta-0.2.0")
             .await
             .expect_err("The given location is already a delta table location. Should error");
+    }
+
+    #[test]
+    fn test_partition_strategy_from_str() {
+        assert!(matches!(
+            "hive".parse::<PartitionStrategy>(),
+            Ok(PartitionStrategy::Hive)
+        ));
+        assert!(matches!(
+            "Directory".parse::<PartitionStrategy>(),
+            Ok(PartitionStrategy::Directory)
+        ));
+        assert!("snowflake".parse::<PartitionStrategy>().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_delta_directory_partitioning() {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        write_parquet_files(
+            temp_dir.path(),
+            &["2020/1/part-0.parquet", "2021/12/part-1.parquet"],
+        );
+
+        let table = ConvertToDeltaBuilder::new()
+            .with_location(temp_dir.path().to_str().unwrap())
+            .with_partition_schema(vec![
+                schema_field("year", PrimitiveType::Integer, true),
+                schema_field("month", PrimitiveType::Integer, true),
+            ])
+            .with_partition_strategy(PartitionStrategy::Directory)
+            .await
+            .expect("Failed to convert to Delta table");
+
+        // The partition columns keep the order of the directories
+        assert_eq!(
+            table.snapshot().unwrap().metadata().partition_columns(),
+            &["year".to_string(), "month".to_string()]
+        );
+        assert_delta_table(
+            table,
+            "directory partitioning",
+            0,
+            vec![
+                "2020/1/part-0.parquet".to_string(),
+                "2021/12/part-1.parquet".to_string(),
+            ],
+            vec![
+                schema_field("id", PrimitiveType::Integer, true),
+                schema_field("month", PrimitiveType::Integer, true),
+                schema_field("year", PrimitiveType::Integer, true),
+            ],
+            &[
+                ("month".to_string(), Scalar::Integer(1)),
+                ("month".to_string(), Scalar::Integer(12)),
+                ("year".to_string(), Scalar::Integer(2020)),
+                ("year".to_string(), Scalar::Integer(2021)),
+            ],
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_delta_directory_partitioning_depth_mismatch() {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        write_parquet_files(
+            temp_dir.path(),
+            &["2020/1/part-0.parquet", "2021/part-1.parquet"],
+        );
+
+        let err = ConvertToDeltaBuilder::new()
+            .with_location(temp_dir.path().to_str().unwrap())
+            .with_partition_schema(vec![
+                schema_field("year", PrimitiveType::Integer, true),
+                schema_field("month", PrimitiveType::Integer, true),
+            ])
+            .with_partition_strategy(PartitionStrategy::Directory)
+            .await
+            .expect_err(
+                "A file with fewer partition directories than partition columns. Should error",
+            );
+        assert!(
+            err.to_string()
+                .contains("Expected 2 partition directories in the path of 2021/part-1.parquet"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_convert_to_delta_directory_partitioning_missing_schema() {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        write_parquet_files(temp_dir.path(), &["2020/part-0.parquet"]);
+
+        let _table = ConvertToDeltaBuilder::new()
+            .with_location(temp_dir.path().to_str().unwrap())
+            .with_partition_strategy(PartitionStrategy::Directory)
+            .await
+            .expect_err("The schema of a partition column is not provided by user. Should error");
     }
 
     #[tokio::test]
