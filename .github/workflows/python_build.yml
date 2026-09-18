@@ -53,7 +53,7 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Check Python
         run: |
@@ -70,7 +70,7 @@ jobs:
         run: make unit-test
 
   test:
-    name: Python Build (Python 3.10 PyArrow latest)
+    name: Python Build (Python 3.11 PyArrow latest)
     runs-on: ubuntu-latest
     steps:
       # v6.0.2
@@ -98,7 +98,7 @@ jobs:
           uv run --no-sync pytest -n auto -m "not pyarrow and not pandas and not datafusion and not integration and not benchmark"
 
   test-datafusion:
-    name: Python Build (Python 3.10 DataFusion integration)
+    name: Python Build (Python 3.11 DataFusion integration)
     runs-on: ubuntu-latest
 
     steps:
@@ -107,7 +107,7 @@ jobs:
       - name: Setup Environment
         uses: ./.github/actions/setup-env
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Build and install deltalake
         run: make develop
@@ -118,7 +118,7 @@ jobs:
         run: DELTALAKE_RUN_DATAFUSION_TESTS=1 uv run --no-sync pytest -v tests/test_datafusion.py -m datafusion
 
   test-lakefs:
-    name: Python Build (Python 3.10 LakeFS Integration tests)
+    name: Python Build (Python 3.11 LakeFS Integration tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -137,7 +137,7 @@ jobs:
         run: uv run --no-sync pytest -m '(lakefs and integration)' --doctest-modules
 
   test-unitycatalog-databricks:
-    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    name: Python Build (Python 3.11 Unity Catalog Integration tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -161,7 +161,7 @@ jobs:
         run: ../../delta-rs/.github/scripts/retry_integration_test.sh unitycatalog_databricks 5 10
 
   test-unitycatalog-oss:
-    name: Python Build (Python 3.10 Unity Catalog Integration tests)
+    name: Python Build (Python 3.11 Unity Catalog Integration tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -215,7 +215,7 @@ jobs:
 
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       # v6.0.2
