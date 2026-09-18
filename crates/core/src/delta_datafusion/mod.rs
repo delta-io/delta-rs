@@ -770,7 +770,7 @@ mod tests {
             .build_storage()
             .unwrap();
         let snapshot = Arc::new(
-            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::Snapshot::try_new(&log_store, None)
                 .await
                 .unwrap(),
         );
@@ -839,7 +839,7 @@ mod tests {
             .build_storage()
             .unwrap();
         let snapshot = Arc::new(
-            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::Snapshot::try_new(&log_store, None)
                 .await
                 .unwrap(),
         );
@@ -903,7 +903,7 @@ mod tests {
             .build_storage()
             .unwrap();
         let snapshot = Arc::new(
-            crate::kernel::Snapshot::try_new(&log_store, Default::default(), None)
+            crate::kernel::Snapshot::try_new(&log_store, None)
                 .await
                 .unwrap(),
         );

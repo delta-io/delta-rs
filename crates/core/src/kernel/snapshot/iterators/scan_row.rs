@@ -1200,7 +1200,7 @@ mod tests {
             r#"{"numRecords":11,"minValues":{"value":1},"nullCount":{"value":0}"#,
         );
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let stats_schema = Arc::new(StructType::try_new([
             StructField::nullable("numRecords", DataType::LONG),
             StructField::nullable(
@@ -1229,7 +1229,7 @@ mod tests {
         let raw_stats = r#"{"maxValues":{"value":"z"},"numRecords":11,"nullCount":{"value":0},"minValues":{"value":"a"}}"#;
         let batch = scan_row_batch_with_stats(raw_stats);
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let projected = parse_stats_column_with_schema(
             snapshot.inner.as_ref(),
             &batch,

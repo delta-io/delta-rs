@@ -44,12 +44,8 @@ pub(crate) struct FindFiles {
 
 /// Finds files in a snapshot that match the provided predicate.
 #[instrument(
-    skip_all,
-    fields(
-        version = snapshot.version(),
-        has_predicate = predicate.is_some(),
-        partition_scan = field::Empty,
-        candidate_count = field::Empty
+    skip_all, fields(
+        version = snapshot.version(), has_predicate = predicate.is_some(), partition_scan = field::Empty, candidate_count = field::Empty
     )
 )]
 pub(crate) async fn find_files(
@@ -106,7 +102,6 @@ pub(crate) async fn find_files(
 
 pub(crate) struct FindFilesExprProperties {
     pub partition_columns: Vec<String>,
-
     pub partition_only: bool,
     pub result: DeltaResult<()>,
     /// Partition columns referenced by the visited expression.
@@ -404,11 +399,8 @@ fn join_batches_with_add_actions(
 
 /// Determine which files contain a record that satisfies the predicate
 #[instrument(
-    skip_all,
-    fields(
-        version = snapshot.version(),
-        total_files = field::Empty,
-        matching_files = field::Empty
+    skip_all, fields(
+        version = snapshot.version(), total_files = field::Empty, matching_files = field::Empty
     )
 )]
 pub(in crate::delta_datafusion) async fn find_files_scan(
@@ -718,15 +710,7 @@ mod tests {
     }
 
     async fn lazy_snapshot(table: &DeltaTable) -> TestResult<Snapshot> {
-        Ok(Snapshot::try_new(
-            table.log_store().as_ref(),
-            crate::DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?)
+        Ok(Snapshot::try_new(table.log_store().as_ref(), None).await?)
     }
 
     #[tokio::test]
@@ -737,16 +721,8 @@ mod tests {
             .await?;
 
         let log_store = table.log_store();
-        let lazy = Snapshot::try_new(
-            log_store.as_ref(),
-            crate::DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-        let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
         let session = create_session().into_inner().state();
         table.update_datafusion_session(&session)?;
         session.ensure_log_store_registered(log_store.as_ref())?;
@@ -786,13 +762,9 @@ mod tests {
         source_add.size = 1234;
         source_add.stats = Some(
             serde_json::json!({
-                "numRecords": 7,
-                "minValues": { "id": 1 },
-                "maxValues": { "id": 7 },
-                "nullCount": { "id": 0 }
+                "numRecords": 7, "minValues": { "id": 1 }, "maxValues": { "id": 7 }, "nullCount": { "id": 0 }
             })
-            .to_string(),
-        );
+            .to_string(), );
         source_add.tags = Some(HashMap::from([
             ("source".to_string(), Some("metadata-rich".to_string())),
             ("nullable-tag".to_string(), None),
@@ -828,13 +800,8 @@ mod tests {
             .await?;
 
         let log_store = table.log_store();
-        let skip_stats_config = crate::DeltaTableConfig {
-            require_files: false,
-            skip_stats: true,
-            ..Default::default()
-        };
-        let lazy = Snapshot::try_new(log_store.as_ref(), skip_stats_config.clone(), None).await?;
-        let eager = EagerSnapshot::try_new(log_store.as_ref(), skip_stats_config, None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
         let session = create_session().into_inner().state();
         table.update_datafusion_session(&session)?;
         session.ensure_log_store_registered(log_store.as_ref())?;
@@ -890,8 +857,7 @@ mod tests {
                 .expect("a partition-only predicate");
         assert_eq!(referenced, vec!["p0".to_string()]);
 
-        // A mixed partition + data predicate keeps only the partition-only conjunct,
-        // and still reports only the partition column it references.
+        // A mixed partition + data predicate keeps only the partition-only conjunct, // and still reports only the partition column it references.
         let (_predicate, referenced) = extract_partition_only_predicate(
             col("p0").eq(lit(5_i32)).and(col("data").gt(lit(3_i32))),
             &partition_columns,
@@ -1034,7 +1000,6 @@ mod tests {
         base.load().await?;
 
         let table = DeltaTableBuilder::from_url(base.table_url().clone())?
-            .without_files()
             .load()
             .await?;
         let log_store = table.log_store();
@@ -1193,7 +1158,6 @@ mod tests {
         base.load().await?;
 
         let table = DeltaTableBuilder::from_url(base.table_url().clone())?
-            .without_files()
             .load()
             .await?;
         let log_store = table.log_store();
@@ -1286,11 +1250,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
         let log_store = table.log_store().clone();
-        let config = crate::DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = Snapshot::try_new(log_store.as_ref(), config, None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         assert!(!snapshot.has_materialized_files_for_test());
 
@@ -1314,11 +1274,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
         let (log_store, mut operations) = recording_log_store(table.log_store());
-        let config = crate::DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = Snapshot::try_new(log_store.as_ref(), config, None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         drain_recorded_ops(&mut operations).await;
 
         snapshot
@@ -1365,15 +1321,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
         let (log_store, mut operations) = recording_log_store(table.log_store());
-        let snapshot = Snapshot::try_new(
-            log_store.as_ref(),
-            crate::DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         drain_recorded_ops(&mut operations).await;
 
         snapshot

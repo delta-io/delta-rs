@@ -151,8 +151,7 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -183,7 +182,7 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
 #[cfg(test)]
 mod tests {
     use crate::kernel::{DataType, PrimitiveType, StructField};
-    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
+    use crate::writer::test_utils::TestResult;
 
     use super::*;
 
@@ -196,30 +195,5 @@ mod tests {
             "comment".to_string(),
             MetadataValue::String("identifier".to_string()),
         )])
-    }
-
-    #[tokio::test]
-    async fn update_field_metadata_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        UpdateFieldMetadataBuilder::new(log_store, Some(snapshot.clone()))
-            .with_field_name("id")
-            .with_metadata(field_metadata())
-            .await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
     }
 }
