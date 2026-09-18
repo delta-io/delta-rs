@@ -5,7 +5,7 @@ import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -178,7 +178,7 @@ class Metadata:
         )
 
 
-class TableProperty(str, Enum):
+class TableProperty(StrEnum):
     """Delta table property keys.
 
     Use these values as keys in the `configuration` argument to
