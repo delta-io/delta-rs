@@ -80,6 +80,8 @@ pub(crate) struct DeltaScanMetaExec {
     file_id_field: Option<FieldRef>,
     /// plan properties
     properties: Arc<PlanProperties>,
+    /// Optional limit on the total number of rows produced.
+    fetch: Option<usize>,
 }
 
 impl DisplayAs for DeltaScanMetaExec {
@@ -146,6 +148,14 @@ impl DeltaScanMetaExec {
             metrics,
             file_id_field,
             properties,
+            fetch: None,
+        }
+    }
+
+    fn with_new_fetch(&self, fetch: Option<usize>) -> Self {
+        Self {
+            fetch,
+            ..self.clone()
         }
     }
 
@@ -287,6 +297,8 @@ impl ExecutionPlan for DeltaScanMetaExec {
             schema_adapter: super::SchemaAdapter::new(Arc::clone(
                 &self.scan_plan.contract.result_schema,
             )),
+            fetch: self.fetch,
+            produced: 0,
         }))
     }
 
@@ -295,7 +307,12 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 
     fn supports_limit_pushdown(&self) -> bool {
-        true
+        // This node has no children, so DataFusion cannot push a limit through
+        // it: reporting `true` makes the planner drop the surrounding limit
+        // node (and any `skip`) instead of forwarding it. Returning `false`
+        // makes the planner call `with_fetch`, which lets the scan absorb the
+        // limit itself while still re-adding a limit for any offset.
+        false
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -303,11 +320,11 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 
     fn fetch(&self) -> Option<usize> {
-        None
+        self.fetch
     }
 
-    fn with_fetch(&self, _: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
-        None
+    fn with_fetch(&self, limit: Option<usize>) -> Option<Arc<dyn ExecutionPlan>> {
+        Some(Arc::new(self.with_new_fetch(limit)))
     }
 
     fn statistics_from_inputs(
@@ -402,6 +419,10 @@ struct DeltaScanMetaStream {
     file_id_field: Option<FieldRef>,
     /// Cached schema adapter for efficient batch adaptation across batches
     schema_adapter: super::SchemaAdapter,
+    /// Optional limit on the total number of rows produced by this stream.
+    fetch: Option<usize>,
+    /// Number of rows produced by this stream so far.
+    produced: usize,
 }
 
 impl DeltaScanMetaStream {
@@ -564,6 +585,10 @@ impl Stream for DeltaScanMetaStream {
         // Single-pass block, not a real loop: every path yields exactly one
         // poll result, and all exits funnel through `record_poll` below.
         let poll = 'poll: {
+            if self.fetch.is_some_and(|limit| self.produced >= limit) {
+                self.current = None;
+                break 'poll Poll::Ready(None);
+            }
             if self.current.is_none() {
                 let Some((file_id, row_count)) = self.input.pop_front() else {
                     break 'poll Poll::Ready(None);
@@ -577,7 +602,11 @@ impl Stream for DeltaScanMetaStream {
             let Some((file_id, total_rows, offset, chunk_rows)) = self.current.clone() else {
                 unreachable!("cursor is set just above");
             };
-            let len = chunk_rows.min(total_rows.saturating_sub(offset));
+            let mut len = chunk_rows.min(total_rows.saturating_sub(offset));
+            if let Some(limit) = self.fetch {
+                // `produced < limit` was validated above, so this cannot underflow.
+                len = len.min(limit - self.produced);
+            }
             let batch = match self.batch_project_chunk(&file_id, offset, len) {
                 Ok(batch) => batch,
                 // Drop the file: the error is yielded once and the stream advances.
@@ -592,6 +621,7 @@ impl Stream for DeltaScanMetaStream {
             } else {
                 Some((file_id, total_rows, emitted, chunk_rows))
             };
+            self.produced += batch.num_rows();
             Poll::Ready(Some(Ok(batch)))
         };
         self.baseline_metrics.record_poll(poll)
@@ -1492,6 +1522,159 @@ mod tests {
                 .compute(repartitioned, &StatisticsArgs::new())?
                 .num_rows,
             Precision::Exact(20)
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_scan_limit_pushdown_returns_exact_rows() -> TestResult {
+        let (_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", provider).unwrap();
+
+        let unlimited = session
+            .sql("SELECT part FROM delta_table")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            unlimited.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            REPRO_TOTAL_ROWS,
+            "metadata-only scan without a limit must return every row"
+        );
+
+        let df = session.sql("SELECT part FROM delta_table LIMIT 7").await?;
+        let plan = df.clone().create_physical_plan().await?;
+        assert!(
+            format!("{:?}", plan).contains("DeltaScanMetaExec"),
+            "expected a metadata-only scan: {plan:?}"
+        );
+        let limited = df.collect().await?;
+        assert_eq!(
+            limited.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            7,
+            "LIMIT must be honored by the metadata-only scan"
+        );
+
+        let over_sql = format!(
+            "SELECT part FROM delta_table LIMIT {}",
+            REPRO_TOTAL_ROWS + 1000
+        );
+        let over = session.sql(&over_sql).await?.collect().await?;
+        assert_eq!(
+            over.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            REPRO_TOTAL_ROWS,
+            "a limit larger than the table must return every row"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_scan_fetch_truncates_batches() -> TestResult {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        const BATCH_SIZE: usize = 3;
+        const FETCH: usize = 5;
+
+        let (_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let part_idx = provider.schema().index_of("part")?;
+        let scan = provider
+            .scan(&session.state(), Some(&vec![part_idx]), &[], None)
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan")
+            .clone();
+        assert!(!exec.supports_limit_pushdown());
+        assert_eq!(exec.fetch(), None);
+
+        let limited = exec
+            .with_fetch(Some(FETCH))
+            .expect("metadata scan must be able to absorb a fetch");
+        let limited = limited
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("with_fetch must preserve DeltaScanMetaExec")
+            .clone();
+        assert_eq!(limited.fetch(), Some(FETCH));
+
+        let exec_session =
+            SessionContext::new_with_config(SessionConfig::new().with_batch_size(BATCH_SIZE));
+        let batches: Vec<RecordBatch> = limited
+            .execute(0, exec_session.task_ctx())?
+            .try_collect()
+            .await?;
+        assert!(
+            batches.iter().all(|batch| batch.num_rows() <= BATCH_SIZE),
+            "each chunk must stay within the session batch size"
+        );
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            FETCH,
+            "the stream must stop after the requested number of rows"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_meta_scan_fetch_respects_deletion_vectors() -> TestResult {
+        use datafusion::prelude::{SessionConfig, SessionContext};
+
+        const BATCH_SIZE: usize = 3;
+        const FETCH: usize = 5;
+        const ROWS: usize = 10;
+        // 8-entry mask over 10 rows: 6 kept + 2 implicitly-kept pad rows.
+        const MASK: &[bool] = &[true, true, false, true, true, true, false, true];
+
+        let (_dir, mut table) = create_partitioned_repro_table().await?;
+        let batch = RecordBatch::try_new(
+            repro_schema(),
+            vec![
+                Arc::new(Int64Array::from_iter_values(0..ROWS as i64)),
+                Arc::new(StringArray::from(vec!["p"; ROWS])),
+            ],
+        )?;
+        table = table
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await?;
+
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        let part_idx = provider.schema().index_of("part")?;
+        let scan = provider
+            .scan(&session.state(), Some(&vec![part_idx]), &[], None)
+            .await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("expected metadata-only scan")
+            .clone();
+        let (file_id, _) = exec.input[0][0].clone();
+        exec.selection_vectors.insert(file_id, MASK.to_vec());
+
+        let limited = exec
+            .with_fetch(Some(FETCH))
+            .expect("metadata scan must be able to absorb a fetch");
+        let limited = limited
+            .downcast_ref::<DeltaScanMetaExec>()
+            .expect("with_fetch must preserve DeltaScanMetaExec")
+            .clone();
+
+        let exec_session =
+            SessionContext::new_with_config(SessionConfig::new().with_batch_size(BATCH_SIZE));
+        let batches: Vec<RecordBatch> = limited
+            .execute(0, exec_session.task_ctx())?
+            .try_collect()
+            .await?;
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            FETCH,
+            "fetch must count deletion-vector-adjusted rows"
         );
 
         Ok(())
