@@ -7,6 +7,7 @@ from arro3.core import Array, DataType, Table
 from arro3.core import Field as ArrowField
 
 from deltalake import CommitProperties, DeltaTable, write_deltalake
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 
 
@@ -215,6 +216,49 @@ def test_optimize_metrics_report_planner_strategy(
     assert metrics["preserveInsertionOrder"] is True
     assert metrics["maxBinSpanFiles"] == 2
     assert "maxInputDisplacement" not in metrics
+
+
+def test_compact_with_sort_columns_sorts_output(
+    tmp_path: pathlib.Path,
+):
+    write_deltalake(
+        tmp_path,
+        Table(
+            {
+                "x": Array([3, 1], type=DataType.int32()),
+                "y": Array([30, 10], type=DataType.int32()),
+            }
+        ),
+        mode="append",
+    )
+    write_deltalake(
+        tmp_path,
+        Table(
+            {
+                "x": Array([4, 2], type=DataType.int32()),
+                "y": Array([40, 20], type=DataType.int32()),
+            }
+        ),
+        mode="append",
+    )
+
+    dt = DeltaTable(tmp_path)
+    metrics = dt.optimize.compact(sort_columns=["x"])
+
+    assert metrics["numFilesAdded"] == 1
+    assert metrics["numFilesRemoved"] == 2
+    assert dt.to_pyarrow_table().column("x").to_pylist() == [1, 2, 3, 4]
+
+
+def test_compact_sort_columns_rejects_nonexistent_column(
+    tmp_path: pathlib.Path,
+):
+    write_deltalake(tmp_path, ordered_range_table(0, 3), mode="append")
+    write_deltalake(tmp_path, ordered_range_table(3, 3), mode="append")
+
+    dt = DeltaTable(tmp_path)
+    with pytest.raises(DeltaError, match="not found in schema"):
+        dt.optimize.compact(sort_columns=["does_not_exist"])
 
 
 def test_zorder_metrics_do_not_claim_preserve_insertion_order(

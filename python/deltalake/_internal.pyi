@@ -136,6 +136,7 @@ class RawDeltaTable:
         max_temp_directory_size: int | None,
         min_commit_interval: int | None,
         writer_properties: WriterProperties | None,
+        sort_columns: list[str] | None,
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> str: ...

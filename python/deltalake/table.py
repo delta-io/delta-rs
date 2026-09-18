@@ -2443,6 +2443,7 @@ class TableOptimizer:
         min_commit_interval: int | timedelta | None = None,
         writer_properties: WriterProperties | None = None,
         *args: Any,
+        sort_columns: list[str] | None = None,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
     ) -> dict[str, Any]:
@@ -2452,7 +2453,9 @@ class TableOptimizer:
         This operation is idempotent; if run twice on the same table (assuming it has
         not been updated) it will do nothing the second time.
 
-        Compaction keeps file order within each partition.
+        Compaction keeps file order within each partition. When ``sort_columns`` is
+        provided, rows within each compacted output file are additionally sorted by
+        those columns; this is opt-in and does not change partition-local ordering.
 
         The target size is approximate.
 
@@ -2471,6 +2474,8 @@ class TableOptimizer:
                                     created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
+            sort_columns: optional list of columns to sort rows by within each compacted
+                            output file. Columns must exist in the table schema.
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 
@@ -2515,6 +2520,7 @@ class TableOptimizer:
             max_temp_directory_size,
             min_commit_interval,
             writer_properties,
+            sort_columns,
             commit_properties,
             post_commithook_properties,
         )

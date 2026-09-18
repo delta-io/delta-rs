@@ -817,6 +817,7 @@ impl RawDeltaTable {
         max_temp_directory_size = None,
         min_commit_interval = None,
         writer_properties=None,
+        sort_columns=None,
         commit_properties=None,
         post_commithook_properties=None
     ))]
@@ -831,6 +832,7 @@ impl RawDeltaTable {
         max_temp_directory_size: Option<u64>,
         min_commit_interval: Option<u64>,
         writer_properties: Option<PyWriterProperties>,
+        sort_columns: Option<Vec<String>>,
         commit_properties: Option<PyCommitProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
     ) -> PyResult<String> {
@@ -863,6 +865,10 @@ impl RawDeltaTable {
                 cmd = cmd.with_writer_properties(
                     set_writer_properties(writer_props).map_err(PythonError::from)?,
                 );
+            }
+
+            if let Some(sort_columns) = sort_columns {
+                cmd = cmd.with_sort_columns(sort_columns);
             }
 
             if let Some(commit_properties) =
