@@ -68,7 +68,7 @@ SUPPORTED_WRITER_FEATURES = {
 }
 
 MAX_SUPPORTED_READER_VERSION = 3
-NOT_SUPPORTED_READER_VERSION = 2
+NOT_SUPPORTED_READER_VERSION = -1
 SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
@@ -1165,13 +1165,10 @@ class DeltaTable:
             raise DeltaError("Table is instantiated without files.")
 
         table_protocol = self.protocol()
-        if (
-            table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
-            or table_protocol.min_reader_version == NOT_SUPPORTED_READER_VERSION
-        ):
+        if table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {table_protocol.min_reader_version} "
-                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} "
+                f"The table's minimum reader version greater than the "
+                f"maximum supported version {MAX_SUPPORTED_READER_VERSION} "
                 f"with these reader features: {SUPPORTED_READER_FEATURES}"
             )
         if (

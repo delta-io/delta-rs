@@ -2809,6 +2809,41 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_deletion_vectors_scan() -> TestResult<()> {
+        let mut table = open_fs_path("../test/tests/data/table_with_deletion_logs");
+        table.load().await?;
+        let fresh = Snapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let mut expected = vec![true; 100];
+        expected[2] = false;
+        expected[79] = false;
+
+        for (name, snapshot) in [
+            (
+                "cached",
+                SnapshotWrapper::from(table.snapshot()?.snapshot().clone()),
+            ),
+            ("fresh", SnapshotWrapper::from(fresh)),
+        ] {
+            for predicate in [None, Some(col("id").gt(lit(0i64)))] {
+                let provider = DeltaScan::new(snapshot.clone(), DeltaScanConfig::default())?
+                    .with_file_skipping_predicate(predicate.clone());
+                let deletion_vectors = provider.deletion_vectors(&state).await?;
+                assert_eq!(deletion_vectors.len(), 1);
+                assert!(deletion_vectors[0].filepath.ends_with(
+                    "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
+                ));
+                assert_eq!(
+                    deletion_vectors[0].keep_mask, expected,
+                    "{name} scan with predicate {predicate:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
     async fn provider_for_partitioned_table() -> TestResult<(
         crate::DeltaTable,
         Arc<crate::delta_datafusion::table_provider::next::DeltaScan>,
