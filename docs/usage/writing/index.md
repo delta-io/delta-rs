@@ -92,3 +92,23 @@ data = pa.table(
 
 write_deltalake(table_path, data, writer_properties=wp)
 ```
+
+## Bounding memory when the object store is slow
+
+When a data file reaches its target size, the writer uploads it in the background and starts the next file right away. Each pending upload holds that file's bytes in memory until the object store has accepted them. If the store is slower than the writer, those pending uploads would pile up, so `deltalake` caps the bytes they may hold.
+
+The cap is 512 MiB. Set the environment variable `DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES` to a number of bytes to change it. It is read when a write starts, so it can differ between writes. Once the cap is reached, a write waits for an upload to land before it rolls another file, and that backpressure reaches the data source. A single file larger than the whole cap is still uploaded, on its own.
+
+The cap covers one write call. Every writer in that call shares it, including the change data feed writer and all partition writers, so a partitioned write does not multiply it. Two writes running at the same time in one process each get their own.
+
+``` python
+import os
+
+os.environ["DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES"] = str(256 * 1024 * 1024)  # 256 MiB
+
+from deltalake import write_deltalake
+
+write_deltalake("s3://bucket/my_table", data, mode="append")
+```
+
+Data files that are still open, one per partition value the write meets, hold their current row group in memory separately from this cap.
