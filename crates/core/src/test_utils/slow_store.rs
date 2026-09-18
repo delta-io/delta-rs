@@ -42,7 +42,11 @@ impl SlowCountingStore {
     }
 
     fn track(&self) -> InFlightGuard {
-        InFlightGuard::new(self.in_flight.clone(), self.max_in_flight.clone())
+        let now = self.in_flight.fetch_add(1, Ordering::AcqRel) + 1;
+        self.max_in_flight.fetch_max(now, Ordering::AcqRel);
+        InFlightGuard {
+            in_flight: self.in_flight.clone(),
+        }
     }
 }
 
@@ -50,14 +54,6 @@ impl SlowCountingStore {
 #[derive(Debug)]
 struct InFlightGuard {
     in_flight: Arc<AtomicUsize>,
-}
-
-impl InFlightGuard {
-    fn new(in_flight: Arc<AtomicUsize>, max_in_flight: Arc<AtomicUsize>) -> Self {
-        let now = in_flight.fetch_add(1, Ordering::AcqRel) + 1;
-        max_in_flight.fetch_max(now, Ordering::AcqRel);
-        Self { in_flight }
-    }
 }
 
 impl Drop for InFlightGuard {

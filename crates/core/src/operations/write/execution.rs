@@ -26,7 +26,7 @@ use uuid::Uuid;
 
 use crate::DeltaTableError;
 use crate::datafile::writer::{
-    DeltaWriter, WriterConfig, write_batches_timed, writer_batch_concurrency,
+    DeltaWriter, UploadBudget, WriterConfig, write_batches_timed, writer_batch_concurrency,
 };
 use crate::delta_datafusion::{
     ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
@@ -964,6 +964,8 @@ async fn write_cdc_plan(
     ));
     let cdf_schema = plan.schema().clone();
 
+    // One budget for both destinations of a change-data write.
+    let upload_budget = UploadBudget::from_env();
     let normal_config = WriterConfig::new(
         write_schema.clone(),
         partition_columns.clone(),
@@ -973,7 +975,8 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     )
-    .with_random_prefix_length(random_prefix_length);
+    .with_random_prefix_length(random_prefix_length)
+    .with_upload_budget(upload_budget.clone());
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),
@@ -985,7 +988,7 @@ async fn write_cdc_plan(
         writer_stats_config.stats_columns.clone(),
     )
     .with_random_prefix_length(random_prefix_length)
-    .with_upload_budget(normal_config.upload_budget().clone());
+    .with_upload_budget(upload_budget);
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {
