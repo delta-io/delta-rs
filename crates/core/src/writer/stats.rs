@@ -74,6 +74,50 @@ pub(crate) fn create_add(
     })
 }
 
+/// Creates an [`Add`] log action for a Parquet file that was written outside of this crate.
+///
+/// Given the [`ParquetMetaData`] of an existing Parquet file, this builds the `Add` action
+/// (including data skipping statistics) required to register that file in a Delta table.
+/// It is the reader-side entry point for backfilling Parquet files into a Delta table
+/// without rewriting the data, for example when importing an existing Parquet data lake.
+///
+/// `partition_values` are the values of the table's partition columns for this file,
+/// `path` is the file's path relative to the table root, and `size` is its size in bytes.
+/// Statistics are collected for the first `num_indexed_cols` columns, or only for
+/// `stats_columns` when that is `Some`.
+///
+/// ```ignore
+/// use deltalake_core::writer::create_add_from_read;
+///
+/// // `metadata` is the `ParquetMetaData` of a file that predates the Delta table and
+/// // `partition_values` maps the table's partition columns to this file's values.
+/// let add = create_add_from_read(
+///     &partition_values,
+///     "date=2024-01-01/part-00000.parquet".to_string(),
+///     file_size,
+///     &metadata,
+///     DataSkippingNumIndexedCols::default(),
+///     &None,
+/// )?;
+/// ```
+pub fn create_add_from_read(
+    partition_values: &IndexMap<String, Scalar>,
+    path: String,
+    size: i64,
+    file_metadata: &ParquetMetaData,
+    num_indexed_cols: DataSkippingNumIndexedCols,
+    stats_columns: &Option<Vec<String>>,
+) -> Result<Add, DeltaTableError> {
+    create_add(
+        partition_values,
+        path,
+        size,
+        file_metadata,
+        num_indexed_cols,
+        stats_columns,
+    )
+}
+
 // As opposed to `stats_from_file_metadata` which operates on `parquet::format::FileMetaData`,
 // this function produces the stats by reading the metadata from already written out files.
 //
@@ -1459,4 +1503,55 @@ mod tests {
         ))
         .collect()
     });
+
+    #[test]
+    fn test_create_add_from_read() {
+        use arrow::array::{Int32Array, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use parquet::arrow::ArrowWriter;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])),
+            ],
+        )
+        .unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+        let file_size = buffer.len() as i64;
+
+        let mut partition_values = IndexMap::new();
+        partition_values.insert("part".to_string(), Scalar::String("2024-01-01".to_string()));
+
+        let add = create_add_from_read(
+            &partition_values,
+            "part-00000.parquet".to_string(),
+            file_size,
+            &metadata,
+            DataSkippingNumIndexedCols::NumColumns(2),
+            &Some(vec!["id".to_string(), "name".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(add.path, "part-00000.parquet");
+        assert_eq!(add.size, file_size);
+        assert_eq!(
+            add.partition_values.get("part"),
+            Some(&Some("2024-01-01".to_string()))
+        );
+
+        let stats = add.get_stats().unwrap().unwrap();
+        assert!(!stats.min_values.is_empty());
+        assert!(!stats.max_values.is_empty());
+        assert!(!stats.null_count.is_empty());
+    }
 }

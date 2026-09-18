@@ -14,6 +14,7 @@ use crate::protocol::{ColumnCountStat, DeltaOperation, SaveMode};
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
+pub use stats::create_add_from_read;
 
 pub mod json;
 pub mod record_batch;
