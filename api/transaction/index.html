@@ -1491,6 +1491,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.transaction.RemoveAction" class="md-nav__link">
+    RemoveAction
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.transaction.create_table_with_add_actions" class="md-nav__link">
     create_table_with_add_actions
   </a>
@@ -2326,6 +2333,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.transaction.RemoveAction" class="md-nav__link">
+    RemoveAction
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.transaction.create_table_with_add_actions" class="md-nav__link">
     create_table_with_add_actions
   </a>
@@ -2600,6 +2614,45 @@ the delta.logRetentionDuration into account.</p>
 
 </div>
 
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="deltalake.transaction.RemoveAction" class="doc doc-heading">
+          <span class="doc doc-object-name doc-class-name">deltalake.transaction.RemoveAction</span>
+
+
+</h3>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">RemoveAction</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data_change</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">deletion_timestamp</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents first">
+
+  
+      
+
+
+  
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+  </div>
+
+
+</div>
+
 
 <div class="doc doc-object doc-function">
 
@@ -2629,10 +2682,132 @@ the delta.logRetentionDuration into account.</p>
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">create_write_transaction</span><span class="p">(</span><span class="n">actions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">AddAction</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">DeltaSchema</span> <span class="o">|</span> <span class="n">ArrowSchemaExportable</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">CommitProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">PostCommitHookProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">create_write_transaction</span><span class="p">(</span><span class="n">actions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">AddAction</span> <span class="o">|</span> <span class="n">RemoveAction</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">DeltaSchema</span> <span class="o">|</span> <span class="n">ArrowSchemaExportable</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">CommitProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">PostCommitHookProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
+  
+      <p>Commit file actions to the table as a single transaction.</p>
+<p>Files referenced by an <code>AddAction</code> must already exist in the table location.
+A <code>RemoveAction</code> marks an existing file as removed and is only allowed with
+<code>mode="append"</code>; <code>mode="overwrite"</code> derives its own remove actions from the
+partition filters. A path cannot be both added and removed in the same
+transaction, and tables with <code>delta.appendOnly=true</code> reject remove actions
+that have <code>data_change=True</code>.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>actions</code></td>
+          <td>
+                <code>list[<a class="autorefs autorefs-internal" title="deltalake.transaction.AddAction" href="#deltalake.transaction.AddAction">AddAction</a> | <a class="autorefs autorefs-internal" title="deltalake.transaction.RemoveAction" href="#deltalake.transaction.RemoveAction">RemoveAction</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p><code>AddAction</code> and <code>RemoveAction</code> entries to commit together.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>mode</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>save mode of the write, <code>"append"</code> or <code>"overwrite"</code>.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>schema</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.schema.Schema" href="../schema/#deltalake.Schema">Schema</a> | <span title="arro3.core.types.ArrowSchemaExportable">ArrowSchemaExportable</span></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>schema of the files being added.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_by</code></td>
+          <td>
+                <code>list[str] | str | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>partition columns of the table.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>partitions to replace when <code>mode="overwrite"</code>.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.transaction.CommitProperties" href="#deltalake.CommitProperties">CommitProperties</a> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.transaction.PostCommitHookProperties" href="#deltalake.PostCommitHookProperties">PostCommitHookProperties</a> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
   </div>
 

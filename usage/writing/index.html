@@ -2196,6 +2196,13 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#bounding-memory-when-the-object-store-is-slow" class="md-nav__link">
+    Bounding memory when the object store is slow
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2347,6 +2354,21 @@ data classes.</p>
 </span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23" href="#__codelineno-4-23"></a>
 </span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24" href="#__codelineno-4-24"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="n">table_path</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">writer_properties</span><span class="o">=</span><span class="n">wp</span><span class="p">)</span>
 </span></code></pre></div></p>
+<h2 id="bounding-memory-when-the-object-store-is-slow">Bounding memory when the object store is slow</h2>
+<p>When a data file reaches its target size, the writer uploads it in the background and starts the next file at once. Each pending upload holds that file's bytes until the store accepts them. A slow store would let them pile up, so <code>deltalake</code> caps the bytes they may hold.</p>
+<p>The cap is a ceiling, not a reservation. A store that keeps up never reaches it. Once uploads do fall behind, the write waits for one to land before it starts another file, and that backpressure reaches the data source.</p>
+<p>By default the cap is a quarter of the memory the process may use — the container limit if there is one, otherwise total system memory — held between 4 and 32 times <code>target_file_size</code>. Below 4, uploads run one at a time. Above 32 they do not go faster, because how many keep a store busy depends on its request concurrency, and stores saturate well below 32. At the default 100 MiB <code>target_file_size</code> the upper bound is 3.2 GiB, so the memory share only lowers the cap under about 13 GiB of RAM. If the lower bound raises the share instead, <code>deltalake</code> warns that the target file size is large for the memory available.</p>
+<p>Set <code>DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES</code> to a byte count to choose the cap yourself, or to <code>-1</code> to remove it. <code>deltalake</code> reads it when a write starts, so it can differ between writes. Keep it above a few times <code>target_file_size</code>: a larger file takes the whole cap and still uploads, but then uploads run one at a time.</p>
+<p>One cap covers one write call. Every writer in it shares the cap, including the change data feed writer and all partition writers, so more partition values do not raise the cap. Concurrent writes each get their own.</p>
+<p>The cap covers uploads only. A write also keeps one file open per partition value it meets, and each open file buffers its current row group outside the cap. Writing across many partition values can therefore use several times the cap: measured against a fast store with a 64 MiB cap, peak memory was 22 MiB for 1 partition value and 460 MiB for 512, none of it pending uploads. Write fewer partition values per call, or lower <code>max_row_group_size</code> in <code>WriterProperties</code>, to bound that part.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">"DELTARS_MAX_IN_FLIGHT_UPLOAD_BYTES"</span><span class="p">]</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="mi">256</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span>  <span class="c1"># 256 MiB</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">write_deltalake</span>
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">"s3://bucket/my_table"</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"append"</span><span class="p">)</span>
+</span></code></pre></div>
 
 
 

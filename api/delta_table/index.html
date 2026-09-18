@@ -2240,6 +2240,13 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.create_write_transaction" class="md-nav__link">
+    create_write_transaction
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.delete" class="md-nav__link">
     delete
   </a>
@@ -2340,6 +2347,13 @@
           <li class="md-nav__item">
   <a href="#deltalake.DeltaTable.restore" class="md-nav__link">
     restore
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deltalake.DeltaTable.scan" class="md-nav__link">
+    scan
   </a>
   
 </li>
@@ -2554,10 +2568,10 @@ Depending on the storage backend used, you could provide options values using th
           </td>
           <td>
             <div class="doc-md-description">
-              <p>If True, skip parsing per-file statistics while opening the table.
-                Use for workflows that never need file pruning (vacuum, filesystem check, append-only writes).
-                Any predicated query on this instance will scan every file because the cache has no stats.
-                Partition pruning is unaffected. Defaults to False.</p>
+              <p>If True, skip parsing file statistics while opening the table.
+                Use for maintenance and append workflows that do not need file pruning.
+                Queries with predicates scan each file because the kernel disables statistics and
+                partition pruning. Defaults to False.</p>
             </div>
           </td>
           <td>
@@ -3030,6 +3044,147 @@ If 'ignore', will not do anything if table already exists. Defaults to "error".<
 
 
 
+<h4 id="deltalake.DeltaTable.create_write_transaction" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">create_write_transaction</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">create_write_transaction</span><span class="p">(</span><span class="n">actions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">AddAction</span> <span class="o">|</span> <span class="n">RemoveAction</span><span class="p">],</span> <span class="n">mode</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">DeltaSchema</span> <span class="o">|</span> <span class="n">ArrowSchemaExportable</span><span class="p">,</span> <span class="n">partition_by</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">commit_properties</span><span class="p">:</span> <span class="n">CommitProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">post_commithook_properties</span><span class="p">:</span> <span class="n">PostCommitHookProperties</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Commit file actions to the table as a single transaction.</p>
+<p>Files referenced by an <code>AddAction</code> must already exist in the table location.
+A <code>RemoveAction</code> marks an existing file as removed and is only allowed with
+<code>mode="append"</code>; <code>mode="overwrite"</code> derives its own remove actions from the
+partition filters. A path cannot be both added and removed in the same
+transaction, and tables with <code>delta.appendOnly=true</code> reject remove actions
+that have <code>data_change=True</code>.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>actions</code></td>
+          <td>
+                <code>list[<a class="autorefs autorefs-internal" title="deltalake.transaction.AddAction" href="../transaction/#deltalake.transaction.AddAction">AddAction</a> | <a class="autorefs autorefs-internal" title="deltalake.transaction.RemoveAction" href="../transaction/#deltalake.transaction.RemoveAction">RemoveAction</a>]</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p><code>AddAction</code> and <code>RemoveAction</code> entries to commit together.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>mode</code></td>
+          <td>
+                <code>str</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>save mode of the write, <code>"append"</code> or <code>"overwrite"</code>.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>schema</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.schema.Schema" href="../schema/#deltalake.Schema">Schema</a> | <span title="arro3.core.types.ArrowSchemaExportable">ArrowSchemaExportable</span></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>schema of the files being added.</p>
+            </div>
+          </td>
+          <td>
+              <em>required</em>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_by</code></td>
+          <td>
+                <code>list[str] | str | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>partition columns of the table.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>partition_filters</code></td>
+          <td>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>partitions to replace when <code>mode="overwrite"</code>.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>commit_properties</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.transaction.CommitProperties" href="../transaction/#deltalake.CommitProperties">CommitProperties</a> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties of the transaction commit.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>post_commithook_properties</code></td>
+          <td>
+                <code><a class="autorefs autorefs-internal" title="deltalake.transaction.PostCommitHookProperties" href="../transaction/#deltalake.PostCommitHookProperties">PostCommitHookProperties</a> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>properties for the post commit hook.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
 <h4 id="deltalake.DeltaTable.delete" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">delete</span>
 
@@ -3216,7 +3371,7 @@ Deletion vectors are materialized in memory before being exposed as record batch
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">file_uris</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterConjunctionType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">file_uris</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">file_pruning_predicate</span><span class="p">:</span> <span class="n">FilePruningPredicateType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -3224,8 +3379,44 @@ Deletion vectors are materialized in memory before being exposed as record batch
       <p>Get the list of files as absolute URIs, including the scheme (e.g. "s3://").</p>
 <p>Local files will be just plain absolute paths, without a scheme. (That is,
 no 'file://' prefix.)</p>
-<p>Use the partition_filters parameter to retrieve a subset of files that match the
-given filters.</p>
+<p>Files are selected with <code>file_pruning_predicate</code>, which takes either a SQL
+predicate string or tuple filters.</p>
+<p><strong>SQL predicates.</strong> Any boolean SQL expression built from column comparisons
+(<code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>), <code>IS [NOT] NULL</code>, <code>[NOT] IN</code>,
+<code>[NOT] BETWEEN</code>, <code>NOT</code>, <code>AND</code> and <code>OR</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">(</span><span class="n">file_pruning_predicate</span><span class="o">=</span><span class="s2">"year = 2021 AND (month = 1 OR day &gt; 15)"</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Tuple filters.</strong> Each filter is a <code>(column, op, value)</code> tuple. A flat list
+is a conjunction (AND) of its filters. A list of such lists is interpreted in
+disjunctive normal form: an OR across the inner AND groups.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">(</span><span class="n">file_pruning_predicate</span><span class="o">=</span><span class="p">[(</span><span class="s2">"year"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"2021"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"month"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"12"</span><span class="p">)])</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># year = 2021 AND month = 12</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">(</span><span class="n">file_pruning_predicate</span><span class="o">=</span><span class="p">[</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="p">[(</span><span class="s2">"year"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"2021"</span><span class="p">)],</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="p">[(</span><span class="s2">"year"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"2020"</span><span class="p">),</span> <span class="p">(</span><span class="s2">"month"</span><span class="p">,</span> <span class="s2">"&gt;="</span><span class="p">,</span> <span class="s2">"10"</span><span class="p">)],</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="p">])</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># year = 2021 OR (year = 2020 AND month &gt;= 10)</span>
+</span></code></pre></div>
+<p>The supported ops are <code>=</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>, <code>in</code>, and <code>not in</code>.
+For <code>in</code> and <code>not in</code>, the value must be a collection such as a list, a set
+or a tuple. Values may be Python primitives (str, int, float, bool, date,
+datetime); each is encoded to its partition string form and parsed against
+the column's type. Comparisons follow that type: on a string column,
+<code>("month", "&gt;=", 12)</code> compares lexicographically, so <code>"4" &gt;= "12"</code>. Use
+the empty string <code>''</code> to match a null partition value, or a SQL predicate
+with <code>IS NULL</code>.</p>
+<p><strong>Pruning semantics.</strong> The predicate prunes files, not rows. Filters on
+partition columns select files exactly. Filters on other columns are
+evaluated against per-file min/max statistics and select a superset: every
+file that may contain a matching row is returned, files that provably
+contain none are dropped, and files without statistics for a referenced
+column are always retained. Filter the rows after reading when you need
+exact results. How much a data-column filter actually prunes depends on
+the data layout: min/max statistics only rule out files when similar
+values are colocated, so tables partitioned or z-ordered on the
+referenced column prune well, while uniformly distributed values may
+prune nothing.</p>
 
 
 
@@ -3243,11 +3434,25 @@ given filters.</p>
         <tr>
           <td><code>partition_filters</code></td>
           <td>
-                <code><span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span> | None</code>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>the partition filters that will be used for getting the matched files</p>
+              <p>Deprecated. Pass tuple filters to <code>file_pruning_predicate</code> instead.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>file_pruning_predicate</code></td>
+          <td>
+                <code><span title="deltalake.table.FilePruningPredicateType">FilePruningPredicateType</span> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>a SQL predicate string or tuple filters as described above</p>
             </div>
           </td>
           <td>
@@ -3280,24 +3485,7 @@ given filters.</p>
         </tr>
     </tbody>
   </table>
-      <p>Predicates are expressed in disjunctive normal form (DNF), like <code>[("x", "=", "a"), ...]</code>.
-DNF allows arbitrary boolean logical combinations of single partition predicates.
-The innermost tuples each describe a single partition predicate. The list of inner
-predicates is interpreted as a conjunction (AND), forming a more selective and
-multiple partition predicates.</p>
-<p>Each tuple has format: <code>(key, op, value)</code> and compares the key with the value.</p>
-<p>The supported op are: <code>=</code>, <code>!=</code>, <code>in</code>, and <code>not in</code>. If the op is <code>in</code> or <code>not in</code>,
-the value must be a collection such as a list, a set or a tuple.
-The supported type for value is <code>str</code>. Use empty string <code>''</code> for Null partition value.</p>
 
-<details class="example" open>
-  <summary>Example</summary>
-  <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>("x", "=", "a")
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>("x", "!=", "a")
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>("y", "in", ["a", "b", "c"])
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>("z", "not in", ["a","b"])
-</span></code></pre></div>
-</details>
   </div>
 
 </div>
@@ -4144,7 +4332,7 @@ Set this to avoid OOM when merging into large tables with a source table which t
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">file_pruning_predicate</span><span class="p">:</span> <span class="n">FilePruningPredicateType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4171,11 +4359,26 @@ Set this to avoid OOM when merging into large tables with a source table which t
         <tr>
           <td><code>partition_filters</code></td>
           <td>
-                <code>list[tuple[str, str, <span title="typing.Any">Any</span>]] | None</code>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>The partition filters that will be used for getting the matched partitions, defaults to <code>None</code> (no filtering).</p>
+              <p>Deprecated. Pass tuple filters to <code>file_pruning_predicate</code> instead.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>file_pruning_predicate</code></td>
+          <td>
+                <code><span title="deltalake.table.FilePruningPredicateType">FilePruningPredicateType</span> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A SQL predicate string or tuple filters; syntax and
+pruning semantics are described in <code>file_uris</code>.</p>
             </div>
           </td>
           <td>
@@ -4184,6 +4387,9 @@ Set this to avoid OOM when merging into large tables with a source table which t
         </tr>
     </tbody>
   </table>
+      <p>When a filter references a non-partition column, the result contains the
+partitions of every file that may hold matching rows, following the pruning
+semantics described in <code>file_uris</code>.</p>
 
   </div>
 
@@ -4494,6 +4700,114 @@ Results in
 
 
 
+<h4 id="deltalake.DeltaTable.scan" class="doc doc-heading">
+          <span class="doc doc-object-name doc-function-name">scan</span>
+
+
+</h4>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">scan</span><span class="p">(</span><span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">predicate</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RecordBatchReader</span>
+</span></code></pre></div>
+
+  <div class="doc doc-contents ">
+  
+      <p>Lazily read the table with the built-in DataFusion engine.</p>
+<p>Returns an Arrow RecordBatchReader that streams batches as they are
+produced; consume it with anything arrow-native (pyarrow, duckdb,
+polars). Reads tables with column mapping or deletion vectors.
+Row order is not guaranteed.</p>
+
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>columns</code></td>
+          <td>
+                <code>list[str] | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>Column names to project. If None, all columns are read.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>predicate</code></td>
+          <td>
+                <code>str | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>SQL predicate evaluated per row by the engine; the
+result contains exactly the matching rows, unlike
+<code>file_pruning_predicate</code> on the file listing APIs, which only
+skips whole files. DataFusion SQL, parsed with the generic
+dialect and identifier normalization disabled, so unquoted
+column names match case sensitively.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+
+
+  <p><strong>Returns:</strong></p>
+  <table>
+    <thead>
+      <tr>
+<th>Name</th>        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+<td><code>RecordBatchReader</code></td>          <td>
+                <code><span title="arro3.core.RecordBatchReader">RecordBatchReader</span></code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A lazy stream of record batches.</p>
+            </div>
+          </td>
+        </tr>
+    </tbody>
+  </table>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">DeltaTable</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">"tmp/my_table"</span><span class="p">)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">reader</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">"value"</span><span class="p">],</span> <span class="n">predicate</span><span class="o">=</span><span class="s2">"year = '2021'"</span><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">reader</span><span class="p">:</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="o">...</span>
+</span></code></pre></div>
+</details>
+  </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+
 <h4 id="deltalake.DeltaTable.schema" class="doc doc-heading">
           <span class="doc doc-object-name doc-function-name">schema</span>
 
@@ -4544,12 +4858,28 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="n">Expression</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">types_mapper</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span><span class="p">],</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pd.DataFrame'</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="n">Expression</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">types_mapper</span><span class="p">:</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">pyarrow</span><span class="o">.</span><span class="n">DataType</span><span class="p">],</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pd.DataFrame'</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Build a pandas dataframe using data from the DeltaTable.</p>
+<p><code>filters</code> both prunes files and filters rows: each file's partition
+values and min/max statistics are attached to its dataset fragment, so
+files that cannot contain matching rows are never read, and the
+surviving rows are filtered exactly.</p>
+<p>This method is a thin wrapper over <code>to_pyarrow_dataset</code>. The unrolled
+chain is equivalent, and passing <code>file_pruning_predicate</code> there prunes
+during log replay, before any per-file fragment setup, which can matter
+on tables with very large file counts:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">"year"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"2021"</span><span class="p">)])</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># equivalent, pruning pre-scan; the pruning predicate keeps whole</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># surviving files, pass filter= to to_table for exact rows</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">file_pruning_predicate</span><span class="o">=</span><span class="s2">"year = 2021"</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">cols</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</span></code></pre></div>
 
 
 
@@ -4567,11 +4897,11 @@ Results in
         <tr>
           <td><code>partitions</code></td>
           <td>
-                <code>list[tuple[str, str, <span title="typing.Any">Any</span>]] | None</code>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+              <p>Deprecated. Use <code>filters</code>, or <code>to_pyarrow_dataset</code> with <code>file_pruning_predicate</code></p>
             </div>
           </td>
           <td>
@@ -4613,7 +4943,21 @@ Results in
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass <code>partitions</code></p>
+              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+        <tr>
+          <td><code>types_mapper</code></td>
+          <td>
+                <code><span title="typing.Callable">Callable</span>[[<a class="autorefs autorefs-external" title="pyarrow.DataType" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType">DataType</a>], <span title="typing.Any">Any</span>] | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A function mapping a pyarrow DataType to a pandas ExtensionDtype</p>
             </div>
           </td>
           <td>
@@ -4637,7 +4981,7 @@ Results in
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">FilterConjunctionType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">parquet_read_options</span><span class="p">:</span> <span class="n">ParquetReadOptions</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pyarrow.dataset.Dataset'</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">parquet_read_options</span><span class="p">:</span> <span class="n">ParquetReadOptions</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">as_large_types</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">file_pruning_predicate</span><span class="p">:</span> <span class="n">FilePruningPredicateType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pyarrow.dataset.Dataset'</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
@@ -4660,11 +5004,11 @@ Results in
         <tr>
           <td><code>partitions</code></td>
           <td>
-                <code><span title="deltalake.table.FilterConjunctionType">FilterConjunctionType</span> | None</code>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+              <p>Deprecated. Pass tuple filters to <code>file_pruning_predicate</code> instead</p>
             </div>
           </td>
           <td>
@@ -4731,6 +5075,22 @@ If <code>schema</code> is passed it takes precedence over this option.</p>
                 <code>False</code>
           </td>
         </tr>
+        <tr>
+          <td><code>file_pruning_predicate</code></td>
+          <td>
+                <code><span title="deltalake.table.FilePruningPredicateType">FilePruningPredicateType</span> | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p>A SQL predicate string or tuple filters selecting the
+files to include; see the <code>file_uris</code> docstring for the syntax and
+pruning semantics</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
     </tbody>
   </table>
       <p>More info on <a href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html">pyarrow dataset ParquetReadOptions</a>.</p>
@@ -4789,12 +5149,28 @@ a <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/pyth
 
 
 </h4>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="n">Expression</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pyarrow.Table'</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filesystem</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">pa_fs</span><span class="o">.</span><span class="n">FileSystem</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">filters</span><span class="p">:</span> <span class="n">FilterType</span> <span class="o">|</span> <span class="n">Expression</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s1">'pyarrow.Table'</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents ">
   
       <p>Build a PyArrow Table using data from the DeltaTable.</p>
+<p><code>filters</code> both prunes files and filters rows: each file's partition
+values and min/max statistics are attached to its dataset fragment, so
+files that cannot contain matching rows are never read, and the
+surviving rows are filtered exactly.</p>
+<p>This method is a thin wrapper over <code>to_pyarrow_dataset</code>. The unrolled
+chain is equivalent, and passing <code>file_pruning_predicate</code> there prunes
+during log replay, before any per-file fragment setup, which can matter
+on tables with very large file counts:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">cols</span><span class="p">,</span> <span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">"year"</span><span class="p">,</span> <span class="s2">"="</span><span class="p">,</span> <span class="s2">"2021"</span><span class="p">)])</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># equivalent, pruning pre-scan; the pruning predicate keeps whole</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># surviving files, pass filter= to to_table for exact rows</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">file_pruning_predicate</span><span class="o">=</span><span class="s2">"year = 2021"</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="p">)</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="n">cols</span><span class="p">)</span>
+</span></code></pre></div>
 
 
 
@@ -4812,11 +5188,11 @@ a <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/pyth
         <tr>
           <td><code>partitions</code></td>
           <td>
-                <code>list[tuple[str, str, <span title="typing.Any">Any</span>]] | None</code>
+                <code><span title="deltalake.table.FilterType">FilterType</span> | None</code>
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
+              <p>Deprecated. Use <code>filters</code>, or <code>to_pyarrow_dataset</code> with <code>file_pruning_predicate</code></p>
             </div>
           </td>
           <td>
@@ -4858,7 +5234,7 @@ a <a class="autorefs autorefs-external" href="https://arrow.apache.org/docs/pyth
           </td>
           <td>
             <div class="doc-md-description">
-              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression. If you pass a filter you do not need to pass <code>partitions</code></p>
+              <p>A disjunctive normal form (DNF) predicate for filtering rows, or directly a pyarrow.dataset.Expression</p>
             </div>
           </td>
           <td>

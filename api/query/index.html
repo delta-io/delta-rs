@@ -2306,7 +2306,7 @@
 
 
 </h3>
-<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">QueryBuilder</span><span class="p">()</span>
+<div class="doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">QueryBuilder</span><span class="p">(</span><span class="n">session_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span>
 </span></code></pre></div>
 
   <div class="doc doc-contents first">
@@ -2315,6 +2315,45 @@
       <p>QueryBuilder is an API which exposes Apache DataFusion SQL to Python users of the deltalake library.</p>
 <div class="language-py highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">qb</span> <span class="o">=</span> <span class="n">QueryBuilder</span><span class="p">()</span>
 </span></code></pre></div>
+  
+      <p>Create a QueryBuilder, optionally overriding the DataFusion session config.</p>
+
+<details class="example" open>
+  <summary>Example</summary>
+  <div class="language-py highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">from</span><span class="w"> </span><span class="nn">deltalake</span><span class="w"> </span><span class="kn">import</span> <span class="n">QueryBuilder</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">qb</span> <span class="o">=</span> <span class="n">QueryBuilder</span><span class="p">({</span><span class="s2">"datafusion.execution.batch_size"</span><span class="p">:</span> <span class="s2">"1024"</span><span class="p">})</span>
+</span></code></pre></div>
+</details>
+
+
+  <p><strong>Parameters:</strong></p>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Description</th>
+        <th>Default</th>
+      </tr>
+    </thead>
+    <tbody>
+        <tr>
+          <td><code>session_config</code></td>
+          <td>
+                <code>dict[str, str] | None</code>
+          </td>
+          <td>
+            <div class="doc-md-description">
+              <p><a href="https://datafusion.apache.org/user-guide/configs.html">DataFusion configuration settings</a>
+applied on top of the defaults deltalake tunes for Delta tables.</p>
+            </div>
+          </td>
+          <td>
+                <code>None</code>
+          </td>
+        </tr>
+    </tbody>
+  </table>
 
 
   

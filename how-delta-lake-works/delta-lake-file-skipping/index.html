@@ -2022,6 +2022,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#file-skipping-with-deltalake" class="md-nav__link">
+    File skipping with deltalake
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-delta-lake-implements-file-skipping" class="md-nav__link">
     How Delta Lake implements file skipping
   </a>
@@ -2279,6 +2286,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#file-skipping-with-deltalake" class="md-nav__link">
+    File skipping with deltalake
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#how-delta-lake-implements-file-skipping" class="md-nav__link">
     How Delta Lake implements file skipping
   </a>
@@ -2384,6 +2398,22 @@
 </span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>+-------+-----+
 </span></code></pre></div>
 <p>Polars can use the Delta table metadata to skip the file that does not contain data relevant to the query.</p>
+<h2 id="file-skipping-with-deltalake">File skipping with deltalake</h2>
+<p>The same skipping is exposed directly on <code>DeltaTable</code>: the file-listing
+methods accept a <code>file_pruning_predicate</code> (a SQL string or tuple filters) and
+prune files against the transaction log before any data is read, and <code>filters</code>
+on the read methods prunes the same way before filtering rows.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">"tmp/a_table"</span><span class="p">)</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">(</span><span class="n">file_pruning_predicate</span><span class="o">=</span><span class="s2">"age &lt; 20"</span><span class="p">)</span>  <span class="c1"># only the file that may contain age &lt; 20</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">filters</span><span class="o">=</span><span class="p">[(</span><span class="s2">"age"</span><span class="p">,</span> <span class="s2">"&lt;"</span><span class="p">,</span> <span class="mi">20</span><span class="p">)])</span>
+</span></code></pre></div>
+<p>On non-partition columns like <code>age</code> the pruning is conservative: a file is
+dropped only when its min/max statistics prove no row can match, so the file
+list is a complete superset of the matching files. Partition-column predicates
+prune exactly. See
+<a href="../../usage/querying-delta-tables/#selecting-files-with-a-pruning-predicate">Querying Delta Tables</a>
+for details.</p>
 <h2 id="how-delta-lake-implements-file-skipping">How Delta Lake implements file skipping</h2>
 <p>Here’s how engines execute queries on Delta tables:</p>
 <ul>
@@ -2403,33 +2433,33 @@
 <h2 id="how-to-maximize-file-skipping">How to maximize file skipping</h2>
 <p>You can maximize file-skipping by colocating similar data in the same files.</p>
 <p>Suppose you have a table with test scores and frequently run queries that filter based on the <code>test_score</code> column.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>filename    min_test_score  max_test_score
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>fileA       45              100
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>fileB       65              98
-</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>fileC       50              96
+<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>filename    min_test_score  max_test_score
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>fileA       45              100
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>fileB       65              98
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>fileC       50              96
 </span></code></pre></div>
 <p>Suppose you want to run the following query: <code>select * from exams where test_score &gt; 90</code>.</p>
 <p>This query cannot skip files, given the current organization of the data.  You can rearrange the data to colocate similar test scores in the same files to allow for file skipping.  Here’s the new layout: </p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>filename    min_test_score  max_test_score
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>fileD       45              70
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>fileE       55              80
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>fileF       78              100
+<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>filename    min_test_score  max_test_score
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>fileD       45              70
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>fileE       55              80
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>fileF       78              100
 </span></code></pre></div>
 <p>The query (<code>select * from exams where test_score &gt; 90</code>) can skip two of the three files with the new Delta table layout.  The query engine only has to read <code>fileF</code> for this query.</p>
 <p>Now, let’s look at how file skipping works with string values.</p>
 <h2 id="how-file-skipping-works-with-strings">How file skipping works with strings</h2>
 <p>File skipping is also effective when filtering on string values.</p>
 <p>Suppose you have a table with <code>person_name</code> and <code>country</code> columns.  There are millions of rows of data.  Here are the first three rows of data:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>person_name country
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>person1     angola
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>person2     china
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>person3     mexico
+<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>person_name country
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>person1     angola
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>person2     china
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>person3     mexico
 </span></code></pre></div>
 <p>The Delta table contains three files with the following metadata:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>filename    min_country max_country
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>fileA       albania     mali
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>fileB       libia       paraguay
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>fileC       oman        zimbabwe
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>filename    min_country max_country
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>fileA       albania     mali
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>fileB       libia       paraguay
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>fileC       oman        zimbabwe
 </span></code></pre></div>
 <p>Suppose you want to run the following query: <code>select * from some_people where country = 'austria'</code>.</p>
 <p>You only need to read the data in <code>fileA</code> to run this query.  The <code>min_country</code> value for <code>fileB</code> and <code>fileC</code> are greater than “austria”, so we know those files don’t contain any data relevant to the query.</p>
@@ -2437,13 +2467,13 @@
 <h2 id="file-skipping-for-partitioned-tables">File skipping for partitioned tables</h2>
 <p>You can partition Delta tables for file skipping as well.  Suppose we have the same data as in the previous section, but the table is partitioned by <code>country</code>.</p>
 <p>Here’s the Delta table:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>filename    partition
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>fileA       albania
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>fileB       libia
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>fileC       oman
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>fileD       jamaica
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>fileE       albania
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>fileF       oman
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>filename    partition
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>fileA       albania
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>fileB       libia
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>fileC       oman
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>fileD       jamaica
+</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>fileE       albania
+</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>fileF       oman
 </span></code></pre></div>
 <p>Suppose you want to run the following query on this partitioned table: <code>select * from some_partitioned_table where country = 'albania'</code>.</p>
 <p>You only need to read <code>fileA</code> and <code>fileE</code> to execute this query.  Delta Lake provides the file-level partition metadata in the transaction log so that this query will run quickly.</p>

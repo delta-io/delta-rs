@@ -1078,6 +1078,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#writing-to-a-slow-object-store" class="md-nav__link">
+    Writing to a slow object store
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#use-vacuum-to-save-storage-costs" class="md-nav__link">
     Use vacuum to save storage costs
   </a>
@@ -2335,6 +2342,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#writing-to-a-slow-object-store" class="md-nav__link">
+    Writing to a slow object store
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#use-vacuum-to-save-storage-costs" class="md-nav__link">
     Use vacuum to save storage costs
   </a>
@@ -2432,6 +2446,9 @@
 <p>DML operations like deleting, updating, and merging write existing data in new files and mark existing files for deletion in the transaction log.  Rewriting data files is expensive, so you want to minimize the number of rewritten files when you run DML operations.</p>
 <p>Delta Lake supports a table feature called deletion vectors that implements DML transactions more efficiently under the hood.  Enabling deletion vectors is usually the best way to make DML operations run faster.  Note: delta-rs doesn’t support deletion vectors yet.</p>
 <p>You should periodically purge deletion vectors because they can accumulate and slow subsequent read operations.  Once you enable the feature, you must purge the deletion vectors in your table with an appropriate cadence.</p>
+<h2 id="writing-to-a-slow-object-store">Writing to a slow object store</h2>
+<p>When the object store accepts data more slowly than the writer produces it, finished files wait in memory for their upload to land.  On a large write against a slow or throttled store, those pending uploads can grow until the process runs out of memory.</p>
+<p>delta-rs caps how many bytes pending uploads may hold, so a slow store slows the write down instead of exhausting memory.  The cap is set for you and usually needs no attention.  Note that it bounds uploads only, so a write spread over many partition values still uses extra memory for the files it holds open.  If you write very large files, or run in a container with little memory, see <a href="https://delta-io.github.io/delta-rs/usage/writing/#bounding-memory-when-the-object-store-is-slow">bounding memory when the object store is slow</a>.</p>
 <h2 id="use-vacuum-to-save-storage-costs">Use vacuum to save storage costs</h2>
 <p>Delta Lake supports transactions, which necessitates keeping old versions of data in storage, even the files marked for removal in the transaction log.</p>
 <p>Keeping old versions of Delta tables in storage is often desirable because it allows for versioned data, time travel, and rolling back tables to a previous state.</p>
