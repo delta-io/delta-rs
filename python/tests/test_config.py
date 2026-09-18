@@ -1,6 +1,6 @@
 from arro3.core import Table
 
-from deltalake import write_deltalake
+from deltalake import TableProperty, write_deltalake
 from deltalake.table import DeltaTable, DeltaTableConfig
 
 
@@ -37,6 +37,18 @@ def test_config_roundtrip(tmp_path, sample_table: Table):
     )
 
     assert config == dt.table_config
+
+
+def test_table_property_as_configuration_key(tmp_path, sample_table: Table):
+    write_deltalake(
+        tmp_path,
+        sample_table,
+        configuration={TableProperty.APPEND_ONLY: "true"},
+    )
+
+    configuration = DeltaTable(tmp_path).metadata().configuration
+
+    assert configuration[TableProperty.APPEND_ONLY.value] == "true"
 
 
 def test_open_with_skip_stats(tmp_path, sample_table: Table):
