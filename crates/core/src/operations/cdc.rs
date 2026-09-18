@@ -152,7 +152,12 @@ mod tests {
     /// determining whether CDC files should be written or not.
     #[tokio::test]
     async fn test_should_write_cdc_v7_table_no_writer_feature() {
-        let actions = vec![Action::Protocol(ProtocolInner::new(1, 7).as_kernel())];
+        // Create protocol with writer version 7 and a writer feature that's NOT CDC
+        // This tests the specific behavior where writer features exist but CDC feature is not set
+        let protocol = ProtocolInner::new(1, 7)
+            .append_writer_features(vec![TableFeature::AppendOnly])
+            .as_kernel();
+        let actions = vec![Action::Protocol(protocol)];
         let mut table: DeltaTable = DeltaTable::new_in_memory()
             .create()
             .with_column(

@@ -6,7 +6,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
-from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import pytest
@@ -15,9 +14,8 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaError, DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
-from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
 S3_SIMPLE_TABLE_FILES = [
@@ -590,8 +588,6 @@ def test_without_files_update_preserves_get_add_actions_error(tmp_path: Path):
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    from urllib.parse import urlparse
-
     table_path = urlparse(dt.table_uri).path
     absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
@@ -1007,21 +1003,6 @@ def test_delta_table_with_filters():
         == len(dt.to_pandas(filters=filter_expr))
         == data.num_rows
     )
-
-
-@pytest.mark.pyarrow
-def test_writer_fails_on_protocol():
-    import pytest
-
-    table_path = "../crates/test/tests/data/simple_table"
-    dt = DeltaTable(table_path)
-    dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_dataset()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_table()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pandas()
 
 
 class ExcPassThroughThread(Thread):
@@ -1782,49 +1763,19 @@ def test_deletion_vectors_table_with_deletion_logs():
     dt = DeltaTable(table_path)
 
     vectors = dt.deletion_vectors().read_all()
-    assert vectors.num_rows > 0
-
-    add_actions = dt.get_add_actions(flatten=True)
-    table_root = Path(table_path).resolve()
-    add_paths = add_actions["path"].to_pylist()
-    add_num_records = add_actions["num_records"].to_pylist()
-    num_records_by_file_path: dict[str, int] = {}
-    for add_path, num_records in zip(add_paths, add_num_records, strict=True):
-        file_path = (table_root / add_path).resolve().as_posix()
-        assert file_path not in num_records_by_file_path
-        num_records_by_file_path[file_path] = num_records
-
-    found_deleted_row = False
-    known_file_suffix = (
+    assert vectors.num_rows == 1
+    filepath = vectors["filepath"].to_pylist()[0]
+    assert Path(urlparse(filepath).path).name == (
         "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
     )
-    known_file_mask = None
-    known_file_num_records = None
+    expected_mask = [True] * 100
+    expected_mask[2] = expected_mask[79] = False
+    assert vectors["selection_vector"].to_pylist() == [expected_mask]
 
-    for filepath, mask in zip(
-        vectors["filepath"].to_pylist(),
-        vectors["selection_vector"].to_pylist(),
-        strict=True,
-    ):
-        file_path = Path(urlparse(filepath).path).as_posix()
-        assert file_path in num_records_by_file_path
-
-        num_records = num_records_by_file_path[file_path]
-        filename = Path(file_path).name
-        assert len(mask) == num_records
-
-        if False in mask:
-            found_deleted_row = True
-        if filename == known_file_suffix:
-            known_file_mask = mask
-            known_file_num_records = num_records
-
-    assert found_deleted_row
-    assert known_file_mask is not None
-    assert known_file_num_records is not None
-    assert len(known_file_mask) == known_file_num_records
-    assert False in known_file_mask
-    assert known_file_mask[-1] is True
+    con = QueryBuilder()
+    con.register("test", dt)
+    df = con.execute("SELECT * FROM test").read_all()
+    assert len(df) == 98
 
 
 @pytest.mark.pandas

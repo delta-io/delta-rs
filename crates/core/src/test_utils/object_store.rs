@@ -122,7 +122,7 @@ fn classify_path(path: &Path) -> RecordedPathKind {
             | LogPathFileType::CompactedCommit { .. }
             | LogPathFileType::Crc
             | LogPathFileType::Unknown => RecordedPathKind::Commit,
-            LogPathFileType::SinglePartCheckpoint
+            LogPathFileType::ClassicCheckpoint
             | LogPathFileType::UuidCheckpoint
             | LogPathFileType::MultiPartCheckpoint { .. } => RecordedPathKind::Checkpoint,
         };

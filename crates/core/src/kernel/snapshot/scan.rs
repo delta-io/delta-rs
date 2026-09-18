@@ -162,10 +162,14 @@ fn with_kernel_stats_output(
         StatsSourcePolicy::None => delta_kernel::scan::StatsOptions::none(),
         StatsSourcePolicy::ParsedWithJsonFallback => match materialization.stats_projection() {
             StatsProjection::None => delta_kernel::scan::StatsOptions::json_only(),
-            StatsProjection::Full => delta_kernel::scan::StatsOptions::all_struct(),
-            StatsProjection::PredicateColumns(_columns) => {
-                // TODO: Pass the selected columns to `StatsOptions::struct_columns`.
-                delta_kernel::scan::StatsOptions::all_struct()
+            StatsProjection::Full | StatsProjection::PredicateColumns(_) => {
+                // Cached replay requires JSON stats in Kernel's base scan schema.
+                if materialization.preserves_raw_stats() {
+                    delta_kernel::scan::StatsOptions::all()
+                } else {
+                    // TODO: Pass selected columns to `StatsOptions::struct_columns`.
+                    delta_kernel::scan::StatsOptions::all_struct()
+                }
             }
             StatsProjection::NumRecordsOnly => delta_kernel::scan::StatsOptions::json_only(),
         },
