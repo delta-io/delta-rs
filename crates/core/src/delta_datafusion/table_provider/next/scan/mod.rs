@@ -361,13 +361,12 @@ async fn replay_files(
     })
 }
 
-/// Normalize a DV keep mask for `deletion_vectors()`.
+/// Pad a DV keep mask to `numRecords` for `deletion_vectors()`.
 ///
-/// Kernel returns a sparse mask (up to the highest deleted row index). For API output we need one
-/// full mask per file, to do this we pad trailing entries with `true` up to `numRecords`. If `numRecords`
-/// is missing the mask will be empty
+/// Kernel stops the mask at the highest deleted row. Fill trailing entries with `true`.
+/// Return an error when `numRecords` is missing or shorter than the mask.
 ///
-/// This is API only. Scan execution does per batch normalization in `exec::consume_dv_mask` and
+/// Scan execution normalizes each batch in `exec::consume_dv_mask` and
 /// `exec_meta::apply_selection_vector`.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,
@@ -376,8 +375,10 @@ fn normalize_dv_keep_mask_for_api(
 ) -> Result<Vec<bool>> {
     let redacted_url = super::redact_url_for_error(file_url);
     let Some(num_records) = num_records else {
-        debug!("Missing numRecords for file with deletion vector: {redacted_url:?}");
-        return Ok(vec![]);
+        return plan_err!(
+            "Missing numRecords for file with deletion vector: {}",
+            redacted_url
+        );
     };
     let num_records = usize::try_from(num_records).map_err(|_| {
         DataFusionError::Execution(format!(
@@ -1161,6 +1162,20 @@ mod tests {
             .expect_err("longer mask should error");
         let message = err.to_string();
         assert!(message.contains("exceeds numRecords"));
+        assert!(message.contains(&expected_url));
+        assert!(!message.contains("sig=token"));
+        assert!(!message.contains("secret"));
+    }
+
+    #[test]
+    fn test_normalize_dv_keep_mask_for_api_errors_when_num_records_missing() {
+        let url =
+            Url::parse("s3://user:secret@example.com/table/file.parquet?sig=token#frag").unwrap();
+        let expected_url = super::super::redact_url_for_error(&url);
+        let err = normalize_dv_keep_mask_for_api(vec![true], None, &url)
+            .expect_err("missing numRecords should error");
+        let message = err.to_string();
+        assert!(message.contains("Missing numRecords"));
         assert!(message.contains(&expected_url));
         assert!(!message.contains("sig=token"));
         assert!(!message.contains("secret"));
