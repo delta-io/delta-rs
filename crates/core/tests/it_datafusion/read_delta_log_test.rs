@@ -398,7 +398,6 @@ async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant
         location.clone(),
         table.version().unwrap(),
         Some(false),
-        None,
     )
     .await
     .unwrap();

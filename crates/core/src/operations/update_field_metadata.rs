@@ -1,20 +1,19 @@
 //! Update metadata on a field in a schema
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use delta_kernel::schema::{MetadataValue, StructType};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{
     Action, EagerSnapshot, MetadataExt as _, ProtocolExt as _, SnapshotMetadataRef,
     resolve_snapshot,
 };
 use crate::logstore::LogStoreRef;
+use crate::operations::commit_actions_in_scope;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -30,16 +29,6 @@ pub struct UpdateFieldMetadataBuilder {
     log_store: LogStoreRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for UpdateFieldMetadataBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl UpdateFieldMetadataBuilder {
@@ -51,7 +40,6 @@ impl UpdateFieldMetadataBuilder {
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -70,12 +58,6 @@ impl UpdateFieldMetadataBuilder {
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -154,28 +136,20 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
             let snapshot =
                 resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
             let (actions, operation) = plan_update_field_metadata_actions(
                 snapshot.snapshot().metadata_state(),
                 &this.field_name,
                 this.metadata.clone(),
             )?;
 
-            let commit = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(this.get_custom_execute_handler())
-                .build(Some(&snapshot), this.log_store.clone(), operation)
-                .await?;
-
-            this.post_execute(operation_id).await?;
-
-            Ok(DeltaTable::new_with_state(
-                this.log_store,
-                commit.snapshot(),
-            ))
+            commit_actions_in_scope(
+                &this.log_store,
+                &snapshot,
+                this.commit_properties,
+                actions,
+                operation,
+            )
+            .await
         })
     }
 }

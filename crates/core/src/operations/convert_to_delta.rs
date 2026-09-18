@@ -17,9 +17,7 @@ use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
 use tracing::debug;
-use uuid::Uuid;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::CommitProperties;
 use crate::logstore::StorageConfig;
@@ -116,7 +114,6 @@ pub struct ConvertToDeltaBuilder {
     configuration: HashMap<String, Option<String>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 impl Default for ConvertToDeltaBuilder {
@@ -125,14 +122,11 @@ impl Default for ConvertToDeltaBuilder {
     }
 }
 
-impl super::Operation for ConvertToDeltaBuilder {
+impl ConvertToDeltaBuilder {
     fn log_store(&self) -> &LogStoreRef {
         self.log_store
             .as_ref()
             .expect("Log store should be available at this stage.")
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
     }
 }
 
@@ -150,7 +144,6 @@ impl ConvertToDeltaBuilder {
             comment: None,
             configuration: Default::default(),
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -246,14 +239,8 @@ impl ConvertToDeltaBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
-
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
-    async fn into_create_builder(mut self) -> Result<(CreateBuilder, Uuid), Error> {
+    async fn into_create_builder(mut self) -> Result<CreateBuilder, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
         // Return an error if neither log store nor path is provided
         self.log_store = if let Some(log_store) = self.log_store {
@@ -270,9 +257,6 @@ impl ConvertToDeltaBuilder {
             return Err(Error::MissingLocation);
         };
 
-        let operation_id = self.get_operation_id();
-        self.pre_execute(operation_id).await?;
-
         // Return an error if the location is already a Delta table location
         if self.log_store().is_delta_table_location().await? {
             return Err(Error::DeltaTableAlready);
@@ -283,7 +267,7 @@ impl ConvertToDeltaBuilder {
         );
 
         // Get all the parquet files in the location
-        let object_store = self.log_store().object_store(None);
+        let object_store = self.log_store().object_store();
         let mut files = Vec::new();
         object_store
             .list(None)
@@ -442,7 +426,7 @@ impl ConvertToDeltaBuilder {
         if let Some(comment) = self.comment {
             builder = builder.with_comment(comment);
         }
-        Ok((builder, operation_id))
+        Ok(builder)
     }
 }
 
@@ -454,17 +438,10 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
         let this = self;
 
         Box::pin(async move {
-            let handler = this.custom_execute_handler.clone();
-            let (builder, operation_id) = this
+            let builder = this
                 .into_create_builder()
                 .await
                 .map_err(DeltaTableError::from)?;
-
-            if let Some(handler) = handler {
-                handler
-                    .post_execute(builder.log_store(), operation_id)
-                    .await?;
-            }
 
             let table = builder.await?;
             Ok(table)

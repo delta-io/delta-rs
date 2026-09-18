@@ -649,3 +649,186 @@ def test_storage_options(sample_table: Table):
                 "bearer_token": "test",
             },
         )
+
+
+def _transaction_branches() -> set[str]:
+    """Names of the hidden `delta-tx-*` branches in the test repository."""
+    import base64
+    import json
+    import urllib.request
+
+    request = urllib.request.Request(
+        "http://127.0.0.1:8000/api/v1/repositories/bronze/branches"
+        "?show_hidden=true&amount=1000"
+    )
+    token = base64.b64encode(b"LAKEFSID:LAKEFSKEY").decode()
+    request.add_header("Authorization", f"Basic {token}")
+    with urllib.request.urlopen(request) as response:
+        results = json.load(response)["results"]
+    return {branch["id"] for branch in results if branch["id"].startswith("delta-tx-")}
+
+
+def _priced_row(price: int) -> Table:
+    return Table(
+        {
+            "id": Array(
+                ["9"], ArrowField("id", type=DataType.string_view(), nullable=True)
+            ),
+            "price": Array(
+                [price], ArrowField("price", type=DataType.int64(), nullable=True)
+            ),
+            "sold": Array(
+                [1], ArrowField("sold", type=DataType.int32(), nullable=True)
+            ),
+            "deleted": Array(
+                [False], ArrowField("deleted", type=DataType.bool(), nullable=True)
+            ),
+        }
+    )
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
+def test_failed_write_leaves_no_transaction_branch(
+    lakefs_path, sample_table: Table, lakefs_storage_options
+):
+    write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+    dt.alter.add_constraint({"price_cap": "price < 100"})
+    assert dt.version() == 1
+    before = _transaction_branches()
+
+    # The data files are uploaded to the transaction branch before the constraint check
+    # fails, so the branch must be deleted by the failure path.
+    with pytest.raises(DeltaError):
+        write_deltalake(
+            lakefs_path,
+            _priced_row(1000),
+            mode="append",
+            storage_options=lakefs_storage_options,
+        )
+
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+    assert dt.version() == 1
+    assert _transaction_branches() <= before
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
+def test_concurrent_writers_commit_distinct_versions(
+    lakefs_path, sample_table: Table, lakefs_storage_options
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
+    before = _transaction_branches()
+
+    def append(_: int) -> None:
+        write_deltalake(
+            lakefs_path,
+            sample_table,
+            mode="append",
+            storage_options=lakefs_storage_options,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(append, range(2)))
+
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+    assert dt.version() == 2
+    assert [entry["operation"] for entry in dt.history()] == ["WRITE", "WRITE", "WRITE"]
+    assert len(dt.file_uris()) == 3
+    assert _transaction_branches() <= before
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
+def test_create_write_transaction_commits_files_staged_on_the_branch(
+    lakefs_path, sample_table: Table, lakefs_storage_options, lakefs_client
+):
+    import io
+
+    import lakefs
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from deltalake.transaction import AddAction
+
+    table_name = lakefs_path.rsplit("/", 1)[1]
+    write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+    branch = lakefs.Branch(
+        repository_id="bronze", branch_id="main", client=lakefs_client
+    )
+    commits_before = len(list(branch.log()))
+
+    # A low-level writer stages its own file on the source branch, without a transaction
+    # branch. The commit is a conditional put of the commit file plus a LakeFS commit of
+    # the source branch.
+    buffer = io.BytesIO()
+    pq.write_table(
+        pa.table(
+            {"id": ["9"], "price": [9], "sold": [9], "deleted": [False]},
+            schema=pa.schema(
+                [
+                    ("id", pa.string()),
+                    ("price", pa.int64()),
+                    ("sold", pa.int32()),
+                    ("deleted", pa.bool_()),
+                ]
+            ),
+        ),
+        buffer,
+    )
+    data = buffer.getvalue()
+    branch.object(f"{table_name}/part-staged.parquet").upload(data=data, mode="wb")
+    assert list(branch.uncommitted(prefix=table_name)), "the file is only staged"
+
+    dt.create_write_transaction(
+        actions=[AddAction("part-staged.parquet", len(data), {}, 0, True, "{}")],
+        mode="append",
+        schema=dt.schema(),
+    )
+
+    dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+    assert dt.version() == 1
+    assert len(dt.file_uris()) == 2
+    rows = QueryBuilder().register("tbl", dt).execute("select * from tbl").read_all()
+    assert rows.num_rows == 6
+    assert list(branch.uncommitted(prefix=table_name)) == []
+    assert len(list(branch.log())) == commits_before + 1
+
+
+@pytest.mark.lakefs
+@pytest.mark.integration
+def test_write_into_dirty_branch_fails_and_leaves_the_source_unchanged(
+    lakefs_path, sample_table: Table, lakefs_storage_options, lakefs_client
+):
+    import lakefs
+
+    table_name = lakefs_path.rsplit("/", 1)[1]
+    write_deltalake(lakefs_path, sample_table, storage_options=lakefs_storage_options)
+    branch = lakefs.Branch(
+        repository_id="bronze", branch_id="main", client=lakefs_client
+    )
+    dirty_path = f"{table_name}/staged-by-another-tool.txt"
+    branch.object(dirty_path).upload(data="not committed", mode="w")
+    before = _transaction_branches()
+
+    try:
+        with pytest.raises(DeltaError, match="uncommitted changes"):
+            write_deltalake(
+                lakefs_path,
+                sample_table,
+                mode="append",
+                storage_options=lakefs_storage_options,
+            )
+
+        dt = DeltaTable(lakefs_path, storage_options=lakefs_storage_options)
+        assert dt.version() == 0
+        assert not branch.object(
+            f"{table_name}/_delta_log/00000000000000000001.json"
+        ).exists()
+        assert _transaction_branches() <= before
+    finally:
+        branch.reset_changes(path_type="object", path=dirty_path)

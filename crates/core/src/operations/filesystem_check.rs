@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -25,16 +24,14 @@ use object_store::ObjectStore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 use url::{ParseError, Url};
-use uuid::Uuid;
 
-use super::CustomExecuteHandler;
-use super::Operation;
 use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{Action, Add, Remove};
 use crate::kernel::{ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, resolve_snapshot};
 use crate::logstore::LogStoreRef;
+use crate::logstore::with_operation;
 use crate::protocol::DeltaOperation;
 use crate::table::state::DeltaTableState;
 
@@ -49,7 +46,6 @@ pub struct FileSystemCheckBuilder {
     dry_run: bool,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 /// Details of the FSCK operation including which files were removed from the log
@@ -66,8 +62,6 @@ pub struct FileSystemCheckMetrics {
 }
 
 struct FileSystemCheckPlan {
-    /// Delta object store for handling data files
-    log_store: LogStoreRef,
     /// Files that no longer exists in undlying ObjectStore but have active add actions
     pub files_to_remove: Vec<Add>,
 }
@@ -101,15 +95,6 @@ fn is_absolute_path(path: &str) -> DeltaResult<bool> {
     }
 }
 
-impl super::Operation for FileSystemCheckBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
-}
-
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
     pub(crate) fn new(log_store: LogStoreRef, snapshot: Option<EagerSnapshot>) -> Self {
@@ -118,7 +103,6 @@ impl FileSystemCheckBuilder {
             log_store,
             dry_run: false,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -131,12 +115,6 @@ impl FileSystemCheckBuilder {
     /// Additional information to write to the commit
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 
@@ -163,7 +141,7 @@ impl FileSystemCheckBuilder {
             }
         }
 
-        let object_store = log_store.object_store(None);
+        let object_store = log_store.object_store();
         let list_span = info_span!("list_files", operation = "filesystem_check");
         let mut files = list_span.in_scope(|| object_store.list(None));
 
@@ -188,20 +166,16 @@ impl FileSystemCheckBuilder {
             .map(|file| file.to_owned())
             .collect();
 
-        Ok(FileSystemCheckPlan {
-            files_to_remove,
-            log_store,
-        })
+        Ok(FileSystemCheckPlan { files_to_remove })
     }
 }
 
 impl FileSystemCheckPlan {
     pub async fn execute(
         self,
+        log_store: LogStoreRef,
         snapshot: &EagerSnapshot,
         mut commit_properties: CommitProperties,
-        operation_id: Uuid,
-        handle: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<FileSystemCheckMetrics> {
         let mut actions = Vec::with_capacity(self.files_to_remove.len());
         let mut removed_file_paths = Vec::with_capacity(self.files_to_remove.len());
@@ -237,12 +211,10 @@ impl FileSystemCheckPlan {
         );
 
         CommitBuilder::from(commit_properties)
-            .with_operation_id(operation_id)
-            .with_post_commit_hook_handler(handle)
             .with_actions(actions)
             .build(
                 Some(snapshot),
-                self.log_store.clone(),
+                log_store,
                 DeltaOperation::FileSystemCheck {},
             )
             .await?;
@@ -281,22 +253,16 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                     },
                 ));
             };
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let parent = this.log_store.clone();
+            let commit_properties = this.commit_properties;
+            let snapshot_ref = &snapshot;
+            let metrics = with_operation(&parent, |log_store| async move {
+                plan.execute(log_store, snapshot_ref, commit_properties)
+                    .await
+            })
+            .await?;
 
-            let metrics = plan
-                .execute(
-                    &snapshot,
-                    this.commit_properties.clone(),
-                    operation_id,
-                    this.get_custom_execute_handler(),
-                )
-                .await?;
-
-            this.post_execute(operation_id).await?;
-
-            let mut table =
-                DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot));
+            let mut table = DeltaTable::new_with_state(parent, DeltaTableState::new(snapshot));
             table.update_state().await?;
             Ok((table, metrics))
         })

@@ -263,8 +263,7 @@ impl Snapshot {
         config: DeltaTableConfig,
         version: Option<Version>,
     ) -> DeltaResult<Self> {
-        // TODO: bundle operation_id with logstore ...
-        let engine = log_store.engine(None);
+        let engine = log_store.engine();
 
         // NB: kernel engine uses Url::join to construct paths,
         // if the path does not end with a slash, the would override the entire path.
@@ -480,7 +479,7 @@ impl Snapshot {
             return Ok(self);
         }
 
-        self.materialize_files_with_engine(log_store.engine(None), None)
+        self.materialize_files_with_engine(log_store.engine(), None)
             .await
     }
 
@@ -617,7 +616,7 @@ impl Snapshot {
             return cached;
         }
         if predicate.is_some() && self.config.skip_stats {
-            return self.files_with_engine(log_store.engine(None), predicate);
+            return self.files_with_engine(log_store.engine(), predicate);
         }
 
         match self
@@ -628,14 +627,14 @@ impl Snapshot {
                 let (existing_version, existing_data, existing_predicate) =
                     materialized_seed.into_parts();
                 self.files_from(
-                    log_store.engine(None),
+                    log_store.engine(),
                     predicate,
                     existing_version,
                     Box::new(existing_data),
                     existing_predicate,
                 )
             }
-            None => self.files_with_engine(log_store.engine(None), predicate),
+            None => self.files_with_engine(log_store.engine(), predicate),
         }
     }
 
@@ -794,7 +793,7 @@ impl Snapshot {
                 let (existing_version, existing_data, existing_predicate) =
                     materialized_seed.into_parts();
                 self.files_from_materialized_with_options(
-                    log_store.engine(None),
+                    log_store.engine(),
                     predicate,
                     existing_version,
                     Box::new(existing_data),
@@ -806,7 +805,7 @@ impl Snapshot {
                 )
             }
             None => self.files_with_engine_materialized_with_skip_stats(
-                log_store.engine(None),
+                log_store.engine(),
                 predicate,
                 stats_mode,
                 skip_stats,
@@ -989,7 +988,7 @@ impl Snapshot {
         log_store: &dyn LogStore,
         limit: Option<usize>,
     ) -> DeltaResult<BoxStream<'_, DeltaResult<Option<CommitInfo>>>> {
-        let store = log_store.root_object_store(None);
+        let store = log_store.root_object_store();
 
         let log_root = self.table_root_path()?.join("_delta_log");
         let start_from = if let Some(limit) = limit {
@@ -1074,7 +1073,7 @@ impl Snapshot {
         let tx = builder.tx();
 
         // TODO: bundle operation id with log store ...
-        let engine = log_store.engine(None);
+        let engine = log_store.engine();
 
         let remove_data = match self
             .inner
@@ -1121,7 +1120,7 @@ impl Snapshot {
         app_id: String,
     ) -> DeltaResult<Option<i64>> {
         // TODO: bundle operation id with log store ...
-        let engine = log_store.engine(None);
+        let engine = log_store.engine();
         let inner = self.inner.clone();
         let version =
             spawn_blocking_with_span(move || inner.get_app_id_version(&app_id, engine.as_ref()))
@@ -1143,7 +1142,7 @@ impl Snapshot {
         log_store: &dyn LogStore,
         domain: impl ToString,
     ) -> DeltaResult<Option<String>> {
-        let engine = log_store.engine(None);
+        let engine = log_store.engine();
         let inner = self.inner.clone();
         let domain = domain.to_string();
         let metadata =
@@ -1387,7 +1386,7 @@ impl EagerSnapshot {
         let previous_snapshot = self.snapshot.clone();
         let updated_snapshot = previous_snapshot
             .clone()
-            .update(log_store.engine(None), target_version)
+            .update(log_store.engine(), target_version)
             .await?;
         if Arc::ptr_eq(&updated_snapshot, &previous_snapshot) {
             return Ok(());
@@ -1605,7 +1604,7 @@ mod tests {
                 &Default::default(),
             );
 
-            let engine = log_store.engine(None);
+            let engine = log_store.engine();
             let snapshot = KernelSnapshot::builder_for(table_url.clone()).build(engine.as_ref())?;
             Ok((
                 Self {
@@ -1866,7 +1865,7 @@ mod tests {
     ) -> DeltaResult<Vec<object_store::path::Path>> {
         let checkpoint_prefix = format!("{version:020}.checkpoint", version = version);
         Ok(log_store
-            .object_store(None)
+            .object_store()
             .list(Some(log_store.log_path()))
             .try_collect::<Vec<_>>()
             .await?
@@ -4002,7 +4001,7 @@ mod tests {
 
         append_test_add(&mut table, "part-00002.snappy.parquet").await?;
         let version = table.version().unwrap();
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
 
         let snapshot =
             EagerSnapshot::try_new(table.log_store().as_ref(), Default::default(), None).await?;
@@ -4031,10 +4030,10 @@ mod tests {
         assert_eq!(snapshot.version(), version);
         assert_eq!(snapshot.checkpoint_version(), None);
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
 
         let updated = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(version))
+            .update(log_store.engine(), Some(version))
             .await?;
         assert_eq!(updated.version(), version);
         assert_eq!(updated.checkpoint_version(), Some(version));
@@ -4050,11 +4049,9 @@ mod tests {
         assert_eq!(snapshot.version(), version);
         assert_eq!(snapshot.checkpoint_version(), None);
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
 
-        let updated = Arc::new(snapshot)
-            .update(log_store.engine(None), None)
-            .await?;
+        let updated = Arc::new(snapshot).update(log_store.engine(), None).await?;
         assert_eq!(updated.version(), version);
         assert_eq!(updated.checkpoint_version(), Some(version));
         Ok(())
@@ -4071,7 +4068,7 @@ mod tests {
         let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), None);
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
 
         snapshot.update(log_store.as_ref(), Some(version)).await?;
         assert_eq!(snapshot.version(), version);
@@ -4093,7 +4090,7 @@ mod tests {
         let expected_paths = eager_file_paths(&snapshot, log_store.as_ref()).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), None);
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
 
         snapshot.update(log_store.as_ref(), None).await?;
         assert_eq!(snapshot.version(), version);
@@ -4118,7 +4115,7 @@ mod tests {
             .cloned()
             .expect("expected materialized files");
 
-        let updated = snapshot.update(log_store.engine(None), None).await?;
+        let updated = snapshot.update(log_store.engine(), None).await?;
 
         assert!(Arc::ptr_eq(&updated, &prior_snapshot));
         assert!(Arc::ptr_eq(
@@ -4138,7 +4135,7 @@ mod tests {
         let mut snapshot =
             EagerSnapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
         snapshot.update(log_store.as_ref(), Some(version)).await?;
         assert_eq!(snapshot.snapshot.checkpoint_version(), Some(version));
 
@@ -4176,18 +4173,15 @@ mod tests {
         let snapshot =
             Snapshot::try_new(log_store.as_ref(), Default::default(), Some(version)).await?;
 
-        checkpoints::create_checkpoint(&table, None).await?;
+        checkpoints::create_checkpoint(&table).await?;
         let checkpoint_paths = checkpoint_file_paths(log_store.as_ref(), version).await?;
         assert!(!checkpoint_paths.is_empty());
         for checkpoint_path in checkpoint_paths {
-            log_store
-                .object_store(None)
-                .delete(&checkpoint_path)
-                .await?;
+            log_store.object_store().delete(&checkpoint_path).await?;
         }
 
         let err = Arc::new(snapshot)
-            .update(log_store.engine(None), Some(version))
+            .update(log_store.engine(), Some(version))
             .await
             .unwrap_err();
         assert!(

@@ -34,13 +34,13 @@ use object_store::{Error, ObjectStore, path::Path};
 use serde::Serialize;
 use tracing::*;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
     ActiveAddOptions, AddStatsPolicy, EagerSnapshot, Snapshot, TombstoneView, Version,
     resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
@@ -115,7 +115,7 @@ async fn collect_keep_version_paths(
         )
         .await?,
     );
-    let engine = log_store.engine(None);
+    let engine = log_store.engine();
     let mut keep_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
     debug!(version = %initial_version, num_files = keep_files.len(), "collected keep-version paths");
 
@@ -210,16 +210,6 @@ pub struct VacuumBuilder {
     clock: Option<Arc<dyn Clock>>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for VacuumBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 /// Details for the Vacuum operation including which files were
@@ -267,7 +257,6 @@ impl VacuumBuilder {
             parallel_scan: true,
             clock: None,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -343,12 +332,6 @@ impl VacuumBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
-
     /// Determine which files can be deleted. Does not actually perform the deletion
     async fn create_vacuum_plan(&self, snapshot: &Snapshot) -> Result<VacuumPlan, VacuumError> {
         if self.mode == VacuumMode::Full {
@@ -413,7 +396,7 @@ impl VacuumBuilder {
         }
 
         if self.mode == VacuumMode::Full {
-            let object_store = self.log_store.object_store(None);
+            let object_store = self.log_store.object_store();
 
             if self.parallel_scan && should_try_parallel_vacuum(partition_columns) {
                 let valid_files = Arc::new(valid_files);
@@ -575,31 +558,24 @@ impl std::future::IntoFuture for VacuumBuilder {
                 ));
             }
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
-
-            let result = plan
-                .execute(
-                    this.log_store.clone(),
-                    &snapshot,
-                    this.commit_properties.clone(),
-                    operation_id,
-                    this.get_custom_execute_handler(),
-                )
-                .await?;
-
-            this.post_execute(operation_id).await?;
-
-            Ok(match result {
-                Some((snapshot, metrics)) => (
-                    DeltaTable::new_with_state(this.log_store, snapshot),
-                    metrics,
-                ),
-                None => (
+            if plan.files_to_delete.is_empty() {
+                return Ok((
                     DeltaTable::new_with_state(this.log_store, DeltaTableState::new(snapshot)),
                     Default::default(),
-                ),
+                ));
+            }
+
+            // Both vacuum commits and the deletes between them share one write scope.
+            let parent = this.log_store.clone();
+            let commit_properties = this.commit_properties;
+            let snapshot_ref = &snapshot;
+            let (state, metrics) = with_operation(&parent, |log_store| async move {
+                plan.execute(log_store, snapshot_ref, commit_properties)
+                    .await
             })
+            .await?;
+
+            Ok((DeltaTable::new_with_state(parent, state), metrics))
         })
     }
 }
@@ -625,13 +601,7 @@ impl VacuumPlan {
         store: LogStoreRef,
         snapshot: &EagerSnapshot,
         mut commit_properties: CommitProperties,
-        operation_id: uuid::Uuid,
-        handle: Option<Arc<dyn CustomExecuteHandler>>,
-    ) -> Result<Option<(DeltaTableState, VacuumMetrics)>, DeltaTableError> {
-        if self.files_to_delete.is_empty() {
-            return Ok(None);
-        }
-
+    ) -> Result<(DeltaTableState, VacuumMetrics), DeltaTableError> {
         let start_operation = DeltaOperation::VacuumStart {
             retention_check_enabled: self.retention_check_enabled,
             specified_retention_millis: self.specified_retention_millis,
@@ -656,8 +626,6 @@ impl VacuumPlan {
         );
 
         let last_commit = CommitBuilder::from(start_props)
-            .with_operation_id(operation_id)
-            .with_post_commit_hook_handler(handle.clone())
             .build(Some(snapshot), store.clone(), start_operation)
             .await?;
         // Finish VACUUM START COMMIT
@@ -667,7 +635,7 @@ impl VacuumPlan {
             .boxed();
 
         let files_deleted = store
-            .object_store(Some(operation_id))
+            .object_store()
             .delete_stream(locations)
             .map(|res| match res {
                 Ok(path) => Ok(path.to_string()),
@@ -689,19 +657,17 @@ impl VacuumPlan {
             serde_json::to_value(end_metrics)?,
         );
         let last_commit = CommitBuilder::from(commit_properties)
-            .with_operation_id(operation_id)
-            .with_post_commit_hook_handler(handle)
-            .build(Some(&last_commit.snapshot), store.clone(), end_operation)
+            .build(Some(&last_commit.snapshot), store, end_operation)
             .await?;
         // Finish VACUUM END COMMIT
 
-        Ok(Some((
+        Ok((
             last_commit.snapshot,
             VacuumMetrics {
                 files_deleted,
                 dry_run: false,
             },
-        )))
+        ))
     }
 }
 
@@ -1028,12 +994,11 @@ mod tests {
     use bytes::Bytes;
     use object_store::{ObjectStoreExt as _, PutPayload, local::LocalFileSystem, memory::InMemory};
     use serde_json::json;
-    use uuid::Uuid;
 
     use super::*;
-    use crate::kernel::transaction::{CommitBuilder, TransactionError};
+    use crate::kernel::transaction::CommitBuilder;
     use crate::kernel::{Action, DataType, PrimitiveType, Remove, Snapshot, StructField};
-    use crate::logstore::{CommitOrBytes, LogStoreConfig};
+    use crate::logstore::LogStoreConfig;
     use crate::protocol::SaveMode;
     use crate::writer::test_utils::create_initialized_table;
     use crate::writer::{DeltaWriter, JsonWriter};
@@ -1161,45 +1126,31 @@ mod tests {
             self.inner.read_commit_entry(version).await
         }
 
-        async fn write_commit_entry(
-            &self,
-            version: Version,
-            commit_or_bytes: CommitOrBytes,
-            operation_id: Uuid,
-        ) -> Result<(), TransactionError> {
-            self.inner
-                .write_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
-        async fn abort_commit_entry(
-            &self,
-            version: Version,
-            commit_or_bytes: CommitOrBytes,
-            operation_id: Uuid,
-        ) -> Result<(), TransactionError> {
-            self.inner
-                .abort_commit_entry(version, commit_or_bytes, operation_id)
-                .await
-        }
-
         async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version> {
             self.inner.get_latest_version(start_version).await
         }
 
-        fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
-            self.inner.object_store(operation_id)
+        fn object_store(&self) -> Arc<dyn ObjectStore> {
+            self.inner.object_store()
         }
 
-        fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
-            self.inner.root_object_store(operation_id)
+        fn root_object_store(&self) -> Arc<dyn ObjectStore> {
+            self.inner.root_object_store()
         }
 
-        fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn delta_kernel::Engine> {
+        fn committer(&self) -> Arc<dyn crate::logstore::Committer> {
+            self.inner.committer()
+        }
+
+        async fn begin_operation(&self) -> DeltaResult<Option<crate::logstore::OperationContext>> {
+            self.inner.begin_operation().await
+        }
+
+        fn engine(&self) -> Arc<dyn delta_kernel::Engine> {
             // The first engine creates the snapshot. The second applies updates.
             let track_refresh_epochs = self.engine_count.fetch_add(1, Ordering::SeqCst) == 1;
             Arc::new(RefreshTrackingEngine {
-                inner: self.inner.engine(operation_id),
+                inner: self.inner.engine(),
                 refresh_count: Arc::clone(&self.refresh_count),
                 update_engine_refresh_epochs: Arc::clone(&self.update_engine_refresh_epochs),
                 track_refresh_epochs,
@@ -1678,9 +1629,7 @@ mod tests {
         assert_ne!(32, result.files_deleted.len());
 
         // Can we checkpoint it?
-        crate::checkpoints::create_checkpoint(&table, None)
-            .await
-            .unwrap();
+        crate::checkpoints::create_checkpoint(&table).await.unwrap();
         table.load().await.unwrap();
         assert_eq!(Some(6), table.version());
 

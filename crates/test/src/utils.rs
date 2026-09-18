@@ -23,7 +23,7 @@ pub trait StorageIntegration {
         Ok(DeltaTableBuilder::from_url(table_url)?
             .with_allow_http(true)
             .build_storage()?
-            .object_store(None))
+            .object_store())
     }
 }
 

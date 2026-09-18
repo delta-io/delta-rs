@@ -1359,7 +1359,7 @@ mod tests {
             .write(vec![get_record_batch(None, false)])
             .with_save_mode(SaveMode::Append)
             .await?;
-        crate::checkpoints::create_checkpoint(&table, None).await?;
+        crate::checkpoints::create_checkpoint(&table).await?;
         let table = table
             .write(vec![get_record_batch(None, false)])
             .with_save_mode(SaveMode::Append)
@@ -1393,7 +1393,7 @@ mod tests {
         assert!(single_replay_reads > 0);
 
         let session = create_session().into_inner().state();
-        update_datafusion_session(&session, &log_store, None)?;
+        update_datafusion_session(&session, &log_store)?;
         session.ensure_log_store_registered(log_store.as_ref())?;
         let matches = find_files_scan(
             &snapshot,

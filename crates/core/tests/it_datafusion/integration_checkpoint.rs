@@ -50,7 +50,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     let log_store = DeltaTableBuilder::from_url(table_url)?
         .with_allow_http(true)
         .build_storage()?;
-    let object_store = log_store.object_store(None);
+    let object_store = log_store.object_store();
 
     let log_path = |version| {
         log_store
@@ -88,8 +88,7 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
     assert!(retention_timestamp > v1time.timestamp_millis());
     assert!(retention_timestamp < v2time.timestamp_millis());
 
-    let removed =
-        cleanup_expired_logs_for(3, log_store.as_ref(), retention_timestamp, None).await?;
+    let removed = cleanup_expired_logs_for(3, log_store.as_ref(), retention_timestamp).await?;
 
     assert_eq!(removed, 2);
     assert!(object_store.head(&log_path(0)).await.is_err());
@@ -131,7 +130,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     writer.flush_and_commit(&mut table).await?; // v2
     assert_eq!(table.version(), Some(2));
 
-    create_checkpoint(&table, None).await.unwrap(); // v2.checkpoint.parquet
+    create_checkpoint(&table).await.unwrap(); // v2.checkpoint.parquet
 
     sleep(Duration::from_secs(1)).await;
     let ts = Utc::now(); // use this ts for log retention expiry
@@ -141,14 +140,13 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         table.version().unwrap(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
-        None,
     )
     .await?;
 
     assert!(
         table
             .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 1)))
             .await
             .is_err(),
@@ -158,7 +156,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     assert!(
         table
             .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -168,7 +166,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     assert!(
         table
             .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2
@@ -187,14 +185,13 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
         table.version().unwrap(),
         table.log_store().as_ref(),
         ts.timestamp_millis(),
-        None,
     )
     .await?;
 
     assert!(
         table
             .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
             .await
             .is_ok(),
@@ -204,7 +201,7 @@ async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
     assert!(
         table
             .log_store()
-            .object_store(None)
+            .object_store()
             .head(&Path::from(format!(
                 "_delta_log/{:020}.checkpoint.parquet",
                 2
@@ -226,7 +223,7 @@ async fn test_older_checkpoint_reads() -> DeltaResult<()> {
     let table_url = ensure_table_uri(table_path).unwrap();
     let table = deltalake_core::open_table(table_url).await?;
     assert_eq!(table.version(), Some(1));
-    create_checkpoint(&table, None).await?;
+    create_checkpoint(&table).await?;
     Ok(())
 }
 
@@ -238,7 +235,7 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
     let table_url = ensure_table_uri(table_path).unwrap();
     let table = deltalake_core::open_table(table_url).await?;
     assert_eq!(table.version(), Some(9));
-    create_checkpoint(&table, None).await?;
+    create_checkpoint(&table).await?;
     Ok(())
 }
 

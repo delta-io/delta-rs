@@ -424,7 +424,7 @@ pub(super) async fn plan_overwrite_rewrite(
     session: &dyn Session,
     mode: SaveMode,
     prepared_write: &PreparedWrite,
-    operation_id: Uuid,
+    write_id: Uuid,
 ) -> DeltaResult<MatchedFilesRewritePlan> {
     let Some(eager_snapshot) = snapshot else {
         return Ok(MatchedFilesRewritePlan::passthrough(
@@ -494,7 +494,7 @@ pub(super) async fn plan_overwrite_rewrite(
 
             let insert_marker_column = reserve_internal_write_marker_column(
                 &[&prepared_write.insert_plan, files_scan.scan()],
-                operation_id,
+                write_id,
             );
 
             let validated_inserts = mark_insert_rows(
@@ -627,8 +627,8 @@ async fn collect_matched_existing_files(
     Ok(MatchedExistingFiles::new(files))
 }
 
-fn reserve_internal_write_marker_column(plans: &[&LogicalPlan], operation_id: Uuid) -> String {
-    let base = format!("{WRITE_INSERT_MARKER_COLUMN}_{operation_id}");
+fn reserve_internal_write_marker_column(plans: &[&LogicalPlan], write_id: Uuid) -> String {
+    let base = format!("{WRITE_INSERT_MARKER_COLUMN}_{write_id}");
     let mut candidate = base.clone();
     let mut suffix = 0usize;
     while plans.iter().any(|plan| {
