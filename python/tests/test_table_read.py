@@ -1763,12 +1763,18 @@ def test_deletion_vectors_table_with_deletion_logs():
     dt = DeltaTable(table_path)
 
     vectors = dt.deletion_vectors().read_all()
-    assert vectors.num_rows > 0
+    assert vectors.num_rows == 1
+    filepath = vectors["filepath"].to_pylist()[0]
+    assert Path(urlparse(filepath).path).name == (
+        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
+    )
+    expected_mask = [True] * 100
+    expected_mask[2] = expected_mask[79] = False
+    assert vectors["selection_vector"].to_pylist() == [expected_mask]
 
     con = QueryBuilder()
     con.register("test", dt)
     df = con.execute("SELECT * FROM test").read_all()
-    # Ensure that the appropriate number of rows are emitted
     assert len(df) == 98
 
 
