@@ -34,6 +34,26 @@ pub(crate) fn create_add(
     num_indexed_cols: DataSkippingNumIndexedCols,
     stats_columns: &Option<Vec<impl AsRef<str>>>,
 ) -> Result<Add, DeltaTableError> {
+    create_add_with_time(
+        partition_values,
+        path,
+        size,
+        file_metadata,
+        num_indexed_cols,
+        stats_columns,
+        None,
+    )
+}
+
+fn create_add_with_time(
+    partition_values: &IndexMap<String, Scalar>,
+    path: String,
+    size: i64,
+    file_metadata: &ParquetMetaData,
+    num_indexed_cols: DataSkippingNumIndexedCols,
+    stats_columns: &Option<Vec<impl AsRef<str>>>,
+    modification_time: Option<i64>,
+) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
         file_metadata,
@@ -42,10 +62,15 @@ pub(crate) fn create_add(
     )?;
     let stats_string = serde_json::to_string(&stats)?;
 
-    // Determine the modification timestamp to include in the add action - milliseconds since epoch
-    // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-    let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-    let modification_time = modification_time.as_millis() as i64;
+    // Determine the modification timestamp to include in the add action - milliseconds since epoch.
+    // Callers that know the file's real modification time pass it in; otherwise fall back to the
+    // current time. `SystemTime::now()` is always greater than `UNIX_EPOCH`, so this is infallible.
+    let modification_time = modification_time.unwrap_or_else(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64
+    });
 
     Ok(Add {
         path,
@@ -83,38 +108,66 @@ pub(crate) fn create_add(
 ///
 /// `partition_values` are the values of the table's partition columns for this file,
 /// `path` is the file's path relative to the table root, and `size` is its size in bytes.
-/// Statistics are collected for the first `num_indexed_cols` columns, or only for
-/// `stats_columns` when that is `Some`.
+/// `modification_time` is the file's modification time in milliseconds since the Unix epoch;
+/// pass `None` to use the current time. Statistics are collected for the first
+/// `num_indexed_cols` columns, or only for `stats_columns` when that is `Some`.
 ///
-/// ```ignore
-/// use deltalake_core::writer::create_add_from_read;
-///
-/// // `metadata` is the `ParquetMetaData` of a file that predates the Delta table and
-/// // `partition_values` maps the table's partition columns to this file's values.
-/// let add = create_add_from_read(
-///     &partition_values,
-///     "date=2024-01-01/part-00000.parquet".to_string(),
-///     file_size,
-///     &metadata,
-///     DataSkippingNumIndexedCols::default(),
-///     &None,
-/// )?;
 /// ```
-pub fn create_add_from_read(
+/// use std::sync::Arc;
+///
+/// use arrow::array::{Int32Array, RecordBatch};
+/// use arrow::datatypes::{DataType, Field, Schema};
+/// use deltalake_core::delta_kernel::expressions::Scalar;
+/// use deltalake_core::delta_kernel::table_properties::DataSkippingNumIndexedCols;
+/// use deltalake_core::writer::create_add_from_parquet_metadata;
+/// use indexmap::IndexMap;
+/// use parquet::arrow::ArrowWriter;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+/// let batch = RecordBatch::try_new(
+///     schema.clone(),
+///     vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+/// )?;
+///
+/// let mut buffer = Vec::new();
+/// let mut writer = ArrowWriter::try_new(&mut buffer, schema, None)?;
+/// writer.write(&batch)?;
+/// let metadata = writer.close()?;
+///
+/// // A file that predates the Delta table, with no partition columns.
+/// let partition_values: IndexMap<String, Scalar> = IndexMap::new();
+/// let add = create_add_from_parquet_metadata(
+///     &partition_values,
+///     "part-00000.parquet".to_string(),
+///     buffer.len() as i64,
+///     &metadata,
+///     None,
+///     DataSkippingNumIndexedCols::default(),
+///     None,
+/// )?;
+/// assert_eq!(add.path, "part-00000.parquet");
+/// # Ok(())
+/// # }
+/// ```
+pub fn create_add_from_parquet_metadata(
     partition_values: &IndexMap<String, Scalar>,
     path: String,
     size: i64,
     file_metadata: &ParquetMetaData,
+    modification_time: Option<i64>,
     num_indexed_cols: DataSkippingNumIndexedCols,
-    stats_columns: &Option<Vec<String>>,
+    stats_columns: Option<&[String]>,
 ) -> Result<Add, DeltaTableError> {
-    create_add(
+    let stats_columns = stats_columns.map(|columns| columns.to_vec());
+    create_add_with_time(
         partition_values,
         path,
         size,
         file_metadata,
         num_indexed_cols,
-        stats_columns,
+        &stats_columns,
+        modification_time,
     )
 }
 
@@ -1505,7 +1558,7 @@ mod tests {
     });
 
     #[test]
-    fn test_create_add_from_read() {
+    fn test_create_add_from_parquet_metadata() {
         use arrow::array::{Int32Array, RecordBatch, StringArray};
         use arrow::datatypes::{DataType, Field, Schema};
         use parquet::arrow::ArrowWriter;
@@ -1532,26 +1585,96 @@ mod tests {
         let mut partition_values = IndexMap::new();
         partition_values.insert("part".to_string(), Scalar::String("2024-01-01".to_string()));
 
-        let add = create_add_from_read(
+        let stats_columns = ["id".to_string(), "name".to_string()];
+        let supplied_modification_time = 1_700_000_000_000_i64;
+        let add = create_add_from_parquet_metadata(
             &partition_values,
             "part-00000.parquet".to_string(),
             file_size,
             &metadata,
+            Some(supplied_modification_time),
             DataSkippingNumIndexedCols::NumColumns(2),
-            &Some(vec!["id".to_string(), "name".to_string()]),
+            Some(stats_columns.as_slice()),
         )
         .unwrap();
 
         assert_eq!(add.path, "part-00000.parquet");
         assert_eq!(add.size, file_size);
+        assert_eq!(add.modification_time, supplied_modification_time);
         assert_eq!(
             add.partition_values.get("part"),
             Some(&Some("2024-01-01".to_string()))
         );
 
         let stats = add.get_stats().unwrap().unwrap();
-        assert!(!stats.min_values.is_empty());
-        assert!(!stats.max_values.is_empty());
-        assert!(!stats.null_count.is_empty());
+        assert_eq!(stats.num_records, 3);
+        assert_eq!(
+            stats
+                .min_values
+                .get("id")
+                .and_then(ColumnValueStat::as_value),
+            Some(&json!(1))
+        );
+        assert_eq!(
+            stats
+                .max_values
+                .get("id")
+                .and_then(ColumnValueStat::as_value),
+            Some(&json!(3))
+        );
+        assert_eq!(
+            stats
+                .null_count
+                .get("name")
+                .and_then(ColumnCountStat::as_value),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn test_create_add_from_parquet_metadata_excludes_partition_columns() {
+        use arrow::array::{Int32Array, RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use parquet::arrow::ArrowWriter;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("part", DataType::Utf8, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(StringArray::from(vec!["x", "x", "x"])),
+            ],
+        )
+        .unwrap();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        let metadata = writer.close().unwrap();
+
+        // `part` is a partition column that is also present in the file schema.
+        let mut partition_values = IndexMap::new();
+        partition_values.insert("part".to_string(), Scalar::String("x".to_string()));
+
+        let add = create_add_from_parquet_metadata(
+            &partition_values,
+            "part=x/part-00000.parquet".to_string(),
+            buffer.len() as i64,
+            &metadata,
+            None,
+            DataSkippingNumIndexedCols::AllColumns,
+            None,
+        )
+        .unwrap();
+
+        let stats = add.get_stats().unwrap().unwrap();
+        assert!(!stats.min_values.contains_key("part"));
+        assert!(!stats.max_values.contains_key("part"));
+        assert!(!stats.null_count.contains_key("part"));
+        // Non-partition columns are still indexed.
+        assert!(stats.min_values.contains_key("id"));
     }
 }

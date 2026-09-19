@@ -120,6 +120,7 @@ pub use protocol::checkpoints;
 pub use arrow;
 #[cfg(feature = "datafusion")]
 pub use datafusion;
+pub use delta_kernel;
 pub use parquet;
 
 #[cfg(not(any(feature = "rustls", feature = "native-tls")))]
