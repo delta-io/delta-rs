@@ -2456,6 +2456,9 @@ class TableOptimizer:
         Compaction keeps file order within each partition. When ``sort_columns`` is
         provided, rows within each compacted output file are additionally sorted by
         those columns; this is opt-in and does not change partition-local ordering.
+        Sorting is applied per output file as a single in-memory sort, so enabling
+        it buffers each file and trades memory and per-file parallelism for sorted
+        output.
 
         The target size is approximate.
 
@@ -2475,7 +2478,9 @@ class TableOptimizer:
                                     want a commit per partition.
             writer_properties: Pass writer properties to the Rust parquet writer.
             sort_columns: optional list of columns to sort rows by within each compacted
-                            output file. Columns must exist in the table schema.
+                            output file. Columns must exist in the table schema. Each file
+                            is sorted as a single in-memory partition, so enabling this
+                            increases peak memory usage for the file being rewritten.
             commit_properties: properties of the transaction commit. If None, default values are used.
             post_commithook_properties: properties for the post commit hook. If None, default values are used.
 

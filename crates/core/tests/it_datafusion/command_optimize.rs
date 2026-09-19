@@ -866,7 +866,6 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
     let plan = create_merge_plan(
         &tracked_table.log_store(),
         OptimizeType::Compact,
-        None,
         tracked_table.snapshot()?.snapshot(),
         &[],
         Some(NonZeroU64::new(1_000_000).unwrap()),
@@ -1019,7 +1018,6 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        None,
         dt.snapshot()?.snapshot(),
         &filter,
         None,
@@ -1087,7 +1085,6 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        None,
         dt.snapshot()?.snapshot(),
         &filter,
         None,
@@ -1152,7 +1149,6 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
     let plan = create_merge_plan(
         &dt.log_store(),
         OptimizeType::Compact,
-        None,
         dt.snapshot()?.snapshot(),
         &[],
         None,
@@ -2277,6 +2273,223 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
     let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
     actual.sort_unstable();
     assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
+
+    Ok(())
+}
+
+fn int32_values(batch: &RecordBatch, name: &str) -> Vec<i32> {
+    batch
+        .column_by_name(name)
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap()
+        .iter()
+        .flatten()
+        .collect()
+}
+
+#[tokio::test]
+async fn test_compact_with_sort_columns_sorts_output() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 30), (1, 10)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(4, 40), (2, 20)], "1970-01-01")?,
+    )
+    .await?;
+
+    let (dt, metrics) = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+        .with_sort_columns(vec!["x".to_string()])
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    let files = dt.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    assert_eq!(int32_values(&actual, "x"), vec![1, 2, 3, 4]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_with_multiple_sort_columns() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 2), (1, 2)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (1, 1)], "1970-01-01")?,
+    )
+    .await?;
+
+    let (dt, _) = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+        .with_sort_columns(vec!["x".to_string(), "y".to_string()])
+        .await?;
+
+    let files = dt.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    assert_eq!(int32_values(&actual, "x"), vec![1, 1, 2, 2]);
+    assert_eq!(int32_values(&actual, "y"), vec![1, 2, 1, 2]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_without_sort_columns_keeps_input_order() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(3, 30), (1, 10)], "1970-01-01")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(4, 40), (2, 20)], "1970-01-01")?,
+    )
+    .await?;
+
+    let (dt, _) = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+        .await?;
+
+    let files = dt.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    // Compaction preserves the plan's stable file order (the newest active file
+    // first) and never reorders rows within the merged file.
+    assert_eq!(int32_values(&actual, "x"), vec![4, 2, 3, 1]);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_with_sort_columns_is_partition_local() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    for (rows, date) in [
+        (vec![(3, 30), (1, 10)], "2022-05-22"),
+        (vec![(4, 40), (2, 20)], "2022-05-22"),
+        (vec![(7, 70), (5, 50)], "2022-05-23"),
+        (vec![(8, 80), (6, 60)], "2022-05-23"),
+    ] {
+        write(&mut writer, &mut dt, tuples_to_batch(rows, date)?).await?;
+    }
+
+    let (dt, _) = dt
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+        .with_sort_columns(vec!["x".to_string()])
+        .await?;
+
+    for (date, expected) in [
+        ("2022-05-22", vec![1, 2, 3, 4]),
+        ("2022-05-23", vec![5, 6, 7, 8]),
+    ] {
+        let filter = vec![("date", FilterOp::Eq, FilterValue::Scalar(date))];
+        let files = dt.get_files_by_partitions(&filter).await?;
+        assert_eq!(files.len(), 1, "{date}");
+        let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+        assert_eq!(int32_values(&actual, "x"), expected, "{date}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_compact_with_sort_columns_nested_path() -> Result<(), Box<dyn Error>> {
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new(
+            "meta",
+            ArrowDataType::Struct(vec![Field::new("field_a", ArrowDataType::Int32, false)].into()),
+            false,
+        ),
+        Field::new("value", ArrowDataType::Int32, false),
+    ]));
+
+    let batch = |field_a: Vec<i32>, value: Vec<i32>| {
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(arrow_array::StructArray::from(vec![(
+                    Arc::new(Field::new("field_a", ArrowDataType::Int32, false)),
+                    Arc::new(Int32Array::from(field_a)) as Arc<dyn arrow_array::Array>,
+                )])) as Arc<dyn arrow_array::Array>,
+                Arc::new(Int32Array::from(value)),
+            ],
+        )
+        .unwrap()
+    };
+
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch(vec![3, 1], vec![30, 10])])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+    let table = table
+        .write(vec![batch(vec![4, 2], vec![40, 20])])
+        .with_save_mode(deltalake_core::protocol::SaveMode::Append)
+        .await?;
+
+    let (table, metrics) = table
+        .optimize()
+        .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+        .with_sort_columns(vec!["meta.field_a".to_string()])
+        .await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    let files = table.get_files_by_partitions(&[]).await?;
+    assert_eq!(files.len(), 1);
+    let actual = read_parquet_file(&files[0], table.object_store()).await?;
+    let meta = actual
+        .column_by_name("meta")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    let field_a = meta
+        .column_by_name("field_a")
+        .unwrap()
+        .as_any()
+        .downcast_ref::<Int32Array>()
+        .unwrap();
+    assert_eq!(
+        field_a.iter().flatten().collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
 
     Ok(())
 }

@@ -346,6 +346,11 @@ impl<'a> OptimizeBuilder<'a> {
     /// Compaction still keeps partition-local file order; within each rewritten
     /// file rows are physically sorted by these columns (ascending, matching the
     /// Z-order convention). Every column must exist in the table schema.
+    ///
+    /// Sorting is applied per output bin as a single, non-partitioned sort, so
+    /// enabling it buffers each bin in memory and serialises that stage within
+    /// the bin. This trades memory and intra-bin parallelism for sorted output;
+    /// prefer a smaller `target_size` when sorting large tables.
     pub fn with_sort_columns(mut self, sort_columns: Vec<String>) -> Self {
         self.sort_columns = Some(sort_columns);
         self
@@ -460,7 +465,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                     cdc: false,
                 },
             )?;
-            let plan = create_merge_plan(
+            let plan = create_merge_plan_with_sort(
                 &this.log_store,
                 this.optimize_type,
                 this.sort_columns,
@@ -677,17 +682,20 @@ impl SelectedFileScanFactory {
 
 /// Build a DataFusion expression for a column path, supporting nested struct
 /// fields via dot notation (e.g., "meta.field_a").
-fn column_expr(col_name: &str) -> Expr {
+fn column_expr(col_name: &str) -> Result<Expr, DeltaTableError> {
     use datafusion::functions::core::expr_ext::FieldAccessor;
     use datafusion::logical_expr::ident;
 
     let mut segments = col_name.split('.');
-    let first = segments.next().expect("column name cannot be empty");
+    let first = segments
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .ok_or_else(|| DeltaTableError::Generic("column name cannot be empty".to_string()))?;
     let mut expr = ident(first);
     for segment in segments {
         expr = expr.field(segment);
     }
-    expr
+    Ok(expr)
 }
 
 impl MergePlan {
@@ -795,12 +803,13 @@ impl MergePlan {
         let provider = scan_factory.provider_for(files.iter().cloned())?;
         let df = context.read_table(Arc::new(provider))?;
         let df = match sort_columns.as_deref() {
-            Some(columns) if !columns.is_empty() => df.sort(
-                columns
+            Some(columns) if !columns.is_empty() => {
+                let sort_exprs = columns
                     .iter()
-                    .map(|col| column_expr(col).sort(true, true))
-                    .collect_vec(),
-            )?,
+                    .map(|col| column_expr(col).map(|expr| expr.sort(true, true)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                df.sort(sort_exprs)?
+            }
             _ => df,
         };
         let stream = df
@@ -831,7 +840,7 @@ impl MergePlan {
             .columns
             .iter()
             .map(|col_name| column_expr(col_name))
-            .collect_vec();
+            .collect::<Result<Vec<_>, _>>()?;
         let expr = Expr::ScalarFunction(ScalarFunction::new_udf(
             Arc::new(ScalarUDF::from(zorder::datafusion::ZOrderUDF)),
             cols,
@@ -1056,6 +1065,31 @@ impl MergePlan {
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
     optimize_type: OptimizeType,
+    snapshot: &EagerSnapshot,
+    filters: &[FilterLiteral<'_>],
+    target_size: Option<NonZeroU64>,
+    writer_properties: WriterProperties,
+    session: SessionState,
+) -> Result<MergePlan, DeltaTableError> {
+    create_merge_plan_with_sort(
+        log_store,
+        optimize_type,
+        None,
+        snapshot,
+        filters,
+        target_size,
+        writer_properties,
+        session,
+    )
+    .await
+}
+
+/// Build a Plan on which files to merge together, sorting each compacted output
+/// file by `sort_columns` when provided. See [OptimizeBuilder].
+#[instrument(skip_all, fields(operation = "create_merge_plan", version = snapshot.version()))]
+pub async fn create_merge_plan_with_sort(
+    log_store: &dyn LogStore,
+    optimize_type: OptimizeType,
     sort_columns: Option<Vec<String>>,
     snapshot: &EagerSnapshot,
     filters: &[FilterLiteral<'_>],
@@ -1069,6 +1103,11 @@ pub async fn create_merge_plan(
 
     let sort_columns = match sort_columns {
         Some(columns) if !columns.is_empty() => {
+            if matches!(optimize_type, OptimizeType::ZOrder(_)) {
+                return Err(DeltaTableError::Generic(
+                    "sort_columns is only supported for compaction, not Z-order".to_string(),
+                ));
+            }
             for column in &columns {
                 validate_column_path(snapshot.schema().as_ref(), column, "Sort")?;
             }
@@ -1561,171 +1600,58 @@ mod compact_planner_tests {
 #[cfg(test)]
 mod compact_sort_tests {
     use super::*;
-    use arrow_array::{Int32Array, StringArray};
+    use arrow_array::Int32Array;
     use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
-    use futures::TryStreamExt;
-    use object_store::ObjectStoreExt as _;
-    use parquet::arrow::ParquetRecordBatchStreamBuilder;
-    use parquet::arrow::async_reader::ParquetObjectReader;
 
-    use crate::kernel::{PrimitiveType, StructField};
     use crate::protocol::SaveMode;
 
-    fn batch(rows: &[(i32, i32)]) -> RecordBatch {
-        let x = Int32Array::from(rows.iter().map(|(x, _)| *x).collect::<Vec<_>>());
-        let y = Int32Array::from(rows.iter().map(|(_, y)| *y).collect::<Vec<_>>());
-        let date = StringArray::from(vec!["1970-01-01"; rows.len()]);
+    fn batch(values: Vec<i32>) -> RecordBatch {
         RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(vec![
-                Field::new("x", ArrowDataType::Int32, false),
-                Field::new("y", ArrowDataType::Int32, false),
-                Field::new("date", ArrowDataType::Utf8, false),
-            ])),
-            vec![Arc::new(x), Arc::new(y), Arc::new(date)],
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "x",
+                ArrowDataType::Int32,
+                false,
+            )])),
+            vec![Arc::new(Int32Array::from(values))],
         )
         .unwrap()
     }
 
-    async fn setup_table() -> Result<(tempfile::TempDir, DeltaTable), Box<dyn std::error::Error>> {
-        let columns = vec![
-            StructField::new(
-                "x".to_owned(),
-                DataType::Primitive(PrimitiveType::Integer),
-                false,
-            ),
-            StructField::new(
-                "y".to_owned(),
-                DataType::Primitive(PrimitiveType::Integer),
-                false,
-            ),
-            StructField::new(
-                "date".to_owned(),
-                DataType::Primitive(PrimitiveType::String),
-                false,
-            ),
-        ];
-        let tmp_dir = tempfile::tempdir()?;
-        let uri = tmp_dir.path().to_str().unwrap().to_owned();
-        let dt = DeltaTable::try_from_url(url::Url::from_directory_path(&uri).unwrap())
-            .await?
-            .create()
-            .with_columns(columns)
-            .await?;
-        Ok((tmp_dir, dt))
-    }
-
-    async fn write_two_files(
-        mut dt: DeltaTable,
-        first: &[(i32, i32)],
-        second: &[(i32, i32)],
-    ) -> Result<DeltaTable, Box<dyn std::error::Error>> {
-        dt = dt
-            .write(vec![batch(first)])
+    async fn in_memory_table(values: Vec<i32>) -> Result<DeltaTable, Box<dyn std::error::Error>> {
+        Ok(DeltaTable::new_in_memory()
+            .write(vec![batch(values)])
             .with_save_mode(SaveMode::Append)
-            .await?;
-        dt = dt
-            .write(vec![batch(second)])
-            .with_save_mode(SaveMode::Append)
-            .await?;
-        Ok(dt)
+            .await?)
     }
 
-    async fn read_optimized_batch(
-        dt: &DeltaTable,
-    ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-        let files = dt.get_files_by_partitions(&[]).await?;
-        assert_eq!(files.len(), 1);
-        let object_store = dt.object_store();
-        let file = object_store.head(&files[0]).await?;
-        let reader =
-            ParquetObjectReader::new(object_store, files[0].clone()).with_file_size(file.size);
-        let batches = ParquetRecordBatchStreamBuilder::new(reader)
-            .await?
-            .build()?
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(arrow_select::concat::concat_batches(
-            &batches[0].schema(),
-            &batches,
-        )?)
-    }
-
-    fn int_column(batch: &RecordBatch, name: &str) -> Vec<i32> {
-        batch
-            .column_by_name(name)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .iter()
-            .flatten()
-            .collect()
+    #[test]
+    fn column_expr_rejects_empty_name() {
+        assert!(column_expr("").is_err());
     }
 
     #[tokio::test]
-    async fn sort_columns_sorts_compacted_output() -> Result<(), Box<dyn std::error::Error>> {
-        let (_tmp_dir, dt) = setup_table().await?;
-        let dt = write_two_files(dt, &[(3, 30), (1, 10)], &[(4, 40), (2, 20)]).await?;
+    async fn sort_columns_are_rejected_for_zorder() -> Result<(), Box<dyn std::error::Error>> {
+        let dt = in_memory_table(vec![1, 2, 3]).await?;
 
-        let (dt, metrics) = dt
+        let err = dt
             .optimize()
-            .with_target_size(NonZeroU64::new(10_000_000).unwrap())
+            .with_type(OptimizeType::ZOrder(vec!["x".to_string()]))
             .with_sort_columns(vec!["x".to_string()])
-            .await?;
+            .await
+            .unwrap_err();
 
-        assert_eq!(metrics.num_files_added, 1);
-        assert_eq!(metrics.num_files_removed, 2);
-        assert_eq!(
-            int_column(&read_optimized_batch(&dt).await?, "x"),
-            vec![1, 2, 3, 4]
+        assert!(
+            err.to_string()
+                .contains("sort_columns is only supported for compaction, not Z-order"),
+            "{err:?}"
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn sort_columns_use_all_requested_columns() -> Result<(), Box<dyn std::error::Error>> {
-        let (_tmp_dir, dt) = setup_table().await?;
-        let dt = write_two_files(dt, &[(2, 2), (1, 2)], &[(2, 1), (1, 1)]).await?;
-
-        let (dt, _) = dt
-            .optimize()
-            .with_target_size(NonZeroU64::new(10_000_000).unwrap())
-            .with_sort_columns(vec!["x".to_string(), "y".to_string()])
-            .await?;
-
-        let batch = read_optimized_batch(&dt).await?;
-        assert_eq!(int_column(&batch, "x"), vec![1, 1, 2, 2]);
-        assert_eq!(int_column(&batch, "y"), vec![1, 2, 1, 2]);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn without_sort_columns_compaction_keeps_input_order()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (_tmp_dir, dt) = setup_table().await?;
-        let dt = write_two_files(dt, &[(3, 30), (1, 10)], &[(4, 40), (2, 20)]).await?;
-
-        let (dt, _) = dt
-            .optimize()
-            .with_target_size(NonZeroU64::new(10_000_000).unwrap())
-            .await?;
-
-        let values = int_column(&read_optimized_batch(&dt).await?, "x");
-        let mut sorted = values.clone();
-        sorted.sort_unstable();
-
-        assert_eq!(sorted, vec![1, 2, 3, 4]);
-        assert_ne!(values, sorted);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn sort_columns_reject_unknown_column() -> Result<(), Box<dyn std::error::Error>> {
-        let (_tmp_dir, dt) = setup_table().await?;
-        let dt = write_two_files(dt, &[(3, 30), (1, 10)], &[(4, 40), (2, 20)]).await?;
+        let dt = in_memory_table(vec![1, 2, 3]).await?;
 
         let err = dt
             .optimize()
