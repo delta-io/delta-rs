@@ -80,7 +80,9 @@ pub(crate) struct DeltaScanMetaExec {
     file_id_field: Option<FieldRef>,
     /// plan properties
     properties: Arc<PlanProperties>,
-    /// Optional limit on the total number of rows produced.
+    /// Optional per-partition cap on the number of rows produced by each
+    /// stream. The global total is enforced by an ancestor limit or
+    /// coalescing node, following DataFusion's limit-pushdown convention.
     fetch: Option<usize>,
 }
 
@@ -157,6 +159,10 @@ impl DeltaScanMetaExec {
             fetch,
             ..self.clone()
         }
+    }
+
+    fn has_deletion_vectors(&self) -> bool {
+        !self.selection_vectors.is_empty()
     }
 
     fn effective_row_count_for_file(&self, file_id: &str, row_count: usize) -> Result<usize> {
@@ -316,7 +322,13 @@ impl ExecutionPlan for DeltaScanMetaExec {
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
-        CardinalityEffect::Equal
+        // A fetch truncates the output and deletion vectors drop rows, so in
+        // either case this node can produce fewer rows than its metadata input.
+        if self.fetch.is_some() || self.has_deletion_vectors() {
+            CardinalityEffect::LowerEqual
+        } else {
+            CardinalityEffect::Equal
+        }
     }
 
     fn fetch(&self) -> Option<usize> {
@@ -419,7 +431,8 @@ struct DeltaScanMetaStream {
     file_id_field: Option<FieldRef>,
     /// Cached schema adapter for efficient batch adaptation across batches
     schema_adapter: super::SchemaAdapter,
-    /// Optional limit on the total number of rows produced by this stream.
+    /// Optional cap on the number of rows produced by this stream (one
+    /// partition). Any global total is enforced by an ancestor node.
     fetch: Option<usize>,
     /// Number of rows produced by this stream so far.
     produced: usize,
@@ -631,7 +644,13 @@ impl Stream for DeltaScanMetaStream {
         // Lower bound: queued files plus the in-progress file, each yielding
         // at least one batch. A file may yield many chunks, so the total is
         // genuinely unknown upfront.
-        (self.input.len() + usize::from(self.current.is_some()), None)
+        let mut lower = self.input.len() + usize::from(self.current.is_some());
+        if let Some(limit) = self.fetch {
+            // Each emitted batch contributes at least one row, so the rows
+            // still allowed by the fetch also bound the remaining batch count.
+            lower = lower.min(limit.saturating_sub(self.produced));
+        }
+        (lower, None)
     }
 }
 
@@ -1573,6 +1592,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_meta_scan_limit_offset_edges() -> TestResult {
+        let (_dir, table) = write_single_file_per_partition_repro_table().await?;
+        let provider = table.table_provider().await?;
+        let session = Arc::new(create_session().into_inner());
+        session.register_table("delta_table", provider).unwrap();
+
+        let row_count =
+            |batches: &[RecordBatch]| batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+
+        // A bare LIMIT is absorbed by the scan, so no limit node remains.
+        let df = session.sql("SELECT part FROM delta_table LIMIT 7").await?;
+        let plan = df.clone().create_physical_plan().await?;
+        let plan_str = displayable(plan.as_ref()).indent(true).to_string();
+        assert!(
+            plan_str.contains("DeltaScanMetaExec"),
+            "expected a metadata-only scan: {plan_str}"
+        );
+        assert!(
+            !plan_str.contains("GlobalLimitExec") && !plan_str.contains("LocalLimitExec"),
+            "the scan must absorb a bare LIMIT so no limit node remains: {plan_str}"
+        );
+        assert_eq!(
+            row_count(&df.collect().await?),
+            7,
+            "LIMIT must be honored by the metadata-only scan"
+        );
+
+        // LIMIT with OFFSET: the scan absorbs fetch+skip and the planner
+        // re-adds a limit for the offset.
+        let offset = session
+            .sql("SELECT part FROM delta_table LIMIT 7 OFFSET 3")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(
+            row_count(&offset),
+            7,
+            "LIMIT with OFFSET must return exactly the requested row count"
+        );
+
+        // LIMIT 0 must not emit any rows.
+        let zero = session
+            .sql("SELECT part FROM delta_table LIMIT 0")
+            .await?
+            .collect()
+            .await?;
+        assert_eq!(row_count(&zero), 0, "LIMIT 0 must return no rows");
+
+        // A LIMIT equal to the full table size must not truncate anything.
+        let full_sql = format!("SELECT part FROM delta_table LIMIT {REPRO_TOTAL_ROWS}");
+        let full = session.sql(&full_sql).await?.collect().await?;
+        assert_eq!(
+            row_count(&full),
+            REPRO_TOTAL_ROWS,
+            "LIMIT equal to the table size must return every row"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_meta_scan_fetch_truncates_batches() -> TestResult {
         use datafusion::prelude::{SessionConfig, SessionContext};
 
@@ -1626,7 +1706,11 @@ mod tests {
         use datafusion::prelude::{SessionConfig, SessionContext};
 
         const BATCH_SIZE: usize = 3;
-        const FETCH: usize = 5;
+        // Not a multiple of the session batch size, so the last chunk must be
+        // truncated after masking: correct output is 2 + 2 rows, whereas a
+        // variant that ignored the fetch when sizing the final chunk would
+        // emit 2 + 3 = 5.
+        const FETCH: usize = 4;
         const ROWS: usize = 10;
         // 8-entry mask over 10 rows: 6 kept + 2 implicitly-kept pad rows.
         const MASK: &[bool] = &[true, true, false, true, true, true, false, true];
@@ -1671,6 +1755,14 @@ mod tests {
             .execute(0, exec_session.task_ctx())?
             .try_collect()
             .await?;
+        assert_eq!(
+            batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>(),
+            vec![2, 2],
+            "the last chunk must be truncated below the session batch size after masking"
+        );
         assert_eq!(
             batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
             FETCH,
