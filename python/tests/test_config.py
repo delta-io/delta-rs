@@ -5,9 +5,18 @@ from deltalake.table import DeltaTable, DeltaTableConfig
 
 
 def test_config_roundtrip(tmp_path, sample_table: Table):
+    import warnings
+
     write_deltalake(tmp_path, sample_table)
 
-    config = DeltaTableConfig(without_files=True, log_buffer_size=100)
+    # Test DeltaTableConfig constructor deprecation
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        config = DeltaTableConfig(without_files=True, log_buffer_size=100)
+
+        assert len(w) == 1
+        assert issubclass(w[0].category, DeprecationWarning)
+        assert "DeltaTableConfig class is deprecated" in str(w[0].message)
 
     dt = DeltaTable(
         tmp_path,
@@ -15,7 +24,31 @@ def test_config_roundtrip(tmp_path, sample_table: Table):
         log_buffer_size=config.log_buffer_size,
     )
 
-    assert config == dt.table_config
+    # Test table_config property deprecation
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        table_config = dt.table_config
+
+        # Debug: print the warnings to see what we actually get
+        for i, warning in enumerate(w):
+            print(f"Warning {i}: {warning.message} (category: {warning.category})")
+
+        # We expect 2 warnings: one from the property access and one from the DeltaTableConfig constructor
+        assert len(w) == 2
+        dep_warnings = [
+            warning for warning in w if issubclass(warning.category, DeprecationWarning)
+        ]
+        assert len(dep_warnings) == 2
+        assert any(
+            "The 'table_config' property is deprecated" in str(warning.message)
+            for warning in dep_warnings
+        )
+        assert any(
+            "DeltaTableConfig class is deprecated" in str(warning.message)
+            for warning in dep_warnings
+        )
+
+    assert config == table_config
 
     config = DeltaTableConfig(without_files=False, log_buffer_size=1)
 

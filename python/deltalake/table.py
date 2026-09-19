@@ -178,10 +178,23 @@ class Metadata:
         )
 
 
-class DeltaTableConfig(NamedTuple):
+class _DeltaTableConfigBase(NamedTuple):
     without_files: bool
     log_buffer_size: int
     skip_stats: bool = False
+
+
+class DeltaTableConfig(_DeltaTableConfigBase):
+    def __new__(
+        cls, without_files: bool, log_buffer_size: int, skip_stats: bool = False
+    ) -> "DeltaTableConfig":
+        """Create DeltaTableConfig with deprecation warning."""
+        warnings.warn(
+            "The DeltaTableConfig class is deprecated and will be removed in a future release. ",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return super().__new__(cls, without_files, log_buffer_size, skip_stats)
 
 
 class ProtocolVersions(NamedTuple):
@@ -216,17 +229,42 @@ class DeltaTable:
             without_files: If True, will load table without tracking files.
                                 Some append-only applications might have no need of tracking any files. So, the
                                 DeltaTable will be loaded with a significant memory reduction.
+                                DEPRECATED: Use table properties or other mechanisms instead.
             log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
                                 also be considered for optimal performance. Defaults to 4 * number of cpus.
+                                DEPRECATED: This parameter will be managed automatically in future versions.
             skip_stats: If True, skip parsing file statistics while opening the table.
                                 Use for maintenance and append workflows that do not need file pruning.
                                 Queries with predicates scan each file because the kernel disables statistics and
                                 partition pruning. Defaults to False.
+                                DEPRECATED: Use table properties or other mechanisms instead.
 
         """
+        if without_files:
+            warnings.warn(
+                "The 'without_files' parameter is deprecated and will be removed in a future release. "
+                "Use table properties or other mechanisms to achieve similar behavior.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if log_buffer_size is not None:
+            warnings.warn(
+                "The 'log_buffer_size' parameter is deprecated and will be removed in a future release. "
+                "This parameter will be managed automatically in future versions.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if skip_stats:
+            warnings.warn(
+                "The 'skip_stats' parameter is deprecated and will be removed in a future release. "
+                "Use table properties or other mechanisms to achieve similar behavior.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         self._storage_options = storage_options
         self._table = RawDeltaTable(
             str(table_uri),
@@ -239,6 +277,12 @@ class DeltaTable:
 
     @property
     def table_config(self) -> DeltaTableConfig:
+        warnings.warn(
+            "The 'table_config' property is deprecated and will be removed in a future release. "
+            "Access configuration parameters individually instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return DeltaTableConfig(*self._table.table_config())
 
     @staticmethod
