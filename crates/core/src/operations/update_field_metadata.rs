@@ -178,22 +178,3 @@ impl std::future::IntoFuture for UpdateFieldMetadataBuilder {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::kernel::{DataType, PrimitiveType, StructField};
-    use crate::writer::test_utils::TestResult;
-
-    use super::*;
-
-    fn id_field() -> StructField {
-        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
-    }
-
-    fn field_metadata() -> HashMap<String, MetadataValue> {
-        HashMap::from([(
-            "comment".to_string(),
-            MetadataValue::String("identifier".to_string()),
-        )])
-    }
-}

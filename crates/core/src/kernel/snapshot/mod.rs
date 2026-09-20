@@ -114,22 +114,6 @@ impl SnapshotIdentity {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SnapshotMaterializationMode {
-    Lazy,
-    Eager,
-}
-
-impl SnapshotMaterializationMode {
-    fn from_require_files(require_files: bool) -> Self {
-        if require_files {
-            Self::Eager
-        } else {
-            Self::Lazy
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MaterializedFilesPolicy {
     FullTablePreserveRaw,
     FullTableWithoutStats,
@@ -414,20 +398,6 @@ impl Snapshot {
     /// Get the table protocol of the snapshot
     pub fn protocol(&self) -> &Protocol {
         self.inner.table_configuration().protocol()
-    }
-
-    /// The `materialization_mode` involves the interaction that this [Snapshot] makes with kernel
-    /// rather than setting any particular scanning setting in kernel per se.
-    ///
-    /// Direct Snapshot construction is still lazy, but by default
-    /// [SnapshotMaterializationMode::Eager] will drain delta-kernel-rs' active file metadata scan.
-    ///
-    /// [resolve_snapshot]  also makes callers that requested metadata only loading materialize
-    /// files.
-    ///
-    /// There is ongoing work related to [issue 4584](https://github.com/delta-io/delta-rs/issues/4584).
-    fn materialization_mode(&self) -> SnapshotMaterializationMode {
-        SnapshotMaterializationMode::Eager
     }
 
     fn identity(&self) -> SnapshotIdentity {
@@ -1299,24 +1269,21 @@ impl EagerSnapshot {
         Self::try_new_with_snapshot(log_store, snapshot.into()).await
     }
 
+    /// Materialize active-file metadata through kernel replay; this does not set a kernel scan mode.
+    /// Direct [`Snapshot`] construction remains lazy, while this constructor and
+    /// [`resolve_snapshot`] require materialized files, including for metadata-only callers.
+    /// See [issue 4584](https://github.com/delta-io/delta-rs/issues/4584) for the ongoing migration.
     pub(crate) async fn try_new_with_snapshot(
         log_store: &dyn LogStore,
         snapshot: Arc<Snapshot>,
     ) -> DeltaResult<Self> {
-        let snapshot = match snapshot.materialization_mode() {
-            SnapshotMaterializationMode::Eager => {
-                snapshot.ensure_materialized_files(log_store).await?
-            }
-            SnapshotMaterializationMode::Lazy => snapshot,
-        };
+        let snapshot = snapshot.ensure_materialized_files(log_store).await?;
         Ok(Self { snapshot })
     }
 
     pub(crate) async fn with_files(self, log_store: &dyn LogStore) -> DeltaResult<Self> {
-        if self.snapshot.materialized_files().is_some() {
-            return Ok(self);
-        }
-        Self::try_new_with_snapshot(log_store, self.snapshot).await
+        let snapshot = self.snapshot.ensure_materialized_files(log_store).await?;
+        Ok(Self { snapshot })
     }
 
     /// Update the snapshot to the given version
@@ -1665,59 +1632,6 @@ mod tests {
         Ok((table_dir, table))
     }
 
-    async fn table_with_initial_stats_add() -> DeltaResult<(TempDir, DeltaTable)> {
-        let table_dir = tempfile::tempdir().unwrap();
-        let mut add = make_test_add("part-00000.snappy.parquet", &[], 0);
-        add.size = 1;
-        add.stats = Some(
-            r#"{"numRecords":1,"minValues":{"id":1},"maxValues":{"id":1},"nullCount":{"id":0}}"#
-                .to_string(),
-        );
-        let table = CreateBuilder::new()
-            .with_location(table_dir.path().to_string_lossy())
-            .with_columns([StructField::new(
-                "id",
-                DataType::Primitive(PrimitiveType::Integer),
-                true,
-            )])
-            .with_actions([Action::Add(add)])
-            .await?;
-
-        assert_eq!(table.version(), Some(0));
-        Ok((table_dir, table))
-    }
-
-    fn assert_canonical_no_stats_cache(materialized_files: &MaterializedFiles) {
-        assert_eq!(
-            materialized_files.policy,
-            MaterializedFilesPolicy::FullTableWithoutStats
-        );
-        for batch in materialized_files.batches.iter() {
-            let field = batch
-                .schema_ref()
-                .field_with_name("stats")
-                .expect("cache without statistics must retain the canonical stats field");
-            assert_eq!(field.data_type(), &ArrowDataType::Utf8);
-            assert!(field.is_nullable());
-            let stats = batch
-                .column_by_name("stats")
-                .expect("cache without statistics must retain the canonical stats column");
-            assert_eq!(stats.null_count(), batch.num_rows());
-            assert!(batch.column_by_name("stats_parsed").is_none());
-        }
-    }
-
-    fn without_stats_field(batch: &RecordBatch) -> DeltaResult<RecordBatch> {
-        let projection = batch
-            .schema_ref()
-            .fields()
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, field)| (field.name() != "stats").then_some(idx))
-            .collect::<Vec<_>>();
-        Ok(batch.project(&projection)?)
-    }
-
     fn field_count(batch: &RecordBatch, name: &str) -> usize {
         batch
             .schema()
@@ -1854,14 +1768,6 @@ mod tests {
             .expect("materialized file cache wire must be an object")
     }
 
-    fn snapshot_config_wire_mut(
-        value: &mut serde_json::Value,
-    ) -> &mut serde_json::Map<String, serde_json::Value> {
-        snapshot_wire_fields_mut(value)[9]
-            .as_object_mut()
-            .expect("snapshot config wire must be an object")
-    }
-
     fn set_materialized_files_wire_table_root(
         materialized_files: &mut serde_json::Map<String, serde_json::Value>,
     ) {
@@ -1869,15 +1775,6 @@ mod tests {
             .as_object_mut()
             .expect("snapshot identity wire must be an object");
         identity.insert("table_root".to_string(), json!("memory:///other/"));
-    }
-
-    fn eager_snapshot_materialized_files_wire_mut(
-        value: &mut serde_json::Value,
-    ) -> &mut serde_json::Map<String, serde_json::Value> {
-        let snapshot = snapshot_wire_fields_mut(value)
-            .first_mut()
-            .expect("eager snapshot wire is empty");
-        snapshot_materialized_files_wire_mut(snapshot)
     }
 
     #[tokio::test]
@@ -2400,6 +2297,103 @@ mod tests {
         assert!(actual.materialized_files().is_some());
         assert_eq!(actual.try_materialized_log_data()?.num_files(), 0);
 
+        Ok(())
+    }
+
+    #[test]
+    fn eager_snapshot_rejects_invalid_or_missing_materialized_cache() -> TestResult {
+        let snapshot: EagerSnapshot = serde_json::from_str(include_str!(
+            "../../../tests/serde/eager_snapshot_pre_identity.json"
+        ))?;
+        for rejected_cache in ["missing", "wrong_identity", "without_stats"] {
+            let mut value = serde_json::to_value(&snapshot)?;
+            match rejected_cache {
+                "missing" => value[0][9] = serde_json::Value::Null,
+                "wrong_identity" => value[0][9]["identity"]["version"] = json!(999),
+                "without_stats" => value[0][9]["policy"] = json!("FullTableWithoutStats"),
+                _ => unreachable!(),
+            }
+            let error = serde_json::from_value::<EagerSnapshot>(value)
+                .expect_err("an eager snapshot must not expose a rejected cache as an empty table");
+            assert!(
+                error
+                    .to_string()
+                    .contains("without valid materialized files")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_lazy_or_no_stats_eager_payload_is_not_an_empty_table() -> TestResult {
+        let snapshot: EagerSnapshot = serde_json::from_str(include_str!(
+            "../../../tests/serde/eager_snapshot_pre_identity.json"
+        ))?;
+        for (require_files, skip_stats) in [(false, false), (true, true)] {
+            let mut value = legacy_eager_snapshot_payload(&snapshot);
+            value[0].as_array_mut().unwrap().insert(
+                9,
+                json!({
+                    "requireFiles": require_files,
+                    "skipStats": skip_stats,
+                    "logBufferSize": 4,
+                    "logBatchSize": 1024,
+                }),
+            );
+            if !require_files {
+                value[1] = json!([]);
+            }
+            let error = serde_json::from_value::<EagerSnapshot>(value)
+                .expect_err("legacy uncached state must require reopening, not look empty");
+            assert!(
+                error
+                    .to_string()
+                    .contains("without valid materialized files")
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_lazy_loading_policy_preserves_present_eager_files() -> TestResult {
+        let snapshot: EagerSnapshot = serde_json::from_str(include_str!(
+            "../../../tests/serde/eager_snapshot_pre_identity.json"
+        ))?;
+        let mut value = legacy_eager_snapshot_payload(&snapshot);
+        value[0].as_array_mut().unwrap().insert(
+            9,
+            json!({
+                "requireFiles": false,
+                "skipStats": false,
+                "logBufferSize": 4,
+                "logBatchSize": 1024,
+            }),
+        );
+        let actual: EagerSnapshot = serde_json::from_value(value)?;
+        assert_eq!(actual.try_log_data()?.num_files(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lazy_snapshot_explicit_materialization_preserves_active_files() -> TestResult {
+        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
+        let lazy = Arc::new(Snapshot::try_new(&log_store, None).await?);
+        let lazy_paths = active_add_paths(lazy.as_ref(), &log_store).await?;
+        assert_eq!(lazy_paths.len(), 5);
+        assert!(!lazy.has_materialized_files_for_test());
+
+        let eager = EagerSnapshot {
+            snapshot: lazy.clone(),
+        }
+        .with_files(&log_store)
+        .await?;
+        assert!(eager.snapshot().has_materialized_files_for_test());
+        assert!(!lazy.has_materialized_files_for_test());
+        assert_eq!(
+            active_add_paths(eager.snapshot(), &log_store).await?,
+            lazy_paths
+        );
+        assert_eq!(eager.try_log_data()?.num_files(), 5);
         Ok(())
     }
 

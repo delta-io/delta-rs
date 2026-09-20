@@ -89,7 +89,7 @@ use uuid::Uuid;
 use writer::maybe_lazy_cast_reader;
 
 use crate::datafusion::TokioDeltaScan;
-use crate::error::{DeltaError, DeltaProtocolError, PythonError, to_rt_err};
+use crate::error::{DeltaProtocolError, PythonError, to_rt_err};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
@@ -446,12 +446,13 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.version()))
     }
 
-    pub(crate) fn has_files(&self) -> PyResult<bool> {
-        Ok(true)
-    }
-
-    pub fn table_config(&self) -> PyResult<()> {
-        Ok(())
+    pub fn table_config(&self) -> (bool, usize, bool) {
+        // Report the loading behavior retained for compatibility.
+        let log_buffer_size = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            * 4;
+        (false, log_buffer_size, false)
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
@@ -593,9 +594,6 @@ impl RawDeltaTable {
         py: Python,
         file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
         let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         py.detach(|| {
             if let Some(filter) = filter {
@@ -627,10 +625,6 @@ impl RawDeltaTable {
         &self,
         file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
-        if !self.with_table(|_t| Ok(true))? {
-            return Err(DeltaError::new_err("Table is initiated without files."));
-        }
-
         let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         if let Some(filter) = filter {
             self.with_table(|t| {
@@ -1243,10 +1237,6 @@ impl RawDeltaTable {
     }
 
     pub fn deletion_vectors(&self, py: Python) -> PyResult<Arro3RecordBatchReader> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
-
         py.detach(|| {
             let (table, state) = self.cloned_table_and_state()?;
 
@@ -1906,9 +1896,6 @@ impl RawDeltaTable {
         Ok(())
     }
     pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3Table> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
         let table: PyTable = self.with_table(|t| -> PyResult<PyTable> {
             let state = t.snapshot().map_err(PythonError::from)?;
             let mut batches = state

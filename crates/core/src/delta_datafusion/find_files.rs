@@ -857,7 +857,7 @@ mod tests {
                 .expect("a partition-only predicate");
         assert_eq!(referenced, vec!["p0".to_string()]);
 
-        // A mixed partition + data predicate keeps only the partition-only conjunct, // and still reports only the partition column it references.
+        // Keep the partition conjunct and report the column it references.
         let (_predicate, referenced) = extract_partition_only_predicate(
             col("p0").eq(lit(5_i32)).and(col("data").gt(lit(3_i32))),
             &partition_columns,

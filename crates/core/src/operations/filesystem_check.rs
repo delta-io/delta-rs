@@ -311,8 +311,7 @@ mod tests {
     use super::*;
     use crate::TableProperty;
     use crate::kernel::{
-        DataType, DeletionVectorDescriptor, EagerSnapshot, PrimitiveType, Snapshot, StorageType,
-        StructField,
+        DataType, DeletionVectorDescriptor, PrimitiveType, Snapshot, StorageType, StructField,
     };
 
     async fn metadata_rich_missing_file_table() -> DeltaResult<(DeltaTable, Add)> {

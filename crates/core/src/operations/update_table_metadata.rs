@@ -160,27 +160,3 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{Int32Array, RecordBatch};
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
-
-    use crate::kernel::{DataType, EagerSnapshot, PrimitiveType, StructField};
-    use crate::writer::test_utils::TestResult;
-
-    use super::*;
-
-    fn id_field() -> StructField {
-        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
-    }
-
-    fn metadata_update() -> TableMetadataUpdate {
-        TableMetadataUpdate {
-            name: Some("events".to_string()),
-            description: Some("event table".to_string()),
-        }
-    }
-}
