@@ -151,8 +151,7 @@ def test_write_with_default_column_properties_encoding(tmp_path: pathlib.Path):
     parquet_path = DeltaTable(tmp_path).file_uris()[0]
     encodings = pq.read_metadata(parquet_path).row_group(0).column(0).encodings
 
-    assert "DELTA_BINARY_PACKED" in encodings
-    assert "RLE_DICTIONARY" not in encodings
+    assert encodings == ("RLE", "DELTA_BINARY_PACKED")
 
 
 @pytest.mark.pyarrow
