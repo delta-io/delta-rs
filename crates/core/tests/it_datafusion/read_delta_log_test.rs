@@ -1,5 +1,6 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
+use futures::TryStreamExt;
 use object_store::path::Path as StorePath;
 use object_store::{
     CopyOptions, GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions,
@@ -472,4 +473,49 @@ async fn read_delta_table_with_renamed_partitioning_column() {
     .unwrap();
     assert_eq!(table.version(), Some(4));
     assert!(table.snapshot().is_ok());
+}
+
+#[tokio::test]
+async fn test_history_stream_stops_reading_when_dropped() {
+    // Table creation is commit 0.
+    let temp = tempfile::tempdir().unwrap();
+    let mut table = fs_common::create_table(&temp.path().to_string_lossy(), None).await;
+
+    // Add nine more commits: ten total.
+    for _ in 0..9 {
+        let add = fs_common::add(0);
+        fs_common::commit_add(&mut table, &add).await;
+    }
+
+    // Reload through a storage wrapper that records reads.
+    let location = Url::from_directory_path(temp.path()).unwrap();
+    let store = Arc::new(InstrumentedStore::new_recording());
+    let table = DeltaTableBuilder::from_url(location.clone())
+        .unwrap()
+        .with_storage_backend(store.clone(), location)
+        .with_log_buffer_size(1)
+        .unwrap()
+        .load()
+        .await
+        .unwrap();
+
+    // Exclude reads used to load the table.
+    store.clear_recorded_gets();
+
+    // Constructing the stream must not read commit contents.
+    let mut history = table.history_stream(None);
+    assert!(store.recorded_gets().is_empty());
+
+    // Consume one entry.
+    let first = history.try_next().await.unwrap();
+    assert!(first.is_some());
+
+    // With buffer size 1, only the newest commit should be fetched.
+    let reads = store.recorded_gets();
+    assert_eq!(reads.len(), 1);
+    assert!(reads[0].ends_with("_delta_log/00000000000000000009.json"));
+
+    // Stop consuming before reaching any older commits.
+    drop(history);
+    assert_eq!(store.recorded_gets().len(), 1);
 }
