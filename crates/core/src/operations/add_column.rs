@@ -161,19 +161,3 @@ impl std::future::IntoFuture for AddColumnBuilder {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::kernel::{DataType, PrimitiveType};
-    use crate::writer::test_utils::TestResult;
-
-    use super::*;
-
-    fn id_field() -> StructField {
-        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
-    }
-
-    fn added_field() -> StructField {
-        StructField::new("added", DataType::Primitive(PrimitiveType::String), true)
-    }
-}

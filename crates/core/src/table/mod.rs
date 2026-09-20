@@ -84,9 +84,24 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let state = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let storage_config: LogStoreConfig = seq
+                #[derive(Deserialize)]
+                #[serde(untagged)]
+                enum StorageOrLegacyConfig {
+                    Storage(Box<LogStoreConfig>),
+                    Legacy {
+                        #[serde(rename = "requireFiles", alias = "require_files")]
+                        _require_files: bool,
+                    },
+                }
+                let storage_config = match seq
                     .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| A::Error::invalid_length(1, &self))?
+                {
+                    StorageOrLegacyConfig::Storage(config) => *config,
+                    StorageOrLegacyConfig::Legacy { .. } => seq
+                        .next_element()?
+                        .ok_or_else(|| A::Error::invalid_length(2, &self))?,
+                };
                 let log_store = crate::logstore::logstore_for(
                     storage_config.location(),
                     storage_config.options().clone(),
@@ -599,6 +614,32 @@ mod tests {
             dt.snapshot().unwrap().log_data().num_files()
         );
         drop(tmp_dir);
+    }
+
+    #[test]
+    fn table_deserializes_legacy_config_slot() {
+        let snapshot: crate::kernel::EagerSnapshot = serde_json::from_str(include_str!(
+            "../../tests/serde/eager_snapshot_pre_identity.json"
+        ))
+        .unwrap();
+        let mut table = DeltaTable::new_in_memory();
+        table.state = Some(DeltaTableState::new(snapshot));
+        let mut value = serde_json::to_value(&table).unwrap();
+        let config = json!({
+            "requireFiles": true,
+            "logBufferSize": 4,
+            "logBatchSize": 1024,
+            "skipStats": false,
+        });
+        value[0]["snapshot"][0]
+            .as_array_mut()
+            .unwrap()
+            .insert(9, config.clone());
+        value.as_array_mut().unwrap().insert(1, config);
+        let actual: DeltaTable = serde_json::from_value(value).unwrap();
+        assert_eq!(actual.version(), Some(1));
+        assert_eq!(actual.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(actual.table_url(), table.table_url());
     }
 
     #[tokio::test]

@@ -1055,10 +1055,6 @@ mod tests {
         Ok(())
     }
 
-    fn lazy_snapshot_config() {
-        // formerly returned DeltaTableConfig { require_files: false }; now a no-op
-    }
-
     fn normalize_vacuum_plan(plan: VacuumPlan) -> (Vec<(String, i64)>, bool, i64, Option<i64>) {
         let mut files = plan
             .files_to_delete
