@@ -416,6 +416,16 @@ impl Snapshot {
         self.inner.table_configuration().protocol()
     }
 
+    /// The `materialization_mode` involves the interaction that this [Snapshot] makes with kernel
+    /// rather than setting any particular scanning setting in kernel per se.
+    ///
+    /// Direct Snapshot construction is still lazy, but by default
+    /// [SnapshotMaterializationMode::Eager] will drain delta-kernel-rs' active file metadata scan.
+    ///
+    /// [resolve_snapshot]  also makes callers that requested metadata only loading materialize
+    /// files.
+    ///
+    /// There is ongoing work related to [issue 4584](https://github.com/delta-io/delta-rs/issues/4584).
     fn materialization_mode(&self) -> SnapshotMaterializationMode {
         SnapshotMaterializationMode::Eager
     }
