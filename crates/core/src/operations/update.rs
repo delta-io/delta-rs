@@ -379,7 +379,7 @@ async fn execute(
 
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
-        Some(eager_snapshot),
+        snapshot.table_configuration(),
         session,
         physical_plan.clone(),
         table_partition_cols.to_vec(),
@@ -435,7 +435,7 @@ async fn execute(
             Ok(cdc_plan) => {
                 let cdc_exec = session.create_physical_plan(&cdc_plan).await?;
                 let cdc_actions = write_execution_plan_cdc(
-                    Some(eager_snapshot),
+                    snapshot.table_configuration(),
                     session,
                     cdc_exec,
                     table_partition_cols.to_vec(),
