@@ -1,11 +1,11 @@
 import json
 import multiprocessing
 import os
+import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
-import time
 from typing import Any
 from urllib.parse import urlparse
 
