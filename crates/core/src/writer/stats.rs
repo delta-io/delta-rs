@@ -338,7 +338,7 @@ impl StatsScalar {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
-                    value: val,
+                    value: fit_decimal_to_precision(val, decimal_type),
                     scale: decimal_type.scale,
                 })
             }
@@ -388,19 +388,10 @@ impl StatsScalar {
                     });
                 };
 
-                let mut val = val / 10.0_f64.powi(decimal_type.scale);
-
-                if val.is_normal()
-                    && (val.trunc() as i128).to_string().len()
-                        > (decimal_type.precision - decimal_type.scale) as usize
-                {
-                    // For normal values with integer parts that get rounded to a number beyond
-                    // the precision - scale range take the next smaller (by magnitude) value
-                    val = f64::from_bits(val.to_bits() - 1);
-                }
+                let val = val / 10.0_f64.powi(decimal_type.scale);
 
                 Ok(Self::Decimal {
-                    value: val,
+                    value: fit_decimal_to_precision(val, decimal_type),
                     scale: decimal_type.scale,
                 })
             }
@@ -436,6 +427,23 @@ impl StatsScalar {
 /// Performs big endian sign extension
 /// Copied from arrow-rs repo/parquet crate:
 /// https://github.com/apache/arrow-rs/blob/b25c441745602c9967b1e3cc4a28bc469cfb1311/parquet/src/arrow/buffer/bit_util.rs#L54
+/// Keep a decimal statistic inside the integer digit budget its type declares.
+///
+/// Converting a decimal to `f64` can round the value up to a magnitude that needs more
+/// integer digits than `precision - scale` allows. Writing that rounded value out as a
+/// minValue or maxValue would widen the range in the wrong direction and let a reader
+/// skip a file that does contain matching rows, so step back to the next smaller
+/// magnitude representable in `f64`.
+fn fit_decimal_to_precision(val: f64, decimal_type: &DecimalType) -> f64 {
+    if val.is_normal()
+        && (val.trunc() as i128).to_string().len()
+            > (decimal_type.precision - decimal_type.scale) as usize
+    {
+        return f64::from_bits(val.to_bits() - 1);
+    }
+    val
+}
+
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
@@ -934,6 +942,28 @@ mod tests {
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
+    }
+
+    #[test]
+    fn test_int64_decimal_min_stat_respects_precision() {
+        // A decimal(18, 0) column whose true minimum is the largest value the
+        // precision allows. Converting to f64 rounds 999999999999999999 up to
+        // 1e18, which serializes to a 19 digit minValue that is greater than the
+        // true minimum and would let a reader skip a file that does match.
+        let stats = simple_parquet_stat!(Statistics::Int64, 999999999999999999i64);
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+
+        let scalar = StatsScalar::try_from_stats(&stats, Some(&logical_type), true).unwrap();
+        let min_value = serde_json::Value::from(scalar);
+        let min = min_value.as_i64().unwrap();
+
+        assert!(
+            min <= 999999999999999999,
+            "minValue {min} is greater than the true minimum 999999999999999999"
+        );
     }
 
     #[tokio::test]
