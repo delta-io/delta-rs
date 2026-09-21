@@ -78,11 +78,6 @@ test-cov: ## Create coverage report
 test-pyspark:
 	uv run --no-sync pytest -m 'pyarrow and pyspark and integration'
 
-.PHONY: build-documentation
-build-documentation: ## Build documentation with Sphinx
-	$(info --- Run build of the Sphinx documentation ---)
-	uv run --no-sync sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
-
 .PHONY: build-docs
 build-docs: ## Build documentation with mkdocs
 	$(info --- Run build of the documentation ---)
