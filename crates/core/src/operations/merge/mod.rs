@@ -94,7 +94,6 @@ use crate::kernel::{
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
-use crate::operations::write::WriterStatsConfig;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
     add_generated_columns, add_missing_generated_columns, gc_is_enabled,
@@ -1603,19 +1602,14 @@ async fn execute(
         .or_else(|| find_node::<DeltaScanExec>(&write))
         .ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns().to_vec();
-    let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
-
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
         snapshot.table_configuration(),
         &state,
         write,
-        table_partition_cols.to_vec(),
         log_store.object_store(Some(operation_id)),
         Some(snapshot.table_properties().target_file_size()),
         None,
         writer_properties.clone(),
-        writer_stats_config.clone(),
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
