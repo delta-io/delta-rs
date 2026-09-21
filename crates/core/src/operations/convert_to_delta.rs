@@ -1147,19 +1147,17 @@ mod tests {
             ])
         );
 
-        // The add action of the single converted file carries no statistics
-        let commit =
-            fs::read_to_string(temp_dir.path().join("_delta_log/00000000000000000000.json"))
-                .expect("Failed to read the commit file");
-        let add: serde_json::Value = commit
-            .lines()
-            .find(|line| line.contains("\"add\""))
-            .map(|line| serde_json::from_str(line).expect("Failed to parse the add action"))
-            .expect("The commit should hold an add action");
-        assert!(
-            add["add"]["stats"].is_null(),
-            "The add action should carry no statistics: {add}"
-        );
+        // The converted file carries no statistics
+        let files: Vec<_> = table
+            .snapshot()
+            .expect("The table should hold a snapshot")
+            .snapshot()
+            .file_views(&table.log_store(), None)
+            .try_collect()
+            .await
+            .expect("Failed to read the file views");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].num_records(), None);
     }
 
     #[tokio::test]
