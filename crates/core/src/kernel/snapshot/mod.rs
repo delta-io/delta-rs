@@ -1535,14 +1535,11 @@ mod tests {
         let mut table = DeltaTable::new_in_memory()
             .create()
             .with_location(table_dir.path().to_str().unwrap())
-            .with_columns(
-                [StructField::new(
-                    "id",
-                    DataType::Primitive(PrimitiveType::Integer),
-                    true,
-                )]
-                .into_iter(),
-            )
+            .with_columns([StructField::new(
+                "id",
+                DataType::Primitive(PrimitiveType::Integer),
+                true,
+            )])
             .await?;
 
         append_test_add(&mut table, "part-00000.snappy.parquet").await?;
