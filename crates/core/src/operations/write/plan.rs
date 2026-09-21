@@ -23,6 +23,7 @@ use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
+use super::configs::WriteExecOptions;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
@@ -82,13 +83,6 @@ impl SchemaDelta {
         }
         actions
     }
-}
-
-/// Sink specific knobs that must survive planning unchanged.
-pub(super) struct WriteExecOptions {
-    pub(super) target_file_size: Option<NonZeroU64>,
-    pub(super) write_batch_size: Option<usize>,
-    pub(super) writer_properties: Option<WriterProperties>,
 }
 
 /// Prepared insert input plus the exact validation the sink must enforce.

@@ -45,6 +45,7 @@ use uuid::Uuid;
 
 use super::{
     CustomExecuteHandler, Operation,
+    write::configs::WriteExecOptions,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
 };
 use crate::delta_datafusion::{
@@ -378,9 +379,11 @@ async fn execute(
         session,
         physical_plan.clone(),
         log_store.object_store(Some(operation_id)).clone(),
-        Some(snapshot.table_properties().target_file_size()),
-        None,
-        writer_properties.clone(),
+        WriteExecOptions {
+            target_file_size: Some(snapshot.table_properties().target_file_size()),
+            write_batch_size: None,
+            writer_properties: writer_properties.clone(),
+        },
     )
     .await?;
 
@@ -432,9 +435,11 @@ async fn execute(
                     session,
                     cdc_exec,
                     log_store.object_store(Some(operation_id)),
-                    Some(snapshot.table_properties().target_file_size()),
-                    None,
-                    writer_properties,
+                    WriteExecOptions {
+                        target_file_size: Some(snapshot.table_properties().target_file_size()),
+                        write_batch_size: None,
+                        writer_properties,
+                    },
                 )
                 .await?;
                 actions.extend(cdc_actions);

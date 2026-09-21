@@ -1,9 +1,19 @@
+use std::num::NonZeroU64;
+
 use delta_kernel::{
     table_configuration::TableConfiguration, table_properties::DataSkippingNumIndexedCols,
 };
+use parquet::file::properties::WriterProperties;
 
 use crate::kernel::arrow::engine_ext::stats_table_properties;
 use crate::table::config::TablePropertiesExt as _;
+
+/// Sink specific knobs that must survive planning unchanged.
+pub(crate) struct WriteExecOptions {
+    pub(crate) target_file_size: Option<NonZeroU64>,
+    pub(crate) write_batch_size: Option<usize>,
+    pub(crate) writer_properties: Option<WriterProperties>,
+}
 
 /// Configuration for the writer on how to collect stats
 #[derive(Clone)]
