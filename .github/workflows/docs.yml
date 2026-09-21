@@ -84,7 +84,6 @@ jobs:
         with:
           folder: site
           clean-exclude: |
-            python/
             .nojekyll
           single-commit: false
           git-config-name: "Github Action"
