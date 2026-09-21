@@ -2536,7 +2536,8 @@ Depending on the storage backend used, you could provide options values using th
             <div class="doc-md-description">
               <p>If True, will load table without tracking files.
                 Some append-only applications might have no need of tracking any files. So, the
-                DeltaTable will be loaded with a significant memory reduction.</p>
+                DeltaTable will be loaded with a significant memory reduction.
+                DEPRECATED: Use table properties or other mechanisms instead.</p>
             </div>
           </td>
           <td>
@@ -2554,7 +2555,8 @@ Depending on the storage backend used, you could provide options values using th
                 Setting a value greater than 1 results in concurrent calls to the storage api.
                 This can decrease latency if there are many files in the log since the last checkpoint,
                 but will also increase memory usage. Possible rate limits of the storage backend should
-                also be considered for optimal performance. Defaults to 4 * number of cpus.</p>
+                also be considered for optimal performance. Defaults to 4 * number of cpus.
+                DEPRECATED: This parameter will be managed automatically in future versions.</p>
             </div>
           </td>
           <td>
@@ -2571,7 +2573,8 @@ Depending on the storage backend used, you could provide options values using th
               <p>If True, skip parsing file statistics while opening the table.
                 Use for maintenance and append workflows that do not need file pruning.
                 Queries with predicates scan each file because the kernel disables statistics and
-                partition pruning. Defaults to False.</p>
+                partition pruning. Defaults to False.
+                DEPRECATED: Use table properties or other mechanisms instead.</p>
             </div>
           </td>
           <td>
