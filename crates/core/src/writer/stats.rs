@@ -335,10 +335,15 @@ impl StatsScalar {
                 }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
+                let val = get_stat!(v);
+                if decimal_type.scale == 0 {
+                    // Preserve exact integer bounds instead of rounding through f64.
+                    return Ok(Self::Int64(val));
+                }
+                let val = val as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
-                    value: fit_decimal_to_precision(val, decimal_type),
+                    value: val,
                     scale: decimal_type.scale,
                 })
             }
@@ -388,10 +393,19 @@ impl StatsScalar {
                     });
                 };
 
-                let val = val / 10.0_f64.powi(decimal_type.scale);
+                let mut val = val / 10.0_f64.powi(decimal_type.scale);
+
+                if val.is_normal()
+                    && (val.trunc() as i128).to_string().len()
+                        > (decimal_type.precision - decimal_type.scale) as usize
+                {
+                    // For normal values with integer parts that get rounded to a number beyond
+                    // the precision - scale range take the next smaller (by magnitude) value
+                    val = f64::from_bits(val.to_bits() - 1);
+                }
 
                 Ok(Self::Decimal {
-                    value: fit_decimal_to_precision(val, decimal_type),
+                    value: val,
                     scale: decimal_type.scale,
                 })
             }
@@ -427,23 +441,6 @@ impl StatsScalar {
 /// Performs big endian sign extension
 /// Copied from arrow-rs repo/parquet crate:
 /// https://github.com/apache/arrow-rs/blob/b25c441745602c9967b1e3cc4a28bc469cfb1311/parquet/src/arrow/buffer/bit_util.rs#L54
-/// Keep a decimal statistic inside the integer digit budget its type declares.
-///
-/// Converting a decimal to `f64` can round the value up to a magnitude that needs more
-/// integer digits than `precision - scale` allows. Writing that rounded value out as a
-/// minValue or maxValue would widen the range in the wrong direction and let a reader
-/// skip a file that does contain matching rows, so step back to the next smaller
-/// magnitude representable in `f64`.
-fn fit_decimal_to_precision(val: f64, decimal_type: &DecimalType) -> f64 {
-    if val.is_normal()
-        && (val.trunc() as i128).to_string().len()
-            > (decimal_type.precision - decimal_type.scale) as usize
-    {
-        return f64::from_bits(val.to_bits() - 1);
-    }
-    val
-}
-
 pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     assert!(b.len() <= N, "Array too large, expected less than {N}");
     let is_negative = (b[0] & 128u8) == 128u8;
@@ -963,6 +960,96 @@ mod tests {
         assert!(
             min <= 999999999999999999,
             "minValue {min} is greater than the true minimum 999999999999999999"
+        );
+    }
+
+    #[test]
+    fn test_int64_decimal_zero_scale_bounds_are_exact() {
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+        for value in [
+            -999_999_999_999_999_999_i64,
+            -9_007_199_254_740_993,
+            -9_007_199_254_740_991,
+            -1234,
+            0,
+            1234,
+            9_007_199_254_740_991,
+            9_007_199_254_740_993,
+            999_999_999_999_999_999,
+        ] {
+            let stats = simple_parquet_stat!(Statistics::Int64, value);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(
+                    serde_json::Value::from(scalar),
+                    serde_json::Value::from(value),
+                    "value={value}, use_min={use_min}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_int64_decimal_nonzero_scale_stats() {
+        for (scale, expected) in [(3, json!(1.234)), (-1, json!(12340.0))] {
+            let logical_type = LogicalType::Decimal(DecimalType {
+                scale,
+                precision: 4,
+            });
+            let stats = simple_parquet_stat!(Statistics::Int64, 1234);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(serde_json::Value::from(scalar), expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_int64_decimal_zero_scale_add_stats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "amount", "type": "decimal(18,0)", "nullable": true, "metadata": {} }
+            ]
+        });
+        create_temp_table_with_schema(temp_dir.path(), &schema);
+        let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table)
+            .unwrap()
+            .with_writer_properties(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(1))
+                    .build(),
+            );
+        let values = arrow_array::Decimal128Array::from(vec![
+            9_007_199_254_740_993,
+            -999_999_999_999_999_999,
+            999_999_999_999_999_999,
+            -9_007_199_254_740_993,
+        ])
+        .with_precision_and_scale(18, 0)
+        .unwrap();
+        let batch =
+            arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(values)])
+                .unwrap();
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        let stats = adds[0].get_stats().unwrap().unwrap();
+        assert_eq!(
+            stats.min_values["amount"].as_value().unwrap().as_i64(),
+            Some(-999_999_999_999_999_999)
+        );
+        assert_eq!(
+            stats.max_values["amount"].as_value().unwrap().as_i64(),
+            Some(999_999_999_999_999_999)
         );
     }
 
