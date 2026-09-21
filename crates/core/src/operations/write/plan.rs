@@ -23,7 +23,6 @@ use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::configs::WriterStatsConfig;
 use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
@@ -40,7 +39,7 @@ use crate::kernel::{
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
-use crate::operations::{get_num_idx_cols_and_stats_columns, get_target_file_size};
+use crate::operations::get_target_file_size;
 use crate::protocol::SaveMode;
 
 /// Schema and protocol actions required before the sink executes the write.
@@ -87,11 +86,9 @@ impl SchemaDelta {
 
 /// Sink specific knobs that must survive planning unchanged.
 pub(super) struct WriteExecOptions {
-    pub(super) partition_columns: Vec<String>,
     pub(super) target_file_size: Option<NonZeroU64>,
     pub(super) write_batch_size: Option<usize>,
     pub(super) writer_properties: Option<WriterProperties>,
-    pub(super) writer_stats_config: WriterStatsConfig,
 }
 
 /// Prepared insert input plus the exact validation the sink must enforce.
@@ -427,7 +424,6 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         exact_validation,
         exec_options: build_exec_options(
             snapshot,
-            partition_columns,
             target_file_size,
             write_batch_size,
             writer_properties,
@@ -466,7 +462,7 @@ pub(super) async fn plan_overwrite_rewrite(
         Some(predicate) => {
             let analysis = analyze_predicate_for_find_files(
                 predicate.clone(),
-                &prepared_write.exec_options.partition_columns,
+                eager_snapshot.metadata().partition_columns(),
             )?;
             let mut diagnostics = RewriteDiagnostics {
                 matched_file_count: 0,
@@ -704,7 +700,6 @@ fn align_plan_to_schema(plan: LogicalPlan, target_plan: &LogicalPlan) -> DeltaRe
 
 fn build_exec_options(
     snapshot: Option<&EagerSnapshot>,
-    partition_columns: Vec<String>,
     target_file_size: Option<Option<NonZeroU64>>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
@@ -713,18 +708,11 @@ fn build_exec_options(
     let config = snapshot.map(|snapshot| snapshot.table_properties());
     let target_file_size =
         target_file_size.unwrap_or_else(|| Some(get_target_file_size(config, configuration)));
-    let (num_indexed_cols, stats_columns) =
-        get_num_idx_cols_and_stats_columns(config, configuration.clone());
 
     WriteExecOptions {
-        partition_columns,
         target_file_size,
         write_batch_size,
         writer_properties,
-        writer_stats_config: WriterStatsConfig {
-            num_indexed_cols,
-            stats_columns,
-        },
     }
 }
 

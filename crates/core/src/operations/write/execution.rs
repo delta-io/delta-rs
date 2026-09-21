@@ -308,12 +308,10 @@ pub(crate) async fn write_execution_plan_cdc(
     table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
@@ -321,12 +319,10 @@ pub(crate) async fn write_execution_plan_cdc(
         table_config,
         session,
         plan,
-        partition_columns,
         cdc_store,
         target_file_size,
         write_batch_size,
         writer_properties,
-        writer_stats_config,
     )
     .await?
     .into_iter()
@@ -355,23 +351,19 @@ pub(crate) async fn write_execution_plan(
     table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         table_config,
         session,
         plan,
-        partition_columns,
         object_store,
         target_file_size,
         write_batch_size,
         writer_properties,
-        writer_stats_config,
         None,
         false,
         None,
@@ -385,12 +377,10 @@ pub(crate) async fn write_execution_plan_v2(
     table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
     target_file_size: Option<NonZeroU64>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
@@ -415,12 +405,12 @@ pub(crate) async fn write_execution_plan_v2(
     }
 
     let sink_config = WriteSinkConfig {
-        partition_columns,
+        partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
         target_file_size,
         write_batch_size,
         writer_properties,
-        writer_stats_config,
+        writer_stats_config: WriterStatsConfig::from_config(table_config),
         column_mapping: ColumnMappingState::from_table_config(table_config),
     };
 
