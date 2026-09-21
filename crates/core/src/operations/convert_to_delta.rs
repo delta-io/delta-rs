@@ -1100,10 +1100,8 @@ mod tests {
             .expect("Failed to convert to Delta table");
 
         let commit_info = table
-            .history(None)
+            .last_commit()
             .await
-            .expect("Failed to read the commit log")
-            .next()
             .expect("The commit log should hold one entry");
 
         assert_eq!(commit_info.operation.as_deref(), Some("CONVERT"));
@@ -1112,14 +1110,13 @@ mod tests {
             .operation_parameters
             .expect("The commit should record operation parameters");
         // Every operation parameter is stored as a string in the commit log
-        assert_eq!(parameters.get("numFiles"), Some(&serde_json::json!("2")));
         assert_eq!(
-            parameters.get("partitionBy"),
-            Some(&serde_json::json!(r#"["year"]"#))
-        );
-        assert_eq!(
-            parameters.get("collectStats"),
-            Some(&serde_json::json!("true"))
+            parameters,
+            HashMap::from([
+                ("numFiles".to_string(), "2".into()),
+                ("partitionBy".to_string(), r#"["year"]"#.into()),
+                ("collectStats".to_string(), "true".into()),
+            ])
         );
     }
 
@@ -1135,17 +1132,19 @@ mod tests {
             .expect("Failed to convert to Delta table");
 
         let commit_info = table
-            .history(None)
+            .last_commit()
             .await
-            .expect("Failed to read the commit log")
-            .next()
             .expect("The commit log should hold one entry");
         let parameters = commit_info
             .operation_parameters
             .expect("The commit should record operation parameters");
         assert_eq!(
-            parameters.get("collectStats"),
-            Some(&serde_json::json!("false"))
+            parameters,
+            HashMap::from([
+                ("numFiles".to_string(), "1".into()),
+                ("partitionBy".to_string(), "[]".into()),
+                ("collectStats".to_string(), "false".into()),
+            ])
         );
 
         // The add action of the single converted file carries no statistics
