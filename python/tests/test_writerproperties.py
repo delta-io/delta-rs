@@ -143,9 +143,7 @@ def test_write_with_default_column_properties_encoding(tmp_path: pathlib.Path):
     )
 
     write_deltalake(
-        tmp_path,
-        pa.table({"value": [1, 2, 3]}),
-        writer_properties=writer_properties
+        tmp_path, pa.table({"value": [1, 2, 3]}), writer_properties=writer_properties
     )
 
     parquet_path = DeltaTable(tmp_path).file_uris()[0]
