@@ -43,7 +43,6 @@ use serde::Serialize;
 use tracing::log::*;
 use uuid::Uuid;
 
-use super::write::WriterStatsConfig;
 use super::{
     CustomExecuteHandler, Operation,
     write::execution::{write_execution_plan, write_execution_plan_cdc},
@@ -308,9 +307,6 @@ async fn execute(
         .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
         .try_collect()?;
 
-    let current_metadata = snapshot.metadata();
-    let table_partition_cols = current_metadata.partition_columns().to_vec();
-
     let scan_start = Instant::now();
 
     let maybe_scan_plan =
@@ -377,17 +373,14 @@ async fn execute(
     let physical_plan = session.create_physical_plan(&plan_updated).await?;
     let tracker = CDCTracker::new(files_scan.scan().clone(), plan_updated);
 
-    let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
         snapshot.table_configuration(),
         session,
         physical_plan.clone(),
-        table_partition_cols.to_vec(),
         log_store.object_store(Some(operation_id)).clone(),
         Some(snapshot.table_properties().target_file_size()),
         None,
         writer_properties.clone(),
-        writer_stats_config.clone(),
     )
     .await?;
 
@@ -438,12 +431,10 @@ async fn execute(
                     snapshot.table_configuration(),
                     session,
                     cdc_exec,
-                    table_partition_cols.to_vec(),
                     log_store.object_store(Some(operation_id)),
                     Some(snapshot.table_properties().target_file_size()),
                     None,
                     writer_properties,
-                    writer_stats_config,
                 )
                 .await?;
                 actions.extend(cdc_actions);
