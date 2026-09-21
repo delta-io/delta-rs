@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::cast::normalize_for_delta;
-use crate::kernel::transaction::CommitProperties;
+use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::logstore::StorageConfig;
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
@@ -29,7 +29,7 @@ use crate::{
     kernel::{Add, DataType, StructField, scalars::ScalarExt},
     logstore::{LogStore, LogStoreRef},
     operations::create::CreateBuilder,
-    protocol::SaveMode,
+    protocol::{DeltaOperation, SaveMode},
     table::builder::ensure_table_uri,
     table::config::TableProperty,
     writer::stats::stats_from_parquet_metadata,
@@ -266,7 +266,7 @@ impl ConvertToDeltaBuilder {
     }
 
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
-    async fn into_create_builder(mut self) -> Result<(CreateBuilder, Uuid), Error> {
+    async fn into_create_builder(mut self) -> Result<PreparedConversion, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
         // Return an error if neither log store nor path is provided
         self.log_store = if let Some(log_store) = self.log_store {
@@ -435,6 +435,12 @@ impl ConvertToDeltaBuilder {
         let mut schema_fields = schema.fields().collect_vec();
         schema_fields.append(&mut partition_schema_fields.values().collect::<Vec<_>>());
 
+        let operation = DeltaOperation::Convert {
+            num_files: i64::try_from(actions.len())?,
+            partition_by: partition_schema_fields.keys().cloned().collect(),
+            collect_stats: true,
+        };
+
         // Generate CreateBuilder with corresponding add actions, schemas and operation meta
         let mut builder = CreateBuilder::new()
             .with_log_store(self.log_store().clone())
@@ -442,16 +448,32 @@ impl ConvertToDeltaBuilder {
             .with_partition_columns(partition_schema_fields.keys().cloned())
             .with_actions(actions)
             .with_save_mode(self.mode)
-            .with_configuration(self.configuration)
-            .with_commit_properties(self.commit_properties);
+            .with_configuration(self.configuration);
         if let Some(name) = self.name {
             builder = builder.with_table_name(name);
         }
         if let Some(comment) = self.comment {
             builder = builder.with_comment(comment);
         }
-        Ok((builder, operation_id))
+        Ok(PreparedConversion {
+            builder,
+            operation,
+            operation_id,
+            commit_properties: self.commit_properties,
+        })
     }
+}
+
+/// Everything needed to commit a conversion, prepared from a [`ConvertToDeltaBuilder`]
+struct PreparedConversion {
+    /// Builds the protocol, metadata and add actions of the new table using CreateBuilder
+    builder: CreateBuilder,
+    /// The `CONVERT` operation written to the commit log
+    operation: DeltaOperation,
+    /// Identifies this operation in the custom execute handler
+    operation_id: Uuid,
+    /// Additional information to add to the commit
+    commit_properties: CommitProperties,
 }
 
 /// Parse the value of a partition directory into a scalar of the partition column's type
@@ -484,18 +506,34 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
 
         Box::pin(async move {
             let handler = this.custom_execute_handler.clone();
-            let (builder, operation_id) = this
+            let prepared = this
                 .into_create_builder()
                 .await
                 .map_err(DeltaTableError::from)?;
+            let PreparedConversion {
+                builder,
+                operation,
+                operation_id,
+                commit_properties,
+            } = prepared;
+
+            // Reuse the create builder to assemble the protocol, metadata and add actions
+            let (mut table, actions, _, _) = builder.into_table_and_actions().await?;
+
+            let version = CommitBuilder::from(commit_properties)
+                .with_actions(actions)
+                .with_operation_id(operation_id)
+                .with_post_commit_hook_handler(handler.clone())
+                .build(None, table.log_store(), operation)
+                .await?
+                .version();
+            table.load_version(version).await?;
 
             if let Some(handler) = handler {
                 handler
-                    .post_execute(builder.log_store(), operation_id)
+                    .post_execute(&table.log_store(), operation_id)
                     .await?;
             }
-
-            let table = builder.await?;
             Ok(table)
         })
     }
@@ -1035,6 +1073,44 @@ mod tests {
             Ok(PartitionStrategy::Directory)
         ));
         assert!("snowflake".parse::<PartitionStrategy>().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_convert_writes_convert_operation() {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        write_parquet_files(
+            temp_dir.path(),
+            &["year=2020/part-0.parquet", "year=2021/part-1.parquet"],
+        );
+
+        let table = ConvertToDeltaBuilder::new()
+            .with_location(temp_dir.path().to_str().unwrap())
+            .with_partition_schema(vec![schema_field("year", PrimitiveType::Integer, true)])
+            .await
+            .expect("Failed to convert to Delta table");
+
+        let commit_info = table
+            .history(None)
+            .await
+            .expect("Failed to read the commit log")
+            .next()
+            .expect("The commit log should hold one entry");
+
+        assert_eq!(commit_info.operation.as_deref(), Some("CONVERT"));
+
+        let parameters = commit_info
+            .operation_parameters
+            .expect("The commit should record operation parameters");
+        // Every operation parameter is stored as a string in the commit log
+        assert_eq!(parameters.get("numFiles"), Some(&serde_json::json!("2")));
+        assert_eq!(
+            parameters.get("partitionBy"),
+            Some(&serde_json::json!(r#"["year"]"#))
+        );
+        assert_eq!(
+            parameters.get("collectStats"),
+            Some(&serde_json::json!("true"))
+        );
     }
 
     #[tokio::test]
