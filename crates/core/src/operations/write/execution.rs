@@ -31,7 +31,7 @@ use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::configs::{WriteExecOptions, WriterStatsConfig};
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -303,67 +303,53 @@ pub(crate) struct WriteStreamMetrics {
     pub write_time_ms: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
     table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    exec_options: WriteExecOptions,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
-    Ok(write_execution_plan(
-        table_config,
-        session,
-        plan,
-        cdc_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
+    Ok(
+        write_execution_plan(table_config, session, plan, cdc_store, exec_options)
+            .await?
+            .into_iter()
+            .map(|add| {
+                // Modify add actions into CDC actions
+                match add {
+                    Action::Add(add) => {
+                        Action::Cdc(AddCDCFile {
+                            // This is a gnarly hack, but the action needs the nested path, not the
+                            // path inside the prefixed store
+                            path: format!("_change_data/{}", add.path),
+                            size: add.size,
+                            partition_values: add.partition_values,
+                            data_change: false,
+                            tags: add.tags,
+                        })
+                    }
+                    _ => panic!("Expected Add action"),
+                }
+            })
+            .collect::<Vec<_>>(),
     )
-    .await?
-    .into_iter()
-    .map(|add| {
-        // Modify add actions into CDC actions
-        match add {
-            Action::Add(add) => {
-                Action::Cdc(AddCDCFile {
-                    // This is a gnarly hack, but the action needs the nested path, not the
-                    // path inside the prefixed store
-                    path: format!("_change_data/{}", add.path),
-                    size: add.size,
-                    partition_values: add.partition_values,
-                    data_change: false,
-                    tags: add.tags,
-                })
-            }
-            _ => panic!("Expected Add action"),
-        }
-    })
-    .collect::<Vec<_>>())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    exec_options: WriteExecOptions,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
         table_config,
         session,
         plan,
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
+        exec_options,
         None,
         false,
         None,
@@ -378,9 +364,7 @@ pub(crate) async fn write_execution_plan_v2(
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
+    exec_options: WriteExecOptions,
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
@@ -407,9 +391,9 @@ pub(crate) async fn write_execution_plan_v2(
     let sink_config = WriteSinkConfig {
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
+        target_file_size: exec_options.target_file_size,
+        write_batch_size: exec_options.write_batch_size,
+        writer_properties: exec_options.writer_properties,
         writer_stats_config: WriterStatsConfig::from_config(table_config),
         column_mapping: ColumnMappingState::from_table_config(table_config),
     };
