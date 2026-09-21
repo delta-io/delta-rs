@@ -572,11 +572,9 @@ impl std::future::IntoFuture for WriteBuilder {
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
 
                 let plan::WriteExecOptions {
-                    partition_columns,
                     target_file_size,
                     write_batch_size,
                     writer_properties,
-                    writer_stats_config,
                 } = exec_options;
                 let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
                 let (sink_plan, contains_cdc, insert_marker_column) =
@@ -588,12 +586,10 @@ impl std::future::IntoFuture for WriteBuilder {
                     &table_config,
                     &session,
                     source_plan.clone(),
-                    partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
                     target_file_size,
                     write_batch_size,
                     writer_properties,
-                    writer_stats_config,
                     exact_validation,
                     contains_cdc,
                     insert_marker_column,
