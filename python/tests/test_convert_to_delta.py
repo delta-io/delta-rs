@@ -50,6 +50,31 @@ def test_local_convert_to_delta(
 
 
 @pytest.mark.pyarrow
+def test_convert_without_stats(tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"):
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
+    ds.write_dataset(
+        sample_data_pyarrow,
+        tmp_path,
+        format="parquet",
+        existing_data_behavior="overwrite_or_ignore",
+    )
+
+    convert_to_deltalake(tmp_path, collect_stats=False)
+
+    dt = DeltaTable(tmp_path)
+
+    assert dt.history()[0]["operationParameters"]["collectStats"] == "false"
+    num_records = dt.get_add_actions().column("num_records").to_pylist()
+    assert num_records == [None] * len(num_records)
+
+    # The data still reads back unchanged without statistics
+    assert pa.schema(dt.schema()) == sample_data_pyarrow.schema
+    assert dt.to_pyarrow_table() == sample_data_pyarrow
+
+
+@pytest.mark.pyarrow
 def test_convert_delta_write_modes(
     tmp_path: pathlib.Path, sample_data_pyarrow: "pa.Table"
 ):

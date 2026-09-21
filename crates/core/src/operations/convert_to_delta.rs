@@ -125,6 +125,7 @@ pub struct ConvertToDeltaBuilder {
     name: Option<String>,
     comment: Option<String>,
     configuration: HashMap<String, Option<String>>,
+    collect_stats: bool,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
@@ -160,6 +161,7 @@ impl ConvertToDeltaBuilder {
             name: None,
             comment: None,
             configuration: Default::default(),
+            collect_stats: true,
             commit_properties: CommitProperties::default(),
             custom_execute_handler: None,
         }
@@ -250,6 +252,12 @@ impl ConvertToDeltaBuilder {
     ) -> Self {
         self.configuration
             .insert(key.as_ref().into(), value.map(|v| v.into()));
+        self
+    }
+
+    /// Skip reading file statistics from the Parquet footers
+    pub fn without_stats(mut self) -> Self {
+        self.collect_stats = false;
         self
     }
 
@@ -374,17 +382,19 @@ impl ConvertToDeltaBuilder {
 
             let batch_builder = ParquetRecordBatchStreamBuilder::new(object_reader).await?;
 
-            // Fetch the stats
-            let parquet_metadata = batch_builder.metadata();
-            let stats = stats_from_parquet_metadata(
-                &IndexMap::from_iter(partition_values.clone().into_iter()),
-                parquet_metadata.as_ref(),
-                num_indexed_cols,
-                &stats_columns,
-            )
-            .map_err(|e| Error::DeltaTable(e.into()))?;
-            let stats_string =
-                serde_json::to_string(&stats).map_err(|e| Error::DeltaTable(e.into()))?;
+            let stats_string = if self.collect_stats {
+                let parquet_metadata = batch_builder.metadata();
+                let stats = stats_from_parquet_metadata(
+                    &IndexMap::from_iter(partition_values.clone().into_iter()),
+                    parquet_metadata.as_ref(),
+                    num_indexed_cols,
+                    &stats_columns,
+                )
+                .map_err(|e| Error::DeltaTable(e.into()))?;
+                Some(serde_json::to_string(&stats).map_err(|e| Error::DeltaTable(e.into()))?)
+            } else {
+                None
+            };
 
             actions.push(
                 Add {
@@ -407,7 +417,7 @@ impl ConvertToDeltaBuilder {
                         .collect(),
                     modification_time: file.last_modified.timestamp_millis(),
                     data_change: true,
-                    stats: Some(stats_string),
+                    stats: stats_string,
                     ..Default::default()
                 }
                 .into(),
@@ -438,7 +448,7 @@ impl ConvertToDeltaBuilder {
         let operation = DeltaOperation::Convert {
             num_files: i64::try_from(actions.len())?,
             partition_by: partition_schema_fields.keys().cloned().collect(),
-            collect_stats: true,
+            collect_stats: self.collect_stats,
         };
 
         // Generate CreateBuilder with corresponding add actions, schemas and operation meta
@@ -1110,6 +1120,46 @@ mod tests {
         assert_eq!(
             parameters.get("collectStats"),
             Some(&serde_json::json!("true"))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_convert_without_stats() {
+        let temp_dir = tempdir().expect("Failed to create temp directory");
+        write_parquet_files(temp_dir.path(), &["part-0.parquet"]);
+
+        let table = ConvertToDeltaBuilder::new()
+            .with_location(temp_dir.path().to_str().unwrap())
+            .without_stats()
+            .await
+            .expect("Failed to convert to Delta table");
+
+        let commit_info = table
+            .history(None)
+            .await
+            .expect("Failed to read the commit log")
+            .next()
+            .expect("The commit log should hold one entry");
+        let parameters = commit_info
+            .operation_parameters
+            .expect("The commit should record operation parameters");
+        assert_eq!(
+            parameters.get("collectStats"),
+            Some(&serde_json::json!("false"))
+        );
+
+        // The add action of the single converted file carries no statistics
+        let commit =
+            fs::read_to_string(temp_dir.path().join("_delta_log/00000000000000000000.json"))
+                .expect("Failed to read the commit file");
+        let add: serde_json::Value = commit
+            .lines()
+            .find(|line| line.contains("\"add\""))
+            .map(|line| serde_json::from_str(line).expect("Failed to parse the add action"))
+            .expect("The commit should hold an add action");
+        assert!(
+            add["add"]["stats"].is_null(),
+            "The add action should carry no statistics: {add}"
         );
     }
 
