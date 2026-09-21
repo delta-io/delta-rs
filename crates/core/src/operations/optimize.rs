@@ -420,8 +420,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
                 return Err(DeltaTableError::unsupported_column_mapping(
                     ColumnMappingOperation::Write,

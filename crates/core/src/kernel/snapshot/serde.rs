@@ -14,11 +14,9 @@ use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
 use url::Url;
 
-use crate::DeltaTableConfig;
-
 use super::{
     EagerSnapshot, MaterializedFiles, MaterializedFilesPolicy, MaterializedFilesScope, Snapshot,
-    SnapshotIdentity, SnapshotMaterializationMode,
+    SnapshotIdentity,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -174,6 +172,7 @@ impl MaterializedFilesWire {
 fn materialized_files_from_legacy_eager_payload(
     snapshot: &Snapshot,
     legacy_payload: Option<Vec<u8>>,
+    legacy_config: Option<&LegacySnapshotConfig>,
 ) -> Result<Option<Arc<MaterializedFiles>>, String> {
     if let Some(materialized_files) = snapshot.materialized_files().cloned() {
         return Ok(Some(materialized_files));
@@ -183,9 +182,11 @@ fn materialized_files_from_legacy_eager_payload(
         return Ok(None);
     };
 
-    if legacy_payload.is_empty()
-        && snapshot.materialization_mode() == SnapshotMaterializationMode::Lazy
-    {
+    // Empty bytes in a legacy lazy wrapper mean missing files.
+    // Legacy caches without statistics cannot meet the eager cache contract.
+    if legacy_config.is_some_and(|config| {
+        (!config.require_files && legacy_payload.is_empty()) || config.skip_stats
+    }) {
         return Ok(None);
     }
 
@@ -282,7 +283,6 @@ impl Serialize for Snapshot {
         seq.serialize_element(&latest_crc_file)?;
         seq.serialize_element(&latest_commit_file)?;
 
-        seq.serialize_element(&self.config)?;
         let materialized_files = self
             .materialized_files()
             .map(|value| MaterializedFilesWire::try_from_materialized(value))
@@ -326,14 +326,35 @@ impl From<&FileMeta> for FileMetaSerde {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacySnapshotConfig {
+    #[serde(alias = "require_files")]
+    require_files: bool,
+    #[serde(default, alias = "skip_stats")]
+    skip_stats: bool,
+}
+
+// Retain the legacy loading policy while decoding an eager payload.
+struct DeserializedSnapshot {
+    snapshot: Snapshot,
+    legacy_config: Option<LegacySnapshotConfig>,
+}
+
+impl<'de> Deserialize<'de> for DeserializedSnapshot {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_seq(SnapshotVisitor)
+    }
+}
+
 impl<'de> Visitor<'de> for SnapshotVisitor {
-    type Value = Snapshot;
+    type Value = DeserializedSnapshot;
 
     fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         formatter.write_str("struct Snapshot")
     }
 
-    fn visit_seq<V>(self, mut seq: V) -> Result<Snapshot, V::Error>
+    fn visit_seq<V>(self, mut seq: V) -> Result<DeserializedSnapshot, V::Error>
     where
         V: SeqAccess<'de>,
     {
@@ -364,10 +385,26 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
         let latest_commit_file: Option<FileMetaSerde> = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(8, &self))?;
-        let config: DeltaTableConfig = seq
-            .next_element()?
-            .ok_or_else(|| de::Error::invalid_length(9, &self))?;
-        let materialized_files: Option<MaterializedFilesWire> = seq.next_element()?.unwrap_or(None);
+        // Legacy writers stored config in slot 9. Current writers store the optional cache there.
+        let slot: Option<serde_json::Value> = seq.next_element()?.unwrap_or(None);
+        let (materialized_files, legacy_config): (
+            Option<MaterializedFilesWire>,
+            Option<LegacySnapshotConfig>,
+        ) = match slot {
+            Some(value)
+                if value.get("requireFiles").is_some() || value.get("require_files").is_some() =>
+            {
+                let config = serde_json::from_value(value).map_err(de::Error::custom)?;
+                (seq.next_element()?.unwrap_or(None), Some(config))
+            }
+            value => (
+                value
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(de::Error::custom)?,
+                None,
+            ),
+        };
 
         let ascending_commit_files = ascending_commit_files
             .into_iter()
@@ -435,10 +472,15 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
 
         let snapshot = Snapshot {
             inner: Arc::new(snapshot),
-            config,
             materialized_files: None,
         };
         let materialized_files = materialized_files
+            // Reject legacy caches without statistics because the current contract includes them.
+            .filter(|_| {
+                !legacy_config
+                    .as_ref()
+                    .is_some_and(|config| config.skip_stats)
+            })
             .map(|value| {
                 value
                     .into_materialized(&snapshot)
@@ -448,7 +490,10 @@ impl<'de> Visitor<'de> for SnapshotVisitor {
             .flatten()
             .map(Arc::new);
 
-        Ok(snapshot.with_materialized_files(materialized_files))
+        Ok(DeserializedSnapshot {
+            snapshot: snapshot.with_materialized_files(materialized_files),
+            legacy_config,
+        })
     }
 }
 
@@ -457,7 +502,7 @@ impl<'de> Deserialize<'de> for Snapshot {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_seq(SnapshotVisitor)
+        DeserializedSnapshot::deserialize(deserializer).map(|value| value.snapshot)
     }
 }
 
@@ -486,24 +531,26 @@ impl<'de> Visitor<'de> for EagerSnapshotVisitor {
     where
         V: SeqAccess<'de>,
     {
-        let snapshot: Arc<Snapshot> = seq
+        let decoded: DeserializedSnapshot = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        let snapshot = Arc::new(decoded.snapshot);
         let legacy_payload: Option<Vec<u8>> = seq.next_element()?;
-        let snapshot =
-            match materialized_files_from_legacy_eager_payload(snapshot.as_ref(), legacy_payload)
-                .map_err(de::Error::custom)?
-            {
-                Some(materialized_files) if snapshot.materialized_files().is_none() => {
-                    Arc::new(snapshot.with_materialized_files(Some(materialized_files)))
-                }
-                _ => snapshot,
-            };
-        if snapshot.materialization_mode() == SnapshotMaterializationMode::Eager
-            && snapshot.materialized_files().is_none()
+        let snapshot = match materialized_files_from_legacy_eager_payload(
+            snapshot.as_ref(),
+            legacy_payload,
+            decoded.legacy_config.as_ref(),
+        )
+        .map_err(de::Error::custom)?
         {
+            Some(materialized_files) if snapshot.materialized_files().is_none() => {
+                Arc::new(snapshot.with_materialized_files(Some(materialized_files)))
+            }
+            _ => snapshot,
+        };
+        if snapshot.materialized_files().is_none() {
             return Err(de::Error::custom(
-                "cannot deserialize eager snapshot without valid materialized files",
+                "cannot deserialize eager snapshot without valid materialized files; reopen the table to replay its log",
             ));
         }
         Ok(EagerSnapshot { snapshot })

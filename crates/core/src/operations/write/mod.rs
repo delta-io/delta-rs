@@ -423,9 +423,6 @@ impl WriteBuilder {
 
                 if self.mode == SaveMode::Overwrite {
                     PROTOCOL.check_append_only(snapshot)?;
-                    if !snapshot.load_config().require_files {
-                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
-                    }
                 }
 
                 PROTOCOL.can_write_to(snapshot)?;
@@ -2623,41 +2620,6 @@ mod tests {
             }),
             "expected at least one DV-backed tombstone preserving its deletion vector"
         );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_overwrite_without_files_is_rejected() -> TestResult {
-        let temp_dir = tempfile::tempdir()?;
-        let table_path = temp_dir.path().join("without_files_overwrite");
-        std::fs::create_dir(&table_path)?;
-        let table_uri = ensure_table_uri(table_path.to_str().unwrap())?;
-
-        DeltaTable::try_from_url(table_uri.clone())
-            .await?
-            .write(vec![get_record_batch(None, false)])
-            .await?;
-
-        let table = crate::DeltaTableBuilder::from_url(table_uri)?
-            .without_files()
-            .load()
-            .await?;
-
-        assert_eq!(table.version(), Some(0));
-
-        // Phase 3 now routes overwrite planning through matched-file discovery, so this guard
-        // stays covered here to ensure we still fail before any rewrite planning starts.
-        let err = table
-            .write(vec![get_record_batch(None, false)])
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .expect_err("overwrite should fail when table was loaded without files");
-
-        assert!(matches!(
-            err,
-            DeltaTableError::NotInitializedWithFiles(operation) if operation == "WRITE"
-        ));
 
         Ok(())
     }

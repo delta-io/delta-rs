@@ -546,7 +546,7 @@ impl CdfLoadBuilder {
         filters: Option<&Arc<dyn PhysicalExpr>>,
         metrics: Option<ExecutionPlanMetricsSet>,
     ) -> DeltaResult<Arc<dyn ExecutionPlan>> {
-        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), true, None).await?;
+        let snapshot = resolve_snapshot(&self.log_store, self.snapshot.clone(), None).await?;
         PROTOCOL.can_read_from(&snapshot)?;
         if snapshot.table_configuration().column_mapping_mode() != ColumnMappingMode::None {
             return Err(DeltaTableError::unsupported_column_mapping(

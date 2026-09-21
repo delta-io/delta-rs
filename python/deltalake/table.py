@@ -24,7 +24,6 @@ from arro3.core.types import (
 )
 
 from deltalake._internal import (
-    DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
@@ -226,41 +225,29 @@ class DeltaTable:
             table_uri: the path of the DeltaTable
             version: version of the DeltaTable
             storage_options: a dictionary of the options to use for the storage backend
-            without_files: If True, will load table without tracking files.
-                                Some append-only applications might have no need of tracking any files. So, the
-                                DeltaTable will be loaded with a significant memory reduction.
-                                DEPRECATED: Use table properties or other mechanisms instead.
-            log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
-                                Setting a value greater than 1 results in concurrent calls to the storage api.
-                                This can decrease latency if there are many files in the log since the last checkpoint,
-                                but will also increase memory usage. Possible rate limits of the storage backend should
-                                also be considered for optimal performance. Defaults to 4 * number of cpus.
-                                DEPRECATED: This parameter will be managed automatically in future versions.
-            skip_stats: If True, skip parsing file statistics while opening the table.
-                                Use for maintenance and append workflows that do not need file pruning.
-                                Queries with predicates scan each file because the kernel disables statistics and
-                                partition pruning. Defaults to False.
-                                DEPRECATED: Use table properties or other mechanisms instead.
+            without_files: Deprecated and ignored. Table loading materializes active-file metadata.
+            log_buffer_size: Deprecated and ignored. Log buffering is managed internally.
+            skip_stats: Deprecated and ignored. Table loading retains file statistics.
 
         """
         if without_files:
             warnings.warn(
-                "The 'without_files' parameter is deprecated and will be removed in a future release. "
-                "Use table properties or other mechanisms to achieve similar behavior.",
+                "The 'without_files' parameter is deprecated and ignored. "
+                "Table loading materializes active-file metadata.",
                 DeprecationWarning,
                 stacklevel=2,
             )
         if log_buffer_size is not None:
             warnings.warn(
-                "The 'log_buffer_size' parameter is deprecated and will be removed in a future release. "
-                "This parameter will be managed automatically in future versions.",
+                "The 'log_buffer_size' parameter is deprecated and ignored. "
+                "Log buffering is managed internally.",
                 DeprecationWarning,
                 stacklevel=2,
             )
         if skip_stats:
             warnings.warn(
-                "The 'skip_stats' parameter is deprecated and will be removed in a future release. "
-                "Use table properties or other mechanisms to achieve similar behavior.",
+                "The 'skip_stats' parameter is deprecated and ignored. "
+                "Table loading retains file statistics.",
                 DeprecationWarning,
                 stacklevel=2,
             )
@@ -270,16 +257,13 @@ class DeltaTable:
             str(table_uri),
             version=version,
             storage_options=storage_options,
-            without_files=without_files,
-            log_buffer_size=log_buffer_size,
-            skip_stats=skip_stats,
         )
 
     @property
     def table_config(self) -> DeltaTableConfig:
         warnings.warn(
             "The 'table_config' property is deprecated and will be removed in a future release. "
-            "Access configuration parameters individually instead.",
+            "It reports effective defaults; deprecated constructor options are ignored.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -1162,9 +1146,6 @@ class DeltaTable:
             raise ImportError(
                 "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
             )
-        if not self._table.has_files():
-            raise DeltaError("Table is instantiated without files.")
-
         table_protocol = self.protocol()
         if table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
