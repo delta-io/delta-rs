@@ -94,6 +94,7 @@ use crate::kernel::{
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
+use crate::operations::write::configs::WriteExecOptions;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
     add_generated_columns, add_missing_generated_columns, gc_is_enabled,
@@ -1607,9 +1608,11 @@ async fn execute(
         &state,
         write,
         log_store.object_store(Some(operation_id)),
-        Some(snapshot.table_properties().target_file_size()),
-        None,
-        writer_properties.clone(),
+        WriteExecOptions {
+            target_file_size: Some(snapshot.table_properties().target_file_size()),
+            write_batch_size: None,
+            writer_properties: writer_properties.clone(),
+        },
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
