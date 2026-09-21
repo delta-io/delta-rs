@@ -35,7 +35,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::schema::cast::{merge_arrow_schema, normalize_for_delta};
 use crate::kernel::{
     Action, ActiveAddOptions, Add, AddStatsPolicy, DeletionVectorDescriptor, EagerSnapshot,
-    Metadata, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
+    Metadata, Protocol, ProtocolExt as _, Remove, Snapshot, StructType, StructTypeExt,
 };
 use crate::logstore::LogStoreRef;
 use crate::operations::cdc::{CDC_COLUMN_NAME, should_write_cdc};
@@ -45,8 +45,8 @@ use crate::protocol::SaveMode;
 /// Schema and protocol actions required before the sink executes the write.
 #[derive(Default)]
 pub(super) struct SchemaDelta {
-    metadata: Option<Action>,
-    protocol: Option<Action>,
+    metadata: Option<Metadata>,
+    protocol: Option<Protocol>,
 }
 
 impl SchemaDelta {
@@ -58,10 +58,10 @@ impl SchemaDelta {
     pub(super) fn into_actions(self) -> Vec<Action> {
         let mut actions = Vec::with_capacity(2);
         if let Some(metadata) = self.metadata {
-            actions.push(metadata);
+            actions.push(metadata.into());
         }
         if let Some(protocol) = self.protocol {
-            actions.push(protocol);
+            actions.push(protocol.into());
         }
         actions
     }
@@ -816,8 +816,8 @@ fn schema_delta_for_prepared_source(
     )?;
 
     Ok(SchemaDelta {
-        metadata: Some(metadata.into()),
-        protocol: (current_protocol != &new_protocol).then_some(new_protocol.into()),
+        metadata: Some(metadata),
+        protocol: (current_protocol != &new_protocol).then_some(new_protocol),
     })
 }
 
