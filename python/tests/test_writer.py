@@ -3358,9 +3358,6 @@ def test_writing_with_generator(tmp_path):
     write_deltalake(tmp_path, my_sequence)
 
 
-@pytest.mark.skip(
-    reason="Should be re-enabled when column mapping can come in properly"
-)
 @pytest.mark.pyarrow
 def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
     """
@@ -3369,7 +3366,7 @@ def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
     """
     import pyarrow as pa
 
-    from deltalake import write_deltalake
+    from deltalake import DeltaTable, write_deltalake
 
     line_size = 12
     field_with_metadata = pa.field(
@@ -3391,6 +3388,16 @@ def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
             "delta.minWriterVersion": "5",
         },
     )
+
+    import pyarrow.parquet as pq
+
+    dt = DeltaTable(tmp_path)
+    physical_names = [
+        field.metadata["delta.columnMapping.physicalName"]
+        for field in dt.schema().fields
+    ]
+    for file in dt.file_uris():
+        assert pq.read_schema(file).names == physical_names
 
 
 def _now_ms() -> int:
