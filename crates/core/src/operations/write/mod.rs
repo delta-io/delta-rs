@@ -818,6 +818,46 @@ mod tests {
             .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
+    /// The first write to a location creates the table, so there is no snapshot to read the
+    /// column mapping mode from. The sink must still write physical column names.
+    #[tokio::test]
+    async fn test_create_write_column_mapped_table_writes_physical_names() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![get_record_batch(None, false)])
+            .with_configuration([("delta.columnMapping.mode", Some("name"))])
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot();
+        assert_eq!(
+            snapshot.table_configuration().column_mapping_mode(),
+            ColumnMappingMode::Name
+        );
+
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(files.len(), 1);
+        let reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+            table.log_store().object_store(None),
+            files[0].clone(),
+        );
+        let builder = parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder::new(reader)
+            .await
+            .unwrap();
+
+        let parquet_columns: Vec<&str> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        let schema = snapshot.schema();
+        let physical_names: Vec<&str> = schema
+            .fields()
+            .map(|field| field.physical_name(ColumnMappingMode::Name))
+            .collect();
+        assert_eq!(parquet_columns, physical_names);
+    }
+
     #[tokio::test]
     async fn test_create_write() {
         let table_schema = get_delta_schema();
