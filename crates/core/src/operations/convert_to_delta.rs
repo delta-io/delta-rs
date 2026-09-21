@@ -377,7 +377,7 @@ impl ConvertToDeltaBuilder {
             // Fetch the stats
             let parquet_metadata = batch_builder.metadata();
             let stats = stats_from_parquet_metadata(
-                &IndexMap::from_iter(partition_values.clone().into_iter()),
+                &IndexMap::from_iter(partition_values.clone()),
                 parquet_metadata.as_ref(),
                 num_indexed_cols,
                 &stats_columns,

@@ -1,5 +1,6 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
+use futures::TryStreamExt;
 use object_store::path::Path as StorePath;
 use object_store::{
     CopyOptions, GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions,

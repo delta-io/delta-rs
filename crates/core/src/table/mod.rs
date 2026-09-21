@@ -259,23 +259,27 @@ impl DeltaTable {
         }
     }
 
-    /// Returns provenance information, including the operation, user, and so on, for each write to a table.
+    /// Streams provenance information for each write to the table, newest commit first.
+    ///
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
     /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
     /// it returns all commits from the earliest commit.
-    pub async fn history(
-        &self,
-        limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
-        let infos = self
-            .snapshot()?
-            .snapshot()
-            .snapshot()
-            .commit_infos(&self.log_store(), limit)
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(infos.into_iter().flatten())
+    pub fn history(&self, limit: Option<usize>) -> BoxStream<'_, DeltaResult<CommitInfo>> {
+        let Some(state) = self.state.as_ref() else {
+            return Box::pin(once(ready(Err(DeltaTableError::NotInitialized))));
+        };
+        let log_store = self.log_store();
+        Box::pin(
+            once(async move {
+                state
+                    .snapshot()
+                    .snapshot()
+                    .commit_infos(&log_store, limit)
+                    .await
+            })
+            .try_flatten()
+            .try_filter_map(|info| ready(Ok(info))),
+        )
     }
 
     #[cfg(test)]
@@ -283,7 +287,7 @@ impl DeltaTable {
     ///
     /// This is a silly convenience function to reduce some copy-paste in tests
     pub(crate) async fn last_commit(&self) -> Result<CommitInfo, DeltaTableError> {
-        let mut infos: Vec<_> = self.history(Some(1)).await?.collect();
+        let mut infos: Vec<_> = self.history(Some(1)).try_collect().await?;
         infos.pop().ok_or(DeltaTableError::Generic(
             "Somehow there is nothing in the history!".into(),
         ))
