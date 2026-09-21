@@ -261,14 +261,10 @@ impl DeltaTable {
 
     /// Streams provenance information for each write to the table, newest commit first.
     ///
-    /// This returns the same commit infos as [`DeltaTable::history`], but commit files are only
-    /// read from storage as the stream is polled. A caller that stops consuming early, for example
-    /// once it reaches a commit older than some timestamp, avoids reading the rest of the log.
-    ///
-    /// Up to `log_buffer_size` commit files are fetched concurrently, so a few more files than
-    /// were consumed may be read. Commits without a `commitInfo` action are skipped. `limit` has
-    /// the same meaning as in [`DeltaTable::history`].
-    pub fn history_stream(&self, limit: Option<usize>) -> BoxStream<'_, DeltaResult<CommitInfo>> {
+    /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
+    /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
+    /// it returns all commits from the earliest commit.
+    pub fn history(&self, limit: Option<usize>) -> BoxStream<'_, DeltaResult<CommitInfo>> {
         let Some(state) = self.state.as_ref() else {
             return Box::pin(once(ready(Err(DeltaTableError::NotInitialized))));
         };
@@ -286,25 +282,12 @@ impl DeltaTable {
         )
     }
 
-    /// Returns provenance information, including the operation, user, and so on, for each write to a table.
-    /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
-    /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
-    /// it returns all commits from the earliest commit.
-    pub async fn history(
-        &self,
-        limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
-        let infos = self.history_stream(limit).try_collect::<Vec<_>>().await?;
-
-        Ok(infos.into_iter())
-    }
-
     #[cfg(test)]
     /// We have enough internal tests that just need to check the last commit of the table.
     ///
     /// This is a silly convenience function to reduce some copy-paste in tests
     pub(crate) async fn last_commit(&self) -> Result<CommitInfo, DeltaTableError> {
-        let mut infos: Vec<_> = self.history(Some(1)).await?.collect();
+        let mut infos: Vec<_> = self.history(Some(1)).try_collect().await?;
         infos.pop().ok_or(DeltaTableError::Generic(
             "Somehow there is nothing in the history!".into(),
         ))
