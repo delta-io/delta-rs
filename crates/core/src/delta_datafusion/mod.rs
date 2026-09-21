@@ -70,9 +70,7 @@ pub use self::table_provider::next::{
 pub(crate) use self::utils::*;
 pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use column_mapping::ColumnMappingState;
-pub(crate) use data_validation::{
-    DataValidationExec, constraints_to_exprs, generated_columns_to_exprs, validation_predicates,
-};
+pub(crate) use data_validation::{DataValidationExec, constraints_to_exprs, validation_predicates};
 pub(crate) use find_files::*;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{

@@ -14,25 +14,21 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, SendableRecordBatchStream,
     execute_stream_partitioned,
 };
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tracing::log::*;
 use uuid::Uuid;
 
 use crate::DeltaTableError;
 use crate::datafile::writer::{
     DeltaWriter, UploadBudget, WriterConfig, write_batches_timed, writer_batch_concurrency,
 };
-use crate::delta_datafusion::{
-    ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
-};
+use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
+use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::WriterStatsConfig;
@@ -309,7 +305,7 @@ pub(crate) struct WriteStreamMetrics {
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -322,7 +318,7 @@ pub(crate) async fn write_execution_plan_cdc(
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
     Ok(write_execution_plan(
-        snapshot,
+        table_config,
         session,
         plan,
         partition_columns,
@@ -356,7 +352,7 @@ pub(crate) async fn write_execution_plan_cdc(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -367,7 +363,7 @@ pub(crate) async fn write_execution_plan(
     writer_stats_config: WriterStatsConfig,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
-        snapshot,
+        table_config,
         session,
         plan,
         partition_columns,
@@ -386,7 +382,7 @@ pub(crate) async fn write_execution_plan(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
     partition_columns: Vec<String>,
@@ -399,23 +395,8 @@ pub(crate) async fn write_execution_plan_v2(
     contains_cdc: bool,
     insert_marker_column: Option<String>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    // We always take the plan Schema since the data may contain Large/View arrow types,
-    // the schema and batches were prior constructed with this in mind.
-    let schema = plan.schema();
-    let mut validations = if let Some(snapshot) = snapshot {
-        validation_predicates(
-            session,
-            &plan.schema().to_dfschema()?,
-            snapshot.table_configuration(),
-        )?
-    } else {
-        debug!(
-            "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."
-        );
-        let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-        let df_schema = schema.clone().to_dfschema()?;
-        generated_columns_to_exprs(session, &df_schema, &delta_schema.get_generated_columns()?)?
-    };
+    let mut validations =
+        validation_predicates(session, &plan.schema().to_dfschema()?, table_config)?;
 
     if let Some(mut pred) = predicate {
         // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
@@ -440,8 +421,7 @@ pub(crate) async fn write_execution_plan_v2(
         write_batch_size,
         writer_properties,
         writer_stats_config,
-        column_mapping: snapshot
-            .and_then(|s| ColumnMappingState::from_table_config(s.table_configuration())),
+        column_mapping: ColumnMappingState::from_table_config(table_config),
     };
 
     if !contains_cdc {
