@@ -17,6 +17,7 @@ use datafusion::logical_expr::{
 };
 use datafusion::prelude::col;
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use futures::TryStreamExt as _;
 use itertools::Itertools as _;
 use parquet::file::properties::WriterProperties;
@@ -53,6 +54,23 @@ impl SchemaDelta {
     #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.metadata.is_none() && self.protocol.is_none()
+    }
+
+    /// `base` with this delta applied: the configuration the sink must write against.
+    pub(super) fn applied_to(&self, base: &TableConfiguration) -> DeltaResult<TableConfiguration> {
+        if self.metadata.is_none() && self.protocol.is_none() {
+            return Ok(base.clone());
+        }
+        Ok(TableConfiguration::try_new(
+            self.metadata
+                .clone()
+                .unwrap_or_else(|| base.metadata().clone()),
+            self.protocol
+                .clone()
+                .unwrap_or_else(|| base.protocol().clone()),
+            base.table_root().clone(),
+            base.version(),
+        )?)
     }
 
     pub(super) fn into_actions(self) -> Vec<Action> {
