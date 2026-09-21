@@ -96,7 +96,7 @@ percent-encoding = "2"
 pin-project-lite = "^0.2.7"
 tracing = { workspace = true }
 rand = "0.10"
-sqlparser = "0.62"
+sqlparser = "0.63"
 humantime = { version = "2.1.0", optional = true }
 validator = { version = "0.19", features = ["derive"] }
 
