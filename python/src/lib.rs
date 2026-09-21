@@ -2430,6 +2430,11 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
 
             properties = properties.set_statistics_enabled(enabled_statistics);
         }
+        if let Some(encoding) = default_column_properties.encoding {
+            properties = properties
+                .set_encoding(Encoding::from_str(&encoding).map_err(DeltaTableError::from)?);
+            properties = properties.set_dictionary_enabled(false);
+        }
         if let Some(bloom_filter_properties) = default_column_properties.bloom_filter_properties {
             if let Some(set_bloom_filter_enabled) = bloom_filter_properties.set_bloom_filter_enabled
             {
@@ -2614,6 +2619,9 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
                 py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
             }
             py_map.into_py_any(py)?
+        }
+        IntervalYearMonth(_) | IntervalDayTime(_) => {
+            unimplemented!("Interval* types are not currently supported by the `deltalake` package")
         }
     };
 

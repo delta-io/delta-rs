@@ -654,6 +654,8 @@ fn scalar_type_name(value: &Scalar) -> &'static str {
         Scalar::Struct(_) => "Struct",
         Scalar::Array(_) => "Array",
         Scalar::Map(_) => "Map",
+        Scalar::IntervalYearMonth(_) => "IntervalYearMonth",
+        Scalar::IntervalDayTime(_) => "IntervalDayTime",
     }
 }
 

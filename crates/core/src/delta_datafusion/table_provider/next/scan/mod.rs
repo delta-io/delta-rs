@@ -361,13 +361,12 @@ async fn replay_files(
     })
 }
 
-/// Normalize a DV keep mask for `deletion_vectors()`.
+/// Pad a DV keep mask to `numRecords` for `deletion_vectors()`.
 ///
-/// Kernel returns a sparse mask (up to the highest deleted row index). For API output we need one
-/// full mask per file, to do this we pad trailing entries with `true` up to `numRecords`. If `numRecords`
-/// is missing we fail, because we cannot know the correct full length.
+/// Kernel stops the mask at the highest deleted row. Fill trailing entries with `true`.
+/// Return an error when `numRecords` is missing or shorter than the mask.
 ///
-/// This is API only. Scan execution does per batch normalization in `exec::consume_dv_mask` and
+/// Scan execution normalizes each batch in `exec::consume_dv_mask` and
 /// `exec_meta::apply_selection_vector`.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,

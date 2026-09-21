@@ -124,6 +124,9 @@ impl ScalarExt for Scalar {
             Self::Struct(_) => self.to_string(),
             Self::Array(_) => self.to_string(),
             Self::Map(_) => self.to_string(),
+            Self::IntervalDayTime(_) | Self::IntervalYearMonth(_) => unimplemented!(
+                "Serialization of Interval* types is currently not undefined behavior"
+            ),
         }
     }
 
@@ -401,6 +404,9 @@ impl ScalarExt for Scalar {
                 }
                 Value::Object(result)
             }
+            Self::IntervalDayTime(_) | Self::IntervalYearMonth(_) => unimplemented!(
+                "JSON serialization of Interval* types is currently not undefined behavior"
+            ),
         }
     }
 }

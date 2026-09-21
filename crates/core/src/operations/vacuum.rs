@@ -729,9 +729,11 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
-        && !partition_columns
-            .iter()
-            .any(|partition_column| path_name.starts_with(partition_column)))
+        && !partition_columns.iter().any(|partition_column| {
+            path_name
+                .strip_prefix(partition_column.as_str())
+                .is_some_and(|rest| rest.starts_with('='))
+        }))
 }
 
 /// Returns true if the file at `location` is a candidate for deletion.
@@ -2766,5 +2768,28 @@ mod tests {
             "parallel and flat full scans must agree on delete set"
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_hidden_directory_matches_partition_dirs_not_mere_prefixes() {
+        let partition_columns = vec!["_date".to_string()];
+
+        // A real partition directory is not hidden, so it can be vacuumed.
+        assert!(
+            !is_hidden_directory(
+                &partition_columns,
+                &object_store::path::Path::from("_date=2024-01-01/part-0.parquet")
+            )
+            .unwrap()
+        );
+
+        // An unrelated hidden directory that merely shares the prefix must stay hidden.
+        assert!(
+            is_hidden_directory(
+                &partition_columns,
+                &object_store::path::Path::from("_dates_backup/part-0.parquet")
+            )
+            .unwrap()
+        );
     }
 }

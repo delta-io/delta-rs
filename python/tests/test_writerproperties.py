@@ -132,6 +132,27 @@ def test_write_with_writerproperties_encoding(
 
 
 @pytest.mark.pyarrow
+def test_write_with_default_column_properties_encoding(tmp_path: pathlib.Path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    writer_properties = WriterProperties(
+        default_column_properties=ColumnProperties(
+            encoding="DELTA_BINARY_PACKED",
+        ),
+    )
+
+    write_deltalake(
+        tmp_path, pa.table({"value": [1, 2, 3]}), writer_properties=writer_properties
+    )
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    encodings = pq.read_metadata(parquet_path).row_group(0).column(0).encodings
+
+    assert encodings == ("RLE", "DELTA_BINARY_PACKED")
+
+
+@pytest.mark.pyarrow
 @pytest.mark.parametrize("placement", ["per_column", "default"])
 @pytest.mark.parametrize(
     "col_props",
