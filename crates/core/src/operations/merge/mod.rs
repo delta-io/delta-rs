@@ -1607,7 +1607,7 @@ async fn execute(
     let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
 
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
-        Some(&snapshot),
+        snapshot.table_configuration(),
         &state,
         write,
         table_partition_cols.to_vec(),
