@@ -159,6 +159,7 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     dt.load_as_version(datetime.fromisoformat(date_value))
     assert dt.version() == expected_version
 
+
 @pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
 def test_load_as_version_datetime_without_timezone(
     tmp_path: Path, sample_table: Table, monkeypatch: pytest.MonkeyPatch, tz: str
