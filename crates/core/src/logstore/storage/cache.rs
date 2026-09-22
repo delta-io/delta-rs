@@ -17,9 +17,46 @@ use object_store::path::Path;
 use object_store::{
     Attributes, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result as OSResult,
+    Result as OSResult, UploadPart,
 };
 use tracing::debug;
+
+// -- InvalidatingMultipartUpload -----------------------------------------------
+
+/// A `MultipartUpload` wrapper that removes the cache entry for `key` when
+/// `complete()` succeeds, keeping the cache consistent after multipart writes.
+struct InvalidatingMultipartUpload {
+    inner: Box<dyn MultipartUpload>,
+    cache: DeltaCache,
+    key: String,
+}
+
+impl std::fmt::Debug for InvalidatingMultipartUpload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvalidatingMultipartUpload")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl MultipartUpload for InvalidatingMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.inner.put_part(data)
+    }
+
+    async fn complete(&mut self) -> OSResult<PutResult> {
+        let result = self.inner.complete().await?;
+        // Invalidate only on success; a failed complete leaves the object
+        // unchanged so the cached bytes remain valid.
+        self.cache.remove(&self.key);
+        Ok(result)
+    }
+
+    async fn abort(&mut self) -> OSResult<()> {
+        self.inner.abort().await
+    }
+}
 
 // Env-var names
 const ENV_CAPACITY: &str = "DELTA_CACHE_CAPACITY_BYTES";
@@ -200,7 +237,15 @@ impl ObjectStore for CachingObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> OSResult<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+        let inner = self.inner.put_multipart_opts(location, opts).await?;
+        // Wrap the upload so that complete() invalidates the cache entry.
+        // A failed complete() leaves the object unchanged, so we do not
+        // invalidate on abort or error.
+        Ok(Box::new(InvalidatingMultipartUpload {
+            inner,
+            cache: self.cache.clone(),
+            key: location.to_string(),
+        }))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> OSResult<GetResult> {
@@ -384,6 +429,35 @@ mod tests {
         store.get(&path).await.unwrap().bytes().await.unwrap();
         store.delete(&path).await.unwrap();
         assert!(store.get(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_put_multipart_invalidates_cache() {
+        // A multipart upload that completes must invalidate the cached bytes
+        // so subsequent reads see the new data.
+        use object_store::ObjectStoreExt;
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let cache = CacheBuilder::new(1024 * 1024)
+            .with_shards(2)
+            .build::<CacheProperties>();
+        let store = CachingObjectStore::with_cache(inner.clone(), cache);
+
+        let path = Path::from("_delta_log/checkpoint.parquet");
+        // Write initial bytes and prime the cache.
+        store
+            .put(&path, PutPayload::from_static(b"v1"))
+            .await
+            .unwrap();
+        store.get(&path).await.unwrap().bytes().await.unwrap();
+
+        // Overwrite via multipart upload (path used by log_compaction).
+        let mut upload = store.put_multipart(&path).await.unwrap();
+        upload.put_part(b"v2".as_ref().into()).await.unwrap();
+        upload.complete().await.unwrap();
+
+        // Cache must be invalidated -- must read fresh bytes.
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"v2");
     }
 
     #[tokio::test]
