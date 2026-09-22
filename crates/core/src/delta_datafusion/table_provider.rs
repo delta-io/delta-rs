@@ -252,6 +252,7 @@ pub struct TableProviderBuilder {
     /// Predicates used only for file skipping in kernel log replay
     file_skipping_predicates: Option<Vec<Expr>>,
     file_selection: Option<next::FileSelection>,
+    runtime_file_filter: Option<next::RuntimeFileFilter>,
 }
 
 impl fmt::Debug for TableProviderBuilder {
@@ -265,6 +266,7 @@ impl fmt::Debug for TableProviderBuilder {
             .field("table_version", &self.table_version)
             .field("file_skipping_predicates", &self.file_skipping_predicates)
             .field("file_selection", &self.file_selection)
+            .field("runtime_file_filter", &self.runtime_file_filter)
             .finish()
     }
 }
@@ -286,6 +288,7 @@ impl TableProviderBuilder {
             table_version: None,
             file_skipping_predicates: None,
             file_selection: None,
+            runtime_file_filter: None,
         }
     }
 
@@ -354,6 +357,14 @@ impl TableProviderBuilder {
         self
     }
 
+    /// Skip whole files during execution with the predicates that are set in `filter`.
+    ///
+    /// Like file skipping predicates, this never removes rows from a file that is read.
+    pub(crate) fn with_runtime_file_filter(mut self, filter: next::RuntimeFileFilter) -> Self {
+        self.runtime_file_filter = Some(filter);
+        self
+    }
+
     /// Restrict reads to Add action paths. File metadata comes from the selected snapshot.
     pub fn with_adds(self, adds: impl IntoIterator<Item = Add>) -> Self {
         self.with_file_selection(next::FileSelection::from_adds(adds))
@@ -384,6 +395,7 @@ impl TableProviderBuilder {
             table_version,
             file_skipping_predicates,
             file_selection,
+            runtime_file_filter,
         } = self;
 
         let mut config = session
@@ -446,6 +458,10 @@ impl TableProviderBuilder {
 
         if let Some(selection) = file_selection {
             provider = provider.with_file_selection(selection);
+        }
+
+        if let Some(filter) = runtime_file_filter {
+            provider = provider.with_runtime_file_filter(filter);
         }
 
         Ok(provider)
