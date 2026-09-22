@@ -42,7 +42,7 @@ use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::log::*;
 
-use super::write::WriterStatsConfig;
+use super::write::configs::WriteExecOptions;
 use super::write::execution::{write_execution_plan, write_execution_plan_cdc};
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
@@ -287,9 +287,6 @@ async fn execute(
         .map(|(key, expr)| expr.resolve(session, schema.clone()).map(|e| (key.name, e)))
         .try_collect()?;
 
-    let current_metadata = snapshot.metadata();
-    let table_partition_cols = current_metadata.partition_columns().to_vec();
-
     let scan_start = Instant::now();
 
     let maybe_scan_plan =
@@ -356,17 +353,16 @@ async fn execute(
     let physical_plan = session.create_physical_plan(&plan_updated).await?;
     let tracker = CDCTracker::new(files_scan.scan().clone(), plan_updated);
 
-    let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
     let mut actions = write_execution_plan(
-        Some(eager_snapshot),
+        snapshot.table_configuration(),
         session,
         physical_plan.clone(),
-        table_partition_cols.to_vec(),
         log_store.object_store(),
-        Some(snapshot.table_properties().target_file_size()),
-        None,
-        writer_properties.clone(),
-        writer_stats_config.clone(),
+        WriteExecOptions {
+            target_file_size: Some(snapshot.table_properties().target_file_size()),
+            write_batch_size: None,
+            writer_properties: writer_properties.clone(),
+        },
     )
     .await?;
 
@@ -414,15 +410,15 @@ async fn execute(
             Ok(cdc_plan) => {
                 let cdc_exec = session.create_physical_plan(&cdc_plan).await?;
                 let cdc_actions = write_execution_plan_cdc(
-                    Some(eager_snapshot),
+                    snapshot.table_configuration(),
                     session,
                     cdc_exec,
-                    table_partition_cols.to_vec(),
                     log_store.object_store(),
-                    Some(snapshot.table_properties().target_file_size()),
-                    None,
-                    writer_properties,
-                    writer_stats_config,
+                    WriteExecOptions {
+                        target_file_size: Some(snapshot.table_properties().target_file_size()),
+                        write_batch_size: None,
+                        writer_properties,
+                    },
                 )
                 .await?;
                 actions.extend(cdc_actions);
@@ -444,8 +440,7 @@ impl std::future::IntoFuture for UpdateBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.check_append_only(&snapshot)?;
             PROTOCOL.can_write_to(&snapshot)?;
 

@@ -93,7 +93,7 @@ use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
-use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::configs::WriteExecOptions;
 use crate::operations::write::execution::write_execution_plan_v2;
 use crate::operations::write::generated_columns::{
     add_generated_columns, add_missing_generated_columns, gc_is_enabled,
@@ -1526,8 +1526,7 @@ async fn execute(
             .with_column(
                 "__delta_rs_update_expanded",
                 when(
-                    col(CDC_COLUMN_NAME).eq(lit("update")),
-                    // `new_list` takes the *element* type, not the list type. DataFusion 54
+                    col(CDC_COLUMN_NAME).eq(lit("update")), // `new_list` takes the *element* type, not the list type. DataFusion 54
                     // ignored this argument for non-empty values; 55 casts the values to it
                     // (apache/datafusion `ScalarValue::new_list`), so passing a list type here
                     // yields List(List(Utf8)) and unnest leaves a list behind.
@@ -1584,19 +1583,16 @@ async fn execute(
         .or_else(|| find_node::<DeltaScanExec>(&write))
         .ok_or_else(err)?;
 
-    let table_partition_cols = current_metadata.partition_columns().to_vec();
-    let writer_stats_config = WriterStatsConfig::from_config(snapshot.table_configuration());
-
     let (mut actions, write_plan_metrics) = write_execution_plan_v2(
-        Some(&snapshot),
+        snapshot.table_configuration(),
         &state,
         write,
-        table_partition_cols.to_vec(),
         log_store.object_store(),
-        Some(snapshot.table_properties().target_file_size()),
-        None,
-        writer_properties.clone(),
-        writer_stats_config.clone(),
+        WriteExecOptions {
+            target_file_size: Some(snapshot.table_properties().target_file_size()),
+            write_batch_size: None,
+            writer_properties: writer_properties.clone(),
+        },
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
         None,
@@ -1857,8 +1853,7 @@ impl std::future::IntoFuture for MergeBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             PROTOCOL.can_write_to(&snapshot)?;
 
             if this.merge_schema
@@ -1917,6 +1912,7 @@ impl std::future::IntoFuture for MergeBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::DeltaTable;
     use crate::TableProperty;
     use crate::kernel::{Action, DataType, EagerSnapshot, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
@@ -1928,7 +1924,6 @@ mod tests {
     use crate::writer::test_utils::get_delta_schema_non_null_id;
     use crate::writer::test_utils::get_non_null_arrow_schema;
     use crate::writer::test_utils::setup_table_with_configuration;
-    use crate::{DeltaTable, DeltaTableConfig};
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use arrow_schema::DataType as ArrowDataType;
@@ -2189,30 +2184,6 @@ mod tests {
             pre_merge_files.saturating_sub(metrics.num_target_files_scanned)
         );
         assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
-    }
-
-    #[tokio::test]
-    async fn test_count_active_adds_replays_lazy_snapshot_without_materialized_files() -> TestResult
-    {
-        let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = EagerSnapshot::try_new(
-            &log_store,
-            DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            },
-            None,
-        )
-        .await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        let total_files = super::count_active_adds(&snapshot, log_store.as_ref()).await?;
-
-        assert_eq!(total_files, 5);
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
     }
 
     #[test]
@@ -6186,22 +6157,7 @@ mod tests {
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
 
         assert_batches_sorted_eq! {[
-        "+----+-------+------------+------------------+-----------------+",
-        "| id | value | modified   | _change_type     | _commit_version |",
-        "+----+-------+------------+------------------+-----------------+",
-        "| A  | 1     | 2021-02-01 | update_preimage  | 2               |",
-        "| A  | 2     | 2021-02-01 | update_postimage | 2               |",
-        "| B  | 10    | 2021-02-01 | update_preimage  | 2               |",
-        "| B  | 10    | 2021-02-02 | update_postimage | 2               |",
-        "| C  | 10    | 2021-02-02 | update_preimage  | 2               |",
-        "| C  | 20    | 2023-07-04 | update_postimage | 2               |",
-        "| X  | 30    | 2023-07-04 | insert           | 2               |",
-        "| A  | 1     | 2021-02-01 | insert           | 1               |",
-        "| B  | 10    | 2021-02-01 | insert           | 1               |",
-        "| C  | 10    | 2021-02-02 | insert           | 1               |",
-        "| D  | 100   | 2021-02-02 | insert           | 1               |",
-        "+----+-------+------------+------------------+-----------------+",
-        ], &batches }
+        "+----+-------+------------+------------------+-----------------+", "| id | value | modified   | _change_type     | _commit_version |", "+----+-------+------------+------------------+-----------------+", "| A  | 1     | 2021-02-01 | update_preimage  | 2               |", "| A  | 2     | 2021-02-01 | update_postimage | 2               |", "| B  | 10    | 2021-02-01 | update_preimage  | 2               |", "| B  | 10    | 2021-02-02 | update_postimage | 2               |", "| C  | 10    | 2021-02-02 | update_preimage  | 2               |", "| C  | 20    | 2023-07-04 | update_postimage | 2               |", "| X  | 30    | 2023-07-04 | insert           | 2               |", "| A  | 1     | 2021-02-01 | insert           | 1               |", "| B  | 10    | 2021-02-01 | insert           | 1               |", "| C  | 10    | 2021-02-02 | insert           | 1               |", "| D  | 100   | 2021-02-02 | insert           | 1               |", "+----+-------+------------+------------------+-----------------+", ], &batches }
     }
 
     #[tokio::test]
@@ -6302,22 +6258,7 @@ mod tests {
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(6)).collect();
 
         assert_batches_sorted_eq! {[
-        "+----+-------+------------+-------------+------------------+-----------------+",
-        "| id | value | modified   | inserted_by | _change_type     | _commit_version |",
-        "+----+-------+------------+-------------+------------------+-----------------+",
-        "| A  | 1     | 2021-02-01 |             | insert           | 1               |",
-        "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |",
-        "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |",
-        "| B  | 10    | 2021-02-01 |             | insert           | 1               |",
-        "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |",
-        "| B  | 10    | 2021-02-02 | new_value   | update_postimage | 2               |",
-        "| C  | 10    | 2021-02-02 |             | insert           | 1               |",
-        "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |",
-        "| C  | 20    | 2023-07-04 | new_value   | update_postimage | 2               |",
-        "| D  | 100   | 2021-02-02 |             | insert           | 1               |",
-        "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |",
-        "+----+-------+------------+-------------+------------------+-----------------+",
-            ], &batches }
+        "+----+-------+------------+-------------+------------------+-----------------+", "| id | value | modified   | inserted_by | _change_type     | _commit_version |", "+----+-------+------------+-------------+------------------+-----------------+", "| A  | 1     | 2021-02-01 |             | insert           | 1               |", "| A  | 1     | 2021-02-01 |             | update_preimage  | 2               |", "| A  | 2     | 2021-02-01 |             | update_postimage | 2               |", "| B  | 10    | 2021-02-01 |             | insert           | 1               |", "| B  | 10    | 2021-02-01 |             | update_preimage  | 2               |", "| B  | 10    | 2021-02-02 | new_value   | update_postimage | 2               |", "| C  | 10    | 2021-02-02 |             | insert           | 1               |", "| C  | 10    | 2021-02-02 |             | update_preimage  | 2               |", "| C  | 20    | 2023-07-04 | new_value   | update_postimage | 2               |", "| D  | 100   | 2021-02-02 |             | insert           | 1               |", "| X  | 30    | 2023-07-04 | new_value   | insert           | 2               |", "+----+-------+------------+-------------+------------------+-----------------+", ], &batches }
     }
 
     #[tokio::test]
@@ -6386,15 +6327,6 @@ mod tests {
         let _: Vec<_> = batches.iter_mut().map(|b| b.remove_column(5)).collect();
 
         assert_batches_sorted_eq! {[
-        "+----+-------+------------+--------------+-----------------+",
-        "| id | value | modified   | _change_type | _commit_version |",
-        "+----+-------+------------+--------------+-----------------+",
-        "| D  | 100   | 2021-02-02 | delete       | 2               |",
-        "| A  | 1     | 2021-02-01 | insert       | 1               |",
-        "| B  | 10    | 2021-02-01 | insert       | 1               |",
-        "| C  | 10    | 2021-02-02 | insert       | 1               |",
-        "| D  | 100   | 2021-02-02 | insert       | 1               |",
-        "+----+-------+------------+--------------+-----------------+",
-        ], &batches }
+        "+----+-------+------------+--------------+-----------------+", "| id | value | modified   | _change_type | _commit_version |", "+----+-------+------------+--------------+-----------------+", "| D  | 100   | 2021-02-02 | delete       | 2               |", "| A  | 1     | 2021-02-01 | insert       | 1               |", "| B  | 10    | 2021-02-01 | insert       | 1               |", "| C  | 10    | 2021-02-02 | insert       | 1               |", "| D  | 100   | 2021-02-02 | insert       | 1               |", "+----+-------+------------+--------------+-----------------+", ], &batches }
     }
 }

@@ -86,7 +86,7 @@ use std::time;
 use writer::maybe_lazy_cast_reader;
 
 use crate::datafusion::TokioDeltaScan;
-use crate::error::{DeltaError, DeltaProtocolError, PythonError, to_rt_err};
+use crate::error::{DeltaProtocolError, PythonError, to_rt_err};
 use crate::features::TableFeatures;
 use crate::filesystem::FsConfig;
 use crate::merge::PyMergeBuilder;
@@ -378,15 +378,12 @@ impl RawDeltaTable {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None, skip_stats = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None))]
     fn new(
         py: Python,
         table_uri: &str,
         version: Option<Version>,
         storage_options: Option<HashMap<String, String>>,
-        without_files: bool,
-        log_buffer_size: Option<usize>,
-        skip_stats: bool,
     ) -> PyResult<Self> {
         py.detach(|| {
             let table_url = deltalake::table::builder::parse_table_uri(table_uri)
@@ -400,17 +397,6 @@ impl RawDeltaTable {
             }
             if let Some(version) = version {
                 builder = builder.with_version(version)
-            }
-            if without_files {
-                builder = builder.without_files()
-            }
-            if skip_stats {
-                builder = builder.with_skip_stats(true)
-            }
-            if let Some(buf_size) = log_buffer_size {
-                builder = builder
-                    .with_log_buffer_size(buf_size)
-                    .map_err(PythonError::from)?;
             }
 
             let table = rt().block_on(builder.load()).map_err(PythonError::from)?;
@@ -457,20 +443,13 @@ impl RawDeltaTable {
         self.with_table(|t| Ok(t.version()))
     }
 
-    pub(crate) fn has_files(&self) -> PyResult<bool> {
-        self.with_table(|t| Ok(t.config.require_files))
-    }
-
-    pub fn table_config(&self) -> PyResult<(bool, usize, bool)> {
-        self.with_table(|t| {
-            let config = t.config.clone();
-            // Require_files inverted to reflect without_files
-            Ok((
-                !config.require_files,
-                config.log_buffer_size,
-                config.skip_stats,
-            ))
-        })
+    pub fn table_config(&self) -> (bool, usize, bool) {
+        // Report the loading behavior retained for compatibility.
+        let log_buffer_size = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            * 4;
+        (false, log_buffer_size, false)
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
@@ -612,9 +591,6 @@ impl RawDeltaTable {
         py: Python,
         file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
         let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         py.detach(|| {
             if let Some(filter) = filter {
@@ -646,10 +622,6 @@ impl RawDeltaTable {
         &self,
         file_pruning_predicate: Option<PyFilePruningPredicate>,
     ) -> PyResult<Vec<String>> {
-        if !self.with_table(|t| Ok(t.config.require_files))? {
-            return Err(DeltaError::new_err("Table is initiated without files."));
-        }
-
         let filter = self.resolve_files_predicate(file_pruning_predicate)?;
         if let Some(filter) = filter {
             self.with_table(|t| {
@@ -1226,10 +1198,6 @@ impl RawDeltaTable {
     }
 
     pub fn deletion_vectors(&self, py: Python) -> PyResult<Arro3RecordBatchReader> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
-
         py.detach(|| {
             let (table, state) = self.cloned_table_and_state()?;
 
@@ -1387,8 +1355,9 @@ impl RawDeltaTable {
         rt().block_on(async {
             match self._table.lock() {
                 Ok(table) => {
-                    let history = table
+                    let history: Vec<deltalake::kernel::models::CommitInfo> = table
                         .history(limit)
+                        .try_collect()
                         .await
                         .map_err(PythonError::from)
                         .map_err(PyErr::from)?;
@@ -1401,6 +1370,7 @@ impl RawDeltaTable {
                         )
                     })?;
                     let commits = history
+                        .into_iter()
                         .map(|c| serde_json::to_string(&c).unwrap())
                         .collect();
                     Ok((version, commits))
@@ -1775,13 +1745,9 @@ impl RawDeltaTable {
 
                         let new_state = if result > 0 {
                             Some(
-                                DeltaTableState::try_new(
-                                    &table.log_store(),
-                                    table.config.clone(),
-                                    table.version(),
-                                )
-                                .await
-                                .map_err(PythonError::from)?,
+                                DeltaTableState::try_new(&table.log_store(), table.version())
+                                    .await
+                                    .map_err(PythonError::from)?,
                             )
                         } else {
                             None
@@ -1801,9 +1767,6 @@ impl RawDeltaTable {
         Ok(())
     }
     pub fn get_add_actions(&self, flatten: bool) -> PyResult<Arro3Table> {
-        if !self.has_files()? {
-            return Err(DeltaError::new_err("Table is instantiated without files."));
-        }
         let table: PyTable = self.with_table(|t| -> PyResult<PyTable> {
             let state = t.snapshot().map_err(PythonError::from)?;
             let mut batches = state
@@ -2270,6 +2233,11 @@ fn set_writer_properties(writer_properties: PyWriterProperties) -> DeltaResult<W
 
             properties = properties.set_statistics_enabled(enabled_statistics);
         }
+        if let Some(encoding) = default_column_properties.encoding {
+            properties = properties
+                .set_encoding(Encoding::from_str(&encoding).map_err(DeltaTableError::from)?);
+            properties = properties.set_dictionary_enabled(false);
+        }
         if let Some(bloom_filter_properties) = default_column_properties.bloom_filter_properties {
             if let Some(set_bloom_filter_enabled) = bloom_filter_properties.set_bloom_filter_enabled
             {
@@ -2454,6 +2422,9 @@ fn scalar_to_py<'py>(value: &Scalar, py_date: &Bound<'py, PyAny>) -> PyResult<Bo
                 py_map.set_item(scalar_to_py(key, py_date)?, scalar_to_py(value, py_date)?)?;
             }
             py_map.into_py_any(py)?
+        }
+        IntervalYearMonth(_) | IntervalDayTime(_) => {
+            unimplemented!("Interval* types are not currently supported by the `deltalake` package")
         }
     };
 
@@ -3184,6 +3155,7 @@ fn create_table_with_add_actions(
     description=None,
     configuration=None,
     storage_options=None,
+    collect_stats=true,
     commit_properties=None,
     post_commithook_properties=None,
 ))]
@@ -3196,6 +3168,7 @@ fn convert_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
+    collect_stats: bool,
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
@@ -3228,6 +3201,10 @@ fn convert_to_deltalake(
 
         if let Some(strg_options) = storage_options {
             builder = builder.with_storage_options(strg_options);
+        };
+
+        if !collect_stats {
+            builder = builder.without_stats();
         };
 
         if let Some(commit_properties) =

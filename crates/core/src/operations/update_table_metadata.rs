@@ -27,7 +27,6 @@ pub struct TableMetadataUpdate {
         message = "Table name cannot be empty and cannot exceed 255 characters"
     ))]
     pub name: Option<String>,
-
     /// New table description. When set, must be at most 4000 characters.
     #[validate(length(
         max = 4000,
@@ -110,8 +109,7 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let update = this.update.ok_or_else(|| {
                 DeltaTableError::MetadataError("No metadata update specified".to_string())
@@ -132,92 +130,5 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             )
             .await
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{Int32Array, RecordBatch};
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
-
-    use crate::kernel::{DataType, EagerSnapshot, PrimitiveType, StructField};
-    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
-
-    use super::*;
-
-    fn id_field() -> StructField {
-        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
-    }
-
-    fn metadata_update() -> TableMetadataUpdate {
-        TableMetadataUpdate {
-            name: Some("events".to_string()),
-            description: Some("event table".to_string()),
-        }
-    }
-
-    #[tokio::test]
-    async fn update_table_metadata_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
-            .with_update(metadata_update())
-            .await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
-    }
-
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn update_table_metadata_with_lazy_snapshot_retries_after_concurrent_commit() -> TestResult
-    {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "id",
-                ArrowDataType::Int32,
-                true,
-            )])),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-        let table = table.write(vec![batch]).await?;
-
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(snapshot.version(), 0);
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        let updated = UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
-            .with_update(metadata_update())
-            .await?;
-
-        assert_eq!(updated.version(), Some(2));
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
     }
 }

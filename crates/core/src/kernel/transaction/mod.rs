@@ -822,12 +822,7 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                             debug!("version 0 already exists, loading table state for retry");
                             attempt_number = 2;
                             let latest_version: Version = log_store.get_latest_version(0).await?;
-                            EagerSnapshot::try_new(
-                                log_store.as_ref(),
-                                Default::default(),
-                                Some(latest_version),
-                            )
-                            .await?
+                            EagerSnapshot::try_new(log_store.as_ref(), Some(latest_version)).await?
                         }
                         Err(e) => return Err(e.into()),
                     }
@@ -1055,7 +1050,6 @@ impl PostCommit {
             if self.create_checkpoint || cleanup_logs {
                 let version = self.version;
                 let create_checkpoint = self.create_checkpoint;
-                let require_files = state.load_config().require_files;
                 let checkpoint_interval = state.config().checkpoint_interval().get();
                 let cutoff_timestamp = Utc::now().timestamp_millis()
                     - state.table_config().log_retention_duration().as_millis() as i64;
@@ -1067,13 +1061,9 @@ impl PostCommit {
                     with_operation(&self.log_store, |log_store| async move {
                         let mut checkpoint_created = false;
                         if create_checkpoint {
-                            checkpoint_created = maybe_create_checkpoint(
-                                require_files,
-                                checkpoint_interval,
-                                version,
-                                &log_store,
-                            )
-                            .await?;
+                            checkpoint_created =
+                                maybe_create_checkpoint(checkpoint_interval, version, &log_store)
+                                    .await?;
                         }
                         let mut files_cleaned_up: u64 = 0;
                         if cleanup_logs {
@@ -1091,12 +1081,7 @@ impl PostCommit {
                 new_checkpoint_created = checkpoint_created;
                 num_log_files_cleaned_up = files_cleaned_up;
                 if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(
-                        &self.log_store,
-                        state.load_config().clone(),
-                        Some(self.version),
-                    )
-                    .await?;
+                    state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
                 }
             }
 
@@ -1108,9 +1093,7 @@ impl PostCommit {
                 },
             ))
         } else {
-            let state =
-                DeltaTableState::try_new(&self.log_store, Default::default(), Some(self.version))
-                    .await?;
+            let state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
             Ok((
                 state,
                 PostCommitMetrics {
@@ -1124,18 +1107,10 @@ impl PostCommit {
 
 /// Create a checkpoint for `version` when the table's checkpoint interval says so.
 async fn maybe_create_checkpoint(
-    require_files: bool,
     checkpoint_interval: u64,
     version: Version,
     log_store: &LogStoreRef,
 ) -> DeltaResult<bool> {
-    if !require_files {
-        warn!(
-            "Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files."
-        );
-        return Ok(false);
-    }
-
     if (version + 1).is_multiple_of(checkpoint_interval) {
         create_checkpoint_for(version, log_store.as_ref()).await?;
         Ok(true)

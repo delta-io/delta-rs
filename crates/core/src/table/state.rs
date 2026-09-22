@@ -15,7 +15,6 @@ use delta_kernel::{EvaluationHandler, Expression};
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 
-use super::DeltaTableConfig;
 #[cfg(test)]
 use crate::kernel::Action;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, SnapshotExt};
@@ -41,14 +40,10 @@ impl DeltaTableState {
     }
 
     /// Create a new DeltaTableState
-    pub async fn try_new(
-        log_store: &dyn LogStore,
-        config: DeltaTableConfig,
-        version: Option<Version>,
-    ) -> DeltaResult<Self> {
+    pub async fn try_new(log_store: &dyn LogStore, version: Option<Version>) -> DeltaResult<Self> {
         log_store.refresh().await?;
         // TODO: pass through predictae
-        let snapshot = EagerSnapshot::try_new(log_store, config, version).await?;
+        let snapshot = EagerSnapshot::try_new(log_store, version).await?;
         Ok(Self { snapshot })
     }
 
@@ -70,11 +65,6 @@ impl DeltaTableState {
     /// The table schema
     pub fn schema(&self) -> KernelSchemaRef {
         self.snapshot.schema()
-    }
-
-    /// Get the table config which is loaded with of the snapshot
-    pub fn load_config(&self) -> &DeltaTableConfig {
-        self.snapshot.load_config()
     }
 
     /// Well known table configuration
@@ -592,39 +582,6 @@ mod tests {
 
     #[cfg(feature = "datafusion")]
     #[tokio::test]
-    async fn test_add_actions_batches_skip_stats_returns_null_stats() -> DeltaResult<()> {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns(get_delta_schema().fields().cloned())
-            .await?;
-        let table = table
-            .write(vec![get_record_batch(None, false)])
-            .with_save_mode(SaveMode::Append)
-            .await?;
-
-        let config = DeltaTableConfig {
-            skip_stats: true,
-            ..Default::default()
-        };
-        let log_store = table.log_store();
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-        let batches = snapshot.snapshot().add_actions_batches(true)?;
-
-        assert!(!batches.is_empty());
-        let batch = concat_batches(batches[0].schema_ref(), &batches)?;
-        for column_name in ["num_records", "min.value", "max.value"] {
-            let column = batch
-                .column_by_name(column_name)
-                .unwrap_or_else(|| panic!("expected add actions output to contain {column_name}"));
-            assert_eq!(column.null_count(), batch.num_rows());
-            assert!((0..batch.num_rows()).all(|row| column.is_null(row)));
-        }
-
-        Ok(())
-    }
-
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
     async fn test_delta_table_state_serde_roundtrip_preserves_add_actions() -> DeltaResult<()> {
         let table = DeltaTable::new_in_memory()
             .create()
@@ -644,48 +601,6 @@ mod tests {
 
         assert_eq!(actual.version(), state.version());
         assert_eq!(after, before);
-        Ok(())
-    }
-
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn test_delta_table_state_without_files_roundtrip_stays_without_files() -> DeltaResult<()>
-    {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns(get_delta_schema().fields().cloned())
-            .await?;
-        let table = table
-            .write(vec![get_record_batch(None, false)])
-            .with_save_mode(SaveMode::Append)
-            .await?;
-
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let state = DeltaTableState::try_new(table.log_store().as_ref(), config, None).await?;
-        assert!(
-            !state
-                .snapshot()
-                .snapshot()
-                .has_materialized_files_for_test()
-        );
-
-        let bytes = serde_json::to_vec(&state)?;
-        let actual: DeltaTableState = serde_json::from_slice(&bytes)?;
-
-        assert_eq!(actual.version(), state.version());
-        assert!(
-            !actual
-                .snapshot()
-                .snapshot()
-                .has_materialized_files_for_test()
-        );
-        assert!(matches!(
-            actual.add_actions_table(true),
-            Err(DeltaTableError::NotInitializedWithFiles(_))
-        ));
         Ok(())
     }
 
@@ -770,12 +685,7 @@ mod tests {
             .with_save_mode(SaveMode::Append)
             .await?;
 
-        let snapshot = Snapshot::try_new(
-            table.log_store().as_ref(),
-            DeltaTableConfig::default(),
-            None,
-        )
-        .await?;
+        let snapshot = Snapshot::try_new(table.log_store().as_ref(), None).await?;
         let snapshot = Arc::new(snapshot)
             .ensure_materialized_files(table.log_store().as_ref())
             .await?;

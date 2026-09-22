@@ -30,7 +30,6 @@ url = { workspace = true }
 
 # crates.io dependencies
 aws-smithy-runtime-api = { version = "1.11" }
-aws-smithy-types = { version = "=1.6.3" }
 aws-credential-types = { version = "1.2", features = ["hardcoded-credentials"] }
 aws-config = { version = "1.8", features = [
     "behavior-version-latest",
@@ -66,4 +65,4 @@ rustls = [
 ]
 
 [package.metadata.cargo-machete]
-ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "aws-smithy-types", "time"]
+ignored = ["aws-sdk-sts", "aws-smithy-runtime-api", "time"]

@@ -24,32 +24,36 @@ def convert_to_deltalake(
     uri: str | Path,
     mode: Literal["error", "ignore"] = "error",
     partition_by: Schema | None = None,
-    partition_strategy: Literal["hive"] | None = None,
+    partition_strategy: Literal["hive", "directory"] | None = None,
     name: str | None = None,
     description: str | None = None,
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
     *args: Any,
+    collect_stats: bool = True,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
     """
     `Convert` parquet tables `to delta` tables.
 
-    Currently only HIVE partitioned tables are supported. `Convert to delta` creates
-    a transaction log commit with add actions, and additional properties provided such
-    as configuration, name, and description.
+    `Convert to delta` creates a transaction log commit with add actions, and additional
+    properties provided such as configuration, name, and description.
 
     Args:
         uri: URI of a table.
-        partition_by: Optional partitioning schema if table is partitioned.
-        partition_strategy: Optional partition strategy to read and convert
+        partition_by: Optional partitioning schema if table is partitioned. With the
+            `directory` strategy, the fields are mapped in order onto the directories of each file path.
+        partition_strategy: Optional partition strategy to read and convert. `hive` for paths like
+            `year=2020/month=1/part-0.parquet`, `directory` for paths like `2020/1/part-0.parquet`.
         mode: How to handle existing data. Default is to error if table already exists.
             If 'ignore', will not convert anything if table already exists.
         name: User-provided identifier for this table.
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+        collect_stats: whether to read file statistics from the parquet footers. If False, the add
+            actions carry no statistics, which converts faster but disables data skipping.
         commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
@@ -59,10 +63,11 @@ def convert_to_deltalake(
     if partition_by is not None and partition_strategy is None:
         raise ValueError("Partition strategy has to be provided with partition_by.")
 
-    if partition_strategy is not None and partition_strategy != "hive":
-        raise ValueError(
-            "Currently only `hive` partition strategy is supported to be converted."
-        )
+    if partition_strategy is not None and partition_strategy not in (
+        "hive",
+        "directory",
+    ):
+        raise ValueError("Partition strategy must be `hive` or `directory`.")
 
     if mode == "ignore" and try_get_deltatable(uri, storage_options) is not None:
         return
@@ -75,6 +80,7 @@ def convert_to_deltalake(
         description=description,
         configuration=configuration,
         storage_options=storage_options,
+        collect_stats=collect_stats,
         commit_properties=commit_properties,
         post_commithook_properties=post_commithook_properties,
     )

@@ -36,3 +36,6 @@ __pycache__
 .zed
 .zed/
 dat/
+
+**/.hermes/
+.worktrees

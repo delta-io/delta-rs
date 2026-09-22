@@ -100,22 +100,6 @@ def assert_roundtrips(
 
 
 @pytest.mark.pyarrow
-def test_append_with_skip_stats_table_is_replay_safe(tmp_path: pathlib.Path):
-    import pyarrow as pa
-
-    data = pa.table({"id": [1]})
-    write_deltalake(tmp_path, data)
-
-    table = DeltaTable(tmp_path, skip_stats=True)
-    write_deltalake(table, data, mode="append")
-
-    assert table.version() == 1
-    fresh = DeltaTable(tmp_path)
-    assert fresh.version() == 1
-    assert fresh.to_pyarrow_table().num_rows == 2
-
-
-@pytest.mark.pyarrow
 def test_nanosecond_timestamps_cast_to_microsecond_by_default(tmp_path: pathlib.Path):
     """
     Unless ``enable_nanosecond_timestamps()`` is called, nanosecond timestamps
@@ -3103,26 +3087,6 @@ def test_write_table_with_deletion_vectors(tmp_path: pathlib.Path):
 
 
 @pytest.mark.pyarrow
-def test_without_files_delta_table_write_preserves_state(
-    tmp_path: pathlib.Path,
-) -> None:
-    import pyarrow as pa
-
-    initial = pa.table({"id": pa.array([1, 2], type=pa.int64())})
-    write_deltalake(tmp_path, initial)
-
-    dt = DeltaTable(tmp_path, without_files=True)
-    write_deltalake(dt, pa.table({"id": pa.array([3], type=pa.int64())}), mode="append")
-
-    latest = DeltaTable(tmp_path)
-    assert latest.version() == 1
-    assert latest.to_pyarrow_table().sort_by("id")["id"].to_pylist() == [1, 2, 3]
-
-    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
-        dt.get_add_actions(flatten=True)
-
-
-@pytest.mark.pyarrow
 def test_overwrite_with_partitions(tmp_path: pathlib.Path) -> None:
     """
     Calling create_write_transaction with mode="overwrite" and non-empty
@@ -3394,9 +3358,6 @@ def test_writing_with_generator(tmp_path):
     write_deltalake(tmp_path, my_sequence)
 
 
-@pytest.mark.skip(
-    reason="Should be re-enabled when column mapping can come in properly"
-)
 @pytest.mark.pyarrow
 def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
     """
@@ -3405,7 +3366,7 @@ def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
     """
     import pyarrow as pa
 
-    from deltalake import write_deltalake
+    from deltalake import DeltaTable, write_deltalake
 
     line_size = 12
     field_with_metadata = pa.field(
@@ -3427,6 +3388,16 @@ def test_issue_3936_column_mapping(tmp_path: pathlib.Path):
             "delta.minWriterVersion": "5",
         },
     )
+
+    import pyarrow.parquet as pq
+
+    dt = DeltaTable(tmp_path)
+    physical_names = [
+        field.metadata["delta.columnMapping.physicalName"]
+        for field in dt.schema().fields
+    ]
+    for file in dt.file_uris():
+        assert pq.read_schema(file).names == physical_names
 
 
 def _now_ms() -> int:

@@ -124,8 +124,7 @@ impl std::future::IntoFuture for DropColumnNotNullBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let (actions, operation) = plan_drop_column_not_null_actions(
                 snapshot.snapshot().metadata_state(),

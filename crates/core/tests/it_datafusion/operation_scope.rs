@@ -30,7 +30,7 @@ use deltalake_core::operations::update_table_metadata::TableMetadataUpdate;
 use deltalake_core::protocol::SaveMode;
 use deltalake_core::protocol::log_compaction::compact_logs;
 use deltalake_core::test_utils::isolating_store::{IsolatingLogStore, ScopeEvent};
-use deltalake_core::{DeltaResult, DeltaTable, DeltaTableConfig};
+use deltalake_core::{DeltaResult, DeltaTable};
 
 fn schema() -> Vec<StructField> {
     vec![
@@ -511,7 +511,7 @@ async fn datafusion_insert_into_runs_in_one_scope() {
         }
     );
 
-    let mut reloaded = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut reloaded = DeltaTable::new(store.clone());
     reloaded.load().await.unwrap();
     assert_eq!(reloaded.version(), Some(3));
 }
@@ -609,9 +609,9 @@ async fn constraint_violation_aborts_the_scope() {
 async fn concurrent_commit_with_no_retries_aborts_the_scope() {
     let store = IsolatingLogStore::new();
     table_with_data(&store).await;
-    let mut writer_a = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut writer_a = DeltaTable::new(store.clone());
     writer_a.load().await.unwrap();
-    let mut writer_b = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut writer_b = DeltaTable::new(store.clone());
     writer_b.load().await.unwrap();
 
     let writer_a = writer_a.write(vec![batch(&[7])]).await.unwrap();
@@ -636,9 +636,9 @@ async fn concurrent_commit_with_no_retries_aborts_the_scope() {
 async fn two_writers_commit_distinct_versions() {
     let store = IsolatingLogStore::new();
     table_with_data(&store).await;
-    let mut writer_a = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut writer_a = DeltaTable::new(store.clone());
     writer_a.load().await.unwrap();
-    let mut writer_b = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut writer_b = DeltaTable::new(store.clone());
     writer_b.load().await.unwrap();
 
     let writer_a = writer_a.write(vec![batch(&[7])]).await.unwrap();
@@ -711,7 +711,7 @@ async fn failed_post_commit_checkpoint_aborts_its_sibling_scope_and_keeps_the_co
     );
 
     // The commit itself is durable; only the checkpoint is missing.
-    let mut reloaded = DeltaTable::new(store.clone(), DeltaTableConfig::default());
+    let mut reloaded = DeltaTable::new(store.clone());
     reloaded.load().await.unwrap();
     assert_eq!(reloaded.version(), Some(1));
     assert!(

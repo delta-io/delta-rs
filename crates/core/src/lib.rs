@@ -107,9 +107,7 @@ pub use self::data_catalog::{DataCatalog, DataCatalogError};
 pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use self::table::builder::{
-    DeltaTableBuilder, DeltaTableConfig, DeltaVersion, ensure_table_uri,
-};
+pub use self::table::builder::{DeltaTableBuilder, DeltaVersion, ensure_table_uri};
 pub use self::table::config::TableProperty;
 pub use self::table::{BlindDeltaTable, DeltaTable};
 pub use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, path::Path};
@@ -615,22 +613,22 @@ mod tests {
 
         let history1: Vec<_> = table
             .history(None)
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
         let history2: Vec<_> = latest_table
             .history(None)
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
 
         assert_eq!(history1, history2);
 
         let history3: Vec<_> = latest_table
             .history(Some(5))
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
         assert_eq!(history3.len(), 5);
     }
 
@@ -655,18 +653,18 @@ mod tests {
         // load history for table version with available log file
         let history: Vec<_> = table
             .history(Some(5))
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
 
         assert_eq!(history.len(), 5);
 
         // load history for table version without log file
         let history: Vec<_> = table
             .history(Some(10))
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
 
         assert_eq!(history.len(), 8);
     }
@@ -720,14 +718,14 @@ mod tests {
 
         let version_0_history: Vec<_> = version_0_table
             .history(None)
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
         let latest_table_history: Vec<_> = latest_table
             .history(None)
+            .try_collect()
             .await
-            .expect("Cannot get table history")
-            .collect();
+            .expect("Cannot get table history");
 
         assert_eq!(latest_table_history, version_0_history);
     }

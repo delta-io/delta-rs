@@ -14,27 +14,23 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, Partitioning, SendableRecordBatchStream,
     execute_stream_partitioned,
 };
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
 use delta_kernel::table_configuration::TableConfiguration;
 use futures::{StreamExt as _, TryStreamExt as _};
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tracing::log::*;
 
 use crate::DeltaTableError;
 use crate::datafile::writer::{
-    DeltaWriter, WriterConfig, write_batches_timed, writer_batch_concurrency,
+    DeltaWriter, UploadBudget, WriterConfig, write_batches_timed, writer_batch_concurrency,
 };
-use crate::delta_datafusion::{
-    ColumnMappingState, DataValidationExec, generated_columns_to_exprs, validation_predicates,
-};
+use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
-use crate::kernel::{Action, Add, AddCDCFile, EagerSnapshot, StructType, StructTypeExt};
+use crate::kernel::{Action, Add, AddCDCFile};
 use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
-use crate::operations::write::WriterStatsConfig;
+use crate::operations::write::configs::{WriteExecOptions, WriterStatsConfig};
 
 const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
 
@@ -306,75 +302,53 @@ pub(crate) struct WriteStreamMetrics {
     pub write_time_ms: u64,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_cdc(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    exec_options: WriteExecOptions,
 ) -> DeltaResult<Vec<Action>> {
     let cdc_store = Arc::new(PrefixStore::new(object_store, "_change_data"));
 
-    Ok(write_execution_plan(
-        snapshot,
-        session,
-        plan,
-        partition_columns,
-        cdc_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        writer_stats_config,
+    Ok(
+        write_execution_plan(table_config, session, plan, cdc_store, exec_options)
+            .await?
+            .into_iter()
+            .map(|add| {
+                // Modify add actions into CDC actions
+                match add {
+                    Action::Add(add) => {
+                        Action::Cdc(AddCDCFile {
+                            // This is a gnarly hack, but the action needs the nested path, not the
+                            // path inside the prefixed store
+                            path: format!("_change_data/{}", add.path),
+                            size: add.size,
+                            partition_values: add.partition_values,
+                            data_change: false,
+                            tags: add.tags,
+                        })
+                    }
+                    _ => panic!("Expected Add action"),
+                }
+            })
+            .collect::<Vec<_>>(),
     )
-    .await?
-    .into_iter()
-    .map(|add| {
-        // Modify add actions into CDC actions
-        match add {
-            Action::Add(add) => {
-                Action::Cdc(AddCDCFile {
-                    // This is a gnarly hack, but the action needs the nested path, not the
-                    // path inside the prefixed store
-                    path: format!("_change_data/{}", add.path),
-                    size: add.size,
-                    partition_values: add.partition_values,
-                    data_change: false,
-                    tags: add.tags,
-                })
-            }
-            _ => panic!("Expected Add action"),
-        }
-    })
-    .collect::<Vec<_>>())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    exec_options: WriteExecOptions,
 ) -> DeltaResult<Vec<Action>> {
     let (actions, _) = write_execution_plan_v2(
-        snapshot,
+        table_config,
         session,
         plan,
-        partition_columns,
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        writer_stats_config,
+        exec_options,
         None,
         false,
         None,
@@ -385,36 +359,17 @@ pub(crate) async fn write_execution_plan(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan_v2(
-    snapshot: Option<&EagerSnapshot>,
+    table_config: &TableConfiguration,
     session: &dyn Session,
     plan: Arc<dyn ExecutionPlan>,
-    partition_columns: Vec<String>,
     object_store: ObjectStoreRef,
-    target_file_size: Option<NonZeroU64>,
-    write_batch_size: Option<usize>,
-    writer_properties: Option<WriterProperties>,
-    writer_stats_config: WriterStatsConfig,
+    exec_options: WriteExecOptions,
     predicate: Option<Expr>,
     contains_cdc: bool,
     insert_marker_column: Option<String>,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    // We always take the plan Schema since the data may contain Large/View arrow types,
-    // the schema and batches were prior constructed with this in mind.
-    let schema = plan.schema();
-    let mut validations = if let Some(snapshot) = snapshot {
-        validation_predicates(
-            session,
-            &plan.schema().to_dfschema()?,
-            snapshot.table_configuration(),
-        )?
-    } else {
-        debug!(
-            "Using plan schema to derive generated columns, since no snapshot was provided. Implies first write."
-        );
-        let delta_schema: StructType = schema.as_ref().try_into_kernel()?;
-        let df_schema = schema.clone().to_dfschema()?;
-        generated_columns_to_exprs(session, &df_schema, &delta_schema.get_generated_columns()?)?
-    };
+    let mut validations =
+        validation_predicates(session, &plan.schema().to_dfschema()?, table_config)?;
 
     if let Some(mut pred) = predicate {
         // DataRescue uses an internal insert-marker column; CDC-only plans rely on `_change_type`.
@@ -433,14 +388,13 @@ pub(crate) async fn write_execution_plan_v2(
     }
 
     let sink_config = WriteSinkConfig {
-        partition_columns,
+        partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
-        target_file_size,
-        write_batch_size,
-        writer_properties,
-        writer_stats_config,
-        column_mapping: snapshot
-            .and_then(|s| ColumnMappingState::from_table_config(s.table_configuration())),
+        target_file_size: exec_options.target_file_size,
+        write_batch_size: exec_options.write_batch_size,
+        writer_properties: exec_options.writer_properties,
+        writer_stats_config: WriterStatsConfig::from_config(table_config),
+        column_mapping: ColumnMappingState::from_table_config(table_config),
     };
 
     if !contains_cdc {
@@ -962,6 +916,8 @@ async fn write_cdc_plan(
     ));
     let cdf_schema = plan.schema().clone();
 
+    // One budget for both destinations of a change-data write.
+    let upload_budget = UploadBudget::for_write(target_file_size);
     let normal_config = WriterConfig::new(
         write_schema.clone(),
         partition_columns.clone(),
@@ -971,7 +927,8 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     )
-    .with_random_prefix_length(random_prefix_length);
+    .with_random_prefix_length(random_prefix_length)
+    .with_upload_budget(upload_budget.clone());
 
     let cdf_config = WriterConfig::new(
         cdf_schema.clone(),
@@ -982,7 +939,8 @@ async fn write_cdc_plan(
         writer_stats_config.num_indexed_cols,
         writer_stats_config.stats_columns.clone(),
     )
-    .with_random_prefix_length(random_prefix_length);
+    .with_random_prefix_length(random_prefix_length)
+    .with_upload_budget(upload_budget);
 
     // Keep the previous single-writer fan-in path for unpartitioned tables.
     if partition_columns.is_empty() {

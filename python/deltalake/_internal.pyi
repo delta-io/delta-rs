@@ -80,9 +80,6 @@ class RawDeltaTable:
         table_uri: str,
         version: int | None,
         storage_options: dict[str, str] | None,
-        without_files: bool,
-        log_buffer_size: int | None,
-        skip_stats: bool,
     ) -> None: ...
     @staticmethod
     def get_table_uri_from_data_catalog(
@@ -98,7 +95,6 @@ class RawDeltaTable:
     ) -> bool: ...
     def table_uri(self) -> str: ...
     def version(self) -> int: ...
-    def has_files(self) -> bool: ...
     def get_add_file_sizes(self) -> dict[str, int]: ...
     def get_latest_version(self) -> int: ...
     def metadata(self) -> RawDeltaTableMetaData: ...
@@ -353,11 +349,12 @@ def write_to_deltalake(
 def convert_to_deltalake(
     uri: str,
     partition_schema: Schema | None,
-    partition_strategy: Literal["hive"] | None,
+    partition_strategy: Literal["hive", "directory"] | None,
     name: str | None,
     description: str | None,
     configuration: Mapping[str, str | None] | None,
     storage_options: dict[str, str] | None,
+    collect_stats: bool,
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...

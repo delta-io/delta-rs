@@ -618,7 +618,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.partitions_optimized, 1);
     assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
@@ -842,7 +842,7 @@ async fn test_optimize_execute_reads_and_writes_through_given_log_store()
         inner: table.log_store(),
         calls: calls.clone(),
     });
-    let mut tracked_table = DeltaTable::new(tracked_log_store, Default::default());
+    let mut tracked_table = DeltaTable::new(tracked_log_store);
     tracked_table.load().await?;
     let df_context: SessionContext = DeltaSessionContext::default().into();
     let plan = create_merge_plan(
@@ -1686,7 +1686,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
 
     let commit_metrics =
@@ -1729,7 +1729,7 @@ async fn test_optimize_metrics_expose_planner_strategy() -> Result<(), Box<dyn E
     assert_eq!(metrics_json["maxBinSpanFiles"], json!(2));
     assert!(metrics_json.get("maxInputDisplacement").is_none());
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     assert_eq!(
         last_commit.info["operationMetrics"]["plannerStrategy"],

@@ -1,6 +1,10 @@
+use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray, StructArray};
+use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
 use chrono::Duration;
+use deltalake_core::DeltaTable;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
+use deltalake_core::protocol::SaveMode;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt as _, path::Path};
@@ -290,6 +294,56 @@ async fn test_non_managed_files() {
     for path in paths_ignore {
         assert!(!is_deleted(&mut context, &path).await);
     }
+}
+
+/// `payload` has no leaf that is eligible for min/max statistics, so it must not reach the parsed
+/// stats schema as an empty struct. Such a struct used to shrink to zero rows the first time log
+/// replay filtered a batch partially, and the next commit then panicked in `StructArray::slice`.
+/// The partial filter needs one commit that adds several files and a later commit that removes
+/// only some of them. See delta-io/delta-rs#3237.
+#[tokio::test]
+async fn test_vacuum_struct_column_without_min_max_eligible_leaves() -> TestResult {
+    fn batch(ids: Vec<i64>, parts: Vec<&str>) -> RecordBatch {
+        let payload: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(ArrowField::new("data", ArrowDataType::Binary, true)),
+            Arc::new(BinaryArray::from_vec(vec![b"x"; ids.len()])) as ArrayRef,
+        )]));
+        RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(Int64Array::from(ids)) as ArrayRef),
+            ("part", Arc::new(StringArray::from(parts)) as ArrayRef),
+            ("payload", payload),
+        ])
+        .unwrap()
+    }
+
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch(vec![1, 2, 3], vec!["a", "b", "c"])])
+        .with_partition_columns(["part"])
+        .await?;
+    // Tombstone one of the three files, so the next replay filters that batch partially.
+    let (table, _metrics) = table.delete().with_predicate("part = 'a'").await?;
+    let table = table.write(vec![batch(vec![4], vec!["d"])]).await?;
+
+    // Parsed statistics must carry `id` only, with no empty `payload` struct.
+    let add_actions = table.snapshot()?.add_actions_table(true)?;
+    let add_actions_schema = add_actions.schema();
+    let columns = add_actions_schema.fields();
+    assert!(columns.iter().any(|field| field.name() == "min.id"));
+    assert!(
+        !columns
+            .iter()
+            .any(|field| field.name().starts_with("min.payload"))
+    );
+
+    let (_table, metrics) = table
+        .vacuum()
+        .with_retention_period(Duration::hours(0))
+        .with_enforce_retention_duration(false)
+        .with_dry_run(false)
+        .await?;
+    assert_eq!(metrics.files_deleted.len(), 1);
+
+    Ok(())
 }
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {

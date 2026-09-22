@@ -144,13 +144,23 @@ where
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
 
+                let (data, selection_vector) = scan_data.scan_files.into_parts();
+                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+                let scan_files =
+                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
+
                 // Spawn tasks to read the deletion vectors from disk.
-                for file in &ctx.files {
+                for (index, file) in ctx.files.iter().enumerate() {
                     if file.dv_info.has_vector() {
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
                         let file_url = file.file_url.clone();
-                        let num_records = file.num_records;
+                        // Kernel's visitor reads JSON stats. Recover counts from structured stats.
+                        let num_records = file.num_records.or_else(|| {
+                            LogicalFileView::new(scan_files.clone(), index)
+                                .num_records()
+                                .map(|count| count as u64)
+                        });
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
@@ -164,11 +174,6 @@ where
                 }
 
                 this.metrics.num_scanned += ctx.count;
-
-                let (data, selection_vector) = scan_data.scan_files.into_parts();
-                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
-                let scan_files =
-                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
 
                 let stats_projection = match StatsProjection::for_scan(this.kernel_scan.as_ref()) {
                     Ok(projection) => projection,
@@ -388,6 +393,7 @@ impl ScanFileContext {
 }
 
 /// Metadata to read a data file from object storage.
+#[derive(Debug)]
 struct ScanFileContextInner {
     /// Fully qualified URL of the file.
     pub file_url: Url,

@@ -96,8 +96,7 @@ impl std::future::IntoFuture for ConstraintBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             if this.check_constraints.is_empty() {
                 return Err(DeltaTableError::Generic(
