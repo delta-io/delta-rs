@@ -312,30 +312,30 @@ impl ObjectStore for CachingObjectStore {
         &self,
         locations: BoxStream<'static, OSResult<Path>>,
     ) -> BoxStream<'static, OSResult<Path>> {
-        use futures::StreamExt;
+        use futures::{StreamExt, TryStreamExt};
         let inner = self.inner.clone();
         let cache = self.cache.clone();
-        // Collect paths eagerly so we can invalidate the cache before forwarding.
-        // Each path is either passed through or carries its error forward.
+        // Attempt the inner delete first; only invalidate the cache entry on
+        // success. This preserves the invariant that a failed delete leaves
+        // the object (and the cache entry) intact.
         locations
-            .map(move |res| match res {
-                Ok(ref location) => {
-                    cache.remove(&location.to_string());
-                    res
-                }
-                Err(_) => res,
-            })
-            .flat_map(move |res| {
+            .and_then(move |location| {
                 let inner = inner.clone();
-                match res {
-                    Ok(location) => {
-                        let stream: BoxStream<'static, OSResult<Path>> =
-                            inner.delete_stream(
-                                futures::stream::once(async move { Ok(location) }).boxed(),
-                            );
-                        stream
-                    }
-                    Err(e) => futures::stream::once(async move { Err(e) }).boxed(),
+                let cache = cache.clone();
+                async move {
+                    let mut stream = inner.delete_stream(
+                        futures::stream::once(async move { Ok(location.clone()) }).boxed(),
+                    );
+                    let deleted = stream
+                        .try_next()
+                        .await?
+                        .ok_or_else(|| object_store::Error::Generic {
+                            store: "CachingObjectStore",
+                            source: "delete_stream yielded no result".into(),
+                        })?;
+                    // Invalidate only after the backing store confirms deletion.
+                    cache.remove(&deleted.to_string());
+                    Ok(deleted)
                 }
             })
             .boxed()
