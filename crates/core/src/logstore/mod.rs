@@ -89,6 +89,8 @@ pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
     ObjectStoreRegistry, ObjectStoreRetryExt, client_options_from_certificate,
 };
+#[cfg(feature = "delta-cache")]
+pub use self::storage::CachingObjectStore;
 /// Convenience re-export of the object store crate
 pub use ::object_store;
 

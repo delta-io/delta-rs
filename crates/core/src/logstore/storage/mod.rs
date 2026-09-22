@@ -18,6 +18,11 @@ pub(super) mod retry_ext;
 pub(super) mod runtime;
 pub(super) mod utils;
 
+#[cfg(feature = "delta-cache")]
+pub(super) mod cache;
+#[cfg(feature = "delta-cache")]
+pub use cache::CachingObjectStore;
+
 static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from("_delta_log"));
 
 /// Sharable reference to [`ObjectStore`]
