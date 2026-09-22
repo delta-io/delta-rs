@@ -101,7 +101,7 @@ class BloomFilterProperties:
             fpp: The false positive probability for the bloom filter. Must be between 0 and 1 exclusive.
             ndv: The number of distinct values for the bloom filter.
         """
-        if fpp is not None and (fpp <= 0 or fpp >= 1):
+        if fpp is not None and not 0 < fpp < 1:
             raise ValueError("fpp must be between 0 and 1 exclusive")
         self.set_bloom_filter_enabled = set_bloom_filter_enabled
         self.fpp = fpp

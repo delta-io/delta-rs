@@ -83,9 +83,10 @@ def test_writer_properties_no_compression():
         WriterProperties(compression_level=10)
 
 
-def test_invalid_fpp_value():
+@pytest.mark.parametrize("fpp", [1.1, float("nan")])
+def test_invalid_fpp_value(fpp):
     with pytest.raises(ValueError):
-        BloomFilterProperties(set_bloom_filter_enabled=True, fpp=1.1, ndv=30)
+        BloomFilterProperties(set_bloom_filter_enabled=True, fpp=fpp, ndv=30)
 
 
 @pytest.mark.pyarrow
