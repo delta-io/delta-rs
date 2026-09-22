@@ -112,6 +112,23 @@ impl CachingObjectStore {
         Some(Self { inner, cache })
     }
 
+    /// Build from environment variables, constructing the inner store only when
+    /// caching is actually enabled. Returns `None` (without calling `make_inner`)
+    /// if `DELTA_CACHE_CAPACITY_BYTES` is absent or zero.
+    ///
+    /// This avoids constructing the prefixed store twice in `decorate_store` when
+    /// the feature is compiled in but the cache is disabled at runtime.
+    pub(crate) fn from_env_with_inner<F, E>(make_inner: F) -> Option<Self>
+    where
+        F: FnOnce() -> Result<Arc<dyn ObjectStore>, E>,
+        E: std::fmt::Debug,
+    {
+        let cache = build_cache_from_env()?;
+        let inner = make_inner()
+            .expect("decorate_prefix should not fail with a valid url");
+        Some(Self { inner, cache })
+    }
+
     #[cfg(test)]
     pub(crate) fn with_cache(inner: Arc<dyn ObjectStore>, cache: DeltaCache) -> Self {
         Self { inner, cache }
