@@ -114,6 +114,7 @@ lakefs = ["lakefs==0.8.0"]
 pyspark = [
     "pyspark==4.0.1",
     "delta-spark",
+    "pandas<3",
     "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
 other = [
