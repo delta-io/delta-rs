@@ -60,21 +60,62 @@ pub fn build_cache_from_env() -> Option<DeltaCache> {
     let eviction_name = std::env::var(ENV_EVICTION).unwrap_or_else(|_| "lru".to_string());
 
     let eviction_config: EvictionConfig = match eviction_name.to_lowercase().as_str() {
-        "lfu" => LfuConfig {
-            window_capacity_ratio: env_f64(ENV_LFU_WINDOW, 0.01),
-            protected_capacity_ratio: env_f64(ENV_LFU_PROTECTED, 0.8),
-            ..LfuConfig::default()
+        "lfu" => {
+            let window = env_f64(ENV_LFU_WINDOW, 0.01);
+            let protected = env_f64(ENV_LFU_PROTECTED, 0.8);
+            // foyer asserts window > 0, protected > 0, and window + protected < 1.
+            // Catch violations here and disable the cache rather than panicking.
+            if !(window > 0.0 && window < 1.0) {
+                tracing::warn!(
+                    window,
+                    "DELTA_CACHE_LFU_WINDOW_RATIO must be in (0, 1); disabling delta-cache"
+                );
+                return None;
+            }
+            if !(protected > 0.0 && protected < 1.0) {
+                tracing::warn!(
+                    protected,
+                    "DELTA_CACHE_LFU_PROTECTED_RATIO must be in (0, 1); disabling delta-cache"
+                );
+                return None;
+            }
+            if window + protected >= 1.0 {
+                tracing::warn!(
+                    window,
+                    protected,
+                    "DELTA_CACHE_LFU_WINDOW_RATIO + DELTA_CACHE_LFU_PROTECTED_RATIO must be \
+                     < 1.0 (got {}); disabling delta-cache",
+                    window + protected
+                );
+                return None;
+            }
+            LfuConfig {
+                window_capacity_ratio: window,
+                protected_capacity_ratio: protected,
+                ..LfuConfig::default()
+            }
+            .into()
         }
-        .into(),
-        "s3fifo" => S3FifoConfig {
-            small_queue_capacity_ratio: env_f64(ENV_S3_SMALL, 0.1),
-            ghost_queue_capacity_ratio: env_f64(ENV_S3_GHOST, 1.0),
-            small_to_main_freq_threshold: std::env::var(ENV_S3_FREQ)
-                .ok()
-                .and_then(|v| v.parse::<u8>().ok())
-                .unwrap_or(1),
+        "s3fifo" => {
+            let small = env_f64(ENV_S3_SMALL, 0.1);
+            // foyer asserts small_queue_capacity_ratio in (0, 1).
+            if !(small > 0.0 && small < 1.0) {
+                tracing::warn!(
+                    small,
+                    "DELTA_CACHE_S3FIFO_SMALL_RATIO must be in (0, 1); disabling delta-cache"
+                );
+                return None;
+            }
+            S3FifoConfig {
+                small_queue_capacity_ratio: small,
+                ghost_queue_capacity_ratio: env_f64(ENV_S3_GHOST, 1.0),
+                small_to_main_freq_threshold: std::env::var(ENV_S3_FREQ)
+                    .ok()
+                    .and_then(|v| v.parse::<u8>().ok())
+                    .unwrap_or(1),
+            }
+            .into()
         }
-        .into(),
         "sieve" => SieveConfig.into(),
         "fifo" => FifoConfig {}.into(),
         _ => LruConfig {
@@ -400,6 +441,42 @@ mod tests {
         // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_build_cache_from_env_lfu_invalid_sum_returns_none() {
+        // foyer asserts window + protected < 1.0 -- verify we return None instead of panicking.
+        unsafe {
+            std::env::set_var(ENV_CAPACITY, "1048576");
+            std::env::set_var(ENV_EVICTION, "lfu");
+            std::env::set_var(ENV_LFU_WINDOW, "0.5");
+            std::env::set_var(ENV_LFU_PROTECTED, "0.5"); // 0.5 + 0.5 = 1.0, violates < 1.0
+        }
+        assert!(build_cache_from_env().is_none());
+        unsafe {
+            std::env::remove_var(ENV_CAPACITY);
+            std::env::remove_var(ENV_EVICTION);
+            std::env::remove_var(ENV_LFU_WINDOW);
+            std::env::remove_var(ENV_LFU_PROTECTED);
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn test_build_cache_from_env_s3fifo_invalid_small_ratio_returns_none() {
+        // foyer asserts small_queue_capacity_ratio in (0, 1) -- verify we return None.
+        unsafe {
+            std::env::set_var(ENV_CAPACITY, "1048576");
+            std::env::set_var(ENV_EVICTION, "s3fifo");
+            std::env::set_var(ENV_S3_SMALL, "0.0"); // violates > 0.0
+        }
+        assert!(build_cache_from_env().is_none());
+        unsafe {
+            std::env::remove_var(ENV_CAPACITY);
+            std::env::remove_var(ENV_EVICTION);
+            std::env::remove_var(ENV_S3_SMALL);
         }
     }
 
