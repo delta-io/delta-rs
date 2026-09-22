@@ -1,6 +1,10 @@
+use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StructArray};
+use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
 use chrono::Duration;
+use deltalake_core::DeltaTable;
 use deltalake_core::kernel::StructType;
 use deltalake_core::operations::vacuum::Clock;
+use deltalake_core::protocol::SaveMode;
 use deltalake_test::clock::TestClock;
 use deltalake_test::*;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt as _, path::Path};
@@ -290,6 +294,43 @@ async fn test_non_managed_files() {
     for path in paths_ignore {
         assert!(!is_deleted(&mut context, &path).await);
     }
+}
+
+/// `payload` has no leaf that is eligible for min/max statistics. Earlier versions kept it as an
+/// empty struct in the parsed stats schema, which produced zero-length struct arrays. Filtering
+/// such a batch during log replay panicked in `StructArray::slice`. See delta-io/delta-rs#3237.
+#[tokio::test]
+async fn test_vacuum_struct_column_without_min_max_eligible_leaves() -> TestResult {
+    let payload: ArrayRef = Arc::new(StructArray::from(vec![(
+        Arc::new(ArrowField::new("data", ArrowDataType::Binary, true)),
+        Arc::new(BinaryArray::from_vec(vec![b"a", b"bb"])) as ArrayRef,
+    )]));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef),
+        ("payload", payload),
+    ])?;
+
+    let table = DeltaTable::new_in_memory()
+        .write(vec![batch.clone()])
+        .await?;
+    // The overwrite tombstones the first file, so vacuum has something to delete.
+    let table = table
+        .write(vec![batch])
+        .with_save_mode(SaveMode::Overwrite)
+        .await?;
+
+    // Materializing the parsed statistics must not panic.
+    table.snapshot()?.add_actions_table(true)?;
+
+    let (_table, metrics) = table
+        .vacuum()
+        .with_retention_period(Duration::hours(0))
+        .with_enforce_retention_duration(false)
+        .with_dry_run(false)
+        .await?;
+    assert_eq!(metrics.files_deleted.len(), 1);
+
+    Ok(())
 }
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
