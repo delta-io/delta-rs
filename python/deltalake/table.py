@@ -5,6 +5,7 @@ import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -175,6 +176,48 @@ class Metadata:
             f"description: {self._metadata.description}, partition_columns: {self._metadata.partition_columns}, "
             f"created_time: {self.created_time}, configuration: {self._metadata.configuration})"
         )
+
+
+class TableProperty(StrEnum):
+    """Delta table property keys.
+
+    Use these values as keys in the `configuration` argument to
+    [write_deltalake][deltalake.write_deltalake].
+
+    Example:
+        ```python
+        write_deltalake(
+            "path/to/table",
+            data,
+            configuration={TableProperty.APPEND_ONLY: "true"},
+        )
+        ```
+    """
+
+    APPEND_ONLY = "delta.appendOnly"
+    AUTO_OPTIMIZE_AUTO_COMPACT = "delta.autoOptimize.autoCompact"
+    AUTO_OPTIMIZE_OPTIMIZE_WRITE = "delta.autoOptimize.optimizeWrite"
+    CHECKPOINT_INTERVAL = "delta.checkpointInterval"
+    CHECKPOINT_WRITE_STATS_AS_JSON = "delta.checkpoint.writeStatsAsJson"
+    CHECKPOINT_WRITE_STATS_AS_STRUCT = "delta.checkpoint.writeStatsAsStruct"
+    CHECKPOINT_USE_RUN_LENGTH_ENCODING = "delta-rs.checkpoint.useRunLengthEncoding"
+    CHECKPOINT_POLICY = "delta.checkpointPolicy"
+    COLUMN_MAPPING_MODE = "delta.columnMapping.mode"
+    DATA_SKIPPING_NUM_INDEXED_COLS = "delta.dataSkippingNumIndexedCols"
+    DATA_SKIPPING_STATS_COLUMNS = "delta.dataSkippingStatsColumns"
+    DELETED_FILE_RETENTION_DURATION = "delta.deletedFileRetentionDuration"
+    ENABLE_CHANGE_DATA_FEED = "delta.enableChangeDataFeed"
+    ENABLE_DELETION_VECTORS = "delta.enableDeletionVectors"
+    ISOLATION_LEVEL = "delta.isolationLevel"
+    LOG_RETENTION_DURATION = "delta.logRetentionDuration"
+    ENABLE_EXPIRED_LOG_CLEANUP = "delta.enableExpiredLogCleanup"
+    MIN_READER_VERSION = "delta.minReaderVersion"
+    MIN_WRITER_VERSION = "delta.minWriterVersion"
+    RANDOMIZE_FILE_PREFIXES = "delta.randomizeFilePrefixes"
+    RANDOM_PREFIX_LENGTH = "delta.randomPrefixLength"
+    SET_TRANSACTION_RETENTION_DURATION = "delta.setTransactionRetentionDuration"
+    TARGET_FILE_SIZE = "delta.targetFileSize"
+    TUNE_FILE_SIZES_FOR_REWRITES = "delta.tuneFileSizesForRewrites"
 
 
 class _DeltaTableConfigBase(NamedTuple):

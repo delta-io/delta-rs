@@ -19,7 +19,7 @@ from deltalake._internal import (
 )
 from deltalake.query import QueryBuilder
 from deltalake.schema import DataType, Field, Schema, VariantType
-from deltalake.table import DeltaTable, Metadata
+from deltalake.table import DeltaTable, Metadata, TableProperty
 from deltalake.transaction import CommitProperties, PostCommitHookProperties
 from deltalake.writer import (
     BloomFilterProperties,
@@ -149,6 +149,7 @@ __all__ = [
     "QueryBuilder",
     "Schema",
     "TableFeatures",
+    "TableProperty",
     "Transaction",
     "VariantType",
     "WriterProperties",
