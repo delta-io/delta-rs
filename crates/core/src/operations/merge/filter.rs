@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
+use arrow::record_batch::RecordBatch;
 use datafusion::catalog::Session;
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::common::{ScalarValue, TableReference};
@@ -181,11 +182,11 @@ pub(crate) fn generalize_filter(
     source_name: &TableReference,
     target_name: &TableReference,
     placeholders: &mut Vec<PredicatePlaceholder>,
-    streaming_source: bool,
+    with_placeholders: bool,
 ) -> Option<Expr> {
     match predicate {
         Expr::BinaryExpr(binary) => {
-            if !streaming_source {
+            if with_placeholders {
                 if references_table(&binary.right, source_name).has_reference() {
                     if let ReferenceTableCheck::HasReference(left_target) =
                         references_table(&binary.left, target_name)
@@ -222,7 +223,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             );
             let right = generalize_filter(
                 *binary.right,
@@ -230,7 +231,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             );
 
             match (left, right) {
@@ -262,7 +263,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             )?;
 
             let mut list_expr = Vec::new();
@@ -277,7 +278,7 @@ pub(crate) fn generalize_filter(
                             source_name,
                             target_name,
                             placeholders,
-                            streaming_source,
+                            with_placeholders,
                         ) {
                             list_expr.push(item)
                         }
@@ -297,7 +298,7 @@ pub(crate) fn generalize_filter(
         }
         other => match references_table(&other, source_name) {
             ReferenceTableCheck::HasReference(col) => {
-                if !streaming_source {
+                if with_placeholders {
                     let placeholder_name = format!("{col}_{}", placeholders.len());
 
                     let placeholder = Expr::Placeholder(Placeholder {
@@ -341,7 +342,7 @@ pub(crate) async fn try_construct_early_filter(
         source_name,
         target_name,
         &mut placeholders,
-        streaming_source,
+        !streaming_source,
     ) {
         None => Ok(None),
         Some(filter) => {
@@ -350,49 +351,65 @@ pub(crate) async fn try_construct_early_filter(
                 Ok(Some(filter))
             } else {
                 // if we have some filters, which depend on the source df, then collect the placeholders values from the source data
-                // We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
-                // Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
-                let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
-                    if p.is_aggregate {
-                        Left(p.expr.alias(p.alias))
-                    } else {
-                        Right(p.expr.alias(p.alias))
-                    }
-                });
-                let distinct_partitions = LogicalPlan::Aggregate(Aggregate::try_new(
-                    source.clone().into(),
-                    group_columns,
-                    agg_columns,
-                )?);
-                let execution_plan = session_state
-                    .create_physical_plan(&distinct_partitions)
-                    .await?;
+                let aggregate = placeholder_aggregate(source.clone(), placeholders)?;
+                let execution_plan = session_state.create_physical_plan(&aggregate).await?;
                 let items = execute_plan_to_batch(session_state, execution_plan).await?;
-                let placeholder_names = items
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().to_owned())
-                    .collect_vec();
-                let expr = (0..items.num_rows())
-                    .map(|i| {
-                        let replacements = placeholder_names
-                            .iter()
-                            .map(|placeholder| {
-                                let col = items.column_by_name(placeholder).unwrap();
-                                let value = ScalarValue::try_from_array(col, i)?;
-                                Ok((placeholder.clone(), value))
-                            })
-                            .try_collect::<_, _, DeltaTableError>()?;
-                        Ok(replace_placeholders(filter.clone(), &replacements))
-                    })
-                    .collect::<DeltaResult<Vec<_>>>()?
-                    .into_iter()
-                    .reduce(Expr::or);
-                Ok(expr)
+                filter_from_placeholder_values(&filter, &items)
             }
         }
     }
+}
+
+/// Aggregate the placeholder values of an early filter from the source.
+///
+/// We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
+/// Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
+fn placeholder_aggregate(
+    source: LogicalPlan,
+    placeholders: Vec<PredicatePlaceholder>,
+) -> DeltaResult<LogicalPlan> {
+    let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
+        if p.is_aggregate {
+            Left(p.expr.alias(p.alias))
+        } else {
+            Right(p.expr.alias(p.alias))
+        }
+    });
+    Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+        source.into(),
+        group_columns,
+        agg_columns,
+    )?))
+}
+
+/// Replace the placeholders of `filter` with the values of each row of `items`, and combine the
+/// rows with `OR`. Returns `None` when `items` has no rows.
+pub(crate) fn filter_from_placeholder_values(
+    filter: &Expr,
+    items: &RecordBatch,
+) -> DeltaResult<Option<Expr>> {
+    let placeholder_names = items
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_owned())
+        .collect_vec();
+    let expr = (0..items.num_rows())
+        .map(|i| {
+            let replacements = placeholder_names
+                .iter()
+                .map(|placeholder| {
+                    let col = items.column_by_name(placeholder).unwrap();
+                    let value = ScalarValue::try_from_array(col, i)?;
+                    Ok((placeholder.clone(), value))
+                })
+                .try_collect::<_, _, DeltaTableError>()?;
+            Ok(replace_placeholders(filter.clone(), &replacements))
+        })
+        .collect::<DeltaResult<Vec<_>>>()?
+        .into_iter()
+        .reduce(Expr::or);
+    Ok(expr)
 }
 
 async fn execute_plan_to_batch(

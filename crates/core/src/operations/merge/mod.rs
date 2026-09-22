@@ -998,16 +998,10 @@ async fn execute(
     .transpose()?;
 
     // Predicate will be used for conflict detection
-    let commit_predicate = match target_subset_filter.clone() {
-        None => None, // No predicate means it's a full table merge
-        Some(some_filter) => {
-            let predict_expr = match &target_alias {
-                None => some_filter,
-                Some(alias) => remove_table_alias(some_filter, alias),
-            };
-            Some(fmt_expr_to_sql(&predict_expr)?)
-        }
-    };
+    let commit_predicate = target_subset_filter
+        .clone()
+        .map(|filter| commit_predicate_sql(filter, target_alias.as_deref()))
+        .transpose()?;
 
     debug!("Using target subset filter: {commit_predicate:?}");
 
@@ -1782,6 +1776,15 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     })
     .unwrap()
     .data
+}
+
+/// The predicate recorded in the commit for conflict detection.
+fn commit_predicate_sql(filter: Expr, target_alias: Option<&str>) -> DeltaResult<String> {
+    let filter = match target_alias {
+        None => filter,
+        Some(alias) => remove_table_alias(filter, alias),
+    };
+    fmt_expr_to_sql(&filter)
 }
 
 fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
@@ -5593,7 +5596,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5626,7 +5629,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5671,7 +5674,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5711,7 +5714,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5742,7 +5745,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
         let expected_filter_l = Expr::Placeholder(Placeholder {
@@ -5776,7 +5779,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
