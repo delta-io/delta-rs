@@ -30,7 +30,6 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::execution::context::{SessionContext, SessionState};
-use delta_kernel::engine::arrow_conversion::TryIntoArrow as _;
 use delta_kernel::expressions::Scalar;
 use delta_kernel::table_features::ColumnMappingMode;
 use delta_kernel::table_properties::DataSkippingNumIndexedCols;
@@ -50,7 +49,7 @@ use uuid::Uuid;
 use super::{CustomExecuteHandler, Operation};
 use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig, UploadBudget};
 use crate::delta_datafusion::{
-    DataFusionMixins, DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
+    DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
 };
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
@@ -566,6 +565,8 @@ pub struct MergePlan {
     read_table_version: Version,
     /// Session state used for provider owned rewrite scans.
     read_session: Arc<SessionState>,
+    /// Scan config for the rewrite scans, derived from `read_session`.
+    scan_config: DeltaScanConfig,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -626,21 +627,18 @@ struct SelectedFileScanFactory {
 }
 
 impl SelectedFileScanFactory {
-    fn try_new(
+    fn new(
         snapshot: &EagerSnapshot,
         log_store: LogStoreRef,
-        session: &dyn Session,
+        scan_config: DeltaScanConfig,
         read_operation_id: Option<Uuid>,
-    ) -> Result<Self, DeltaTableError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             snapshot: snapshot.clone(),
             log_store,
-            // Mirror the caller's DataFusion session flags so rewrite scans keep
-            // the same parquet/view type behavior as the rest of optimize.
-            scan_config: DeltaScanConfig::new_from_session(session)
-                .with_schema(snapshot.input_schema()),
+            scan_config,
             read_operation_id,
-        })
+        }
     }
 
     fn provider_for(
@@ -844,12 +842,12 @@ impl MergePlan {
                 let read_context = Arc::new(SessionContext::new_with_state(
                     read_session.as_ref().clone(),
                 ));
-                let scan_factory = SelectedFileScanFactory::try_new(
+                let scan_factory = SelectedFileScanFactory::new(
                     snapshot,
                     log_store.clone(),
-                    read_session.as_ref(),
+                    self.scan_config.clone(),
                     Some(operation_id),
-                )?;
+                );
                 let task_parameters = self.task_parameters.clone();
 
                 futures::stream::iter(bins)
@@ -897,12 +895,12 @@ impl MergePlan {
                     object_store,
                 )?);
                 let task_parameters = self.task_parameters.clone();
-                let scan_factory = SelectedFileScanFactory::try_new(
+                let scan_factory = SelectedFileScanFactory::new(
                     snapshot,
                     log_store.clone(),
-                    read_session.as_ref(),
+                    self.scan_config.clone(),
                     Some(operation_id),
-                )?;
+                );
 
                 // For each rewrite evaluate the predicate and then modify each expression
                 // to either compute the new value or obtain the old one then write these batches
@@ -1063,8 +1061,10 @@ pub async fn create_merge_plan(
         target_size,
         predicate: serde_json::to_string(&rendered_filters).ok(),
     };
+    // Write the types the rewrite scan produces (e.g. view types), so batches need no cast
+    let scan_config = DeltaScanConfig::new_from_session(&session);
     let file_schema = arrow_schema_without_partitions(
-        &Arc::new(snapshot.schema().as_ref().try_into_arrow()?),
+        &scan_config.table_schema(snapshot.table_configuration())?,
         partitions_keys,
     );
 
@@ -1086,6 +1086,7 @@ pub async fn create_merge_plan(
         }),
         read_table_version: snapshot.version(),
         read_session: Arc::new(session),
+        scan_config,
     })
 }
 
