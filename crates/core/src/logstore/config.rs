@@ -147,12 +147,15 @@ impl StorageConfig {
         {
             use std::sync::Arc;
             use super::storage::cache::CachingObjectStore;
-            let prefixed: Box<dyn ObjectStore> = Self::decorate_prefix(store.clone(), table_root)?;
-            let arc: Arc<dyn ObjectStore> = Arc::from(prefixed);
-            if let Some(caching) = CachingObjectStore::from_env(arc) {
-                return Ok(Box::new(caching));
+            // Attempt to build the cache first (cheap env-var read).
+            // Only construct the prefixed store if we're actually going to use it,
+            // avoiding a redundant call when the feature is compiled in but disabled.
+            if let Some(cache_store) = CachingObjectStore::from_env_with_inner(|| {
+                Self::decorate_prefix(store.clone(), table_root)
+                    .map(|b| Arc::from(b))
+            }) {
+                return Ok(Box::new(cache_store));
             }
-            // env var absent -- fall through and rebuild the prefix store
         }
         Ok(Self::decorate_prefix(store, table_root)?)
     }
