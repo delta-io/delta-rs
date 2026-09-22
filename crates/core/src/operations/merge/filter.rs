@@ -4,16 +4,26 @@ use std::sync::Arc;
 
 use arrow::compute::concat_batches;
 use arrow::record_batch::RecordBatch;
+use arrow_schema::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::catalog::streaming::StreamingTable;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{ScalarValue, TableReference};
+use datafusion::common::{ScalarValue, TableReference, exec_err};
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
+use datafusion::logical_expr::{
+    Aggregate, Between, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, lit,
+};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 use either::{Left, Right};
-use futures::TryStreamExt as _;
+use futures::channel::mpsc;
+use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools;
+use parking_lot::Mutex;
 
 use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, DeltaTableError};
@@ -410,6 +420,99 @@ pub(crate) fn filter_from_placeholder_values(
         .into_iter()
         .reduce(Expr::or);
     Ok(expr)
+}
+
+/// Batches in flight between a streaming source and the aggregation of its placeholder values.
+const STREAMING_FILTER_BUFFER: usize = 4;
+
+/// The early filter of a MERGE with a source that can only be read once.
+///
+/// The placeholder values are aggregated from the batches sent to `batch_sender` while the join
+/// reads the source, see [`super::source_stats`].
+pub(crate) struct StreamingEarlyFilter {
+    /// Early filter with placeholders for the source values, see [`generalize_filter`]
+    pub filter: Expr,
+    /// Aggregates the placeholder values from the batches sent to `batch_sender`
+    pub aggregate: Arc<dyn ExecutionPlan>,
+    pub batch_sender: mpsc::Sender<RecordBatch>,
+}
+
+/// Plan the early filter for a source that can only be read once.
+///
+/// Returns `None` when the filter does not depend on source values. The static part of the
+/// filter is then returned by [`try_construct_early_filter`].
+pub(crate) async fn try_construct_streaming_early_filter(
+    join_predicate: Expr,
+    table_snapshot: &EagerSnapshot,
+    session_state: &dyn Session,
+    source: &LogicalPlan,
+    source_name: &TableReference,
+    target_name: &TableReference,
+) -> DeltaResult<Option<StreamingEarlyFilter>> {
+    let partition_columns = table_snapshot.metadata().partition_columns();
+    let mut placeholders = Vec::default();
+    let Some(filter) = generalize_filter(
+        join_predicate,
+        &partition_columns.to_vec(),
+        source_name,
+        target_name,
+        &mut placeholders,
+        true,
+    ) else {
+        return Ok(None);
+    };
+    if placeholders.is_empty() {
+        return Ok(None);
+    }
+
+    let schema = Arc::new(source.schema().as_arrow().clone());
+    let (batch_sender, receiver) = mpsc::channel(STREAMING_FILTER_BUFFER);
+    let input = StreamingTable::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(ReceiverPartition {
+            schema,
+            receiver: Mutex::new(Some(receiver)),
+        })],
+    )?;
+    let input = LogicalPlanBuilder::scan(
+        source_name.clone(),
+        provider_as_source(Arc::new(input)),
+        None,
+    )?
+    .build()?;
+    let aggregate = placeholder_aggregate(input, placeholders)?;
+    let aggregate = session_state.create_physical_plan(&aggregate).await?;
+    Ok(Some(StreamingEarlyFilter {
+        filter,
+        aggregate,
+        batch_sender,
+    }))
+}
+
+/// Yields the batches sent to a channel. It can be executed once.
+#[derive(Debug)]
+struct ReceiverPartition {
+    schema: SchemaRef,
+    receiver: Mutex<Option<mpsc::Receiver<RecordBatch>>>,
+}
+
+impl PartitionStream for ReceiverPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        match self.receiver.lock().take() {
+            Some(receiver) => Box::pin(RecordBatchStreamAdapter::new(schema, receiver.map(Ok))),
+            None => Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::once(async {
+                    exec_err!("MERGE source batches can only be read once")
+                }),
+            )),
+        }
+    }
 }
 
 async fn execute_plan_to_batch(
