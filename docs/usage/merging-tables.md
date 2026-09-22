@@ -584,8 +584,10 @@ When your table is partitioned, including partition columns in your merge predic
 ```
 
 As you can see, your filter should specify the partition column(s) and the value(s) you want to target during the merge operation.
-This is especially important when using the default argument `streamed_exec=True` in the `merge` method which disables the use of source table statistics to derive an early pruning predicate.
-Without these statistics, explicit predicates in your merge condition are required for file pruning.
+The `merge` method also derives a pruning predicate from the source data: the partition values and the minimum and maximum of the join keys.
+With the default argument `streamed_exec=True`, the source is read only once, and this predicate is built while the source is read.
+It then skips the target files that cannot match before they are read.
+Explicit predicates in your merge condition prune files before the merge starts, so they still help, for example when the source covers a wide range of keys.
 
 #### 2. Add Additional Filter Columns to Predicates
 
