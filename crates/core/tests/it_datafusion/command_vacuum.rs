@@ -1,4 +1,4 @@
-use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StructArray};
+use arrow_array::{ArrayRef, BinaryArray, Int64Array, RecordBatch, StringArray, StructArray};
 use arrow_schema::{DataType as ArrowDataType, Field as ArrowField};
 use chrono::Duration;
 use deltalake_core::DeltaTable;
@@ -296,31 +296,44 @@ async fn test_non_managed_files() {
     }
 }
 
-/// `payload` has no leaf that is eligible for min/max statistics. Earlier versions kept it as an
-/// empty struct in the parsed stats schema, which produced zero-length struct arrays. Filtering
-/// such a batch during log replay panicked in `StructArray::slice`. See delta-io/delta-rs#3237.
+/// `payload` has no leaf that is eligible for min/max statistics, so it must not reach the parsed
+/// stats schema as an empty struct. Such a struct used to shrink to zero rows the first time log
+/// replay filtered a batch partially, and the next commit then panicked in `StructArray::slice`.
+/// The partial filter needs one commit that adds several files and a later commit that removes
+/// only some of them. See delta-io/delta-rs#3237.
 #[tokio::test]
 async fn test_vacuum_struct_column_without_min_max_eligible_leaves() -> TestResult {
-    let payload: ArrayRef = Arc::new(StructArray::from(vec![(
-        Arc::new(ArrowField::new("data", ArrowDataType::Binary, true)),
-        Arc::new(BinaryArray::from_vec(vec![b"a", b"bb"])) as ArrayRef,
-    )]));
-    let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef),
-        ("payload", payload),
-    ])?;
+    fn batch(ids: Vec<i64>, parts: Vec<&str>) -> RecordBatch {
+        let payload: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(ArrowField::new("data", ArrowDataType::Binary, true)),
+            Arc::new(BinaryArray::from_vec(vec![b"x"; ids.len()])) as ArrayRef,
+        )]));
+        RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(Int64Array::from(ids)) as ArrayRef),
+            ("part", Arc::new(StringArray::from(parts)) as ArrayRef),
+            ("payload", payload),
+        ])
+        .unwrap()
+    }
 
     let table = DeltaTable::new_in_memory()
-        .write(vec![batch.clone()])
+        .write(vec![batch(vec![1, 2, 3], vec!["a", "b", "c"])])
+        .with_partition_columns(["part"])
         .await?;
-    // The overwrite tombstones the first file, so vacuum has something to delete.
-    let table = table
-        .write(vec![batch])
-        .with_save_mode(SaveMode::Overwrite)
-        .await?;
+    // Tombstone one of the three files, so the next replay filters that batch partially.
+    let (table, _metrics) = table.delete().with_predicate("part = 'a'").await?;
+    let table = table.write(vec![batch(vec![4], vec!["d"])]).await?;
 
-    // Materializing the parsed statistics must not panic.
-    table.snapshot()?.add_actions_table(true)?;
+    // Parsed statistics must carry `id` only, with no empty `payload` struct.
+    let add_actions = table.snapshot()?.add_actions_table(true)?;
+    let add_actions_schema = add_actions.schema();
+    let columns = add_actions_schema.fields();
+    assert!(columns.iter().any(|field| field.name() == "min.id"));
+    assert!(
+        !columns
+            .iter()
+            .any(|field| field.name().starts_with("min.payload"))
+    );
 
     let (_table, metrics) = table
         .vacuum()
