@@ -72,6 +72,7 @@ pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{DataValidationExec, constraints_to_exprs, validation_predicates};
 pub(crate) use find_files::*;
+pub(crate) use table_provider::next::RuntimeFileFilter;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
     DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
