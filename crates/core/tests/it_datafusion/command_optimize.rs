@@ -6,9 +6,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{
+    ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StringViewArray, UInt32Array,
+};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
+use arrow_select::take::take;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
@@ -1912,7 +1915,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
         vec![
             Arc::new(Int32Array::from(vec![1, 2, 1, 1, 1, 2])),
             Arc::new(Int32Array::from(vec![1, 1, 2, 2, 2, 2])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringViewArray::from(vec![
                 "1970-01-01",
                 "1970-01-04",
                 "1970-01-01",
@@ -2268,11 +2271,32 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
         .column_by_name("int_id")
         .unwrap()
         .as_any()
-        .downcast_ref::<arrow_array::StringArray>()
+        .downcast_ref::<arrow_array::StringViewArray>()
         .unwrap();
     let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
     actual.sort_unstable();
     assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
+
+    Ok(())
+}
+
+/// Issue <https://github.com/delta-io/delta-rs/issues/3790>: one 8192-row scan batch holds
+/// ~2.2 GB of strings, which overflowed i32 offsets when optimize cast it from Utf8View to Utf8.
+#[tokio::test]
+async fn test_zorder_batch_with_more_than_2gib_of_strings() -> Result<(), Box<dyn Error>> {
+    // 8500 views of one 268,435 byte string, so the ~2.3 GB is never materialized.
+    let value = StringViewArray::from(vec!["a".repeat(268_435)]);
+    let values = take(&value, &UInt32Array::from(vec![0; 8500]), None)?;
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8500));
+    let batch = RecordBatch::try_from_iter([("id", ids), ("value", values)])?;
+    let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+    let (_, metrics) = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["id".to_string()]))
+        .await?;
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 1);
 
     Ok(())
 }
