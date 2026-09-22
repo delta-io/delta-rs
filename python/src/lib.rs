@@ -1406,8 +1406,9 @@ impl RawDeltaTable {
         rt().block_on(async {
             match self._table.lock() {
                 Ok(table) => {
-                    let history = table
+                    let history: Vec<deltalake::kernel::models::CommitInfo> = table
                         .history(limit)
+                        .try_collect()
                         .await
                         .map_err(PythonError::from)
                         .map_err(PyErr::from)?;
@@ -1420,6 +1421,7 @@ impl RawDeltaTable {
                         )
                     })?;
                     let commits = history
+                        .into_iter()
                         .map(|c| serde_json::to_string(&c).unwrap())
                         .collect();
                     Ok((version, commits))

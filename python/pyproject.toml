@@ -117,7 +117,6 @@ pyspark = [
     "delta-spark",
     "numpy==1.26.4", # pyspark is not compatible with latest numpy
 ]
-docs = ["sphinx<=4.5", "sphinx-rtd-theme"]
 other = [
     "azure-storage-blob==12.20.0",
     "packaging>=20",
@@ -128,4 +127,4 @@ other = [
 
 [tool.uv]
 # Re-enable a Python DataFusion dependency group once DataFusion 55 wheels are published.
-default-groups = ["dev", "opentelemetry", "polars", "lakefs", "docs", "other"]
+default-groups = ["dev", "opentelemetry", "polars", "lakefs", "other"]

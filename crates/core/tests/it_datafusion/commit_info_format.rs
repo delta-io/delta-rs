@@ -5,6 +5,7 @@ use deltalake_core::crate_version;
 use deltalake_core::kernel::Action;
 use deltalake_core::kernel::transaction::CommitBuilder;
 use deltalake_core::protocol::{DeltaOperation, SaveMode};
+use futures::TryStreamExt;
 use serde_json::json;
 use std::error::Error;
 
@@ -27,8 +28,8 @@ async fn test_commit_info_engine_info() -> Result<(), Box<dyn Error>> {
         .await?;
     table.update_state().await?;
 
-    let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
-    let last_commit = &commit_info[0];
+    let commit_info: Vec<_> = table.history(Some(1)).try_collect().await?;
+    let last_commit = commit_info.first().unwrap();
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["mode"], json!("Append"));
     assert_eq!(parameters["partitionBy"], json!("[\"some_partition\"]"));

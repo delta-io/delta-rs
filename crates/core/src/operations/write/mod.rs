@@ -674,7 +674,7 @@ mod tests {
     use serde_json::{Value, json};
 
     async fn get_write_metrics(table: &DeltaTable) -> WriteMetrics {
-        let mut commit_info: Vec<_> = table.history(Some(1)).await.unwrap().collect();
+        let mut commit_info: Vec<_> = table.history(Some(1)).try_collect().await.unwrap();
         let metrics = commit_info
             .first_mut()
             .unwrap()
@@ -836,7 +836,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(
             history[0]
@@ -865,7 +865,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(
             history[0]
@@ -894,7 +894,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 4);
         assert_eq!(
             history[0]
@@ -1546,7 +1546,7 @@ mod tests {
                 .all(|remove| remove.deletion_timestamp.is_some())
         );
 
-        let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
+        let commit_info: Vec<_> = table.history(Some(1)).try_collect().await?;
         let operation_parameters = commit_info[0].operation_parameters.as_ref().unwrap();
         assert_eq!(operation_parameters["partitionBy"], json!("[\"id\"]"));
 

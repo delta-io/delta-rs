@@ -37,6 +37,7 @@ use deltalake_core::{
     DeltaTable, DeltaTableError, ensure_table_uri, open_table, operations::write::WriteBuilder,
 };
 use deltalake_test::utils::*;
+use futures::TryStreamExt;
 use serial_test::serial;
 use url::Url;
 
@@ -2415,7 +2416,7 @@ mod insert_into_tests {
         assert_eq!(partition_columns.len(), 1);
         assert_eq!(partition_columns[0], "part");
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 
@@ -2556,7 +2557,7 @@ mod insert_into_tests {
 
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(2));
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
 
         assert_eq!(history.len(), 3); // CREATE + 2 INSERTTs
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2662,7 +2663,7 @@ mod insert_into_tests {
 
         assert_eq!(final_table.version(), Some(1)); // CREATE + OVERWRITE = version 1 (the initial append might not commit separately)
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + OVERWRITE
 
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
@@ -2775,7 +2776,7 @@ mod insert_into_tests {
         let final_table = deltalake_core::open_table(url::Url::parse(&table_uri)?).await?;
         assert_eq!(final_table.version(), Some(1)); // CREATE + SQL INSERT = version 1
 
-        let history: Vec<_> = final_table.history(None).await?.collect();
+        let history: Vec<_> = final_table.history(None).try_collect().await?;
         assert_eq!(history.len(), 2); // CREATE + SQL INSERT
         assert_eq!(history[0].operation.as_ref().unwrap(), "WRITE");
 

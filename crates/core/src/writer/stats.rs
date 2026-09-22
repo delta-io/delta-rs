@@ -335,7 +335,12 @@ impl StatsScalar {
                 }
             }
             (Statistics::Int64(v), Some(LogicalType::Decimal(decimal_type))) => {
-                let val = get_stat!(v) as f64 / 10.0_f64.powi(decimal_type.scale);
+                let val = get_stat!(v);
+                if decimal_type.scale == 0 {
+                    // Preserve exact integer bounds instead of rounding through f64.
+                    return Ok(Self::Int64(val));
+                }
+                let val = val as f64 / 10.0_f64.powi(decimal_type.scale);
                 // Spark serializes these as numbers
                 Ok(Self::Decimal {
                     value: val,
@@ -934,6 +939,118 @@ mod tests {
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
+    }
+
+    #[test]
+    fn test_int64_decimal_min_stat_respects_precision() {
+        // A decimal(18, 0) column whose true minimum is the largest value the
+        // precision allows. Converting to f64 rounds 999999999999999999 up to
+        // 1e18, which serializes to a 19 digit minValue that is greater than the
+        // true minimum and would let a reader skip a file that does match.
+        let stats = simple_parquet_stat!(Statistics::Int64, 999999999999999999i64);
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+
+        let scalar = StatsScalar::try_from_stats(&stats, Some(&logical_type), true).unwrap();
+        let min_value = serde_json::Value::from(scalar);
+        let min = min_value.as_i64().unwrap();
+
+        assert!(
+            min <= 999999999999999999,
+            "minValue {min} is greater than the true minimum 999999999999999999"
+        );
+    }
+
+    #[test]
+    fn test_int64_decimal_zero_scale_bounds_are_exact() {
+        let logical_type = LogicalType::Decimal(DecimalType {
+            scale: 0,
+            precision: 18,
+        });
+        for value in [
+            -999_999_999_999_999_999_i64,
+            -9_007_199_254_740_993,
+            -9_007_199_254_740_991,
+            -1234,
+            0,
+            1234,
+            9_007_199_254_740_991,
+            9_007_199_254_740_993,
+            999_999_999_999_999_999,
+        ] {
+            let stats = simple_parquet_stat!(Statistics::Int64, value);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(
+                    serde_json::Value::from(scalar),
+                    serde_json::Value::from(value),
+                    "value={value}, use_min={use_min}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_int64_decimal_nonzero_scale_stats() {
+        for (scale, expected) in [(3, json!(1.234)), (-1, json!(12340.0))] {
+            let logical_type = LogicalType::Decimal(DecimalType {
+                scale,
+                precision: 4,
+            });
+            let stats = simple_parquet_stat!(Statistics::Int64, 1234);
+            for use_min in [true, false] {
+                let scalar =
+                    StatsScalar::try_from_stats(&stats, Some(&logical_type), use_min).unwrap();
+                assert_eq!(serde_json::Value::from(scalar), expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_int64_decimal_zero_scale_add_stats() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "amount", "type": "decimal(18,0)", "nullable": true, "metadata": {} }
+            ]
+        });
+        create_temp_table_with_schema(temp_dir.path(), &schema);
+        let table_uri = Url::from_directory_path(temp_dir.path()).unwrap();
+        let table = load_table(&table_uri, HashMap::new()).await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table)
+            .unwrap()
+            .with_writer_properties(
+                WriterProperties::builder()
+                    .set_max_row_group_row_count(Some(1))
+                    .build(),
+            );
+        let values = arrow_array::Decimal128Array::from(vec![
+            9_007_199_254_740_993,
+            -999_999_999_999_999_999,
+            999_999_999_999_999_999,
+            -9_007_199_254_740_993,
+        ])
+        .with_precision_and_scale(18, 0)
+        .unwrap();
+        let batch =
+            arrow_array::RecordBatch::try_new(writer.arrow_schema(), vec![Arc::new(values)])
+                .unwrap();
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+        let stats = adds[0].get_stats().unwrap().unwrap();
+        assert_eq!(
+            stats.min_values["amount"].as_value().unwrap().as_i64(),
+            Some(-999_999_999_999_999_999)
+        );
+        assert_eq!(
+            stats.max_values["amount"].as_value().unwrap().as_i64(),
+            Some(999_999_999_999_999_999)
+        );
     }
 
     #[tokio::test]
