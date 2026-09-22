@@ -271,7 +271,8 @@ class DeltaTable:
 
     @staticmethod
     def is_deltatable(
-        table_uri: str, storage_options: dict[str, str] | None = None
+        table_uri: str | Path | os.PathLike[str],
+        storage_options: dict[str, str] | None = None,
     ) -> bool:
         """
         Returns True if a Delta Table exists at specified path.
@@ -282,7 +283,7 @@ class DeltaTable:
             storage_options: a dictionary of the options to use for the
                 storage backend
         """
-        return RawDeltaTable.is_deltatable(table_uri, storage_options)
+        return RawDeltaTable.is_deltatable(str(table_uri), storage_options)
 
     @classmethod
     def create(
