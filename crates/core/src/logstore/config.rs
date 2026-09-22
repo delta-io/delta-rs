@@ -143,8 +143,18 @@ impl StorageConfig {
         store: T,
         table_root: &url::Url,
     ) -> DeltaResult<Box<dyn ObjectStore>> {
-        let inner = Self::decorate_prefix(store, table_root)?;
-        Ok(inner)
+        #[cfg(feature = "delta-cache")]
+        {
+            use std::sync::Arc;
+            use super::storage::cache::CachingObjectStore;
+            let prefixed: Box<dyn ObjectStore> = Self::decorate_prefix(store.clone(), table_root)?;
+            let arc: Arc<dyn ObjectStore> = Arc::from(prefixed);
+            if let Some(caching) = CachingObjectStore::from_env(arc) {
+                return Ok(Box::new(caching));
+            }
+            // env var absent -- fall through and rebuild the prefix store
+        }
+        Ok(Self::decorate_prefix(store, table_root)?)
     }
 
     pub(crate) fn decorate_prefix<T: ObjectStore>(
