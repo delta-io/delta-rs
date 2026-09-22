@@ -2475,8 +2475,9 @@ class TableOptimizer:
         """
         Compacts small files to reduce read overhead.
 
-        This operation is idempotent; if run twice on the same table (assuming it has
-        not been updated) it will do nothing the second time.
+        This operation is eventually idempotent; repeated runs on an unchanged table
+        converge to a stable layout, but a rewritten file that lands under the target
+        size can still be merged again by a later run.
 
         Compaction keeps file order within each partition.
 
