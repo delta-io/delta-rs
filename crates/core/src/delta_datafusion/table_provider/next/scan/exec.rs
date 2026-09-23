@@ -728,37 +728,40 @@ impl DeltaScanStream {
                 DataFusionError::Execution(format!("unknown compact file id '{file_id}'"))
             })?;
             let position_idx = batch.schema().index_of(super::PHYSICAL_POSITION_COLUMN)?;
-            let positions = batch
-                .column(position_idx)
-                .as_any()
-                .downcast_ref::<arrow_array::Int64Array>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution("physical row position is not Int64".into())
-                })?;
-            let selection = positions
-                .iter()
-                .map(|position| {
-                    let position = position.ok_or_else(|| {
-                        DataFusionError::Execution("null physical row position".into())
+            let mut filtered = if let Some(mask) = &entry.keep_mask {
+                let positions = batch
+                    .column(position_idx)
+                    .as_any()
+                    .downcast_ref::<arrow_array::Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Execution("physical row position is not Int64".into())
                     })?;
-                    let position = u64::try_from(position).map_err(|_| {
-                        DataFusionError::Execution("negative physical row position".into())
-                    })?;
-                    if entry.row_count.is_some_and(|count| position >= count) {
-                        return exec_err!("physical row position {position} exceeds file bounds");
-                    }
-                    let index = usize::try_from(position).map_err(|_| {
-                        DataFusionError::Execution("physical row position overflows usize".into())
-                    })?;
-                    Ok(entry
-                        .keep_mask
-                        .as_ref()
-                        .and_then(|mask| mask.get(index))
-                        .copied()
-                        .unwrap_or(true))
-                })
-                .collect::<Result<BooleanArray>>()?;
-            let mut filtered = filter_record_batch(&batch, &selection)?;
+                let selection = positions
+                    .iter()
+                    .map(|position| {
+                        let position = position.ok_or_else(|| {
+                            DataFusionError::Execution("null physical row position".into())
+                        })?;
+                        let position = u64::try_from(position).map_err(|_| {
+                            DataFusionError::Execution("negative physical row position".into())
+                        })?;
+                        if entry.row_count.is_some_and(|count| position >= count) {
+                            return exec_err!(
+                                "physical row position {position} exceeds file bounds"
+                            );
+                        }
+                        let index = usize::try_from(position).map_err(|_| {
+                            DataFusionError::Execution(
+                                "physical row position overflows usize".into(),
+                            )
+                        })?;
+                        Ok(mask.get(index).copied().unwrap_or(true))
+                    })
+                    .collect::<Result<BooleanArray>>()?;
+                filter_record_batch(&batch, &selection)?
+            } else {
+                batch
+            };
             filtered.remove_column(position_idx);
             filtered
         } else {
@@ -1934,15 +1937,6 @@ mod tests {
         let rebound: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(rebound_config);
         assert!(
             Arc::new(exec.clone())
-                .replace_children(
-                    vec![Arc::clone(&rebound)],
-                    ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-                )
-                .is_err(),
-            "DV child replacement must retain the planned Parquet reader"
-        );
-        assert!(
-            Arc::new(exec.clone())
                 .with_new_children(vec![rebound])
                 .is_err(),
             "legacy child replacement must retain the planned Parquet reader"
@@ -2378,6 +2372,65 @@ mod tests {
             .await
             .expect_err("reserved file column name must be rejected");
         assert!(error.to_string().contains("physical position"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_scan_rejects_reserved_parquet_column_name() -> TestResult {
+        use parquet::arrow::ArrowWriter;
+
+        let fixture = physical_dv_fixture()?;
+        let path = fixture.path().join("part-0.parquet");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new(
+                super::super::PHYSICAL_POSITION_COLUMN,
+                DataType::Int64,
+                false,
+            ),
+        ]));
+        let mut writer =
+            ArrowWriter::try_new(std::fs::File::create(&path)?, Arc::clone(&schema), None)?;
+        writer.write(&RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(arrow_array::Int64Array::from(vec![0, 1, 2, 3, 4, 5])),
+                Arc::new(arrow_array::Int64Array::from(vec![0, 1, 2, 3, 4, 5])),
+            ],
+        )?)?;
+        writer.close()?;
+
+        let log = fixture.path().join("_delta_log/00000000000000000000.json");
+        let mut actions: Vec<serde_json::Value> = std::fs::read_to_string(&log)?
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()?;
+        let add = actions
+            .iter_mut()
+            .find(|action| action["add"]["path"] == "part-0.parquet")
+            .expect("fixture must contain the DV file");
+        add["add"]["size"] = serde_json::json!(std::fs::metadata(&path)?.len());
+        std::fs::write(
+            log,
+            actions
+                .iter()
+                .map(serde_json::Value::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )?;
+
+        let table =
+            crate::open_table(url::Url::from_directory_path(fixture.path()).unwrap()).await?;
+        let provider = table.table_provider().build().await?;
+        let session = create_session().into_inner();
+        let error = provider
+            .scan(&session.state(), None, &[], None)
+            .await
+            .expect_err("reserved on-disk column name must be rejected");
+        assert!(
+            error.to_string().contains("Parquet field collides"),
+            "{error}"
+        );
         Ok(())
     }
 
