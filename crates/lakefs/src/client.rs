@@ -1,19 +1,32 @@
 //! Slim HTTP client for the LakeFS branch, commit and merge API.
 
+use std::time::Duration;
+
 use deltalake_core::DeltaResult;
-use reqwest::Client;
-use reqwest::StatusCode;
+use object_store::RetryConfig;
+use reqwest::{Client, Response, StatusCode};
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::policies::{ExponentialBackoff, ExponentialBackoffTimed};
+use reqwest_retry::{RetryTransientMiddleware, Retryable, RetryableStrategy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tracing::debug;
 
 use crate::errors::LakeFSOperationError;
 
+/// Time allowed to open a connection to LakeFS.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Time allowed for one attempt of a request that is safe to repeat. Commits and merges have no
+/// limit: an attempt that is cut off can still complete in LakeFS.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, Clone)]
 pub struct LakeFSConfig {
     host: String,
     username: String,
     password: String,
+    retry: RetryConfig,
 }
 
 impl LakeFSConfig {
@@ -22,8 +35,26 @@ impl LakeFSConfig {
             host,
             username,
             password,
+            retry: RetryConfig::default(),
         }
     }
+
+    /// Retry limits and backoff of the API requests.
+    pub fn with_retry(mut self, retry: RetryConfig) -> Self {
+        self.retry = retry;
+        self
+    }
+}
+
+/// Who writes to the branch of a commit. This decides which failed commits are retried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchAccess {
+    /// Only the caller, as on a transaction branch. Retried after every transient failure.
+    /// "No changes" counts as committed: only an earlier attempt can have taken the staged changes.
+    Exclusive,
+    /// Other writers too, as on the source branch. Retried only when LakeFS did not process the
+    /// request, so a retry cannot commit files that other writers staged.
+    Shared,
 }
 
 /// Why a merge was rejected.
@@ -78,24 +109,83 @@ impl LakeFSLocation {
     }
 }
 
+/// Retries only failures where LakeFS did not process the request: connection errors, 429 and
+/// 503. Any other failure can come after LakeFS applied the request.
+struct RetryUnprocessed;
+
+impl RetryableStrategy for RetryUnprocessed {
+    fn handle(&self, res: &Result<Response, reqwest_middleware::Error>) -> Option<Retryable> {
+        match res {
+            Ok(response) => matches!(
+                response.status(),
+                StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+            )
+            .then_some(Retryable::Transient),
+            Err(reqwest_middleware::Error::Reqwest(err)) if err.is_connect() => {
+                Some(Retryable::Transient)
+            }
+            Err(_) => Some(Retryable::Fatal),
+        }
+    }
+}
+
+/// Backoff from the object store retry settings.
+fn backoff(retry: &RetryConfig) -> ExponentialBackoffTimed {
+    let backoff = &retry.backoff;
+    // retry-policies panics when min > max and takes a whole-number base.
+    ExponentialBackoff::builder()
+        .retry_bounds(
+            backoff.init_backoff.min(backoff.max_backoff),
+            backoff.max_backoff,
+        )
+        .base(backoff.base.round().max(1.0) as u32)
+        .build_with_total_retry_duration_and_max_retries(
+            retry.retry_timeout,
+            u32::try_from(retry.max_retries).unwrap_or(u32::MAX),
+        )
+}
+
 /// Slim LakeFS client for lakefs branch operations.
+///
+/// Requests that are safe to repeat are retried after every transient failure. Merges and commits
+/// on a shared branch are retried only when LakeFS did not process them.
 #[derive(Debug, Clone)]
 pub struct LakeFSClient {
     /// configuration of the lakefs client
     config: LakeFSConfig,
-    http_client: Client,
+    /// Retries connection errors, timeouts, 408, 429 and 5xx responses.
+    retry_transient: ClientWithMiddleware,
+    /// Retries with [`RetryUnprocessed`].
+    retry_unprocessed: ClientWithMiddleware,
 }
 
 impl LakeFSClient {
     pub fn with_config(config: LakeFSConfig) -> Self {
-        let http_client = Client::new();
+        // Fails only where `Client::new()` panics too.
+        let http_client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .build()
+            .expect("failed to build the LakeFS HTTP client");
+        let retry_transient = ClientBuilder::new(http_client.clone())
+            .with(RetryTransientMiddleware::new_with_policy(backoff(
+                &config.retry,
+            )))
+            .build();
+        let retry_unprocessed = ClientBuilder::new(http_client)
+            .with(RetryTransientMiddleware::new_with_policy_and_strategy(
+                backoff(&config.retry),
+                RetryUnprocessed,
+            ))
+            .build();
         Self {
             config,
-            http_client,
+            retry_transient,
+            retry_unprocessed,
         }
     }
 
-    /// Create the hidden branch `branch` from `source_branch`.
+    /// Create the hidden branch `branch` from `source_branch`. An existing branch counts as
+    /// created, because a retry can find the branch of an earlier attempt. Use unique names.
     pub async fn create_branch(
         &self,
         repo: &str,
@@ -113,16 +203,17 @@ impl LakeFSClient {
 
         debug!("Creating LakeFS branch `{branch}` from `{source_branch}` in repo `{repo}`");
         let response = self
-            .http_client
+            .retry_transient
             .post(&request_url)
             .json(&body)
             .basic_auth(&self.config.username, Some(&self.config.password))
+            .timeout(REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
 
         match response.status() {
-            StatusCode::CREATED => Ok(()),
+            StatusCode::CREATED | StatusCode::CONFLICT => Ok(()),
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
@@ -142,9 +233,10 @@ impl LakeFSClient {
         );
         debug!("Deleting LakeFS branch `{branch}` in repo `{repo}`");
         let response = self
-            .http_client
+            .retry_transient
             .delete(&request_url)
             .basic_auth(&self.config.username, Some(&self.config.password))
+            .timeout(REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
@@ -162,13 +254,14 @@ impl LakeFSClient {
         }
     }
 
-    /// Commit the staging area of `branch`.
+    /// Commit the staging area of `branch`. `access` decides the retries, see [`BranchAccess`].
     pub async fn commit(
         &self,
         repo: &str,
         branch: &str,
         commit_message: &str,
         allow_empty: bool,
+        access: BranchAccess,
     ) -> DeltaResult<()> {
         let request_url = format!(
             "{}/api/v1/repositories/{repo}/branches/{branch}/commits",
@@ -180,9 +273,12 @@ impl LakeFSClient {
             "allow_empty": allow_empty,
         });
 
+        let http_client = match access {
+            BranchAccess::Exclusive => &self.retry_transient,
+            BranchAccess::Shared => &self.retry_unprocessed,
+        };
         debug!("Committing to LakeFS Branch: '{branch}' in repo: '{repo}'");
-        let response = self
-            .http_client
+        let response = http_client
             .post(&request_url)
             .json(&body)
             .basic_auth(&self.config.username, Some(&self.config.password))
@@ -195,6 +291,13 @@ impl LakeFSClient {
             StatusCode::UNAUTHORIZED => Err(LakeFSOperationError::UnauthorizedAction.into()),
             status_code => {
                 let body = response.text().await.unwrap_or_default();
+                if access == BranchAccess::Exclusive
+                    && status_code == StatusCode::BAD_REQUEST
+                    && body.contains("no changes")
+                {
+                    debug!("Nothing staged on `{branch}`, an earlier attempt committed it");
+                    return Ok(());
+                }
                 Err(LakeFSOperationError::CommitFailed(format!(
                     "Unknown error occurred during branch commit. Response code was {status_code}, body: {body}"
                 ))
@@ -227,7 +330,7 @@ impl LakeFSClient {
             "Merging LakeFS, source `{source_ref}` into target `{target_branch}` in repo: {repo}"
         );
         let response = self
-            .http_client
+            .retry_unprocessed
             .post(&request_url)
             .json(&body)
             .basic_auth(&self.config.username, Some(&self.config.password))
@@ -277,9 +380,10 @@ impl LakeFSClient {
 
         debug!("Checking for changes from `{base_branch}` to `{compare_branch}` in repo: {repo}");
         let response = self
-            .http_client
+            .retry_transient
             .get(&request_url)
             .basic_auth(&self.config.username, Some(&self.config.password))
+            .timeout(REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
@@ -294,7 +398,7 @@ impl LakeFSClient {
                 let diff: DiffResponse = response
                     .json()
                     .await
-                    .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e })?;
+                    .map_err(|e| LakeFSOperationError::HttpRequestFailed { source: e.into() })?;
 
                 Ok(!diff.results.is_empty())
             }
@@ -311,17 +415,30 @@ impl LakeFSClient {
 }
 
 #[cfg(test)]
+impl LakeFSClient {
+    /// Client for a mock server: two retries without backoff.
+    pub(crate) fn for_tests(host: String) -> Self {
+        let retry = RetryConfig {
+            backoff: object_store::BackoffConfig {
+                init_backoff: Duration::ZERO,
+                max_backoff: Duration::ZERO,
+                base: 2.0,
+            },
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(30),
+        };
+        Self::with_config(LakeFSConfig::new(host, "user".into(), "pass".into()).with_retry(retry))
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use mockito;
     use reqwest::StatusCode;
 
     fn client(server: &mockito::ServerGuard) -> LakeFSClient {
-        LakeFSClient::with_config(LakeFSConfig::new(
-            server.url(),
-            "test_user".to_string(),
-            "test_pass".to_string(),
-        ))
+        LakeFSClient::for_tests(server.url())
     }
 
     #[tokio::test]
@@ -344,6 +461,57 @@ mod tests {
             .await
             .unwrap();
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_branch_retry_finds_the_branch_of_an_earlier_attempt() {
+        // The first attempt creates the branch but fails; the retry finds the branch.
+        let mut server = mockito::Server::new_async().await;
+        let failed = server
+            .mock("POST", "/api/v1/repositories/test_repo/branches")
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let exists = server
+            .mock("POST", "/api/v1/repositories/test_repo/branches")
+            .with_status(StatusCode::CONFLICT.as_u16().into())
+            .with_body(r#"{"message":"branch already exists: not unique"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        client(&server)
+            .create_branch("test_repo", "main", "delta-tx-1234")
+            .await
+            .unwrap();
+        failed.assert_async().await;
+        exists.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_branch_retries_transient_failures() {
+        let mut server = mockito::Server::new_async().await;
+        let path = "/api/v1/repositories/test_repo/branches/delta-tx-1234";
+        let failed = server
+            .mock("DELETE", path)
+            .with_status(StatusCode::BAD_GATEWAY.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let deleted = server
+            .mock("DELETE", path)
+            .with_status(StatusCode::NO_CONTENT.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+
+        client(&server)
+            .delete_branch("test_repo", "delta-tx-1234")
+            .await
+            .unwrap();
+        failed.assert_async().await;
+        deleted.assert_async().await;
     }
 
     #[tokio::test]
@@ -392,10 +560,111 @@ mod tests {
             .await;
 
         client(&server)
-            .commit("test_repo", "delta-tx-1234", "Test commit", false)
+            .commit(
+                "test_repo",
+                "delta-tx-1234",
+                "Test commit",
+                false,
+                BranchAccess::Exclusive,
+            )
             .await
             .unwrap();
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_on_an_exclusive_branch_counts_no_changes_as_committed() {
+        // The first attempt commits but fails; the retry finds nothing staged.
+        let mut server = mockito::Server::new_async().await;
+        let path = "/api/v1/repositories/test_repo/branches/delta-tx-1234/commits";
+        let failed = server
+            .mock("POST", path)
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let no_changes = server
+            .mock("POST", path)
+            .with_status(StatusCode::BAD_REQUEST.as_u16().into())
+            .with_body(r#"{"message":"commit: no changes"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        client(&server)
+            .commit(
+                "test_repo",
+                "delta-tx-1234",
+                "m",
+                false,
+                BranchAccess::Exclusive,
+            )
+            .await
+            .unwrap();
+        failed.assert_async().await;
+        no_changes.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_on_a_shared_branch_retries_only_unprocessed_failures() {
+        let mut server = mockito::Server::new_async().await;
+        // Not processed by LakeFS: retried.
+        let unavailable = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/branches/retried/commits",
+            )
+            .with_status(StatusCode::SERVICE_UNAVAILABLE.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let committed = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/branches/retried/commits",
+            )
+            .with_status(StatusCode::CREATED.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        // Possibly committed: not retried.
+        let failed = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/branches/failed/commits",
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        // "No changes" is an error on a shared branch.
+        let no_changes = server
+            .mock(
+                "POST",
+                "/api/v1/repositories/test_repo/branches/empty/commits",
+            )
+            .with_status(StatusCode::BAD_REQUEST.as_u16().into())
+            .with_body(r#"{"message":"commit: no changes"}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let client = client(&server);
+        client
+            .commit("test_repo", "retried", "m", false, BranchAccess::Shared)
+            .await
+            .unwrap();
+        for branch in ["failed", "empty"] {
+            let err = client
+                .commit("test_repo", branch, "m", false, BranchAccess::Shared)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("LakeFS commit failed"), "{err}");
+        }
+        unavailable.assert_async().await;
+        committed.assert_async().await;
+        failed.assert_async().await;
+        no_changes.assert_async().await;
     }
 
     #[tokio::test]
@@ -461,10 +730,73 @@ mod tests {
                 .await,
             Err(MergeError::Other(LakeFSOperationError::MergeFailed(_)))
         ));
+        // No retries: LakeFS can have applied the merge before any of these responses.
         ok.assert_async().await;
         conflict.assert_async().await;
         dirty.assert_async().await;
         other.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_retries_failures_that_lakefs_did_not_process() {
+        let mut server = mockito::Server::new_async().await;
+        let path = "/api/v1/repositories/test_repo/refs/tx/merge/main";
+        let throttled = server
+            .mock("POST", path)
+            .with_status(StatusCode::TOO_MANY_REQUESTS.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let unavailable = server
+            .mock("POST", path)
+            .with_status(StatusCode::SERVICE_UNAVAILABLE.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let merged = server
+            .mock("POST", path)
+            .with_status(StatusCode::OK.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+
+        client(&server)
+            .merge("test_repo", "main", "tx", "m", false)
+            .await
+            .unwrap();
+        throttled.assert_async().await;
+        unavailable.assert_async().await;
+        merged.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_merge_retries_a_refused_connection_and_reports_the_cause() {
+        // Nothing listens on the port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let err = LakeFSClient::for_tests(host)
+            .merge("test_repo", "main", "tx", "m", false)
+            .await
+            .unwrap_err();
+        let MergeError::Other(err) = err else {
+            panic!("unexpected merge error: {err:?}");
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("after 2 retries") && message.contains("tcp connect error"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn test_backoff_accepts_an_initial_backoff_above_the_maximum() {
+        let mut retry = RetryConfig::default();
+        retry.backoff.init_backoff = Duration::from_secs(60);
+        retry.backoff.max_backoff = Duration::from_secs(1);
+        retry.max_retries = 3;
+        assert_eq!(backoff(&retry).max_retries(), Some(3));
     }
 
     #[test]

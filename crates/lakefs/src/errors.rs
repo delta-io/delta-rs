@@ -2,7 +2,7 @@
 
 use deltalake_core::DeltaTableError;
 use deltalake_core::kernel::transaction::TransactionError;
-use reqwest::Error;
+use reqwest_middleware::Error;
 
 #[derive(thiserror::Error, Debug)]
 pub enum LakeFSConfigError {
@@ -21,8 +21,8 @@ pub enum LakeFSConfigError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LakeFSOperationError {
-    /// Failed to send http request to LakeFS
-    #[error("Failed to send request to LakeFS: {source}")]
+    /// Failed to send http request to LakeFS. `:#` shows the cause, not only the retry count.
+    #[error("Failed to send request to LakeFS: {source:#}")]
     HttpRequestFailed { source: Error },
 
     /// Missing authentication in LakeFS

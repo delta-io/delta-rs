@@ -28,7 +28,7 @@ use deltalake_core::{DeltaResult, DeltaTableError};
 use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt as _};
 use tracing::{debug, warn};
 
-use crate::client::{LakeFSClient, LakeFSLocation, MergeError};
+use crate::client::{BranchAccess, LakeFSClient, LakeFSLocation, MergeError};
 use crate::errors::LakeFSOperationError;
 
 /// How often a merge into a dirty destination branch is retried before the typed
@@ -149,6 +149,7 @@ impl Committer for LakeFSBranchCommitter {
                 &self.branch,
                 &format!("Delta commit {{ table: {table}, version: {version}}}"),
                 false,
+                BranchAccess::Exclusive,
             )
             .await
             .map_err(|e| TransactionError::LogStoreError {
@@ -258,6 +259,7 @@ impl Committer for LakeFSSourceCommitter {
                 &self.location.branch,
                 &format!("Delta commit {{ table: {table}, version: {version}}}"),
                 false,
+                BranchAccess::Shared,
             )
             .await
             .map_err(|e| TransactionError::LogStoreError {
@@ -322,6 +324,7 @@ impl LakeFSTransaction {
                 &self.branch,
                 &format!("Delta file operations {{ table: {table}}}"),
                 true,
+                BranchAccess::Exclusive,
             )
             .await?;
 
@@ -404,7 +407,6 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::client::LakeFSConfig;
 
     fn location() -> LakeFSLocation {
         LakeFSLocation {
@@ -415,11 +417,7 @@ mod tests {
     }
 
     fn client(server: &ServerGuard) -> LakeFSClient {
-        LakeFSClient::with_config(LakeFSConfig::new(
-            server.url(),
-            "user".into(),
-            "pass".into(),
-        ))
+        LakeFSClient::for_tests(server.url())
     }
 
     fn commit_path(version: Version) -> Path {
@@ -636,6 +634,22 @@ mod tests {
         // Idempotent: neither a second finish nor an abort after finish calls LakeFS again.
         transaction.finish(false).await.unwrap();
         transaction.abort().await.unwrap();
+        delete.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn finish_retries_a_failed_branch_delete() {
+        let mut server = mockito::Server::new_async().await;
+        let unavailable = server
+            .mock("DELETE", "/api/v1/repositories/repo/branches/delta-tx-1")
+            .with_status(StatusCode::SERVICE_UNAVAILABLE.as_u16().into())
+            .expect(1)
+            .create_async()
+            .await;
+        let delete = delete_mock(&mut server, 1);
+
+        transaction(&server).finish(false).await.unwrap();
+        unavailable.assert_async().await;
         delete.assert_async().await;
     }
 

@@ -78,11 +78,23 @@ branch. They stage their files directly on the source branch and, when they comm
 branch. That LakeFS commit contains everything that is staged on the branch at that moment, not
 only the files of the Delta commit.
 
+### Retries
+
+Requests to the LakeFS API use the same retry options as the object store requests:
+`max_retries`, `retry_timeout` and `backoff_config.*`. See
+[special configuration](./special_configuration.md).
+
+- Branch creation, branch deletion, diffs and commits of a transaction branch are sent again after
+  every transient failure: a connection error, a timeout, or a 408, 429 or 5xx response.
+- A merge, or a commit of your source branch, is sent again only when LakeFS did not process it: a
+  connection error, or a 429 or 503 response. After any other failure LakeFS can already have
+  applied the request, so the operation fails.
+
 ## Cleaning up transaction branches after a process kill
 
-A transaction branch is deleted when the operation finishes, fails, or is cancelled. Only a
-process that is killed while an operation is running leaves its `delta-tx-*` branch behind. The
-branches are hidden in the UI.
+A transaction branch is deleted when the operation finishes, fails, or is cancelled. A
+`delta-tx-*` branch stays behind only when the process is killed while an operation is running, or
+when the branch deletion still fails after all retries. The branches are hidden in the UI.
 
 With the lakefs python library you can list these branches and delete stale ones.
 

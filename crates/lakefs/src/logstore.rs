@@ -43,7 +43,9 @@ pub fn lakefs_logstore(
         .ok_or(LakeFSConfigError::PasswordCredentialMissing)?
         .to_string();
 
-    let client = LakeFSClient::with_config(LakeFSConfig::new(host, username, password));
+    let client = LakeFSClient::with_config(
+        LakeFSConfig::new(host, username, password).with_retry(options.retry.clone()),
+    );
     Ok(Arc::new(LakeFSLogStore::new(
         store,
         root_store,
@@ -202,11 +204,7 @@ mod tests {
             prefixed,
             root,
             LogStoreConfig::new(&location, StorageConfig::default()),
-            LakeFSClient::with_config(LakeFSConfig::new(
-                server.url(),
-                "user".into(),
-                "pass".into(),
-            )),
+            LakeFSClient::for_tests(server.url()),
         )
         .unwrap()
     }
@@ -219,11 +217,7 @@ mod tests {
             Arc::new(PrefixStore::new(root.clone(), "table")),
             root,
             LogStoreConfig::new(&location, StorageConfig::default()),
-            LakeFSClient::with_config(LakeFSConfig::new(
-                "http://localhost".into(),
-                "user".into(),
-                "pass".into(),
-            )),
+            LakeFSClient::for_tests("http://localhost".into()),
         )
         .unwrap_err();
         assert!(

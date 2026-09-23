@@ -24,7 +24,9 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-reqwest = {version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls-native-roots"]}
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
+reqwest-middleware = { version = "0.5", features = ["json"] }
+reqwest-retry = "0.9"
 
 [dev-dependencies]
 deltalake-core = { path = "../core" }
