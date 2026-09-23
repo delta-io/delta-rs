@@ -117,6 +117,7 @@ not_in_nav: |
 
 exclude_docs: |
   /_build/
+  /Makefile
   /mlc_config.json
   /src
   /requirements.txt

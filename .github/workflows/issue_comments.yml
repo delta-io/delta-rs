@@ -12,13 +12,16 @@ jobs:
   # revisited
   remove-labels:
     runs-on: ubuntu-slim
+    if: ${{ !github.event.issue.pull_request }}
     steps:
       - name: Remove awaiting-feedback label if present
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh issue edit \
-            ${{ github.event.issue_number }} \
+            ${{ github.event.issue.number }} \
             --remove-label "awaiting-feedback" \
-            -R $${ github.repository }}
+            -R ${{ github.repository }}
 
   issue_assign:
     runs-on: ubuntu-slim
