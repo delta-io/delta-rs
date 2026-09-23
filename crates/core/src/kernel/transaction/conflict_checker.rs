@@ -1,6 +1,7 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use std::collections::HashSet;
 
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::IsolationLevel;
 
 use super::CommitInfo;
@@ -9,7 +10,8 @@ use crate::DeltaTableError;
 use crate::delta_datafusion::DataFusionMixins;
 use crate::errors::DeltaResult;
 use crate::kernel::{
-    Action, Add, ConflictReadSet, Metadata, Protocol, Remove, Transaction, Version,
+    Action, Add, ConflictReadSet, Metadata, Protocol, ProtocolExt as _, Remove, Transaction,
+    Version,
 };
 use crate::logstore::{LogStore, get_actions};
 use crate::protocol::DeltaOperation;
@@ -437,6 +439,36 @@ impl<'a> ConflictChecker<'a> {
                     "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
                 )));
             };
+
+            // A table feature can be enabled without moving the protocol versions, in which
+            // case the comparison above sees nothing. Enabling one still changes what a valid
+            // commit looks like, and the requirement may live outside the Metadata action that
+            // `check_no_metadata_updates` guards: clustering, for example, carries its
+            // per-column statistics requirement in a DomainMetadata action. Our transaction was
+            // built without knowing about the feature, so treat it as a protocol change.
+            let curr_reader_features = self
+                .txn_info
+                .read_snapshot
+                .log_data()
+                .protocol()
+                .reader_features_set();
+            let curr_writer_features = self
+                .txn_info
+                .read_snapshot
+                .log_data()
+                .protocol()
+                .writer_features_set();
+            let added_reader =
+                newly_enabled_features(&p.reader_features_set(), &curr_reader_features);
+            let added_writer =
+                newly_enabled_features(&p.writer_features_set(), &curr_writer_features);
+            if !added_reader.is_empty() || !added_writer.is_empty() {
+                return Err(CommitConflictError::ProtocolChanged(format!(
+                    "winning commit enabled table features, reader [{}], writer [{}]",
+                    added_reader.join(", "),
+                    added_writer.join(", ")
+                )));
+            };
         }
         if !self.winning_commit_summary.protocol().is_empty()
             && self
@@ -622,6 +654,24 @@ impl<'a> ConflictChecker<'a> {
             Ok(())
         }
     }
+}
+
+/// Names of the features present in `winning` but not in `current`, sorted for a stable message.
+fn newly_enabled_features(
+    winning: &Option<HashSet<TableFeature>>,
+    current: &Option<HashSet<TableFeature>>,
+) -> Vec<String> {
+    let Some(winning) = winning else {
+        return Vec::new();
+    };
+    let empty = HashSet::new();
+    let current = current.as_ref().unwrap_or(&empty);
+    let mut added: Vec<String> = winning
+        .difference(current)
+        .map(|feature| feature.to_string())
+        .collect();
+    added.sort();
+    added
 }
 
 // implementation and comments adopted from
@@ -908,6 +958,119 @@ mod tests {
         assert!(
             matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
             "A winning commit that raises min_writer_version must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_writer_feature_enabled_without_version_bump() {
+        // Winning commit keeps min_reader/min_writer at (3, 7) and enables a writer
+        // feature the read snapshot did not have. The protocol numbers are unchanged, so
+        // the version comparison cannot see it, but the set of valid commits did change.
+        let setup = vec![
+            ActionFactory::protocol(
+                Some(3),
+                Some(7),
+                Some(vec![TableFeature::DeletionVectors]),
+                Some(vec![TableFeature::DeletionVectors]),
+            )
+            .into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::DeletionVectors]),
+                    Some(vec![
+                        TableFeature::DeletionVectors,
+                        TableFeature::ClusteredTable,
+                    ]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit enabling a new writer feature must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_reader_writer_feature_enabled_without_version_bump() {
+        // Same as above for a feature that is listed on both sides. The kernel rejects a
+        // ReaderWriter feature that appears in readerFeatures alone, so a reader-only
+        // difference cannot be constructed: ColumnMapping lands in both sets.
+        let setup = vec![
+            ActionFactory::protocol(Some(3), Some(7), Some(vec![]), Some(vec![])).into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::ColumnMapping]),
+                    Some(vec![TableFeature::ColumnMapping]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            matches!(result, Err(CommitConflictError::ProtocolChanged(_))),
+            "A winning commit enabling a new reader feature must be rejected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "datafusion")]
+    async fn test_concurrent_protocol_rewrite_without_new_features_is_allowed() {
+        // A winning commit that re-states the same protocol adds no capability
+        // requirement, so an ordinary append must still be allowed through.
+        let setup = vec![
+            ActionFactory::protocol(
+                Some(3),
+                Some(7),
+                Some(vec![TableFeature::DeletionVectors]),
+                Some(vec![TableFeature::DeletionVectors]),
+            )
+            .into(),
+            ActionFactory::metadata(TestSchemas::simple(), None::<Vec<&str>>, None).into(),
+        ];
+        let file = simple_add(true, "1", "10").into();
+        let result = execute_test(
+            Some(setup),
+            None,
+            vec![
+                ActionFactory::protocol(
+                    Some(3),
+                    Some(7),
+                    Some(vec![TableFeature::DeletionVectors]),
+                    Some(vec![TableFeature::DeletionVectors]),
+                )
+                .into(),
+            ],
+            vec![file],
+            false,
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "Re-stating the same protocol must not conflict: {result:?}"
         );
     }
 
