@@ -78,7 +78,7 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>, i64)>,
 
         #[pin]
         stream: S,
@@ -95,7 +95,7 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
@@ -161,12 +161,20 @@ where
                                 .num_records()
                                 .map(|count| count as u64)
                         });
+                        let cardinality = LogicalFileView::new(scan_files.clone(), index)
+                            .deletion_vector_descriptor()
+                            .map(|descriptor| descriptor.cardinality);
+                        let Some(cardinality) = cardinality else {
+                            return Poll::Ready(Some(Err(DeltaTableError::generic(
+                                "Selected DV file has no descriptor",
+                            ))));
+                        };
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records, cardinality)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -375,6 +383,8 @@ pub(crate) struct ScanFileContext {
     ///
     /// The query engine may choose to use these statistics to further optimize the scan.
     pub stats: Statistics,
+    /// Physical row count from the Delta log, if present.
+    pub num_records: Option<u64>,
     /// Partition values for the file.
     pub partitions: Option<StructData>,
 }
@@ -387,6 +397,7 @@ impl ScanFileContext {
             size: inner.size,
             transform: inner.transform,
             stats,
+            num_records: inner.num_records,
             partitions,
         }
     }
