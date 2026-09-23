@@ -145,14 +145,13 @@ impl StorageConfig {
     ) -> DeltaResult<Box<dyn ObjectStore>> {
         #[cfg(feature = "delta-cache")]
         {
-            use std::sync::Arc;
             use super::storage::cache::CachingObjectStore;
+            use std::sync::Arc;
             // Attempt to build the cache first (cheap env-var read).
             // Only construct the prefixed store if we're actually going to use it,
             // avoiding a redundant call when the feature is compiled in but disabled.
             if let Some(cache_store) = CachingObjectStore::from_env_with_inner(|| {
-                Self::decorate_prefix(store.clone(), table_root)
-                    .map(|b| Arc::from(b))
+                Self::decorate_prefix(store.clone(), table_root).map(|b| Arc::from(b))
             }) {
                 return Ok(Box::new(cache_store));
             }

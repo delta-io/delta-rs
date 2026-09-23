@@ -88,13 +88,13 @@ pub use self::factories::{
 };
 pub(crate) use self::scope::with_operation;
 pub use self::scope::{OperationContext, OperationScope, OperationTransaction, ScopeClosed};
+#[cfg(feature = "delta-cache")]
+pub use self::storage::CachingObjectStore;
 pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
     ObjectStoreRegistry, ObjectStoreRetryExt, client_options_from_certificate,
 };
-#[cfg(feature = "delta-cache")]
-pub use self::storage::CachingObjectStore;
 /// Convenience re-export of the object store crate
 pub use ::object_store;
 
