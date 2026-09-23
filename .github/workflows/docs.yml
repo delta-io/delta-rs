@@ -3,6 +3,7 @@ name: docs
 on:
   merge_group:
   pull_request:
+    branches: [main, "release/**"]
     paths:
       - python/**
       - docs/**

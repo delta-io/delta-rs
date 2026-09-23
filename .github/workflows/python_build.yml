@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main, next, next/*]
+    branches: [main, next, next/*, "release/**"]
 
 defaults:
   run:

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "rust-v*"]
   pull_request:
-    branches: [main, "rust-v*", next, next/*]
+    branches: [main, "rust-v*", next, next/*, "release/**"]
   merge_group:
 
 env:
@@ -80,6 +80,21 @@ jobs:
 
       - name: Check no default features (except rustls)
         run: cargo check --profile=ci --package deltalake --no-default-features --features rustls
+
+  semver-check:
+    name: SemVer Compliance
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: ./.github/actions/setup-builder
+      - name: Semver check (deltalake-core) vs crates.io
+        uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          # Use the stable toolchain installed by setup-builder; the action ignores rust-toolchain.toml
+          rust-toolchain: manual
+          package: deltalake-core
 
   test:
     name: Unit Tests

@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, "rust-v*"]
   pull_request:
-    branches: [main, "rust-v*", next, next/*]
+    branches: [main, "rust-v*", next, next/*, "release/**"]
   merge_group:
 
 env:
