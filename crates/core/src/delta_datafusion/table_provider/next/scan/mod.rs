@@ -547,6 +547,15 @@ async fn get_data_scan_plan(
     let mut uses_dv_cache = vec![false; partitioned_files.len()];
 
     let dv_state = if has_deletion_vectors {
+        let file_id_name = scan_plan.contract.file_id_field.name();
+        if file_id_name == PHYSICAL_POSITION_COLUMN
+            || scan_plan
+                .parquet_read_schema
+                .field_with_name(PHYSICAL_POSITION_COLUMN)
+                .is_ok()
+        {
+            return plan_err!("physical position column conflicts with the scan schema");
+        }
         let mut masks = dvs;
         let mut entries = HashMap::new();
         let mut identities = PhysicalFileIdentityMap::new();
@@ -558,10 +567,7 @@ async fn get_data_scan_plan(
                 uses_dv_cache[index] = true;
                 dv_metadata_caches
                     .entry(store_url.clone())
-                    .or_insert_with(|| {
-                        // Retain only validated DV footers for the plan's lifetime.
-                        Arc::new(DefaultCache::new(usize::MAX))
-                    });
+                    .or_insert_with(|| Arc::new(DefaultCache::new(usize::MAX)));
                 footer_tasks.push((
                     id.clone(),
                     store_url.clone(),
@@ -589,10 +595,8 @@ async fn get_data_scan_plan(
         if !masks.is_empty() {
             return plan_err!("Deletion vector was loaded for an unselected file");
         }
-        let file_id_name = scan_plan.contract.file_id_field.name().to_owned();
         let loaded = futures::stream::iter(footer_tasks)
             .map(|(id, store_url, object_meta, log_count, mask)| {
-                let file_id_name = &file_id_name;
                 let cache = Arc::clone(
                     dv_metadata_caches
                         .get(&store_url)

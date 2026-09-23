@@ -2364,6 +2364,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_dv_scan_rejects_reserved_file_column_name() -> TestResult {
+        let fixture = physical_dv_fixture()?;
+        let table =
+            crate::open_table(url::Url::from_directory_path(fixture.path()).unwrap()).await?;
+        let provider = table
+            .table_provider()
+            .with_file_column(super::super::PHYSICAL_POSITION_COLUMN)
+            .await?;
+        let session = create_session().into_inner();
+        let error = provider
+            .scan(&session.state(), None, &[], None)
+            .await
+            .expect_err("reserved file column name must be rejected");
+        assert!(error.to_string().contains("physical position"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_dv_footer_is_loaded_once_and_non_dv_footer_is_not_planned() -> TestResult {
         use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
         use std::sync::atomic::Ordering;
@@ -2423,6 +2441,42 @@ mod tests {
             object_store::path::Path::from_filesystem_path(fixture.path().join("part-1.parquet"))?;
         assert!(runtime_cache.get(&dv_path).is_none());
         assert!(runtime_cache.get(&non_dv_path).is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dv_footer_cache_ignores_runtime_limit() -> TestResult {
+        use std::sync::atomic::Ordering;
+
+        let fixture = physical_dv_fixture()?;
+        let table =
+            crate::open_table(url::Url::from_directory_path(fixture.path()).unwrap()).await?;
+        let provider = table.table_provider().await?;
+        let runtime = datafusion::execution::runtime_env::RuntimeEnvBuilder::new()
+            .with_metadata_cache_limit(0)
+            .build_arc()?;
+        let session =
+            datafusion::prelude::SessionContext::new_with_config_rt(SessionConfig::new(), runtime);
+        let store_url = datafusion::execution::object_store::ObjectStoreUrl::local_filesystem();
+        let inner = session.runtime_env().object_store(&store_url)?;
+        let store = Arc::new(FooterCountingStore {
+            inner,
+            dv_size: std::fs::metadata(fixture.path().join("part-0.parquet"))?.len(),
+            dv_reads: Default::default(),
+            dv_footer_reads: Default::default(),
+            non_dv_reads: Default::default(),
+        });
+        session
+            .runtime_env()
+            .register_object_store(store_url.as_ref(), store.clone());
+
+        let plan = provider.scan(&session.state(), None, &[], None).await?;
+        assert_eq!(store.dv_footer_reads.load(Ordering::Relaxed), 1);
+        for _ in 0..2 {
+            let batches = collect(Arc::clone(&plan), session.task_ctx()).await?;
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+            assert_eq!(store.dv_footer_reads.load(Ordering::Relaxed), 1);
+        }
         Ok(())
     }
 
