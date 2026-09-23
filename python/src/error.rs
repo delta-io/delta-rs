@@ -28,6 +28,9 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         DeltaTableError::InvalidJsonLog { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidStatsJson { .. } => DeltaProtocolError::new_err(err.to_string()),
         DeltaTableError::InvalidData { message } => DeltaProtocolError::new_err(message),
+        DeltaTableError::UnsupportedCatalogManagedTable => {
+            DeltaProtocolError::new_err(err.to_string())
+        }
 
         // commit errors
         DeltaTableError::Transaction { source } => CommitFailedError::new_err(source.to_string()),

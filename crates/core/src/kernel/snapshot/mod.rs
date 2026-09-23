@@ -191,6 +191,20 @@ impl<'a> ConflictReadSet<'a> {
     }
 }
 
+/// Map a kernel error raised while building a snapshot into a [`DeltaTableError`].
+///
+/// delta-rs never sets a max catalog version, so the kernel raising
+/// [`MaxCatalogVersion`](delta_kernel::Error::MaxCatalogVersion) means the table is
+/// catalog-managed, which is not supported yet.
+fn map_snapshot_build_error(err: delta_kernel::Error) -> DeltaTableError {
+    match err {
+        delta_kernel::Error::MaxCatalogVersion(_) => {
+            DeltaTableError::UnsupportedCatalogManagedTable
+        }
+        other => other.into(),
+    }
+}
+
 /// A snapshot of a Delta table
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
@@ -226,7 +240,7 @@ impl Snapshot {
                 if e.to_string().contains("No files in log segment") {
                     return Err(DeltaTableError::NotATable(e.to_string()));
                 } else {
-                    return Err(e.into());
+                    return Err(map_snapshot_build_error(e));
                 }
             }
         };
@@ -297,7 +311,8 @@ impl Snapshot {
             builder.build(task_engine.as_ref())
         })
         .await
-        .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
+        .map_err(|e| DeltaTableError::Generic(e.to_string()))?
+        .map_err(map_snapshot_build_error)?;
 
         let snapshot = Arc::new(Self {
             inner: snapshot,
@@ -2122,6 +2137,47 @@ mod tests {
         assert!(files[0].max_values().is_some());
         assert!(files[0].null_counts().is_some());
         assert!(!snapshot.has_materialized_files_for_test());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_catalog_managed_table_returns_unsupported_error() -> TestResult {
+        let table_dir = tempfile::tempdir().unwrap();
+        let log_dir = table_dir.path().join("_delta_log");
+        std::fs::create_dir_all(&log_dir)?;
+        let commit = [
+            json!({"commitInfo": {"inCommitTimestamp": 1700000000000i64, "timestamp": 1700000000000i64, "operation": "CREATE TABLE", "txnId": "8b3c3f56-4d4a-4c61-9d1e-9a36e1c7c0a1"}}),
+            json!({"protocol": {
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["catalogManaged"],
+                "writerFeatures": ["catalogManaged", "inCommitTimestamp"]
+            }}),
+            json!({"metaData": {
+                "id": "5fba94ed-9794-4965-ba6e-6ee3c0d22af9",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"value\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}",
+                "partitionColumns": [],
+                "configuration": {"delta.enableInCommitTimestamps": "true"},
+                "createdTime": 1700000000000i64
+            }}),
+        ]
+        .iter()
+        .map(|action| action.to_string())
+        .join("\n");
+        std::fs::write(log_dir.join("00000000000000000000.json"), commit)?;
+
+        let table_url = url::Url::from_directory_path(table_dir.path()).unwrap();
+        let error = DeltaTable::try_from_url(table_url)
+            .await
+            .expect_err("catalog-managed tables must not load without the catalog");
+
+        assert!(
+            matches!(error, DeltaTableError::UnsupportedCatalogManagedTable),
+            "expected UnsupportedCatalogManagedTable, got {error:?}"
+        );
+        assert!(error.to_string().contains("issues/4549"));
 
         Ok(())
     }
