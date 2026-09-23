@@ -26,7 +26,7 @@ class Compression(Enum):
     def get_level_range(self) -> tuple[int, int]:
         if self == Compression.GZIP:
             MIN_LEVEL = 0
-            MAX_LEVEL = 10
+            MAX_LEVEL = 9
         elif self == Compression.BROTLI:
             MIN_LEVEL = 0
             MAX_LEVEL = 11
@@ -183,7 +183,7 @@ class WriterProperties:
             max_row_group_size: Max number of rows in row group.
             compression: compression type.
             compression_level: If none and compression has a level, the default level will be used, only relevant for
-                GZIP: levels (1-9),
+                GZIP: levels (0-9),
                 BROTLI: levels (1-11),
                 ZSTD: levels (1-22),
             statistics_truncate_length: maximum length of truncated min/max values in statistics.
