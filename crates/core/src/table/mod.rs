@@ -16,7 +16,6 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use url::Url;
 
-use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::kernel::{CommitInfo, DataCheck, LogicalFileView, Version};
 use crate::logstore::{
@@ -48,8 +47,6 @@ pub use columns::*;
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: Option<DeltaTableState>,
-    /// the load options used during load
-    pub config: DeltaTableConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -61,7 +58,6 @@ impl Serialize for DeltaTable {
     {
         let mut seq = serializer.serialize_seq(None)?;
         seq.serialize_element(&self.state)?;
-        seq.serialize_element(&self.config)?;
         seq.serialize_element(self.log_store.config())?;
         seq.end()
     }
@@ -88,23 +84,31 @@ impl<'de> Deserialize<'de> for DeltaTable {
                 let state = seq
                     .next_element()?
                     .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let config = seq
+                #[derive(Deserialize)]
+                #[serde(untagged)]
+                enum StorageOrLegacyConfig {
+                    Storage(Box<LogStoreConfig>),
+                    Legacy {
+                        #[serde(rename = "requireFiles", alias = "require_files")]
+                        _require_files: bool,
+                    },
+                }
+                let storage_config = match seq
                     .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
-                let storage_config: LogStoreConfig = seq
-                    .next_element()?
-                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                    .ok_or_else(|| A::Error::invalid_length(1, &self))?
+                {
+                    StorageOrLegacyConfig::Storage(config) => *config,
+                    StorageOrLegacyConfig::Legacy { .. } => seq
+                        .next_element()?
+                        .ok_or_else(|| A::Error::invalid_length(2, &self))?,
+                };
                 let log_store = crate::logstore::logstore_for(
                     storage_config.location(),
                     storage_config.options().clone(),
                 )
                 .map_err(|_| A::Error::custom("Failed deserializing LogStore"))?;
 
-                let table = DeltaTable {
-                    state,
-                    config,
-                    log_store,
-                };
+                let table = DeltaTable { state, log_store };
                 Ok(table)
             }
         }
@@ -118,11 +122,10 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef) -> Self {
         Self {
             state: None,
             log_store,
-            config,
         }
     }
 
@@ -146,11 +149,9 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
     pub(crate) fn new_with_state(log_store: LogStoreRef, state: DeltaTableState) -> Self {
-        let config = state.load_config().clone();
         Self {
             state: Some(state),
             log_store,
-            config,
         }
     }
 
@@ -209,9 +210,7 @@ impl DeltaTable {
         max_version: Option<Version>,
     ) -> Result<(), DeltaTableError> {
         let Some(state) = self.state.as_mut() else {
-            self.state = Some(
-                DeltaTableState::try_new(&self.log_store, self.config.clone(), max_version).await?,
-            );
+            self.state = Some(DeltaTableState::try_new(&self.log_store, max_version).await?);
             return Ok(());
         };
 
@@ -260,23 +259,27 @@ impl DeltaTable {
         }
     }
 
-    /// Returns provenance information, including the operation, user, and so on, for each write to a table.
+    /// Streams provenance information for each write to the table, newest commit first.
+    ///
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
     /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
     /// it returns all commits from the earliest commit.
-    pub async fn history(
-        &self,
-        limit: Option<usize>,
-    ) -> Result<impl Iterator<Item = CommitInfo> + use<>, DeltaTableError> {
-        let infos = self
-            .snapshot()?
-            .snapshot()
-            .snapshot()
-            .commit_infos(&self.log_store(), limit)
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
-        Ok(infos.into_iter().flatten())
+    pub fn history(&self, limit: Option<usize>) -> BoxStream<'_, DeltaResult<CommitInfo>> {
+        let Some(state) = self.state.as_ref() else {
+            return Box::pin(once(ready(Err(DeltaTableError::NotInitialized))));
+        };
+        let log_store = self.log_store();
+        Box::pin(
+            once(async move {
+                state
+                    .snapshot()
+                    .snapshot()
+                    .commit_infos(&log_store, limit)
+                    .await
+            })
+            .try_flatten()
+            .try_filter_map(|info| ready(Ok(info))),
+        )
     }
 
     #[cfg(test)]
@@ -284,7 +287,7 @@ impl DeltaTable {
     ///
     /// This is a silly convenience function to reduce some copy-paste in tests
     pub(crate) async fn last_commit(&self) -> Result<CommitInfo, DeltaTableError> {
-        let mut infos: Vec<_> = self.history(Some(1)).await?.collect();
+        let mut infos: Vec<_> = self.history(Some(1)).try_collect().await?;
         infos.pop().ok_or(DeltaTableError::Generic(
             "Somehow there is nothing in the history!".into(),
         ))
@@ -617,6 +620,32 @@ mod tests {
         drop(tmp_dir);
     }
 
+    #[test]
+    fn table_deserializes_legacy_config_slot() {
+        let snapshot: crate::kernel::EagerSnapshot = serde_json::from_str(include_str!(
+            "../../tests/serde/eager_snapshot_pre_identity.json"
+        ))
+        .unwrap();
+        let mut table = DeltaTable::new_in_memory();
+        table.state = Some(DeltaTableState::new(snapshot));
+        let mut value = serde_json::to_value(&table).unwrap();
+        let config = json!({
+            "requireFiles": true,
+            "logBufferSize": 4,
+            "logBatchSize": 1024,
+            "skipStats": false,
+        });
+        value[0]["snapshot"][0]
+            .as_array_mut()
+            .unwrap()
+            .insert(9, config.clone());
+        value.as_array_mut().unwrap().insert(1, config);
+        let actual: DeltaTable = serde_json::from_value(value).unwrap();
+        assert_eq!(actual.version(), Some(1));
+        assert_eq!(actual.snapshot().unwrap().log_data().num_files(), 1);
+        assert_eq!(actual.table_url(), table.table_url());
+    }
+
     #[tokio::test]
     async fn table_without_files_does_not_panic_on_log_data() {
         let (dt, _tmp_dir) = create_test_table().await;
@@ -624,7 +653,6 @@ mod tests {
 
         let table = DeltaTableBuilder::from_url(url)
             .unwrap()
-            .without_files()
             .load()
             .await
             .unwrap();

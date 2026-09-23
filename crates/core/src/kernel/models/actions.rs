@@ -323,7 +323,8 @@ impl ProtocolInner {
 
     pub(crate) fn as_kernel(&self) -> Protocol {
         // this ugliness is a stop-gap until we resolve: https://github.com/delta-io/delta-kernel-rs/issues/1055
-        serde_json::from_value(serde_json::to_value(self).unwrap()).unwrap()
+        serde_json::from_value(serde_json::to_value(self).unwrap())
+            .expect("Failed to convert Protocol to a kernel implementation")
     }
 
     /// Append the reader features in the protocol action, automatically bumps min_reader_version
@@ -494,6 +495,30 @@ impl ProtocolInner {
             }
         }
 
+        // Check and update delta.minWriterVersion.
+        if let Some(min_writer_version) = parsed_properties.get(&TableProperty::MinWriterVersion) {
+            let new_min_writer_version = min_writer_version.parse::<i32>();
+            match new_min_writer_version {
+                Ok(version) => match version {
+                    2..=7 => {
+                        if version > self.min_writer_version {
+                            self.min_writer_version = version
+                        }
+                    }
+                    _ => {
+                        return Err(Error::Generic(format!(
+                            "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                        )));
+                    }
+                },
+                Err(_) => {
+                    return Err(Error::Generic(format!(
+                        "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
+                    )));
+                }
+            }
+        }
+
         // Check and update delta.minReaderVersion
         if let Some(min_reader_version) = parsed_properties.get(&TableProperty::MinReaderVersion) {
             let new_min_reader_version = min_reader_version.parse::<i32>();
@@ -518,29 +543,6 @@ impl ProtocolInner {
             }
         }
 
-        // Check and update delta.minWriterVersion
-        if let Some(min_writer_version) = parsed_properties.get(&TableProperty::MinWriterVersion) {
-            let new_min_writer_version = min_writer_version.parse::<i32>();
-            match new_min_writer_version {
-                Ok(version) => match version {
-                    2..=7 => {
-                        if version > self.min_writer_version {
-                            self.min_writer_version = version
-                        }
-                    }
-                    _ => {
-                        return Err(Error::Generic(format!(
-                            "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
-                        )));
-                    }
-                },
-                Err(_) => {
-                    return Err(Error::Generic(format!(
-                        "delta.minWriterVersion = '{min_writer_version}' is invalid, valid values are ['2','3','4','5','6','7']"
-                    )));
-                }
-            }
-        }
         // Check columnMappingMode and bump protocol or add reader/writerFeatures
         if let Some(mode) = parsed_properties.get(&TableProperty::ColumnMappingMode) {
             if mode.as_str() != "none" {
@@ -619,6 +621,30 @@ impl ProtocolInner {
                         "delta.enableDeletionVectors = '{enable_dv}' is invalid, valid values are ['true']"
                     )));
                 }
+            }
+        }
+
+        // If the minWriterVersion has been set to 7 then there are additional writer features
+        // which must be applied
+        if self.min_writer_version >= 7
+            && let Some(features) = writer_features_for_version(self.min_writer_version)
+        {
+            self = self.append_writer_features(features);
+            // When setting the minWriterVersion the minReaderVersion must necessarily come up to
+            // version 2 if it's not already there
+            if self.min_reader_version < 2 {
+                self.min_reader_version = 2;
+            }
+        }
+        // Ensure that any minReaderVersion of 3 or greater is getting the reader features it needs
+        if self.min_reader_version >= 3
+            && let Some(features) = reader_features_for_version(self.min_reader_version)
+        {
+            self = self.append_reader_features(features);
+            // When upgrading to minReaderVersion 3, and minWriterFeature is 7, it must contain the
+            // Variant feature too
+            if self.min_writer_version >= 7 {
+                self = self.append_writer_features(&[TableFeature::VariantType]);
             }
         }
         Ok(self)
@@ -1316,6 +1342,40 @@ pub(crate) mod serde_path {
     }
 }
 
+/// Determine required writer features for a given writer version
+pub(crate) fn writer_features_for_version(
+    writer_version: i32,
+) -> Option<Vec<delta_kernel::table_features::TableFeature>> {
+    if writer_version >= 7 {
+        // For writer version 7+, include common features
+        Some(vec![
+            delta_kernel::table_features::TableFeature::Invariants,
+            delta_kernel::table_features::TableFeature::AppendOnly,
+        ])
+    } else {
+        // No special features needed for older versions
+        None
+    }
+}
+
+/// Determine required reader features for a given reader version
+pub(crate) fn reader_features_for_version(
+    reader_version: i32,
+) -> Option<Vec<delta_kernel::table_features::TableFeature>> {
+    let mut features = vec![];
+
+    if reader_version >= 3 {
+        // For reader version 3+, include common reader features
+        features.push(delta_kernel::table_features::TableFeature::VariantType);
+    }
+    if !features.is_empty() {
+        return Some(features);
+    }
+
+    // No special reader features needed for older versions
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1466,12 +1526,12 @@ mod tests {
             "readerFeatures": [],
             "writerFeatures": [],
         }))
-        .unwrap();
+        .expect("Failed to initialize a new Protocol");
         let config = HashMap::from([("delta.columnMapping.mode".to_string(), "name".to_string())]);
 
         let protocol = protocol
             .apply_properties_to_protocol(&config, true)
-            .unwrap();
+            .expect("Failed to apply properties to protocol");
 
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
@@ -1519,6 +1579,16 @@ mod tests {
             "writerFeatures should contain ColumnMapping, got: {:?}",
             protocol.writer_features()
         );
+
+        assert!(
+            protocol
+                .writer_features()
+                .unwrap()
+                .contains(&TableFeature::Invariants),
+            "writerFeatures should be upgraded include Invariants, got: {:?}",
+            protocol.writer_features()
+        );
+
         // Reader stayed legacy (v2), so it carries no ColumnMapping reader feature.
         assert!(
             !protocol

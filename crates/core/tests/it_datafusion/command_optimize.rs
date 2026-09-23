@@ -6,9 +6,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{
+    ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StringViewArray, UInt32Array,
+};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
+use arrow_select::take::take;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
@@ -636,7 +639,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.partitions_optimized, 1);
     assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
@@ -860,7 +863,7 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
         inner: table.log_store(),
         calls: calls.clone(),
     });
-    let mut tracked_table = DeltaTable::new(tracked_log_store, Default::default());
+    let mut tracked_table = DeltaTable::new(tracked_log_store);
     tracked_table.load().await?;
     let df_context: SessionContext = DeltaSessionContext::default().into();
     let plan = create_merge_plan(
@@ -1717,7 +1720,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
 
     let commit_metrics =
@@ -1760,7 +1763,7 @@ async fn test_optimize_metrics_expose_planner_strategy() -> Result<(), Box<dyn E
     assert_eq!(metrics_json["maxBinSpanFiles"], json!(2));
     assert!(metrics_json.get("maxInputDisplacement").is_none());
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     assert_eq!(
         last_commit.info["operationMetrics"]["plannerStrategy"],
@@ -1912,7 +1915,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
         vec![
             Arc::new(Int32Array::from(vec![1, 2, 1, 1, 1, 2])),
             Arc::new(Int32Array::from(vec![1, 1, 2, 2, 2, 2])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringViewArray::from(vec![
                 "1970-01-01",
                 "1970-01-04",
                 "1970-01-01",
@@ -2268,11 +2271,32 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
         .column_by_name("int_id")
         .unwrap()
         .as_any()
-        .downcast_ref::<arrow_array::StringArray>()
+        .downcast_ref::<arrow_array::StringViewArray>()
         .unwrap();
     let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
     actual.sort_unstable();
     assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
+
+    Ok(())
+}
+
+/// Issue <https://github.com/delta-io/delta-rs/issues/3790>: one 8192-row scan batch holds
+/// ~2.2 GB of strings, which overflowed i32 offsets when optimize cast it from Utf8View to Utf8.
+#[tokio::test]
+async fn test_zorder_batch_with_more_than_2gib_of_strings() -> Result<(), Box<dyn Error>> {
+    // 8500 views of one 268,435 byte string, so the ~2.3 GB is never materialized.
+    let value = StringViewArray::from(vec!["a".repeat(268_435)]);
+    let values = take(&value, &UInt32Array::from(vec![0; 8500]), None)?;
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8500));
+    let batch = RecordBatch::try_from_iter([("id", ids), ("value", values)])?;
+    let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+    let (_, metrics) = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["id".to_string()]))
+        .await?;
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 1);
 
     Ok(())
 }

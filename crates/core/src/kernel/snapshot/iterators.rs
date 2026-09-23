@@ -815,10 +815,9 @@ mod tests {
             .expect("Failed to create table builder")
             .build_storage()
             .expect("Failed to build storage");
-        let snapshot =
-            crate::kernel::snapshot::Snapshot::try_new(&log_store, Default::default(), None)
-                .await
-                .unwrap();
+        let snapshot = crate::kernel::snapshot::Snapshot::try_new(&log_store, None)
+            .await
+            .unwrap();
 
         let files: Vec<_> = snapshot
             .files(&log_store, None)

@@ -35,6 +35,7 @@ use serde::Serialize;
 use tracing::*;
 
 use super::{CustomExecuteHandler, Operation};
+use crate::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
 use crate::kernel::{
@@ -45,7 +46,6 @@ use crate::logstore::{LogStore, LogStoreRef};
 use crate::protocol::DeltaOperation;
 use crate::table::config::TablePropertiesExt as _;
 use crate::table::state::DeltaTableState;
-use crate::{DeltaTable, DeltaTableConfig};
 
 const DEFAULT_VACUUM_LIST_CONCURRENCY: usize = 10;
 
@@ -104,17 +104,7 @@ async fn collect_keep_version_paths(
     };
 
     log_store.refresh().await?;
-    let mut snapshot = Arc::new(
-        Snapshot::try_new(
-            log_store,
-            DeltaTableConfig {
-                require_files: false,
-                ..Default::default()
-            },
-            Some(*initial_version),
-        )
-        .await?,
-    );
+    let mut snapshot = Arc::new(Snapshot::try_new(log_store, Some(*initial_version)).await?);
     let engine = log_store.engine(None);
     let mut keep_files = collect_active_paths(snapshot.as_ref(), log_store).await?;
     debug!(version = %initial_version, num_files = keep_files.len(), "collected keep-version paths");
@@ -561,8 +551,7 @@ impl std::future::IntoFuture for VacuumBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), true, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
             let plan = this.create_vacuum_plan(snapshot.snapshot()).await?;
 
             if this.dry_run {
@@ -729,9 +718,11 @@ fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
-        && !partition_columns
-            .iter()
-            .any(|partition_column| path_name.starts_with(partition_column)))
+        && !partition_columns.iter().any(|partition_column| {
+            path_name
+                .strip_prefix(partition_column.as_str())
+                .is_some_and(|rest| rest.starts_with('='))
+        }))
 }
 
 /// Returns true if the file at `location` is a candidate for deletion.
@@ -1064,13 +1055,6 @@ mod tests {
         Ok(())
     }
 
-    fn lazy_snapshot_config() -> DeltaTableConfig {
-        DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        }
-    }
-
     fn normalize_vacuum_plan(plan: VacuumPlan) -> (Vec<(String, i64)>, bool, i64, Option<i64>) {
         let mut files = plan
             .files_to_delete
@@ -1301,7 +1285,7 @@ mod tests {
     ) -> DeltaResult<(VacuumPlan, object_store::path::Path)> {
         let (table, expected_path) = encoded_tombstone_table().await?;
         let log_store = table.log_store();
-        let snapshot = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
         let plan = VacuumBuilder::new(log_store, None)
             .with_retention_period(Duration::milliseconds(1))
             .with_mode(mode)
@@ -1338,7 +1322,7 @@ mod tests {
             open_table(ensure_table_uri("../test/tests/data/simple_table").unwrap()).await?;
         let log_store = table.log_store();
         let eager = table.snapshot()?.snapshot();
-        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
         let builder = VacuumBuilder::new(log_store, None)
             .with_retention_period(Duration::hours(0))
             .with_mode(VacuumMode::Lite)
@@ -1375,7 +1359,7 @@ mod tests {
             ))])
             .await?;
         let log_store = table.log_store();
-        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         assert!(!lazy.has_materialized_files_for_test());
         let active_paths = collect_active_paths(&lazy, log_store.as_ref()).await?;
@@ -1424,8 +1408,8 @@ mod tests {
         )
         .await?;
         let log_store = table.log_store();
-        let eager = EagerSnapshot::try_new(log_store.as_ref(), Default::default(), None).await?;
-        let lazy = Snapshot::try_new(log_store.as_ref(), lazy_snapshot_config(), None).await?;
+        let eager = EagerSnapshot::try_new(log_store.as_ref(), None).await?;
+        let lazy = Snapshot::try_new(log_store.as_ref(), None).await?;
         let now_millis = 100_000;
         let retention = Duration::milliseconds(1_000);
 
@@ -2766,5 +2750,28 @@ mod tests {
             "parallel and flat full scans must agree on delete set"
         );
         Ok(())
+    }
+
+    #[test]
+    fn test_hidden_directory_matches_partition_dirs_not_mere_prefixes() {
+        let partition_columns = vec!["_date".to_string()];
+
+        // A real partition directory is not hidden, so it can be vacuumed.
+        assert!(
+            !is_hidden_directory(
+                &partition_columns,
+                &object_store::path::Path::from("_date=2024-01-01/part-0.parquet")
+            )
+            .unwrap()
+        );
+
+        // An unrelated hidden directory that merely shares the prefix must stay hidden.
+        assert!(
+            is_hidden_directory(
+                &partition_columns,
+                &object_store::path::Path::from("_dates_backup/part-0.parquet")
+            )
+            .unwrap()
+        );
     }
 }

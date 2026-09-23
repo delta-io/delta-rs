@@ -1,12 +1,12 @@
 import json
 import multiprocessing
 import os
+import time
 from concurrent.futures import Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from pathlib import Path
 from threading import Barrier, Thread
 from typing import Any
-from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import pytest
@@ -15,9 +15,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaError, DeltaProtocolError
 from deltalake.query import QueryBuilder
-from deltalake.table import ProtocolVersions
 from deltalake.writer import write_deltalake
 
 S3_SIMPLE_TABLE_FILES = [
@@ -159,6 +157,35 @@ def test_load_as_version_datetime(date_value: str, expected_version):
     dt = DeltaTable(table_path)
     dt.load_as_version(datetime.fromisoformat(date_value))
     assert dt.version() == expected_version
+
+
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Seoul", "America/Los_Angeles"])
+def test_load_as_version_datetime_without_timezone(
+    tmp_path: Path, sample_table: Table, monkeypatch: pytest.MonkeyPatch, tz: str
+):
+    if not hasattr(time, "tzset"):
+        pytest.skip("time.tzset is not available on this platform")
+
+    for mode in ["error", "append", "append"]:
+        write_deltalake(tmp_path, data=sample_table, mode=mode)
+
+    log_path = tmp_path / "_delta_log"
+    log_mtime_pairs = [
+        ("00000000000000000000.json", datetime(2020, 1, 1, 0, tzinfo=timezone.utc)),
+        ("00000000000000000001.json", datetime(2020, 1, 1, 8, tzinfo=timezone.utc)),
+        ("00000000000000000002.json", datetime(2020, 1, 1, 18, tzinfo=timezone.utc)),
+    ]
+    for file_name, dt in log_mtime_pairs:
+        ts = dt.timestamp()
+        os.utime(log_path / file_name, (ts, ts))
+
+    monkeypatch.setenv("TZ", tz)
+    time.tzset()
+
+    dt = DeltaTable(tmp_path)
+    dt.load_as_version(datetime(2020, 1, 1, 12))
+
+    assert dt.version() == 1
 
 
 @pytest.mark.parametrize(
@@ -562,36 +589,7 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     assert dt.get_add_actions(flatten=True).num_rows == 0
 
 
-@pytest.mark.pyarrow
-def test_get_add_actions_without_files_raises():
-    table_path = "../crates/test/tests/data/simple_table"
-    dt = DeltaTable(table_path, without_files=True)
-
-    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
-        dt.get_add_actions(flatten=True)
-
-
-@pytest.mark.pyarrow
-def test_without_files_update_preserves_get_add_actions_error(tmp_path: Path):
-    import pyarrow as pa
-
-    data = pa.table({"id": pa.array([1, 2, 3], type=pa.int64())})
-    write_deltalake(tmp_path, data)
-
-    dt = DeltaTable(tmp_path, without_files=True)
-    assert dt.version() == 0
-
-    write_deltalake(tmp_path, data, mode="append")
-    dt.update_incremental()
-
-    assert dt.version() == 1
-    with pytest.raises(DeltaError, match="Table is instantiated without files\\."):
-        dt.get_add_actions(flatten=True)
-
-
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
-    from urllib.parse import urlparse
-
     table_path = urlparse(dt.table_uri).path
     absolute_paths = [os.path.join(table_path, path) for path in expected_paths]
     assert dt.file_uris(partition_filters) == absolute_paths
@@ -1009,21 +1007,6 @@ def test_delta_table_with_filters():
     )
 
 
-@pytest.mark.pyarrow
-def test_writer_fails_on_protocol():
-    import pytest
-
-    table_path = "../crates/test/tests/data/simple_table"
-    dt = DeltaTable(table_path)
-    dt.protocol = Mock(return_value=ProtocolVersions(2, 1, None, None))
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_dataset()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pyarrow_table()
-    with pytest.raises(DeltaProtocolError):
-        dt.to_pandas()
-
-
 class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 
@@ -1370,8 +1353,14 @@ def test_read_table_last_checkpoint_not_updated():
     assert dt.version() == 3
 
 
-def test_is_deltatable_valid_path():
-    table_path = "../crates/test/tests/data/simple_table"
+@pytest.mark.parametrize(
+    "table_path",
+    [
+        "../crates/test/tests/data/simple_table",
+        Path("../crates/test/tests/data/simple_table"),
+    ],
+)
+def test_is_deltatable_valid_path(table_path: str | Path):
     assert DeltaTable.is_deltatable(table_path)
 
 
@@ -1747,14 +1736,6 @@ def test_deletion_vectors_empty_table():
     assert vectors.read_all().num_rows == 0
 
 
-def test_deletion_vectors_without_files_raises():
-    table_path = "../crates/test/tests/data/simple_table"
-    dt = DeltaTable(table_path, without_files=True)
-
-    with pytest.raises(Exception, match="without files"):
-        dt.deletion_vectors()
-
-
 @pytest.mark.pyarrow
 def test_read_variant_fixture():
     table_path = "../crates/test/tests/data/spark-variant-checkpoint"
@@ -1782,49 +1763,19 @@ def test_deletion_vectors_table_with_deletion_logs():
     dt = DeltaTable(table_path)
 
     vectors = dt.deletion_vectors().read_all()
-    assert vectors.num_rows > 0
-
-    add_actions = dt.get_add_actions(flatten=True)
-    table_root = Path(table_path).resolve()
-    add_paths = add_actions["path"].to_pylist()
-    add_num_records = add_actions["num_records"].to_pylist()
-    num_records_by_file_path: dict[str, int] = {}
-    for add_path, num_records in zip(add_paths, add_num_records, strict=True):
-        file_path = (table_root / add_path).resolve().as_posix()
-        assert file_path not in num_records_by_file_path
-        num_records_by_file_path[file_path] = num_records
-
-    found_deleted_row = False
-    known_file_suffix = (
+    assert vectors.num_rows == 1
+    filepath = vectors["filepath"].to_pylist()[0]
+    assert Path(urlparse(filepath).path).name == (
         "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
     )
-    known_file_mask = None
-    known_file_num_records = None
+    expected_mask = [True] * 100
+    expected_mask[2] = expected_mask[79] = False
+    assert vectors["selection_vector"].to_pylist() == [expected_mask]
 
-    for filepath, mask in zip(
-        vectors["filepath"].to_pylist(),
-        vectors["selection_vector"].to_pylist(),
-        strict=True,
-    ):
-        file_path = Path(urlparse(filepath).path).as_posix()
-        assert file_path in num_records_by_file_path
-
-        num_records = num_records_by_file_path[file_path]
-        filename = Path(file_path).name
-        assert len(mask) == num_records
-
-        if False in mask:
-            found_deleted_row = True
-        if filename == known_file_suffix:
-            known_file_mask = mask
-            known_file_num_records = num_records
-
-    assert found_deleted_row
-    assert known_file_mask is not None
-    assert known_file_num_records is not None
-    assert len(known_file_mask) == known_file_num_records
-    assert False in known_file_mask
-    assert known_file_mask[-1] is True
+    con = QueryBuilder()
+    con.register("test", dt)
+    df = con.execute("SELECT * FROM test").read_all()
+    assert len(df) == 98
 
 
 @pytest.mark.pandas

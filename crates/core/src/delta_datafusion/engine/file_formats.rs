@@ -181,7 +181,7 @@ impl JsonHandler for DataFusionFileFormatHandler {
         path: &url::Url,
         data: Box<dyn Iterator<Item = KernelResult<FilteredEngineData>> + Send + '_>,
         overwrite: bool,
-    ) -> KernelResult<()> {
+    ) -> KernelResult<u64> {
         self.get_or_create_json(path.as_object_store_url())?
             .write_json_file(path, data, overwrite)
     }

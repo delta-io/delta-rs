@@ -60,6 +60,28 @@ properties.
     ```
 
 
+## Loading and materialized metadata
+
+Normal `DeltaTable` loading collects active-file metadata and statistics in memory.
+It does not read the contents of the data files. Rust `Snapshot::try_new` remains
+lazy: file metadata is replayed when requested. `EagerSnapshot` explicitly
+materializes that metadata. Rust append-only callers can also use `BlindDeltaTable`.
+
+The Rust `DeltaTableConfig` loading configuration has been removed. In Python,
+`without_files`, `skip_stats`, and `log_buffer_size` are deprecated compatibility
+arguments and are ignored with a warning when supplied with non-default values.
+Consequently, `without_files=True` no longer reduces the memory used by normal
+table loading. The deprecated `table_config` property reports the effective
+loading defaults, not the ignored arguments. Table properties do not replace
+these loading options.
+
+Serialized tables written with the old configuration slot can still be read when
+their eager file cache is valid. Historical eager-wrapper payloads with absent files or no-stats caches, or an
+eager payload whose cache is rejected, must be reopened from its table URI so the
+log can be replayed. Deserialization reports an error instead of presenting the
+missing file state as an empty table. Standalone lazy `Snapshot` payloads remain
+readable without a file cache.
+
 ## Verify Table Existence
 
 You can check whether or not a Delta table exists at a particular path by using

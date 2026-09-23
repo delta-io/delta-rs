@@ -843,12 +843,8 @@ impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
                         debug!("version 0 already exists, loading table state for retry");
                         attempt_number = 2;
                         let latest_version: Version = this.log_store.get_latest_version(0).await?;
-                        EagerSnapshot::try_new(
-                            this.log_store.as_ref(),
-                            Default::default(),
-                            Some(latest_version),
-                        )
-                        .await?
+                        EagerSnapshot::try_new(this.log_store.as_ref(), Some(latest_version))
+                            .await?
                     }
                     Err(e) => return Err(e.into()),
                 }
@@ -1103,12 +1099,7 @@ impl PostCommit {
                 )
                 .await? as u64;
                 if num_log_files_cleaned_up > 0 {
-                    state = DeltaTableState::try_new(
-                        &self.log_store,
-                        state.load_config().clone(),
-                        Some(self.version),
-                    )
-                    .await?;
+                    state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
                 }
             }
 
@@ -1130,9 +1121,7 @@ impl PostCommit {
                 },
             ))
         } else {
-            let state =
-                DeltaTableState::try_new(&self.log_store, Default::default(), Some(self.version))
-                    .await?;
+            let state = DeltaTableState::try_new(&self.log_store, Some(self.version)).await?;
             Ok((
                 state,
                 PostCommitMetrics {
@@ -1149,13 +1138,6 @@ impl PostCommit {
         version: Version,
         operation_id: Uuid,
     ) -> DeltaResult<bool> {
-        if !table_state.load_config().require_files {
-            warn!(
-                "Checkpoint creation in post_commit_hook has been skipped due to table being initialized without files."
-            );
-            return Ok(false);
-        }
-
         let checkpoint_interval = table_state.config().checkpoint_interval().get();
         if (version + 1).is_multiple_of(checkpoint_interval) {
             create_checkpoint_for(version, log_store.as_ref(), Some(operation_id)).await?;

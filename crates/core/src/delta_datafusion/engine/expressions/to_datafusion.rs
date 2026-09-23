@@ -125,6 +125,9 @@ pub(crate) fn to_datafusion_scalar(scalar: &Scalar) -> DFResult<ScalarValue> {
                 .map_err(|e| DataFusionError::External(e.into()))?;
             ScalarValue::try_from(&data_type)?
         }
+        Scalar::IntervalYearMonth(_) | Scalar::IntervalDayTime(_) => {
+            unimplemented!("Interval* types are not supported properly for Datafusion")
+        }
     })
 }
 

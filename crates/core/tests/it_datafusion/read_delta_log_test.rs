@@ -1,5 +1,6 @@
 use deltalake_core::logstore::object_store::{GetResult, Result as ObjectStoreResult};
 use deltalake_core::{DeltaResult, DeltaTableBuilder, DeltaTableError};
+use futures::TryStreamExt;
 use object_store::path::Path as StorePath;
 use object_store::{
     CopyOptions, GetOptions, MultipartUpload, ObjectStore, PutMultipartOptions, PutOptions,
@@ -195,8 +196,6 @@ async fn test_log_buffering() {
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
-            .with_log_buffer_size(1)
-            .unwrap()
             .load()
             .await
             .expect("Failed to load table");
@@ -212,8 +211,6 @@ async fn test_log_buffering() {
             .unwrap()
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -246,8 +243,6 @@ async fn test_log_buffering_success_explicit_version() {
         let mut table = DeltaTableBuilder::from_url(table_uri)
             .unwrap()
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -257,8 +252,6 @@ async fn test_log_buffering_success_explicit_version() {
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -268,8 +261,6 @@ async fn test_log_buffering_success_explicit_version() {
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -279,8 +270,6 @@ async fn test_log_buffering_success_explicit_version() {
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -290,8 +279,6 @@ async fn test_log_buffering_success_explicit_version() {
         let mut table = DeltaTableBuilder::from_url(Url::from_directory_path(&path).unwrap())
             .unwrap()
             .with_version(0)
-            .with_log_buffer_size(buf_size)
-            .unwrap()
             .load()
             .await
             .unwrap();
@@ -315,8 +302,6 @@ async fn test_update_incremental_rejects_downgrade_and_load_version_allows_it() 
     let mut table = DeltaTableBuilder::from_url(table_uri)
         .unwrap()
         .with_version(0)
-        .with_log_buffer_size(10)
-        .unwrap()
         .load()
         .await
         .unwrap();
@@ -421,17 +406,6 @@ async fn test_update_incremental_same_version_checkpoint_refresh_skips_redundant
             .any(|path| path.ends_with("_delta_log/_last_checkpoint")),
         "same-version update reread _last_checkpoint even though the current snapshot was already checkpoint-backed: {recorded_gets:?}"
     );
-}
-
-#[tokio::test]
-async fn test_log_buffering_fail() {
-    let tmp_dir = tempfile::tempdir().unwrap();
-    let path = tmp_dir.path().to_path_buf();
-    let _table = fs_common::create_table(&path.to_string_lossy(), None).await;
-    let table_uri = Url::from_directory_path(std::fs::canonicalize(&path).unwrap()).unwrap();
-    let table_result = DeltaTableBuilder::from_url(table_uri)
-        .and_then(|builder| builder.with_version(0).with_log_buffer_size(0));
-    assert!(table_result.is_err());
 }
 
 #[tokio::test]

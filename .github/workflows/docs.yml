@@ -77,16 +77,34 @@ jobs:
           source python/venv/bin/activate
           mkdocs build
 
+      - name: Resolve the docs version
+        if: ${{ env.IS_RELEASE == 'true' }}
+        env:
+          TAG: ${{ github.event.client_payload.tag }}
+        run: |
+          if [[ "$TAG" == python-v* ]]; then
+            # A python release. Publish the docs under that release number.
+            VERSION="${TAG#python-v}"
+          else
+            # A docs-only merge or a manual run. Update the current release in place,
+            # so documentation fixes reach readers without waiting for a release.
+            VERSION=$(grep -m1 '^version' python/Cargo.toml | awk '{print $3}' | tr -d '"')
+          fi
+          echo "DOCS_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing docs as version $VERSION"
+
       - name: Deploy
         if: ${{ env.IS_RELEASE == 'true' }}
-        # <https://github.com/JamesIves/github-pages-deploy-action/releases/tag/v4.8.0>
-        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f
-        with:
-          folder: site
-          clean-exclude: |
-            python/
-            .nojekyll
-          single-commit: false
-          git-config-name: "Github Action"
-          git-config-email: "deltars@users.noreply.github.com"
-          commit-message: "doc update for tag `${{ github.event.client_payload.tag || github.ref_name }}`"
+        env:
+          DEPLOY_TAG: ${{ github.event.client_payload.tag || github.ref_name }}
+        run: |
+          source python/venv/bin/activate
+          git config user.name "Github Action"
+          git config user.email "deltars@users.noreply.github.com"
+          # mike commits on top of gh-pages, so it needs that branch in full.
+          # The default shallow checkout still fetches the branch complete.
+          git fetch origin gh-pages:gh-pages || echo "gh-pages is missing; mike will create it"
+          mike deploy --push --update-aliases \
+            --message "doc update for tag \`$DEPLOY_TAG\`" \
+            "$DOCS_VERSION" latest
+          mike set-default --push latest

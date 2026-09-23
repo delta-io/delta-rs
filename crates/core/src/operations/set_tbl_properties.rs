@@ -124,8 +124,7 @@ impl std::future::IntoFuture for SetTablePropertiesBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let operation_id = this.get_operation_id();
             this.pre_execute(operation_id).await?;
@@ -162,15 +161,44 @@ pub mod tests {
     use std::collections::HashMap;
     use tempfile::tempdir;
 
-    #[tokio::test]
     /// Verify that setting table properties is persisted to table metadata.
-    pub async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
+    #[tokio::test]
+    async fn test_set_tbl_properties() -> crate::DeltaResult<()> {
         let temp_loc = tempdir()?;
         let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
-        let props = HashMap::from([
-            ("delta.minReaderVersion".to_string(), "3".to_string()),
-            ("delta.minWriterVersion".to_string(), "7".to_string()),
-        ]);
+
+        // Test setting properties that enable features (should work with proper handling)
+        let props = HashMap::from([("delta.enableChangeDataFeed".to_string(), "true".to_string())]);
+        ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
+    }
+
+    /// Test setting protocol versions with features properly handled.
+    #[tokio::test]
+    async fn test_set_protocol_versions_with_features() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+
+        // Test enabling features that automatically set appropriate protocol versions
+        let props = HashMap::from([(
+            "delta.enableDeletionVectors".to_string(),
+            "true".to_string(),
+        )]);
+        ops.set_tbl_properties().with_properties(props).await?;
+
+        Ok(())
+    }
+
+    /// If a user attempts to set a newer minWriterVersion e.g. 7, then the protocol must add
+    /// writer and reader features to the table.
+    #[tokio::test]
+    async fn test_increase_protocol_versions() -> crate::DeltaResult<()> {
+        let temp_loc = tempdir()?;
+        let ops = create_initialized_table(temp_loc.path().to_str().unwrap(), &[]).await;
+
+        // Test enabling features that automatically set appropriate protocol versions
+        let props = HashMap::from([("delta.minWriterVersion".to_string(), "7".to_string())]);
         ops.set_tbl_properties().with_properties(props).await?;
 
         Ok(())

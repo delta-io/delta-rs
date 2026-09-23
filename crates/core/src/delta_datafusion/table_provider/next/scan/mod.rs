@@ -361,13 +361,12 @@ async fn replay_files(
     })
 }
 
-/// Normalize a DV keep mask for `deletion_vectors()`.
+/// Pad a DV keep mask to `numRecords` for `deletion_vectors()`.
 ///
-/// Kernel returns a sparse mask (up to the highest deleted row index). For API output we need one
-/// full mask per file, to do this we pad trailing entries with `true` up to `numRecords`. If `numRecords`
-/// is missing we fail, because we cannot know the correct full length.
+/// Kernel stops the mask at the highest deleted row. Fill trailing entries with `true`.
+/// Return an error when `numRecords` is missing or shorter than the mask.
 ///
-/// This is API only. Scan execution does per batch normalization in `exec::consume_dv_mask` and
+/// Scan execution normalizes each batch in `exec::consume_dv_mask` and
 /// `exec_meta::apply_selection_vector`.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,
@@ -932,7 +931,7 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_empty_file_selection_does_not_poll_metadata_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let scan_plan =
             KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
         let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
@@ -955,7 +954,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_resolved_file_selection_plan_does_not_poll_metadata_stream() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let scan_plan =
             KernelScanPlan::try_new(&snapshot, None, &[], &DeltaScanConfig::default(), None)?;
         let stream: ScanMetadataStream = Box::pin(futures::stream::poll_fn(|_| {
@@ -1659,7 +1658,7 @@ mod tests {
             )
             .await?;
 
-        let snapshot = Snapshot::try_new(&log_store, Default::default(), None).await?;
+        let snapshot = Snapshot::try_new(&log_store, None).await?;
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
             .with_snapshot(snapshot)
             .with_log_store(log_store)

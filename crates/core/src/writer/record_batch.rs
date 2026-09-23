@@ -1702,9 +1702,9 @@ mod tests {
 
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
             let file_schema =
-                arrow_schema_without_partitions(&writer.arrow_schema(), &partition_cols);
+                arrow_schema_without_partitions(&writer.arrow_schema(), partition_cols);
             let partitions =
-                divide_by_partition_values(file_schema, &partition_cols, &batch).unwrap();
+                divide_by_partition_values(file_schema, partition_cols, &batch).unwrap();
 
             assert_eq!(partitions.len(), 1);
             assert_eq!(partitions[0].record_batch, batch);
@@ -1760,9 +1760,9 @@ mod tests {
 
             let mut writer = RecordBatchWriter::for_table(&table).unwrap();
             let file_schema =
-                arrow_schema_without_partitions(&writer.arrow_schema(), &partition_cols);
+                arrow_schema_without_partitions(&writer.arrow_schema(), partition_cols);
             let partitions =
-                divide_by_partition_values(file_schema, &partition_cols, &batch).unwrap();
+                divide_by_partition_values(file_schema, partition_cols, &batch).unwrap();
 
             assert_eq!(partitions.len(), 1);
             assert_eq!(partitions[0].record_batch, batch);

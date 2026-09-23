@@ -5,6 +5,7 @@ import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -24,7 +25,6 @@ from arro3.core.types import (
 )
 
 from deltalake._internal import (
-    DeltaError,
     PyMergeBuilder,
     RawDeltaTable,
     TableFeatures,
@@ -67,7 +67,7 @@ SUPPORTED_WRITER_FEATURES = {
 }
 
 MAX_SUPPORTED_READER_VERSION = 3
-NOT_SUPPORTED_READER_VERSION = 2
+NOT_SUPPORTED_READER_VERSION = -1
 SUPPORTED_READER_FEATURES = {"timestampNtz", "variantType", "variantType-preview"}
 
 FSCK_METRICS_FILES_REMOVED_LABEL = "files_removed"
@@ -178,10 +178,65 @@ class Metadata:
         )
 
 
-class DeltaTableConfig(NamedTuple):
+class TableProperty(StrEnum):
+    """Delta table property keys.
+
+    Use these values as keys in the `configuration` argument to
+    [write_deltalake][deltalake.write_deltalake].
+
+    Example:
+        ```python
+        write_deltalake(
+            "path/to/table",
+            data,
+            configuration={TableProperty.APPEND_ONLY: "true"},
+        )
+        ```
+    """
+
+    APPEND_ONLY = "delta.appendOnly"
+    AUTO_OPTIMIZE_AUTO_COMPACT = "delta.autoOptimize.autoCompact"
+    AUTO_OPTIMIZE_OPTIMIZE_WRITE = "delta.autoOptimize.optimizeWrite"
+    CHECKPOINT_INTERVAL = "delta.checkpointInterval"
+    CHECKPOINT_WRITE_STATS_AS_JSON = "delta.checkpoint.writeStatsAsJson"
+    CHECKPOINT_WRITE_STATS_AS_STRUCT = "delta.checkpoint.writeStatsAsStruct"
+    CHECKPOINT_USE_RUN_LENGTH_ENCODING = "delta-rs.checkpoint.useRunLengthEncoding"
+    CHECKPOINT_POLICY = "delta.checkpointPolicy"
+    COLUMN_MAPPING_MODE = "delta.columnMapping.mode"
+    DATA_SKIPPING_NUM_INDEXED_COLS = "delta.dataSkippingNumIndexedCols"
+    DATA_SKIPPING_STATS_COLUMNS = "delta.dataSkippingStatsColumns"
+    DELETED_FILE_RETENTION_DURATION = "delta.deletedFileRetentionDuration"
+    ENABLE_CHANGE_DATA_FEED = "delta.enableChangeDataFeed"
+    ENABLE_DELETION_VECTORS = "delta.enableDeletionVectors"
+    ISOLATION_LEVEL = "delta.isolationLevel"
+    LOG_RETENTION_DURATION = "delta.logRetentionDuration"
+    ENABLE_EXPIRED_LOG_CLEANUP = "delta.enableExpiredLogCleanup"
+    MIN_READER_VERSION = "delta.minReaderVersion"
+    MIN_WRITER_VERSION = "delta.minWriterVersion"
+    RANDOMIZE_FILE_PREFIXES = "delta.randomizeFilePrefixes"
+    RANDOM_PREFIX_LENGTH = "delta.randomPrefixLength"
+    SET_TRANSACTION_RETENTION_DURATION = "delta.setTransactionRetentionDuration"
+    TARGET_FILE_SIZE = "delta.targetFileSize"
+    TUNE_FILE_SIZES_FOR_REWRITES = "delta.tuneFileSizesForRewrites"
+
+
+class _DeltaTableConfigBase(NamedTuple):
     without_files: bool
     log_buffer_size: int
     skip_stats: bool = False
+
+
+class DeltaTableConfig(_DeltaTableConfigBase):
+    def __new__(
+        cls, without_files: bool, log_buffer_size: int, skip_stats: bool = False
+    ) -> "DeltaTableConfig":
+        """Create DeltaTableConfig with deprecation warning."""
+        warnings.warn(
+            "The DeltaTableConfig class is deprecated and will be removed in a future release. ",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return super().__new__(cls, without_files, log_buffer_size, skip_stats)
 
 
 class ProtocolVersions(NamedTuple):
@@ -213,37 +268,54 @@ class DeltaTable:
             table_uri: the path of the DeltaTable
             version: version of the DeltaTable
             storage_options: a dictionary of the options to use for the storage backend
-            without_files: If True, will load table without tracking files.
-                                Some append-only applications might have no need of tracking any files. So, the
-                                DeltaTable will be loaded with a significant memory reduction.
-            log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
-                                Setting a value greater than 1 results in concurrent calls to the storage api.
-                                This can decrease latency if there are many files in the log since the last checkpoint,
-                                but will also increase memory usage. Possible rate limits of the storage backend should
-                                also be considered for optimal performance. Defaults to 4 * number of cpus.
-            skip_stats: If True, skip parsing file statistics while opening the table.
-                                Use for maintenance and append workflows that do not need file pruning.
-                                Queries with predicates scan each file because the kernel disables statistics and
-                                partition pruning. Defaults to False.
+            without_files: Deprecated and ignored. Table loading materializes active-file metadata.
+            log_buffer_size: Deprecated and ignored. Log buffering is managed internally.
+            skip_stats: Deprecated and ignored. Table loading retains file statistics.
 
         """
+        if without_files:
+            warnings.warn(
+                "The 'without_files' parameter is deprecated and ignored. "
+                "Table loading materializes active-file metadata.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if log_buffer_size is not None:
+            warnings.warn(
+                "The 'log_buffer_size' parameter is deprecated and ignored. "
+                "Log buffering is managed internally.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if skip_stats:
+            warnings.warn(
+                "The 'skip_stats' parameter is deprecated and ignored. "
+                "Table loading retains file statistics.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         self._storage_options = storage_options
         self._table = RawDeltaTable(
             str(table_uri),
             version=version,
             storage_options=storage_options,
-            without_files=without_files,
-            log_buffer_size=log_buffer_size,
-            skip_stats=skip_stats,
         )
 
     @property
     def table_config(self) -> DeltaTableConfig:
+        warnings.warn(
+            "The 'table_config' property is deprecated and will be removed in a future release. "
+            "It reports effective defaults; deprecated constructor options are ignored.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return DeltaTableConfig(*self._table.table_config())
 
     @staticmethod
     def is_deltatable(
-        table_uri: str, storage_options: dict[str, str] | None = None
+        table_uri: str | Path | os.PathLike[str],
+        storage_options: dict[str, str] | None = None,
     ) -> bool:
         """
         Returns True if a Delta Table exists at specified path.
@@ -254,7 +326,7 @@ class DeltaTable:
             storage_options: a dictionary of the options to use for the
                 storage backend
         """
-        return RawDeltaTable.is_deltatable(table_uri, storage_options)
+        return RawDeltaTable.is_deltatable(str(table_uri), storage_options)
 
     @classmethod
     def create(
@@ -516,7 +588,7 @@ class DeltaTable:
             self._table.load_version(version)
         elif isinstance(version, datetime):
             if version.tzinfo is None:
-                version = version.astimezone(timezone.utc)
+                version = version.replace(tzinfo=timezone.utc)
             self._table.load_with_datetime(version.isoformat())
         elif isinstance(version, str):
             self._table.load_with_datetime(version)
@@ -1118,17 +1190,11 @@ class DeltaTable:
             raise ImportError(
                 "Pyarrow is required, install deltalake[pyarrow] for pyarrow read functionality."
             )
-        if not self._table.has_files():
-            raise DeltaError("Table is instantiated without files.")
-
         table_protocol = self.protocol()
-        if (
-            table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION
-            or table_protocol.min_reader_version == NOT_SUPPORTED_READER_VERSION
-        ):
+        if table_protocol.min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {table_protocol.min_reader_version} "
-                f"but deltalake only supports version 1 or {MAX_SUPPORTED_READER_VERSION} "
+                f"The table's minimum reader version greater than the "
+                f"maximum supported version {MAX_SUPPORTED_READER_VERSION} "
                 f"with these reader features: {SUPPORTED_READER_FEATURES}"
             )
         if (
@@ -2503,8 +2569,9 @@ class TableOptimizer:
         """
         Compacts small files to reduce read overhead.
 
-        This operation is idempotent; if run twice on the same table (assuming it has
-        not been updated) it will do nothing the second time.
+        This operation is eventually idempotent; repeated runs on an unchanged table
+        converge to a stable layout, but a rewritten file that lands under the target
+        size can still be merged again by a later run.
 
         Compaction keeps file order within each partition.
 

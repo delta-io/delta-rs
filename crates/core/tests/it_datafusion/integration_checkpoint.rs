@@ -233,11 +233,11 @@ async fn test_older_checkpoint_reads() -> DeltaResult<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 /// This test validates that we can read a table with v2 checkpoints
 async fn test_v2_checkpoint_json() -> DeltaResult<()> {
-    let temp_table = clone_table("checkpoint-v2-table");
+    let temp_table = clone_table("v2-classic-checkpoint-json");
     let table_path = temp_table.path().to_str().unwrap();
     let table_url = ensure_table_uri(table_path).unwrap();
     let table = deltalake_core::open_table(table_url).await?;
-    assert_eq!(table.version(), Some(9));
+    assert_eq!(table.version(), Some(1));
     create_checkpoint(&table, None).await?;
     Ok(())
 }

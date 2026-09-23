@@ -38,6 +38,7 @@ use datafusion::common::Result;
 use datafusion::datasource::{MemTable, provider_as_source};
 use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE};
 use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
+use delta_kernel::table_configuration::TableConfiguration;
 use delta_kernel::table_features::ColumnMappingMode;
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
@@ -397,7 +398,9 @@ impl WriteBuilder {
         }
     }
 
-    async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
+    /// Returns the actions that create the table when it does not exist yet, and the table
+    /// configuration this write starts from.
+    async fn check_preconditions(&self) -> DeltaResult<(Vec<Action>, TableConfiguration)> {
         if self.schema_mode == Some(SchemaMode::Overwrite) && self.mode != SaveMode::Overwrite {
             return Err(DeltaTableError::Generic(
                 "Schema overwrite not supported for Append".to_string(),
@@ -423,9 +426,6 @@ impl WriteBuilder {
 
                 if self.mode == SaveMode::Overwrite {
                     PROTOCOL.check_append_only(snapshot)?;
-                    if !snapshot.load_config().require_files {
-                        return Err(DeltaTableError::NotInitializedWithFiles("WRITE".into()));
-                    }
                 }
 
                 PROTOCOL.can_write_to(snapshot)?;
@@ -440,7 +440,7 @@ impl WriteBuilder {
                     SaveMode::ErrorIfExists => {
                         Err(WriteError::AlreadyExists(self.log_store.root_url().clone()).into())
                     }
-                    _ => Ok(vec![]),
+                    _ => Ok((vec![], snapshot.table_configuration().clone())),
                 }
             }
             None => {
@@ -460,8 +460,20 @@ impl WriteBuilder {
                     builder = builder.with_comment(desc.clone());
                 };
 
-                let (_, actions, _, _) = builder.into_table_and_actions().await?;
-                Ok(actions)
+                let (_, actions, operation, _) = builder.into_table_and_actions().await?;
+                let DeltaOperation::Create {
+                    metadata,
+                    protocol,
+                    location,
+                    ..
+                } = operation
+                else {
+                    unreachable!("CreateBuilder always yields a Create operation")
+                };
+                Ok((
+                    actions,
+                    TableConfiguration::try_new(metadata, protocol, location, 0)?,
+                ))
             }
         }
     }
@@ -487,7 +499,7 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 // Create table actions to initialize table in case it does not yet exist
                 // and should be created
-                let mut actions = this.check_preconditions().await?;
+                let (mut actions, base_config) = this.check_preconditions().await?;
 
                 let partition_columns = this.get_partition_columns()?;
 
@@ -552,17 +564,13 @@ impl std::future::IntoFuture for WriteBuilder {
                     exec_options,
                     ..
                 } = prepared_write;
+
+                // The sink is done against the configuration that is defined during this commit
+                let table_config = schema_delta.applied_to(&base_config)?;
                 actions.extend(schema_delta.into_actions());
 
                 metrics.num_removed_files = overwrite_plan.num_removed_files();
 
-                let plan::WriteExecOptions {
-                    partition_columns,
-                    target_file_size,
-                    write_batch_size,
-                    writer_properties,
-                    writer_stats_config,
-                } = exec_options;
                 let predicate_sql = exact_validation.as_ref().map(fmt_expr_to_sql).transpose()?;
                 let (sink_plan, contains_cdc, insert_marker_column) =
                     overwrite_plan.build_sink_plan()?;
@@ -570,15 +578,11 @@ impl std::future::IntoFuture for WriteBuilder {
 
                 // Here we need to validate if the new data conforms to a predicate if one is provided
                 let (add_actions, _) = write_execution_plan_v2(
-                    this.snapshot.as_ref(),
+                    &table_config,
                     &session,
                     source_plan.clone(),
-                    partition_columns.clone(),
                     this.log_store.object_store(Some(operation_id)).clone(),
-                    target_file_size,
-                    write_batch_size,
-                    writer_properties,
-                    writer_stats_config,
+                    exec_options,
                     exact_validation,
                     contains_cdc,
                     insert_marker_column,
@@ -677,7 +681,7 @@ mod tests {
     use serde_json::{Value, json};
 
     async fn get_write_metrics(table: &DeltaTable) -> WriteMetrics {
-        let mut commit_info: Vec<_> = table.history(Some(1)).await.unwrap().collect();
+        let mut commit_info: Vec<_> = table.history(Some(1)).try_collect().await.unwrap();
         let metrics = commit_info
             .first_mut()
             .unwrap()
@@ -807,6 +811,46 @@ mod tests {
             .expect_err("Remove action is included when Delta table is append-only. Should error");
     }
 
+    /// The first write to a location creates the table, so there is no snapshot to read the
+    /// column mapping mode from. The sink must still write physical column names.
+    #[tokio::test]
+    async fn test_create_write_column_mapped_table_writes_physical_names() {
+        let table = DeltaTable::new_in_memory()
+            .write(vec![get_record_batch(None, false)])
+            .with_configuration([("delta.columnMapping.mode", Some("name"))])
+            .await
+            .unwrap();
+
+        let snapshot = table.snapshot().unwrap().snapshot();
+        assert_eq!(
+            snapshot.table_configuration().column_mapping_mode(),
+            ColumnMappingMode::Name
+        );
+
+        let files = table.get_files_by_partitions(&[]).await.unwrap();
+        assert_eq!(files.len(), 1);
+        let reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+            table.log_store().object_store(None),
+            files[0].clone(),
+        );
+        let builder = parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder::new(reader)
+            .await
+            .unwrap();
+
+        let parquet_columns: Vec<&str> = builder
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect();
+        let schema = snapshot.schema();
+        let physical_names: Vec<&str> = schema
+            .fields()
+            .map(|field| field.physical_name(ColumnMappingMode::Name))
+            .collect();
+        assert_eq!(parquet_columns, physical_names);
+    }
+
     #[tokio::test]
     async fn test_create_write() {
         let table_schema = get_delta_schema();
@@ -839,7 +883,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(
             history[0]
@@ -868,7 +912,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 3);
         assert_eq!(
             history[0]
@@ -897,7 +941,7 @@ mod tests {
         assert_common_write_metrics(write_metrics);
 
         table.load().await.unwrap();
-        let history: Vec<CommitInfo> = table.history(None).await.unwrap().collect();
+        let history: Vec<CommitInfo> = table.history(None).try_collect().await.unwrap();
         assert_eq!(history.len(), 4);
         assert_eq!(
             history[0]
@@ -1549,7 +1593,7 @@ mod tests {
                 .all(|remove| remove.deletion_timestamp.is_some())
         );
 
-        let commit_info: Vec<_> = table.history(Some(1)).await?.collect();
+        let commit_info: Vec<_> = table.history(Some(1)).try_collect().await?;
         let operation_parameters = commit_info[0].operation_parameters.as_ref().unwrap();
         assert_eq!(operation_parameters["partitionBy"], json!("[\"id\"]"));
 
@@ -2628,41 +2672,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_without_files_is_rejected() -> TestResult {
-        let temp_dir = tempfile::tempdir()?;
-        let table_path = temp_dir.path().join("without_files_overwrite");
-        std::fs::create_dir(&table_path)?;
-        let table_uri = ensure_table_uri(table_path.to_str().unwrap())?;
-
-        DeltaTable::try_from_url(table_uri.clone())
-            .await?
-            .write(vec![get_record_batch(None, false)])
-            .await?;
-
-        let table = crate::DeltaTableBuilder::from_url(table_uri)?
-            .without_files()
-            .load()
-            .await?;
-
-        assert_eq!(table.version(), Some(0));
-
-        // Phase 3 now routes overwrite planning through matched-file discovery, so this guard
-        // stays covered here to ensure we still fail before any rewrite planning starts.
-        let err = table
-            .write(vec![get_record_batch(None, false)])
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .expect_err("overwrite should fail when table was loaded without files");
-
-        assert!(matches!(
-            err,
-            DeltaTableError::NotInitializedWithFiles(operation) if operation == "WRITE"
-        ));
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_replace_where_partitioned() {
         let schema = get_arrow_schema(&None);
 
@@ -3257,7 +3266,7 @@ mod tests {
             let writer =
                 WriteBuilder::new(table.log_store.clone(), None).with_input_batches(vec![batch]);
 
-            let actions = writer.check_preconditions().await?;
+            let (actions, _) = writer.check_preconditions().await?;
             assert_eq!(
                 actions.len(),
                 2,
