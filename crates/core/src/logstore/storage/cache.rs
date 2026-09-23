@@ -1,17 +1,43 @@
-//! Optional in-memory byte cache for object store reads.
+//! Object-store byte cache for Delta log replay.
 //!
 //! Enabled only when the `delta-cache` Cargo feature is compiled in, and activated
 //! at runtime when [`CachingObjectStore::from_env`] finds a positive
 //! `DELTA_CACHE_CAPACITY_BYTES` environment variable.
+//!
+//! Two tiers are supported:
+//!
+//! * **Memory-only** (default): a `foyer::Cache` kept entirely in process memory.
+//! * **Hybrid** (enabled by `DELTA_CACHE_DIR`): a `foyer::HybridCache` with a
+//!   memory tier backed by a disk spill tier. Bytes evicted from memory are written
+//!   to the directory named by `DELTA_CACHE_DIR`, which is typically faster than the
+//!   remote object store. Requires a **multi-thread** Tokio runtime.
+//!
+//! # Environment variables
+//!
+//! | Variable | Default | Description |
+//! |---|---|---|
+//! | `DELTA_CACHE_CAPACITY_BYTES` | — | Memory tier byte budget **(required to enable)** |
+//! | `DELTA_CACHE_SHARDS` | `4` | Memory-tier access shards |
+//! | `DELTA_CACHE_EVICTION` | `lru` | Algorithm: `lru`, `lfu`, `s3fifo`, `sieve`, `fifo` |
+//! | `DELTA_CACHE_LRU_HIGH_PRIO_RATIO` | `0.9` | LRU high-priority pool ratio [0,1] |
+//! | `DELTA_CACHE_LFU_WINDOW_RATIO` | `0.01` | LFU window-queue capacity ratio |
+//! | `DELTA_CACHE_LFU_PROTECTED_RATIO` | `0.8` | LFU protected-segment capacity ratio |
+//! | `DELTA_CACHE_S3FIFO_SMALL_RATIO` | `0.1` | S3-FIFO small-queue capacity ratio |
+//! | `DELTA_CACHE_S3FIFO_GHOST_RATIO` | `1.0` | S3-FIFO ghost-queue capacity ratio |
+//! | `DELTA_CACHE_S3FIFO_FREQ_THRESHOLD` | `1` | S3-FIFO small-to-main promotion threshold |
+//! | `DELTA_CACHE_DIR` | — | Directory for disk spill tier; enables `HybridCache` |
+//! | `DELTA_CACHE_DISK_CAPACITY_BYTES` | 80% free | Disk-tier byte budget (0 = foyer default) |
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use foyer::{
-    Cache, CacheBuilder, CacheProperties, EvictionConfig, FifoConfig, LfuConfig, LruConfig,
-    S3FifoConfig, SieveConfig,
+    BlockEngineConfig, Cache, CacheBuilder, CacheProperties, DeviceBuilder, EvictionConfig,
+    FifoConfig, FsDeviceBuilder, HybridCache, HybridCacheBuilder, LfuConfig, LruConfig,
+    S3FifoConfig, SieveConfig, StorageKey, StorageValue,
 };
+use serde::{Deserialize, Serialize};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
@@ -21,44 +47,8 @@ use object_store::{
 };
 use tracing::debug;
 
-// -- InvalidatingMultipartUpload -----------------------------------------------
+// -- Env-var names ------------------------------------------------------------
 
-/// A `MultipartUpload` wrapper that removes the cache entry for `key` when
-/// `complete()` succeeds, keeping the cache consistent after multipart writes.
-struct InvalidatingMultipartUpload {
-    inner: Box<dyn MultipartUpload>,
-    cache: DeltaCache,
-    key: String,
-}
-
-impl std::fmt::Debug for InvalidatingMultipartUpload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InvalidatingMultipartUpload")
-            .field("key", &self.key)
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl MultipartUpload for InvalidatingMultipartUpload {
-    fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        self.inner.put_part(data)
-    }
-
-    async fn complete(&mut self) -> OSResult<PutResult> {
-        let result = self.inner.complete().await?;
-        // Invalidate only on success; a failed complete leaves the object
-        // unchanged so the cached bytes remain valid.
-        self.cache.remove(&self.key);
-        Ok(result)
-    }
-
-    async fn abort(&mut self) -> OSResult<()> {
-        self.inner.abort().await
-    }
-}
-
-// Env-var names
 const ENV_CAPACITY: &str = "DELTA_CACHE_CAPACITY_BYTES";
 const ENV_SHARDS: &str = "DELTA_CACHE_SHARDS";
 const ENV_EVICTION: &str = "DELTA_CACHE_EVICTION";
@@ -68,6 +58,10 @@ const ENV_LFU_PROTECTED: &str = "DELTA_CACHE_LFU_PROTECTED_RATIO";
 const ENV_S3_SMALL: &str = "DELTA_CACHE_S3FIFO_SMALL_RATIO";
 const ENV_S3_GHOST: &str = "DELTA_CACHE_S3FIFO_GHOST_RATIO";
 const ENV_S3_FREQ: &str = "DELTA_CACHE_S3FIFO_FREQ_THRESHOLD";
+const ENV_DIR: &str = "DELTA_CACHE_DIR";
+const ENV_DISK_CAPACITY: &str = "DELTA_CACHE_DISK_CAPACITY_BYTES";
+
+// -- Helpers ------------------------------------------------------------------
 
 fn env_f64(name: &str, default: f64) -> f64 {
     std::env::var(name)
@@ -83,25 +77,108 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-type DeltaCache = Cache<String, Bytes, foyer::DefaultHasher, CacheProperties>;
+// -- CachedBytes newtype ------------------------------------------------------
 
-/// Build a foyer in-memory cache from the current environment variables.
-/// Returns `None` when `DELTA_CACHE_CAPACITY_BYTES` is absent or zero.
-pub fn build_cache_from_env() -> Option<DeltaCache> {
-    let capacity = std::env::var(ENV_CAPACITY)
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .filter(|&c| c > 0)?;
+/// Newtype wrapper for [`bytes::Bytes`] that satisfies foyer's `StorageValue`
+/// bound (which requires `serde::Serialize + serde::de::DeserializeOwned`).
+/// Serialized as a sequence of bytes (plain `Vec<u8>`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedBytes(Vec<u8>);
 
-    let shards = env_usize(ENV_SHARDS, 4);
-    let eviction_name = std::env::var(ENV_EVICTION).unwrap_or_else(|_| "lru".to_string());
+impl From<Bytes> for CachedBytes {
+    fn from(b: Bytes) -> Self {
+        CachedBytes(b.into())
+    }
+}
 
-    let eviction_config: EvictionConfig = match eviction_name.to_lowercase().as_str() {
+impl From<CachedBytes> for Bytes {
+    fn from(c: CachedBytes) -> Self {
+        c.0.into()
+    }
+}
+
+// -- Unified cache enum -------------------------------------------------------
+
+type MemCache = Cache<String, Bytes, foyer::DefaultHasher, CacheProperties>;
+type HybCache = HybridCache<String, CachedBytes>;
+
+/// Unified cache handle: either an in-process memory cache or a foyer hybrid
+/// cache that spills evicted entries to a local disk directory.
+#[derive(Debug, Clone)]
+enum DeltaCache {
+    Memory(MemCache),
+    Hybrid(HybCache),
+}
+
+impl DeltaCache {
+    /// Look up `key`. Returns the cached bytes, or `None` on a miss.
+    /// For the hybrid tier, disk I/O may be involved; errors are treated as
+    /// misses (the read falls through to the object store).
+    async fn lookup(&self, key: &str) -> Option<Bytes> {
+        match self {
+            DeltaCache::Memory(c) => c.get(key).map(|e| e.value().clone()),
+            DeltaCache::Hybrid(c) => c
+                .get(key)
+                .await
+                .ok()
+                .flatten()
+                .map(|e| bytes::Bytes::from(e.value().clone())),
+        }
+    }
+
+    /// Insert `bytes` under `key`.
+    fn store(&self, key: String, bytes: Bytes) {
+        match self {
+            DeltaCache::Memory(c) => {
+                c.insert(key, bytes);
+            }
+            DeltaCache::Hybrid(c) => {
+                c.insert(key, CachedBytes::from(bytes));
+            }
+        }
+    }
+
+    /// Remove the entry for `key` from both memory and disk tiers.
+    fn evict(&self, key: &str) {
+        match self {
+            DeltaCache::Memory(c) => {
+                c.remove(key);
+            }
+            DeltaCache::Hybrid(c) => {
+                c.remove(key);
+            }
+        }
+    }
+
+    /// Memory-tier capacity in bytes (test helper).
+    #[cfg(test)]
+    fn memory_capacity(&self) -> usize {
+        match self {
+            DeltaCache::Memory(c) => c.capacity(),
+            DeltaCache::Hybrid(_) => panic!("capacity() not exposed for hybrid cache"),
+        }
+    }
+
+    /// Memory-tier shard count (test helper).
+    #[cfg(test)]
+    fn memory_shards(&self) -> usize {
+        match self {
+            DeltaCache::Memory(c) => c.shards(),
+            DeltaCache::Hybrid(_) => panic!("shards() not exposed for hybrid cache"),
+        }
+    }
+}
+
+// -- Eviction config builder (shared between memory and hybrid paths) ---------
+
+/// Parse the eviction algorithm env vars and return an [`EvictionConfig`].
+/// Returns `None` if a configured ratio violates foyer's constraints (in which
+/// case the cache should be disabled rather than panicking).
+fn build_eviction_config(eviction_name: &str) -> Option<EvictionConfig> {
+    match eviction_name.to_lowercase().as_str() {
         "lfu" => {
             let window = env_f64(ENV_LFU_WINDOW, 0.01);
             let protected = env_f64(ENV_LFU_PROTECTED, 0.8);
-            // foyer asserts window > 0, protected > 0, and window + protected < 1.
-            // Catch violations here and disable the cache rather than panicking.
             if !(window > 0.0 && window < 1.0) {
                 tracing::warn!(
                     window,
@@ -126,16 +203,17 @@ pub fn build_cache_from_env() -> Option<DeltaCache> {
                 );
                 return None;
             }
-            LfuConfig {
-                window_capacity_ratio: window,
-                protected_capacity_ratio: protected,
-                ..LfuConfig::default()
-            }
-            .into()
+            Some(
+                LfuConfig {
+                    window_capacity_ratio: window,
+                    protected_capacity_ratio: protected,
+                    ..LfuConfig::default()
+                }
+                .into(),
+            )
         }
         "s3fifo" => {
             let small = env_f64(ENV_S3_SMALL, 0.1);
-            // foyer asserts small_queue_capacity_ratio in (0, 1).
             if !(small > 0.0 && small < 1.0) {
                 tracing::warn!(
                     small,
@@ -143,40 +221,218 @@ pub fn build_cache_from_env() -> Option<DeltaCache> {
                 );
                 return None;
             }
-            S3FifoConfig {
-                small_queue_capacity_ratio: small,
-                ghost_queue_capacity_ratio: env_f64(ENV_S3_GHOST, 1.0),
-                small_to_main_freq_threshold: std::env::var(ENV_S3_FREQ)
-                    .ok()
-                    .and_then(|v| v.parse::<u8>().ok())
-                    .unwrap_or(1),
+            Some(
+                S3FifoConfig {
+                    small_queue_capacity_ratio: small,
+                    ghost_queue_capacity_ratio: env_f64(ENV_S3_GHOST, 1.0),
+                    small_to_main_freq_threshold: std::env::var(ENV_S3_FREQ)
+                        .ok()
+                        .and_then(|v| v.parse::<u8>().ok())
+                        .unwrap_or(1),
+                }
+                .into(),
+            )
+        }
+        "sieve" => Some(SieveConfig.into()),
+        "fifo" => Some(FifoConfig {}.into()),
+        _ => Some(
+            LruConfig {
+                high_priority_pool_ratio: env_f64(ENV_LRU_HIGH_PRIO, 0.9),
             }
-            .into()
-        }
-        "sieve" => SieveConfig.into(),
-        "fifo" => FifoConfig {}.into(),
-        _ => LruConfig {
-            high_priority_pool_ratio: env_f64(ENV_LRU_HIGH_PRIO, 0.9),
-        }
-        .into(),
-    };
-
-    let cache = CacheBuilder::new(capacity)
-        .with_shards(shards)
-        .with_eviction_config(eviction_config)
-        .build::<CacheProperties>();
-
-    debug!(
-        capacity,
-        shards,
-        eviction = eviction_name,
-        "delta-cache: in-memory object store cache enabled"
-    );
-
-    Some(cache)
+            .into(),
+        ),
+    }
 }
 
-/// An [`ObjectStore`] decorator that caches unconditional full-object reads.
+// -- Cache construction -------------------------------------------------------
+
+/// Build a memory-only foyer cache.
+fn build_memory_cache(
+    capacity: usize,
+    shards: usize,
+    eviction: EvictionConfig,
+) -> DeltaCache {
+    DeltaCache::Memory(
+        CacheBuilder::new(capacity)
+            .with_shards(shards)
+            .with_eviction_config(eviction)
+            .build::<CacheProperties>(),
+    )
+}
+
+/// Build a hybrid (memory + disk) foyer cache.
+/// Requires a multi-thread Tokio runtime for `block_in_place`.
+async fn build_hybrid_cache(
+    dir: &str,
+    memory_capacity: usize,
+    disk_capacity: usize,
+    shards: usize,
+    eviction: EvictionConfig,
+) -> Option<DeltaCache> {
+    let mut device_builder = FsDeviceBuilder::new(dir);
+    if disk_capacity > 0 {
+        device_builder = device_builder.with_capacity(disk_capacity);
+    }
+    let device = match DeviceBuilder::build(device_builder) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                dir,
+                error = %e,
+                "delta-cache: failed to build disk device; using memory-only cache"
+            );
+            return None;
+        }
+    };
+
+    let cache = HybridCacheBuilder::new()
+        .memory(memory_capacity)
+        .with_shards(shards)
+        .with_eviction_config(eviction)
+        .storage()
+        .with_engine_config(BlockEngineConfig::new(device))
+        .build()
+        .await;
+
+    match cache {
+        Ok(c) => {
+            debug!(
+                memory_capacity,
+                disk_capacity,
+                dir,
+                "delta-cache: hybrid (memory + disk) cache enabled"
+            );
+            Some(DeltaCache::Hybrid(c))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "delta-cache: hybrid cache build failed; using memory-only cache"
+            );
+            None
+        }
+    }
+}
+
+/// Build a [`DeltaCache`] from the current environment variables.
+///
+/// Returns `None` when `DELTA_CACHE_CAPACITY_BYTES` is absent or zero.
+///
+/// When `DELTA_CACHE_DIR` is set:
+/// - In a **multi-thread** Tokio runtime, a hybrid cache is built via
+///   `block_in_place`.
+/// - In a **current-thread** runtime a hybrid cache cannot be built without
+///   blocking the thread; the function falls back to a memory-only cache and
+///   logs a warning.
+pub fn build_cache_from_env() -> Option<DeltaCache> {
+    let capacity = std::env::var(ENV_CAPACITY)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&c| c > 0)?;
+
+    let shards = env_usize(ENV_SHARDS, 4);
+    let eviction_name = std::env::var(ENV_EVICTION).unwrap_or_else(|_| "lru".to_string());
+    let eviction = build_eviction_config(&eviction_name)?;
+
+    let dir = std::env::var(ENV_DIR).ok();
+
+    if let Some(dir) = dir {
+        let disk_capacity = env_usize(ENV_DISK_CAPACITY, 0);
+
+        // Hybrid cache build is async. Use block_in_place if we're in a
+        // multi-thread runtime; fall back to memory-only otherwise.
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(_) => {
+                tracing::warn!(
+                    "delta-cache: DELTA_CACHE_DIR set but no Tokio runtime found; \
+                     using memory-only cache"
+                );
+                return Some(build_memory_cache(capacity, shards, eviction));
+            }
+        };
+
+        match handle.runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::MultiThread => {
+                let hybrid = tokio::task::block_in_place(|| {
+                    handle.block_on(build_hybrid_cache(
+                        &dir,
+                        capacity,
+                        disk_capacity,
+                        shards,
+                        eviction.clone(),
+                    ))
+                });
+                // Fall back to memory-only if the hybrid build fails.
+                Some(hybrid.unwrap_or_else(|| build_memory_cache(capacity, shards, eviction)))
+            }
+            _ => {
+                tracing::warn!(
+                    "delta-cache: DELTA_CACHE_DIR requires a multi-thread Tokio runtime; \
+                     using memory-only cache"
+                );
+                Some(build_memory_cache(capacity, shards, eviction))
+            }
+        }
+    } else {
+        let cache = build_memory_cache(capacity, shards, eviction);
+        debug!(
+            capacity,
+            shards,
+            eviction = eviction_name,
+            "delta-cache: in-memory object store cache enabled"
+        );
+        Some(cache)
+    }
+}
+
+// -- InvalidatingMultipartUpload ----------------------------------------------
+
+/// A [`MultipartUpload`] wrapper that evicts the cache entry for `key` when
+/// `complete()` succeeds, keeping the cache consistent after multipart writes.
+struct InvalidatingMultipartUpload {
+    inner: Box<dyn MultipartUpload>,
+    cache: DeltaCache,
+    key: String,
+}
+
+impl std::fmt::Debug for InvalidatingMultipartUpload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InvalidatingMultipartUpload")
+            .field("key", &self.key)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl MultipartUpload for InvalidatingMultipartUpload {
+    fn put_part(&mut self, data: PutPayload) -> UploadPart {
+        self.inner.put_part(data)
+    }
+
+    async fn complete(&mut self) -> OSResult<PutResult> {
+        let result = self.inner.complete().await?;
+        // Evict only on success; a failed complete leaves the object unchanged.
+        self.cache.evict(&self.key);
+        Ok(result)
+    }
+
+    async fn abort(&mut self) -> OSResult<()> {
+        self.inner.abort().await
+    }
+}
+
+// -- CachingObjectStore -------------------------------------------------------
+
+/// An [`ObjectStore`] decorator that caches unconditional full-object `get()`
+/// results.
+///
+/// Construct via [`CachingObjectStore::from_env`]. Returns `None` when
+/// `DELTA_CACHE_CAPACITY_BYTES` is absent or zero -- no behaviour change for
+/// existing users.
+///
+/// Write operations evict the cached entry for the affected path. Range reads
+/// and conditional gets bypass the cache.
 #[derive(Debug, Clone)]
 pub struct CachingObjectStore {
     inner: Arc<dyn ObjectStore>,
@@ -202,11 +458,11 @@ impl CachingObjectStore {
         E: std::fmt::Debug,
     {
         let cache = build_cache_from_env()?;
-        let inner = make_inner()
-            .expect("decorate_prefix should not fail with a valid url");
+        let inner = make_inner().expect("decorate_prefix should not fail with a valid url");
         Some(Self { inner, cache })
     }
 
+    /// Build from a pre-constructed cache (for tests).
     #[cfg(test)]
     pub(crate) fn with_cache(inner: Arc<dyn ObjectStore>, cache: DeltaCache) -> Self {
         Self { inner, cache }
@@ -228,7 +484,7 @@ impl ObjectStore for CachingObjectStore {
         opts: PutOptions,
     ) -> OSResult<PutResult> {
         let result = self.inner.put_opts(location, payload, opts).await?;
-        self.cache.remove(&location.to_string());
+        self.cache.evict(&location.to_string());
         Ok(result)
     }
 
@@ -238,9 +494,6 @@ impl ObjectStore for CachingObjectStore {
         opts: PutMultipartOptions,
     ) -> OSResult<Box<dyn MultipartUpload>> {
         let inner = self.inner.put_multipart_opts(location, opts).await?;
-        // Wrap the upload so that complete() invalidates the cache entry.
-        // A failed complete() leaves the object unchanged, so we do not
-        // invalidate on abort or error.
         Ok(Box::new(InvalidatingMultipartUpload {
             inner,
             cache: self.cache.clone(),
@@ -263,9 +516,8 @@ impl ObjectStore for CachingObjectStore {
 
         let key = location.to_string();
 
-        if let Some(entry) = self.cache.get(&key) {
+        if let Some(bytes) = self.cache.lookup(&key).await {
             debug!(path = %location, "delta-cache: hit");
-            let bytes = entry.value().clone();
             let size = bytes.len() as u64;
             let meta = match self
                 .inner
@@ -297,7 +549,7 @@ impl ObjectStore for CachingObjectStore {
         let range = result.range.clone();
         let attrs = result.attributes.clone();
         let bytes = result.bytes().await?;
-        self.cache.insert(key, bytes.clone());
+        self.cache.store(key, bytes.clone());
         Ok(GetResult {
             payload: GetResultPayload::Stream(Box::pin(futures::stream::once(
                 async move { Ok(bytes) },
@@ -315,9 +567,6 @@ impl ObjectStore for CachingObjectStore {
         use futures::{StreamExt, TryStreamExt};
         let inner = self.inner.clone();
         let cache = self.cache.clone();
-        // Attempt the inner delete first; only invalidate the cache entry on
-        // success. This preserves the invariant that a failed delete leaves
-        // the object (and the cache entry) intact.
         locations
             .and_then(move |location| {
                 let inner = inner.clone();
@@ -333,8 +582,7 @@ impl ObjectStore for CachingObjectStore {
                             store: "CachingObjectStore",
                             source: "delete_stream yielded no result".into(),
                         })?;
-                    // Invalidate only after the backing store confirms deletion.
-                    cache.remove(&deleted.to_string());
+                    cache.evict(&deleted.to_string());
                     Ok(deleted)
                 }
             })
@@ -354,6 +602,8 @@ impl ObjectStore for CachingObjectStore {
     }
 }
 
+// -- Tests --------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -361,17 +611,19 @@ mod tests {
     use object_store::{ObjectStoreExt, PutPayload, memory::InMemory, path::Path};
     use serial_test::serial;
 
-    fn make_store(capacity: usize) -> CachingObjectStore {
+    fn make_memory_store(capacity: usize) -> CachingObjectStore {
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let cache = CacheBuilder::new(capacity)
-            .with_shards(2)
-            .build::<CacheProperties>();
+        let cache = DeltaCache::Memory(
+            CacheBuilder::new(capacity)
+                .with_shards(2)
+                .build::<CacheProperties>(),
+        );
         CachingObjectStore::with_cache(inner, cache)
     }
 
     #[tokio::test]
     async fn test_get_returns_bytes() {
-        let store = make_store(1024 * 1024);
+        let store = make_memory_store(1024 * 1024);
         let path = Path::from("_delta_log/00000000000000000001.json");
         store
             .put(&path, PutPayload::from_static(b"{\"commitInfo\":{}}"))
@@ -384,9 +636,11 @@ mod tests {
     #[tokio::test]
     async fn test_cache_hit_survives_backing_store_delete() {
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let cache = CacheBuilder::new(1024 * 1024)
-            .with_shards(2)
-            .build::<CacheProperties>();
+        let cache = DeltaCache::Memory(
+            CacheBuilder::new(1024 * 1024)
+                .with_shards(2)
+                .build::<CacheProperties>(),
+        );
         let store = CachingObjectStore::with_cache(inner.clone(), cache);
 
         let path = Path::from("_delta_log/00000000000000000001.json");
@@ -403,15 +657,23 @@ mod tests {
     #[tokio::test]
     async fn test_put_invalidates_cache() {
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let cache = CacheBuilder::new(1024 * 1024)
-            .with_shards(2)
-            .build::<CacheProperties>();
+        let cache = DeltaCache::Memory(
+            CacheBuilder::new(1024 * 1024)
+                .with_shards(2)
+                .build::<CacheProperties>(),
+        );
         let store = CachingObjectStore::with_cache(inner.clone(), cache);
 
         let path = Path::from("file.json");
-        store.put(&path, PutPayload::from_static(b"v1")).await.unwrap();
+        store
+            .put(&path, PutPayload::from_static(b"v1"))
+            .await
+            .unwrap();
         store.get(&path).await.unwrap().bytes().await.unwrap();
-        store.put(&path, PutPayload::from_static(b"v2")).await.unwrap();
+        store
+            .put(&path, PutPayload::from_static(b"v2"))
+            .await
+            .unwrap();
         let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes.as_ref(), b"v2");
     }
@@ -419,13 +681,18 @@ mod tests {
     #[tokio::test]
     async fn test_delete_invalidates_cache() {
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let cache = CacheBuilder::new(1024 * 1024)
-            .with_shards(2)
-            .build::<CacheProperties>();
+        let cache = DeltaCache::Memory(
+            CacheBuilder::new(1024 * 1024)
+                .with_shards(2)
+                .build::<CacheProperties>(),
+        );
         let store = CachingObjectStore::with_cache(inner.clone(), cache);
 
         let path = Path::from("file.json");
-        inner.put(&path, PutPayload::from_static(b"data")).await.unwrap();
+        inner
+            .put(&path, PutPayload::from_static(b"data"))
+            .await
+            .unwrap();
         store.get(&path).await.unwrap().bytes().await.unwrap();
         store.delete(&path).await.unwrap();
         assert!(store.get(&path).await.is_err());
@@ -433,57 +700,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_put_multipart_invalidates_cache() {
-        // A multipart upload that completes must invalidate the cached bytes
-        // so subsequent reads see the new data.
-        use object_store::ObjectStoreExt;
         let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
-        let cache = CacheBuilder::new(1024 * 1024)
-            .with_shards(2)
-            .build::<CacheProperties>();
+        let cache = DeltaCache::Memory(
+            CacheBuilder::new(1024 * 1024)
+                .with_shards(2)
+                .build::<CacheProperties>(),
+        );
         let store = CachingObjectStore::with_cache(inner.clone(), cache);
 
         let path = Path::from("_delta_log/checkpoint.parquet");
-        // Write initial bytes and prime the cache.
         store
             .put(&path, PutPayload::from_static(b"v1"))
             .await
             .unwrap();
         store.get(&path).await.unwrap().bytes().await.unwrap();
 
-        // Overwrite via multipart upload (path used by log_compaction).
         let mut upload = store.put_multipart(&path).await.unwrap();
         upload.put_part(b"v2".as_ref().into()).await.unwrap();
         upload.complete().await.unwrap();
 
-        // Cache must be invalidated -- must read fresh bytes.
         let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(bytes.as_ref(), b"v2");
     }
 
     #[tokio::test]
     async fn test_versioned_get_bypasses_cache() {
-        // A get with options.version set must bypass the cache and go to the
-        // inner store -- the is_unconditional guard must check version.
-        let store = make_store(1024 * 1024);
+        let store = make_memory_store(1024 * 1024);
         let path = Path::from("_delta_log/00000000000000000001.json");
         store
             .put(&path, PutPayload::from_static(b"data"))
             .await
             .unwrap();
-        // Prime the cache.
         store.get(&path).await.unwrap().bytes().await.unwrap();
-        // A versioned get must not be served from the cache entry above;
-        // it must be forwarded to the inner store. InMemory ignores the version
-        // field and returns the object normally, which is fine -- the key
-        // invariant is that `options.version.is_some()` skips the cache path.
         let opts = GetOptions {
             version: Some("v1".to_string()),
             ..Default::default()
         };
-        // If the cache had served this (pre-fix behaviour) we'd still get bytes;
-        // with the fix the inner store is called. InMemory doesn't enforce
-        // versioning so it returns Ok regardless -- but we'd see a cache miss
-        // in tracing. The important thing is this does not panic.
         let bytes = store
             .get_opts(&path, opts)
             .await
@@ -494,10 +746,75 @@ mod tests {
         assert_eq!(bytes.as_ref(), b"data");
     }
 
+    // -- Hybrid cache (disk tier) integration test ----------------------------
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_hybrid_cache_read_after_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+        let hybrid = build_hybrid_cache(
+            dir.path().to_str().unwrap(),
+            4 * 1024 * 1024, // 4 MiB memory
+            16 * 1024 * 1024, // 16 MiB disk
+            2,
+            LruConfig::default().into(),
+        )
+        .await
+        .expect("hybrid cache build failed");
+
+        let store = CachingObjectStore::with_cache(inner.clone(), hybrid);
+
+        let path = Path::from("_delta_log/00000000000000000001.json");
+        store
+            .put(&path, PutPayload::from_static(b"hybrid-data"))
+            .await
+            .unwrap();
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"hybrid-data");
+
+        // Second read should hit the cache.
+        let bytes2 = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes2.as_ref(), b"hybrid-data");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_hybrid_cache_put_invalidates() {
+        let dir = tempfile::tempdir().unwrap();
+        let inner: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+        let hybrid = build_hybrid_cache(
+            dir.path().to_str().unwrap(),
+            4 * 1024 * 1024,
+            16 * 1024 * 1024,
+            2,
+            LruConfig::default().into(),
+        )
+        .await
+        .expect("hybrid cache build failed");
+
+        let store = CachingObjectStore::with_cache(inner.clone(), hybrid);
+        let path = Path::from("file.json");
+
+        store
+            .put(&path, PutPayload::from_static(b"v1"))
+            .await
+            .unwrap();
+        store.get(&path).await.unwrap().bytes().await.unwrap();
+        store
+            .put(&path, PutPayload::from_static(b"v2"))
+            .await
+            .unwrap();
+
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"v2");
+    }
+
+    // -- build_cache_from_env env-var tests ------------------------------------
+
     #[test]
     #[serial]
     fn test_build_cache_from_env_absent() {
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
         }
@@ -507,12 +824,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_zero() {
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::set_var(ENV_CAPACITY, "0");
         }
         assert!(build_cache_from_env().is_none());
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
         }
@@ -521,12 +836,11 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_lfu_invalid_sum_returns_none() {
-        // foyer asserts window + protected < 1.0 -- verify we return None instead of panicking.
         unsafe {
             std::env::set_var(ENV_CAPACITY, "1048576");
             std::env::set_var(ENV_EVICTION, "lfu");
             std::env::set_var(ENV_LFU_WINDOW, "0.5");
-            std::env::set_var(ENV_LFU_PROTECTED, "0.5"); // 0.5 + 0.5 = 1.0, violates < 1.0
+            std::env::set_var(ENV_LFU_PROTECTED, "0.5");
         }
         assert!(build_cache_from_env().is_none());
         unsafe {
@@ -540,11 +854,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_s3fifo_invalid_small_ratio_returns_none() {
-        // foyer asserts small_queue_capacity_ratio in (0, 1) -- verify we return None.
         unsafe {
             std::env::set_var(ENV_CAPACITY, "1048576");
             std::env::set_var(ENV_EVICTION, "s3fifo");
-            std::env::set_var(ENV_S3_SMALL, "0.0"); // violates > 0.0
+            std::env::set_var(ENV_S3_SMALL, "0.0");
         }
         assert!(build_cache_from_env().is_none());
         unsafe {
@@ -557,33 +870,19 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_lru() {
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::set_var(ENV_CAPACITY, "1048576");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_SHARDS, "8");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_EVICTION, "lru");
         }
         let cache = build_cache_from_env();
         assert!(cache.is_some());
         let c = cache.unwrap();
-        assert_eq!(c.capacity(), 1048576);
-        assert_eq!(c.shards(), 8);
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
+        assert_eq!(c.memory_capacity(), 1048576);
+        assert_eq!(c.memory_shards(), 8);
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_SHARDS);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_EVICTION);
         }
     }
@@ -591,37 +890,17 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_lfu() {
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::set_var(ENV_CAPACITY, "2097152");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_EVICTION, "lfu");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_LFU_WINDOW, "0.05");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_LFU_PROTECTED, "0.7");
         }
         assert!(build_cache_from_env().is_some());
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_EVICTION);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_LFU_WINDOW);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_LFU_PROTECTED);
         }
     }
@@ -629,45 +908,19 @@ mod tests {
     #[test]
     #[serial]
     fn test_build_cache_from_env_s3fifo() {
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::set_var(ENV_CAPACITY, "2097152");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_EVICTION, "s3fifo");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_S3_SMALL, "0.2");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_S3_GHOST, "0.5");
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::set_var(ENV_S3_FREQ, "2");
         }
         assert!(build_cache_from_env().is_some());
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
         unsafe {
             std::env::remove_var(ENV_CAPACITY);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_EVICTION);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_S3_SMALL);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_S3_GHOST);
-        }
-        // SAFETY: single-threaded test, serial_test ensures no concurrent env mutations
-        unsafe {
             std::env::remove_var(ENV_S3_FREQ);
         }
     }
