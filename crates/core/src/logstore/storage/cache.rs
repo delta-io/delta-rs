@@ -37,7 +37,6 @@ use foyer::{
     FifoConfig, FsDeviceBuilder, HybridCache, HybridCacheBuilder, LfuConfig, LruConfig,
     S3FifoConfig, SieveConfig, StorageKey, StorageValue,
 };
-use serde::{Deserialize, Serialize};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
@@ -45,6 +44,7 @@ use object_store::{
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     Result as OSResult, UploadPart,
 };
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 // -- Env-var names ------------------------------------------------------------
@@ -247,11 +247,7 @@ fn build_eviction_config(eviction_name: &str) -> Option<EvictionConfig> {
 // -- Cache construction -------------------------------------------------------
 
 /// Build a memory-only foyer cache.
-fn build_memory_cache(
-    capacity: usize,
-    shards: usize,
-    eviction: EvictionConfig,
-) -> DeltaCache {
+fn build_memory_cache(capacity: usize, shards: usize, eviction: EvictionConfig) -> DeltaCache {
     DeltaCache::Memory(
         CacheBuilder::new(capacity)
             .with_shards(shards)
@@ -298,9 +294,7 @@ async fn build_hybrid_cache(
         Ok(c) => {
             debug!(
                 memory_capacity,
-                disk_capacity,
-                dir,
-                "delta-cache: hybrid (memory + disk) cache enabled"
+                disk_capacity, dir, "delta-cache: hybrid (memory + disk) cache enabled"
             );
             Some(DeltaCache::Hybrid(c))
         }
@@ -534,9 +528,9 @@ impl ObjectStore for CachingObjectStore {
                 },
             };
             return Ok(GetResult {
-                payload: GetResultPayload::Stream(Box::pin(futures::stream::once(
-                    async move { Ok(bytes) },
-                ))),
+                payload: GetResultPayload::Stream(Box::pin(futures::stream::once(async move {
+                    Ok(bytes)
+                }))),
                 meta,
                 range: 0..size,
                 attributes: Attributes::default(),
@@ -575,13 +569,14 @@ impl ObjectStore for CachingObjectStore {
                     let mut stream = inner.delete_stream(
                         futures::stream::once(async move { Ok(location.clone()) }).boxed(),
                     );
-                    let deleted = stream
-                        .try_next()
-                        .await?
-                        .ok_or_else(|| object_store::Error::Generic {
-                            store: "CachingObjectStore",
-                            source: "delete_stream yielded no result".into(),
-                        })?;
+                    let deleted =
+                        stream
+                            .try_next()
+                            .await?
+                            .ok_or_else(|| object_store::Error::Generic {
+                                store: "CachingObjectStore",
+                                source: "delete_stream yielded no result".into(),
+                            })?;
                     cache.evict(&deleted.to_string());
                     Ok(deleted)
                 }
@@ -755,7 +750,7 @@ mod tests {
 
         let hybrid = build_hybrid_cache(
             dir.path().to_str().unwrap(),
-            4 * 1024 * 1024, // 4 MiB memory
+            4 * 1024 * 1024,  // 4 MiB memory
             16 * 1024 * 1024, // 16 MiB disk
             2,
             LruConfig::default().into(),
