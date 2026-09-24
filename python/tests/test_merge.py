@@ -3757,3 +3757,42 @@ def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path):
     assert files_scanned <= 1, (
         f"The number of target files scanned was too large! {files_scanned}"
     )
+
+
+@pytest.mark.pyarrow
+@pytest.mark.parametrize("cdf", (False, True))
+def test_merge_insert_predicate_skips_rejected_rows_4784(
+    tmp_path: pathlib.Path, cdf: bool
+):
+    # Regression test for https://github.com/delta-io/delta-rs/issues/4784
+    import pyarrow as pa
+
+    write_deltalake(
+        tmp_path,
+        pa.table({"id": pa.array([1], pa.int64()), "v": pa.array([10.0])}),
+        configuration={"delta.enableChangeDataFeed": "true"} if cdf else None,
+    )
+    # id 2 should be inserted; id 99 fails the insert predicate and must be ignored
+    source = pa.table(
+        {
+            "id": pa.array([2, 99], pa.int64()),
+            "v": pa.array([20.0, None]),
+            "op": pa.array(["insert", "skip"]),
+        }
+    )
+    (
+        DeltaTable(tmp_path)
+        .merge(
+            source=source,
+            predicate="t.id = s.id",
+            source_alias="s",
+            target_alias="t",
+        )
+        .when_not_matched_insert(
+            updates={"id": "s.id", "v": "s.v"}, predicate="s.op = 'insert'"
+        )
+        .execute()
+    )
+
+    result = DeltaTable(tmp_path).to_pyarrow_table().sort_by("id").to_pylist()
+    assert result == [{"id": 1, "v": 10.0}, {"id": 2, "v": 20.0}]
