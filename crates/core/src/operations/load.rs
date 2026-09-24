@@ -4,7 +4,6 @@ use datafusion::catalog::Session;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use futures::future::BoxFuture;
 
-use super::CustomExecuteHandler;
 use crate::DeltaTable;
 use crate::delta_datafusion::engine::AsObjectStoreUrl as _;
 use crate::delta_datafusion::{DataFusionMixins as _, create_session};
@@ -32,15 +31,6 @@ impl std::fmt::Debug for LoadBuilder {
             .field("snapshot", &self.snapshot)
             .field("log_store", &self.log_store)
             .finish()
-    }
-}
-
-impl super::Operation for LoadBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        unimplemented!("Not required in loadBuilder for now.")
     }
 }
 
@@ -94,7 +84,7 @@ impl std::future::IntoFuture for LoadBuilder {
                 if session.runtime_env().object_store(&store_url).is_err() {
                     session
                         .runtime_env()
-                        .register_object_store(&url, this.log_store.root_object_store(None));
+                        .register_object_store(&url, this.log_store.root_object_store());
                 }
                 session
             };

@@ -348,6 +348,6 @@ async fn test_vacuum_struct_column_without_min_max_eligible_leaves() -> TestResu
 
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
-    let res = backend.object_store(None).head(path).await;
+    let res = backend.object_store().head(path).await;
     matches!(res, Err(ObjectStoreError::NotFound { .. }))
 }

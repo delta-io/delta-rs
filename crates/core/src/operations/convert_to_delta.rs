@@ -17,12 +17,10 @@ use parquet::arrow::async_reader::ParquetRecordBatchStreamBuilder;
 use parquet::errors::ParquetError;
 use percent_encoding::percent_decode_str;
 use tracing::debug;
-use uuid::Uuid;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::kernel::schema::cast::normalize_for_delta;
 use crate::kernel::transaction::{CommitBuilder, CommitProperties};
-use crate::logstore::StorageConfig;
+use crate::logstore::{StorageConfig, with_operation};
 use crate::operations::get_num_idx_cols_and_stats_columns;
 use crate::{
     DeltaResult, DeltaTable, DeltaTableError, NULL_PARTITION_VALUE_DATA_PATH, ObjectStoreError,
@@ -128,7 +126,6 @@ pub struct ConvertToDeltaBuilder {
     collect_stats: bool,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
 }
 
 impl Default for ConvertToDeltaBuilder {
@@ -137,14 +134,11 @@ impl Default for ConvertToDeltaBuilder {
     }
 }
 
-impl super::Operation for ConvertToDeltaBuilder {
+impl ConvertToDeltaBuilder {
     fn log_store(&self) -> &LogStoreRef {
         self.log_store
             .as_ref()
             .expect("Log store should be available at this stage.")
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
     }
 }
 
@@ -163,7 +157,6 @@ impl ConvertToDeltaBuilder {
             configuration: Default::default(),
             collect_stats: true,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -267,12 +260,6 @@ impl ConvertToDeltaBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
-        self
-    }
-
     /// Consume self into CreateBuilder with corresponding add actions, schemas and operation meta
     async fn into_create_builder(mut self) -> Result<PreparedConversion, Error> {
         // Use the specified log store. If a log store is not provided, create a new store from the specified path.
@@ -291,9 +278,6 @@ impl ConvertToDeltaBuilder {
             return Err(Error::MissingLocation);
         };
 
-        let operation_id = self.get_operation_id();
-        self.pre_execute(operation_id).await?;
-
         // Return an error if the location is already a Delta table location
         if self.log_store().is_delta_table_location().await? {
             return Err(Error::DeltaTableAlready);
@@ -304,7 +288,7 @@ impl ConvertToDeltaBuilder {
         );
 
         // Get all the parquet files in the location
-        let object_store = self.log_store().object_store(None);
+        let object_store = self.log_store().object_store();
         let mut files = Vec::new();
         object_store
             .list(None)
@@ -468,7 +452,6 @@ impl ConvertToDeltaBuilder {
         Ok(PreparedConversion {
             builder,
             operation,
-            operation_id,
             commit_properties: self.commit_properties,
         })
     }
@@ -480,8 +463,6 @@ struct PreparedConversion {
     builder: CreateBuilder,
     /// The `CONVERT` operation written to the commit log
     operation: DeltaOperation,
-    /// Identifies this operation in the custom execute handler
-    operation_id: Uuid,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
 }
@@ -515,7 +496,6 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
         let this = self;
 
         Box::pin(async move {
-            let handler = this.custom_execute_handler.clone();
             let prepared = this
                 .into_create_builder()
                 .await
@@ -523,27 +503,22 @@ impl std::future::IntoFuture for ConvertToDeltaBuilder {
             let PreparedConversion {
                 builder,
                 operation,
-                operation_id,
                 commit_properties,
             } = prepared;
 
             // Reuse the create builder to assemble the protocol, metadata and add actions
-            let (mut table, actions, _, _) = builder.into_table_and_actions().await?;
+            let (mut table, actions, _) = builder.into_table_and_actions().await?;
 
-            let version = CommitBuilder::from(commit_properties)
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(handler.clone())
-                .build(None, table.log_store(), operation)
-                .await?
-                .version();
+            let parent = table.log_store();
+            let version = with_operation(&parent, |log_store| async move {
+                Ok(CommitBuilder::from(commit_properties)
+                    .with_actions(actions)
+                    .build(None, log_store, operation)
+                    .await?
+                    .version())
+            })
+            .await?;
             table.load_version(version).await?;
-
-            if let Some(handler) = handler {
-                handler
-                    .post_execute(&table.log_store(), operation_id)
-                    .await?;
-            }
             Ok(table)
         })
     }

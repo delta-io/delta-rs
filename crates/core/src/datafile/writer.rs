@@ -1409,7 +1409,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap();
-        let object_store = log_store.object_store(None);
+        let object_store = log_store.object_store();
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch
@@ -1442,7 +1442,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap()
-            .object_store(None);
+            .object_store();
         let properties = WriterProperties::builder()
             .set_max_row_group_row_count(Some(1024))
             .build();
@@ -1482,7 +1482,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap()
-            .object_store(None);
+            .object_store();
         let properties = WriterProperties::builder()
             .set_max_row_group_row_count(Some(1024))
             .build();
@@ -1576,7 +1576,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap()
-            .object_store(None);
+            .object_store();
         // configure small target file size so we can observe multiple files written
         let mut writer = get_partition_writer(
             object_store,
@@ -1610,7 +1610,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap()
-            .object_store(None);
+            .object_store();
         // configure high batch size and low file size to observe one file written and flushed immediately
         // upon writing batch, then ensures the buffer is empty upon closing writer
         let mut writer = get_partition_writer(
@@ -1656,7 +1656,7 @@ mod tests {
             .unwrap()
             .build_storage()
             .unwrap();
-        let object_store = log_store.object_store(None);
+        let object_store = log_store.object_store();
         let batch = get_record_batch(None, false);
 
         // write single un-partitioned batch

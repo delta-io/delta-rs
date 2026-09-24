@@ -108,6 +108,7 @@ nav:
       - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
   - Upgrade guides:
       - Version 1.0.0: upgrade-guides/guide-1.0.0.md
+      - Rust 1.1.0: upgrade-guides/guide-rust-1.1.0.md
   - About:
       - Contributing: about/contributing.md
       - History: about/history.md

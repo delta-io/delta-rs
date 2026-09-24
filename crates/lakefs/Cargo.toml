@@ -22,11 +22,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 url = { workspace = true }
-dashmap = "6"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-reqwest = {version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls-native-roots"]}
-http = "1.0"
+reqwest = { version = "0.13", default-features = false, features = ["http2", "json", "rustls"] }
+reqwest-middleware = { version = "0.5", features = ["json"] }
+reqwest-retry = "0.9"
 
 [dev-dependencies]
 deltalake-core = { path = "../core" }

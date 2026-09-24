@@ -30,7 +30,7 @@ mod simple_checkpoint {
             .unwrap();
 
         // Write a checkpoint
-        checkpoints::create_checkpoint(&table, None).await.unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
@@ -44,7 +44,7 @@ mod simple_checkpoint {
         assert_eq!(5, version);
 
         table.load_version(10).await.unwrap();
-        checkpoints::create_checkpoint(&table, None).await.unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
@@ -196,7 +196,6 @@ mod delete_expired_delta_log_in_checkpoint {
             table.table_url().clone(),
             table.version().expect("Failed to load version() on table"),
             None,
-            None,
         )
         .await
         .expect("Failed to create a checkpoint and cleanup");
@@ -267,7 +266,6 @@ mod delete_expired_delta_log_in_checkpoint {
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
             table.table_url().clone(),
             table.version().expect("Failed to load version() on table"),
-            None,
             None,
         )
         .await
@@ -352,7 +350,6 @@ mod delete_expired_delta_log_in_checkpoint {
             deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             1,
             Some(false),
-            None,
         )
         .await
         .unwrap();
@@ -364,7 +361,6 @@ mod delete_expired_delta_log_in_checkpoint {
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
             deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             table.version().unwrap(),
-            None,
             None,
         )
         .await
@@ -415,7 +411,6 @@ mod delete_expired_delta_log_in_checkpoint {
         checkpoints::create_checkpoint_from_table_url_and_cleanup(
             deltalake_core::ensure_table_uri(table.table_url()).unwrap(),
             table.version().unwrap(),
-            None,
             None,
         )
         .await

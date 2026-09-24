@@ -67,13 +67,11 @@ use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::*;
-use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
 use self::validation::{
     MergeValidation, MergeValidationExec, build_duplicate_match_validation_plan,
 };
-use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
@@ -91,6 +89,7 @@ use crate::kernel::{
     Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
     resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -181,16 +180,6 @@ pub struct MergeBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for MergeBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl MergeBuilder {
@@ -219,7 +208,6 @@ impl MergeBuilder {
             not_match_source_operations: Vec::new(),
             safe_cast: false,
             streaming: false,
-            custom_execute_handler: None,
         }
     }
 
@@ -465,12 +453,6 @@ impl MergeBuilder {
     /// Set streaming mode execution
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -874,8 +856,6 @@ async fn execute(
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-    operation_id: Uuid,
-    handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(EagerSnapshot, MergeMetrics)> {
     info!(
         operation = "merge",
@@ -1607,7 +1587,7 @@ async fn execute(
         snapshot.table_configuration(),
         &state,
         write,
-        log_store.object_store(Some(operation_id)),
+        log_store.object_store(),
         WriteExecOptions {
             target_file_size: Some(snapshot.table_properties().target_file_size()),
             write_batch_size: None,
@@ -1670,7 +1650,8 @@ async fn execute(
         &target_files_scanned_metric_names,
         || {
             warn!(
-                %operation_id, metric_names = ?target_files_scanned_metric_names, "Missing target scan metric; defaulting target files scanned to zero"
+                metric_names = ?target_files_scanned_metric_names,
+                "Missing target scan metric; defaulting target files scanned to zero"
             );
             0
         },
@@ -1691,11 +1672,16 @@ async fn execute(
             derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
         if impossible_state {
             warn!(
-                %operation_id, total_files, scanned_files = metrics.num_target_files_scanned, metric_names = ?target_files_skipped_metric_names, "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
+                total_files,
+                scanned_files = metrics.num_target_files_scanned,
+                metric_names = ?target_files_skipped_metric_names,
+                "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
             );
         }
         warn!(
-            %operation_id, metric_names = ?target_files_skipped_metric_names, derived, "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+            metric_names = ?target_files_skipped_metric_names,
+            derived,
+            "Missing target skipped-file metric; deriving from total-files minus scanned-files"
         );
         derived
     };
@@ -1722,9 +1708,7 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .with_operation_id(operation_id)
-        .with_post_commit_hook_handler(handle.cloned())
-        .build(Some(&snapshot), log_store.clone(), operation)
+        .build(Some(&snapshot), log_store, operation)
         .await?;
     Ok((commit.snapshot().snapshot, metrics))
 }
@@ -1880,49 +1864,46 @@ impl std::future::IntoFuture for MergeBuilder {
                 ));
             }
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let parent = this.log_store.clone();
+            let (snapshot, metrics) = with_operation(&parent, |log_store| async move {
+                let (state, _) = resolve_session_state(
+                    this.state.as_deref(),
+                    this.session_fallback_policy,
+                    || create_session().state(),
+                    SessionResolveContext {
+                        operation: "merge",
+                        table_uri: Some(log_store.root_url()),
+                        cdc: false,
+                    },
+                )?;
 
-            let (state, _) = resolve_session_state(
-                this.state.as_deref(),
-                this.session_fallback_policy,
-                || create_session().state(),
-                SessionResolveContext {
-                    operation: "merge",
-                    table_uri: Some(this.log_store.root_url()),
-                    cdc: false,
-                },
-            )?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&state, this.log_store.as_ref())?;
 
-            update_datafusion_session(&state, this.log_store.as_ref(), Some(operation_id))?;
-
-            let (snapshot, metrics) = execute(
-                this.predicate,
-                this.source,
-                this.log_store.clone(),
-                snapshot,
-                state,
-                this.writer_properties,
-                this.commit_properties,
-                this.safe_cast,
-                this.streaming,
-                this.source_alias,
-                this.target_alias,
-                this.merge_schema,
-                this.match_operations,
-                this.not_match_operations,
-                this.not_match_source_operations,
-                operation_id,
-                this.custom_execute_handler.as_ref(),
-            )
+                execute(
+                    this.predicate,
+                    this.source,
+                    log_store,
+                    snapshot,
+                    state,
+                    this.writer_properties,
+                    this.commit_properties,
+                    this.safe_cast,
+                    this.streaming,
+                    this.source_alias,
+                    this.target_alias,
+                    this.merge_schema,
+                    this.match_operations,
+                    this.not_match_operations,
+                    this.not_match_source_operations,
+                )
+                .await
+            })
             .await?;
 
-            if let Some(handler) = this.custom_execute_handler {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
-
             Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
+                DeltaTable::new_with_state(parent, DeltaTableState { snapshot }),
                 metrics,
             ))
         })

@@ -20,7 +20,6 @@ use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use uuid::Uuid;
 
 use crate::DeltaTableError;
 use crate::datafile::writer::{
@@ -410,7 +409,6 @@ pub(crate) async fn write_exec_plan(
     log_store: &dyn LogStore,
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
-    operation_id: Option<Uuid>,
     target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
     writer_properties: Option<WriterProperties>,
@@ -425,7 +423,7 @@ pub(crate) async fn write_exec_plan(
             .build(),
     };
     let stats_config = WriterStatsConfig::from_config(table_config);
-    let object_store = log_store.object_store(operation_id);
+    let object_store = log_store.object_store();
     let sink_config = WriteSinkConfig {
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
