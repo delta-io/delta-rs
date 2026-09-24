@@ -95,6 +95,10 @@ jobs:
           # Use the stable toolchain installed by setup-builder; the action ignores rust-toolchain.toml
           rust-toolchain: manual
           package: deltalake-core
+          # Namespace the rustdoc cache by branch so a baseline cached from a
+          # different branch (e.g. one that introduced then reverted a breaking
+          # change) can never produce a false-pass on this branch.
+          prefix-key: ${{ github.head_ref }}
 
   test:
     name: Unit Tests
