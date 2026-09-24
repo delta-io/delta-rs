@@ -824,15 +824,14 @@ async fn write_data_plan(
 /// Split a CDC-unioned batch into (normal-write rows, cdf rows) using Arrow compute,
 /// avoiding the overhead of a DataFusion plan-and-execute cycle per batch.
 ///
-/// Split a CDC-unioned batch into (normal-write rows, cdf rows) using Arrow compute,
-/// avoiding the overhead of a DataFusion plan-and-execute cycle per batch.
-///
 /// Mirrors the original DataFusion filter semantics exactly:
 /// - **normal side** (written to the data file): rows where `_change_type` is NOT IN
-///   {"delete", "source_delete", "update_preimage"} — survivor rows (null change type)
-///   plus "insert" and "update_postimage" rows. The `_change_type` column is stripped.
+///   {"delete", "source_delete", "update_preimage"}. The `_change_type` column is stripped.
 /// - **CDF side** (written to `_change_data`): rows where `_change_type` IS IN
-///   {"delete", "insert", "update_preimage", "update_postimage"} — null survivors excluded.
+///   {"delete", "insert", "update_preimage", "update_postimage"}.
+///
+/// As in SQL, a null `_change_type` matches neither filter, so the row is dropped from both
+/// sides. Merge relies on this to drop source rows that no insert clause accepts.
 fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch)> {
     use arrow::array::BooleanArray;
     use arrow::array::cast::AsArray;
@@ -850,14 +849,14 @@ fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch
             DeltaTableError::generic("_change_type column is not a Utf8 string array")
         })?;
 
-    // Normal side: keep survivors (null _change_type) and non-delete events.
+    // Normal side: keep non-delete events and drop a null _change_type.
     // Mirrors `NOT IN ("delete", "source_delete", "update_preimage")`.
     let normal_mask: BooleanArray = change_type_col
         .iter()
         .map(|v| {
-            Some(!matches!(
+            Some(matches!(
                 v,
-                Some("delete" | "source_delete" | "update_preimage")
+                Some(change_type) if !matches!(change_type, "delete" | "source_delete" | "update_preimage")
             ))
         })
         .collect();
@@ -867,7 +866,7 @@ fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch
     // _change_type must not appear in the data file.
     normal_batch.remove_column(cdc_idx);
 
-    // CDF side: only explicit change events; null survivors are excluded.
+    // CDF side: only explicit change events; a null _change_type is dropped.
     // Mirrors `IN ("delete", "insert", "update_preimage", "update_postimage")`.
     let cdf_mask: BooleanArray = change_type_col
         .iter()
