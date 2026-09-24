@@ -191,6 +191,18 @@ impl DisplayAs for DeltaScanExec {
     }
 }
 
+fn plan_properties(
+    scan_plan: &KernelScanPlan,
+    input: &Arc<dyn ExecutionPlan>,
+) -> Arc<PlanProperties> {
+    Arc::new(PlanProperties::new(
+        EquivalenceProperties::new(Arc::clone(&scan_plan.contract.output_schema)),
+        input.properties().partitioning.clone(),
+        input.properties().emission_type,
+        input.properties().boundedness,
+    ))
+}
+
 impl DeltaScanExec {
     pub(super) fn new(
         scan_plan: Arc<KernelScanPlan>,
@@ -206,12 +218,7 @@ impl DeltaScanExec {
             .contract
             .retain_file_id
             .then(|| scan_plan.contract.file_id_field.name().to_owned());
-        let properties = Arc::new(PlanProperties::new(
-            EquivalenceProperties::new(Arc::clone(&scan_plan.contract.output_schema)),
-            input.properties().partitioning.clone(),
-            input.properties().emission_type,
-            input.properties().boundedness,
-        ));
+        let properties = plan_properties(&scan_plan, &input);
         Self {
             scan_plan,
             input,
@@ -226,24 +233,20 @@ impl DeltaScanExec {
         }
     }
 
+    // Keep the metrics: they hold the file counts recorded during planning.
     fn with_new_input_same_properties(&self, input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             input,
-            metrics: ExecutionPlanMetricsSet::new(),
             ..Self::clone(self)
         }
     }
 
     fn with_new_input(&self, input: Arc<dyn ExecutionPlan>) -> Self {
-        Self::new(
-            Arc::clone(&self.scan_plan),
+        Self {
+            properties: plan_properties(&self.scan_plan, &input),
             input,
-            Arc::clone(&self.transforms),
-            self.dv_state.clone(),
-            Arc::clone(&self.public_file_ids),
-            self.partition_stats.clone(),
-            ExecutionPlanMetricsSet::new(),
-        )
+            ..Self::clone(self)
+        }
     }
 
     fn has_deletion_vectors(&self) -> bool {
