@@ -251,18 +251,6 @@ pub enum DeltaOperation {
         metadata: Metadata,
     },
 
-    /// Represents a Delta `Convert` operation.
-    /// Converts an existing Parquet table into a Delta table in place
-    #[serde(rename_all = "camelCase")]
-    Convert {
-        /// The number of Parquet files that were converted into `Add` actions
-        num_files: i64,
-        /// The columns the converted table is partitioned by
-        partition_by: Vec<String>,
-        /// Whether file statistics were collected during the conversion
-        collect_stats: bool,
-    },
-
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
     #[serde(rename_all = "camelCase")]
@@ -409,7 +397,6 @@ impl DeltaOperation {
                 ..
             } => "CREATE OR REPLACE TABLE",
             DeltaOperation::Create { .. } => "CREATE TABLE",
-            DeltaOperation::Convert { .. } => "CONVERT",
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::Update { .. } => "UPDATE",
@@ -463,7 +450,6 @@ impl DeltaOperation {
             | Self::AddConstraint { .. }
             | Self::DropConstraint { .. } => false,
             Self::Create { .. }
-            | Self::Convert { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
