@@ -33,34 +33,11 @@ use crate::logstore::{LogStore, ObjectStoreRef};
 use crate::operations::cdc::CDC_COLUMN_NAME;
 use crate::operations::write::configs::{WriteExecOptions, WriterStatsConfig};
 
-const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
-
 /// Error message used when a worker's `send` fails because the writer task has
 /// already closed the channel (e.g. the writer errored). It is recognised by
 /// [`is_writer_task_closed_error`] so the real (writer) error is surfaced
 /// instead of this downstream symptom.
 const WRITER_TASK_CLOSED_UNEXPECTEDLY_MSG: &str = "Writer task closed unexpectedly";
-
-fn parse_channel_size(raw: Option<&str>) -> usize {
-    raw.and_then(|s| s.parse::<usize>().ok())
-        .filter(|size| *size > 0)
-        .unwrap_or(DEFAULT_WRITER_BATCH_CHANNEL_SIZE)
-}
-
-/// Capacity of the mpsc channels between partition-reader workers and the writer task.
-/// Env override: `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (positive integer; 0 or invalid → default).
-/// Distinct from `DELTARS_MAX_CONCURRENT_WRITERS` (partition parallelism) and
-/// `DELTARS_MAX_CONCURRENCY_TASKS` in writer.rs (per-file upload parallelism).
-fn channel_size() -> usize {
-    static CHANNEL_SIZE: OnceLock<usize> = OnceLock::new();
-    *CHANNEL_SIZE.get_or_init(|| {
-        parse_channel_size(
-            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
-                .ok()
-                .as_deref(),
-        )
-    })
-}
 
 #[cfg(test)]
 mod tests {
