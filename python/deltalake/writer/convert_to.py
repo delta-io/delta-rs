@@ -30,7 +30,6 @@ def convert_to_deltalake(
     configuration: Mapping[str, str | None] | None = None,
     storage_options: dict[str, str] | None = None,
     *args: Any,
-    collect_stats: bool = True,
     commit_properties: CommitProperties | None = None,
     post_commithook_properties: PostCommitHookProperties | None = None,
 ) -> None:
@@ -52,8 +51,6 @@ def convert_to_deltalake(
         description: User-provided description for this table.
         configuration: A map containing configuration options for the metadata action.
         storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
-        collect_stats: whether to read file statistics from the parquet footers. If False, the add
-            actions carry no statistics, which converts faster but disables data skipping.
         commit_properties: properties of the transaction commit. If None, default values are used.
         post_commithook_properties: properties for the post commit hook. If None, default values are used.
     """
@@ -80,7 +77,6 @@ def convert_to_deltalake(
         description=description,
         configuration=configuration,
         storage_options=storage_options,
-        collect_stats=collect_stats,
         commit_properties=commit_properties,
         post_commithook_properties=post_commithook_properties,
     )

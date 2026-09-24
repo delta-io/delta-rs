@@ -3327,7 +3327,6 @@ fn create_table_with_add_actions(
     description=None,
     configuration=None,
     storage_options=None,
-    collect_stats=true,
     commit_properties=None,
     post_commithook_properties=None,
 ))]
@@ -3340,7 +3339,6 @@ fn convert_to_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
-    collect_stats: bool,
     commit_properties: Option<PyCommitProperties>,
     post_commithook_properties: Option<PyPostCommitHookProperties>,
 ) -> PyResult<()> {
@@ -3373,10 +3371,6 @@ fn convert_to_deltalake(
 
         if let Some(strg_options) = storage_options {
             builder = builder.with_storage_options(strg_options);
-        };
-
-        if !collect_stats {
-            builder = builder.without_stats();
         };
 
         if let Some(commit_properties) =

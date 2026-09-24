@@ -354,7 +354,6 @@ def convert_to_deltalake(
     description: str | None,
     configuration: Mapping[str, str | None] | None,
     storage_options: dict[str, str] | None,
-    collect_stats: bool,
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
