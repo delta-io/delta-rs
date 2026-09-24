@@ -831,10 +831,8 @@ fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch
     let normal_mask: BooleanArray = change_type_col
         .iter()
         .map(|v| {
-            Some(matches!(
-                v,
-                Some(change_type) if !matches!(change_type, "delete" | "source_delete" | "update_preimage")
-            ))
+            v.map(|v| !matches!(v, "delete" | "source_delete" | "update_preimage"))
+                .unwrap_or(false)
         })
         .collect();
 
@@ -848,10 +846,12 @@ fn split_cdc_batch(batch: &RecordBatch) -> DeltaResult<(RecordBatch, RecordBatch
     let cdf_mask: BooleanArray = change_type_col
         .iter()
         .map(|v| {
-            Some(matches!(
-                v,
-                Some("delete" | "insert" | "update_preimage" | "update_postimage")
-            ))
+            v.is_some_and(|v| {
+                matches!(
+                    v,
+                    "delete" | "insert" | "update_preimage" | "update_postimage"
+                )
+            })
         })
         .collect();
     let cdf_batch = filter_record_batch(batch, &cdf_mask)
