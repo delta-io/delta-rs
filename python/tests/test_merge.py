@@ -3683,7 +3683,13 @@ def test_merge_type_mismatch_partition_pruning(tmp_path: pathlib.Path, streaming
 
 
 @pytest.mark.pandas
-def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path):
+# Streamed merge has no source stats, so it cannot prune target files yet.
+@pytest.mark.parametrize(
+    ("streaming", "expected_files_scanned"), ((False, 1), (True, 3))
+)
+def test_merge_file_pruning_regression_3636(
+    tmp_path: pathlib.Path, streaming: bool, expected_files_scanned: int
+):
     """
     https://github.com/delta-io/delta-rs/issues/3636
     """
@@ -3747,16 +3753,13 @@ def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path):
             predicate="s.date = t.date and s.ts = t.ts and s.direction = t.direction",
             source_alias="s",
             target_alias="t",
+            streamed_exec=streaming,
         )
         .when_not_matched_insert_all()
         .execute()
     )
 
-    files_scanned = stats["num_target_files_scanned"]
-
-    assert files_scanned <= 1, (
-        f"The number of target files scanned was too large! {files_scanned}"
-    )
+    assert stats["num_target_files_scanned"] == expected_files_scanned
 
 
 @pytest.mark.pyarrow
