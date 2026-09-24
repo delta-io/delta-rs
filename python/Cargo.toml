@@ -93,7 +93,7 @@ features = ["extension-module", "abi3", "abi3-py311"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = [
     "azure",
     "datafusion",
@@ -125,7 +125,7 @@ features = [
 # Keep SFTP enabled for Linux and macOS Python wheels.
 [target.'cfg(not(windows))'.dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = ["opendal-sftp"]
 
 [features]
