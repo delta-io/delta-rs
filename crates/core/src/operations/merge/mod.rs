@@ -2205,6 +2205,60 @@ mod tests {
         assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
     }
 
+    #[tokio::test]
+    async fn test_merge_metrics_count_files_when_target_scan_is_repartitioned() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        // Split the target files into ranges. This replaces the input of the target scan.
+        let overrides = [
+            ("datafusion.execution.target_partitions", "4"),
+            ("datafusion.execution.batch_size", "1"),
+            ("datafusion.optimizer.repartition_file_min_size", "0"),
+        ]
+        .map(|(key, value)| (key.to_string(), value.to_string()));
+        let session = crate::delta_datafusion::DeltaSessionContext::new_with_session_overrides(
+            &HashMap::from(overrides),
+        )
+        .unwrap();
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["AA"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1])),
+                Arc::new(arrow::array::StringArray::from(vec!["2021-02-01"])),
+            ],
+        )
+        .unwrap();
+        let source = SessionContext::new().read_batch(batch).unwrap();
+
+        // Matched clauses keep row indexes in the target scan, which blocks the split.
+        let (_, metrics) = table
+            .merge(
+                source,
+                col("target.id")
+                    .eq(col("source.id"))
+                    .and(col("target.modified").eq(lit("2021-02-01"))),
+            )
+            .with_session_state(Arc::new(session.state()))
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
     #[test]
     fn test_build_file_skipping_predicates_splits_conjunctions() {
         let target = TableReference::parse_str("target");
