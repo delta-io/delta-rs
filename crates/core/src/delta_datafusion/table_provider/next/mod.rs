@@ -1786,6 +1786,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_keeps_file_count_when_input_is_replaced() -> TestResult {
+        let table = create_in_memory_id_table_with_rows(vec![1, 2]).await?;
+        let provider = DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+        let plan = provider.scan(&state, None, &[], None).await?;
+
+        // Optimizer rules replace the input of the scan, for example to split files into ranges.
+        let input = Arc::clone(plan.children()[0]);
+        for options in [
+            datafusion::physical_plan::ChildrenPropertiesMode::Keep,
+            datafusion::physical_plan::ChildrenPropertiesMode::Recompute,
+        ] {
+            let replaced = Arc::clone(&plan).replace_children(
+                vec![Arc::clone(&input)],
+                datafusion::physical_plan::ReplaceChildrenOptions::new(options),
+            )?;
+            let mut visitor = DeltaScanVisitor::default();
+            visit_execution_plan(replaced.as_ref(), &mut visitor).unwrap();
+            assert_eq!(visitor.num_scanned, Some(1));
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_with_file_selection_reads_only_selected_files() -> TestResult {
         let log_store = TestTables::Simple.table_builder()?.build_storage()?;
         let snapshot = Arc::new(Snapshot::try_new(&log_store, None).await?);
