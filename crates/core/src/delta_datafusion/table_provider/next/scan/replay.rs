@@ -165,9 +165,10 @@ where
                             .deletion_vector_descriptor()
                             .map(|descriptor| descriptor.cardinality);
                         let Some(cardinality) = cardinality else {
-                            return Poll::Ready(Some(Err(DeltaTableError::generic(
-                                "Selected DV file has no descriptor",
-                            ))));
+                            return Poll::Ready(Some(Err(DeltaTableError::generic(format!(
+                                "DV file {} has no descriptor in scan metadata",
+                                super::super::redact_url_for_error(&file_url)
+                            )))));
                         };
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();

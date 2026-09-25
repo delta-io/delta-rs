@@ -724,7 +724,7 @@ impl DeltaScanStream {
         &mut self,
         batch: RecordBatch,
         file_id: String,
-        file_id_idx: usize,
+        mut file_id_idx: usize,
     ) -> Result<RecordBatch> {
         let mut batch = if let Some(entries) = &self.entries {
             let entry = entries.get(&file_id).ok_or_else(|| {
@@ -758,6 +758,7 @@ impl DeltaScanStream {
                                 "physical row position overflows usize".into(),
                             )
                         })?;
+                        // Kernel omits trailing live rows from DV masks.
                         Ok(mask.get(index).copied().unwrap_or(true))
                     })
                     .collect::<Result<BooleanArray>>()?;
@@ -765,6 +766,9 @@ impl DeltaScanStream {
             } else {
                 batch
             };
+            if position_idx < file_id_idx {
+                file_id_idx -= 1;
+            }
             filtered.remove_column(position_idx);
             filtered
         } else {
@@ -829,6 +833,7 @@ impl DeltaScanStream {
             )
         })?;
 
+        // MERGE keys surviving rows by one-based ordinal. DV positions are zero-based.
         let values = if row_count == 0 {
             Vec::new()
         } else {
@@ -1928,6 +1933,13 @@ mod tests {
         let limited_result = Arc::new(exec.clone()).replace_children(
             vec![limited],
             ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        );
+
+        let rebuilt: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config.clone());
+        assert!(
+            Arc::new(exec.clone())
+                .with_new_children(vec![rebuilt])
+                .is_ok()
         );
 
         let parquet_source = config
@@ -3193,6 +3205,34 @@ mod tests {
 
         assert_eq!(kept, vec![10, 21]);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_batch_project_handles_position_before_file_id() -> TestResult {
+        let (kernel_type, scan_plan) = dv_kernel_type_and_int32_scan_plan().await?;
+        let batch = with_positions(
+            value_and_file_id_batch(&[10, 11], &[Some("f1"), Some("f1")], false)?,
+            vec![0, 1],
+        )?
+        .project(&[0, 2, 1])?;
+        let mut stream = test_scan_stream(
+            scan_plan,
+            kernel_type,
+            HashMap::from([("f1".to_string(), vec![true, false])]),
+            Vec::new(),
+            None,
+        );
+
+        let outputs = stream.batch_project(batch)?;
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(
+            outputs[0]
+                .column(0)
+                .as_primitive::<arrow::datatypes::Int32Type>()
+                .values(),
+            &[10]
+        );
         Ok(())
     }
 
