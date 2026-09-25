@@ -62,7 +62,10 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
-use filter::{try_construct_early_filter, try_construct_streaming_early_filter};
+use filter::{
+    DEFAULT_STREAMING_FILTER_BUFFER, try_construct_early_filter,
+    try_construct_streaming_early_filter,
+};
 use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
@@ -169,6 +172,8 @@ pub struct MergeBuilder {
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
     streaming: bool,
+    /// Batches in flight between a streaming source and the early filter of the target scan
+    streaming_filter_buffer: usize,
     /// Enable merge schema evolution
     merge_schema: bool,
     /// Delta object store for handling data files
@@ -221,6 +226,7 @@ impl MergeBuilder {
             not_match_source_operations: Vec::new(),
             safe_cast: false,
             streaming: false,
+            streaming_filter_buffer: DEFAULT_STREAMING_FILTER_BUFFER,
             custom_execute_handler: None,
         }
     }
@@ -467,6 +473,16 @@ impl MergeBuilder {
     /// Set streaming mode execution
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
+        self
+    }
+
+    /// Set the number of source batches in flight to the early filter of a streaming source.
+    ///
+    /// The early filter collects the source values that skip target files while the join reads
+    /// the source. A larger buffer lets the join read ahead of the collection, at the cost of
+    /// memory. Only used with [`Self::with_streaming`]. Default is 4.
+    pub fn with_streaming_filter_buffer(mut self, buffer: usize) -> Self {
+        self.streaming_filter_buffer = buffer;
         self
     }
 
@@ -877,6 +893,7 @@ async fn execute(
     mut commit_properties: CommitProperties,
     safe_cast: bool,
     streaming: bool,
+    streaming_filter_buffer: usize,
     source_alias: Option<String>,
     target_alias: Option<String>,
     merge_schema: bool,
@@ -1024,6 +1041,7 @@ async fn execute(
             &source,
             &source_name,
             &target_name,
+            streaming_filter_buffer,
         )
         .await?
         .map(|filter| {
@@ -1959,6 +1977,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.commit_properties,
                 this.safe_cast,
                 this.streaming,
+                this.streaming_filter_buffer,
                 this.source_alias,
                 this.target_alias,
                 this.merge_schema,
