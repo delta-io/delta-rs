@@ -11,9 +11,6 @@ env:
   # https://github.com/rust-lang/cargo/issues/10280
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
-  # Override RUSTFLAGS to not treat warnings as errors (setup-rust-toolchain sets -D warnings by default)
-  # This allows deprecated methods to be warnings instead of errors
-  RUSTFLAGS: ""
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
