@@ -422,8 +422,9 @@ pub(crate) fn filter_from_placeholder_values(
     Ok(expr)
 }
 
-/// Batches in flight between a streaming source and the aggregation of its placeholder values.
-const STREAMING_FILTER_BUFFER: usize = 4;
+/// Default additional buffer of batches in flight between a streaming source and the aggregation of its
+/// placeholder values.
+pub(super) const DEFAULT_STREAMING_FILTER_BUFFER: usize = 4;
 
 /// The early filter of a MERGE with a source that can only be read once.
 ///
@@ -448,6 +449,7 @@ pub(crate) async fn try_construct_streaming_early_filter(
     source: &LogicalPlan,
     source_name: &TableReference,
     target_name: &TableReference,
+    buffer: usize,
 ) -> DeltaResult<Option<StreamingEarlyFilter>> {
     let partition_columns = table_snapshot.metadata().partition_columns();
     let mut placeholders = Vec::default();
@@ -466,7 +468,7 @@ pub(crate) async fn try_construct_streaming_early_filter(
     }
 
     let schema = Arc::new(source.schema().as_arrow().clone());
-    let (batch_sender, receiver) = mpsc::channel(STREAMING_FILTER_BUFFER);
+    let (batch_sender, receiver) = mpsc::channel(buffer);
     let input = StreamingTable::try_new(
         Arc::clone(&schema),
         vec![Arc::new(ReceiverPartition {
