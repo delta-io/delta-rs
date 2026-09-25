@@ -410,7 +410,7 @@ fn validate_dv_mask(
 /// Kernel stops the mask at the highest deleted row. Fill trailing entries with `true`.
 /// Return an error when `numRecords` is missing or shorter than the mask.
 ///
-/// Scan execution reads sparse masks by physical position.
+/// Scan execution uses physical positions without padding.
 fn normalize_dv_keep_mask_for_api(
     mut mask: Vec<bool>,
     num_records: Option<u64>,
@@ -541,7 +541,6 @@ async fn get_data_scan_plan(
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
     };
 
-    // Use the runtime cache for files without DVs.
     let partitioned_files = files
         .into_iter()
         .enumerate()

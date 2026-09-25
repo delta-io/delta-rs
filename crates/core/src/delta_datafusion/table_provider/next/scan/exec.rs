@@ -56,7 +56,7 @@ pub(super) enum DvExecutionState {
     Physical {
         /// DV masks and Parquet row counts by scan file ID.
         entries: Arc<HashMap<String, DeletionVectorEntry>>,
-        /// Expected object store and path for each file ID in the child plan.
+        /// Object store and metadata for each child file ID.
         physical_file_identities: Arc<super::PhysicalFileIdentityMap>,
     },
 }
@@ -98,7 +98,7 @@ pub(super) struct DeletionVectorEntry {
 ///
 /// - **Column mapping**: Translates physical column names to logical names
 /// - **Partition values**: Materializes partition column values from file paths
-/// - **Deletion vectors**: Filters out deleted rows using per-file selection vectors
+/// - **Deletion vectors**: Filters deleted rows by physical position
 /// - **Schema evolution**: Handles missing columns and type coercion
 ///
 /// # Data Flow
