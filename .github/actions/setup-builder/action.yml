@@ -64,6 +64,8 @@ runs:
       with:
         toolchain: stable
         components: rustfmt,clippy
-        cache: true
+        # We use sccache for caching, so disable caching to prevent
+        # redundant caching and fighting for cache space.
+        cache: false
         # if we ever get rid of all the clippy warnings, we can remove this line
         rustflags: ""
