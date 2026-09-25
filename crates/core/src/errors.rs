@@ -239,15 +239,6 @@ pub enum DeltaTableError {
         /// Human-readable description of the operation (e.g. "ADD COLUMN").
         operation: String,
     },
-
-    /// Error returned when loading a catalog-managed table (`catalogManaged` table feature),
-    /// whose commits are ratified by a catalog such as Unity Catalog. delta-rs cannot yet
-    /// resolve the catalog's unpublished commits.
-    #[error(
-        "Catalog-managed tables (table feature 'catalogManaged') are not supported yet. \
-         See https://github.com/delta-io/delta-rs/issues/4549"
-    )]
-    UnsupportedCatalogManagedTable,
 }
 
 impl From<object_store::path::Error> for DeltaTableError {

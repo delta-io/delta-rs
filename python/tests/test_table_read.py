@@ -15,7 +15,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
-from deltalake.exceptions import DeltaProtocolError
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.writer import write_deltalake
 
@@ -637,7 +637,7 @@ def test_read_catalog_managed_table_raises(tmp_path: Path):
         "\n".join(json.dumps(action) for action in actions)
     )
 
-    with pytest.raises(DeltaProtocolError, match="catalogManaged"):
+    with pytest.raises(DeltaError, match="catalogManaged"):
         DeltaTable(str(tmp_path))
 
 

@@ -29,6 +29,7 @@ use delta_kernel::schema::derive_macro_utils::ToDataType;
 use delta_kernel::schema::{SchemaRef as KernelSchemaRef, StructField, ToSchema};
 use delta_kernel::snapshot::Snapshot as KernelSnapshot;
 use delta_kernel::table_configuration::TableConfiguration;
+use delta_kernel::table_features::TableFeature;
 use delta_kernel::table_properties::TableProperties;
 use delta_kernel::{
     Engine, EvaluationHandler, Expression, ExpressionEvaluator, PredicateRef, Version,
@@ -195,12 +196,15 @@ impl<'a> ConflictReadSet<'a> {
 ///
 /// delta-rs never sets a max catalog version, so the kernel raising
 /// [`MaxCatalogVersion`](delta_kernel::Error::MaxCatalogVersion) means the table is
-/// catalog-managed, which is not supported yet.
+/// catalog-managed, which is not supported yet. Report it the same way the kernel reports
+/// any other unsupported table feature.
 fn map_snapshot_build_error(err: delta_kernel::Error) -> DeltaTableError {
     match err {
-        delta_kernel::Error::MaxCatalogVersion(_) => {
-            DeltaTableError::UnsupportedCatalogManagedTable
-        }
+        delta_kernel::Error::MaxCatalogVersion(_) => delta_kernel::Error::unsupported(format!(
+            "Feature '{}' is not supported",
+            TableFeature::CatalogManaged
+        ))
+        .into(),
         other => other.into(),
     }
 }
@@ -2174,10 +2178,17 @@ mod tests {
             .expect_err("catalog-managed tables must not load without the catalog");
 
         assert!(
-            matches!(error, DeltaTableError::UnsupportedCatalogManagedTable),
-            "expected UnsupportedCatalogManagedTable, got {error:?}"
+            matches!(
+                error,
+                DeltaTableError::KernelError(delta_kernel::Error::Unsupported(_))
+            ),
+            "expected an unsupported-feature kernel error, got {error:?}"
         );
-        assert!(error.to_string().contains("issues/4549"));
+        assert!(
+            error
+                .to_string()
+                .contains("Feature 'catalogManaged' is not supported")
+        );
 
         Ok(())
     }
