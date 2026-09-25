@@ -46,6 +46,19 @@ def test_file_info(file_systems, table_data):
 
 
 @pytest.mark.pyarrow
+def test_copy_file(file_systems):
+    store, arrow_fs = file_systems
+
+    with arrow_fs.open_output_stream("source.txt") as stream:
+        stream.write(b"hello")
+
+    store.copy_file("source.txt", "dest.txt")
+
+    with arrow_fs.open_input_file("dest.txt") as stream:
+        assert stream.read() == b"hello"
+
+
+@pytest.mark.pyarrow
 def test_get_file_info_selector(file_systems):
     store, arrow_fs = file_systems
     import pyarrow as pa
