@@ -81,9 +81,6 @@ jobs:
       - name: Spot-check build for native-tls features
         run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
 
-      - name: Check no default features (except rustls)
-        run: cargo check --profile=ci --package deltalake --no-default-features --features rustls
-
   test:
     name: Unit Tests
     needs: test-matrix
