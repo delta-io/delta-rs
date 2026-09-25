@@ -69,11 +69,14 @@ jobs:
         with:
           python-version: 3.13
 
+      - name: load DAT
+        run: make setup-dat
+
       - name: Default build
         run: cargo build --profile=ci --package deltalake
 
       - name: Default features with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
