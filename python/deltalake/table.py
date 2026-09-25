@@ -2352,6 +2352,57 @@ class TableAlterer:
             post_commithook_properties,
         )
 
+    def drop_columns(
+        self,
+        column_names: str | list[str],
+        raise_if_not_exists: bool = True,
+        *args: Any,
+        commit_properties: CommitProperties | None = None,
+        post_commithook_properties: PostCommitHookProperties | None = None,
+    ) -> None:
+        """
+        Drop one or more top-level columns from the table.
+
+        This is the equivalent of ``ALTER TABLE <table> DROP COLUMNS (<names>)``. It is a
+        metadata-only operation: the columns are removed from the table's schema while the
+        existing data files are left untouched.
+
+        Because of that, the table must have
+        [column mapping](https://docs.delta.io/delta-column-mapping/) enabled
+        (``delta.columnMapping.mode`` set to ``name`` or ``id``). Without column mapping the
+        drop would require rewriting every data file, which is not supported, and the
+        operation raises instead.
+
+        A column cannot be dropped if it is a partition column, if it is listed in
+        ``delta.dataSkippingStatsColumns``, or if it is still referenced by a check
+        constraint, an invariant, or a generated column. Dropping every column is also
+        rejected, since a table must keep at least one column. Nested (dotted) column paths
+        are not supported yet.
+
+        Args:
+            column_names: the name of the column to drop, or a list of column names.
+            raise_if_not_exists: raise if a requested column does not exist.
+            commit_properties: properties of the transaction commit. If None, default values are used.
+            post_commithook_properties: properties for the post commit hook. If None, default values are used.
+
+        Example:
+            ```python
+            from deltalake import DeltaTable
+            dt = DeltaTable("test_table")
+            dt.alter.drop_columns("legacy_column")
+            dt.alter.drop_columns(["first_unused", "second_unused"])
+            ```
+        """
+        if isinstance(column_names, str):
+            column_names = [column_names]
+
+        self.table._table.drop_columns(
+            column_names,
+            raise_if_not_exists,
+            commit_properties,
+            post_commithook_properties,
+        )
+
     def set_table_properties(
         self,
         properties: dict[str, str],

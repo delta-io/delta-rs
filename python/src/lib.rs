@@ -1111,6 +1111,40 @@ impl RawDeltaTable {
         Ok(())
     }
 
+    #[pyo3(signature = (column_names, raise_if_not_exists, commit_properties=None, post_commithook_properties=None))]
+    pub fn drop_columns(
+        &self,
+        py: Python,
+        column_names: Vec<String>,
+        raise_if_not_exists: bool,
+        commit_properties: Option<PyCommitProperties>,
+        post_commithook_properties: Option<PyPostCommitHookProperties>,
+    ) -> PyResult<()> {
+        let table = py.detach(|| {
+            let table = self._table.lock().map_err(to_rt_err)?.clone();
+            let mut cmd = table
+                .drop_columns()
+                .with_columns(column_names)
+                .with_raise_if_not_exists(raise_if_not_exists);
+
+            if let Some(commit_properties) =
+                maybe_create_commit_properties(commit_properties, post_commithook_properties)
+            {
+                cmd = cmd.with_commit_properties(commit_properties);
+            }
+
+            if self.log_store()?.name() == "LakeFSLogStore" {
+                cmd = cmd.with_custom_execute_handler(Arc::new(LakeFSCustomExecuteHandler {}))
+            }
+
+            rt().block_on(cmd.into_future())
+                .map_err(PythonError::from)
+                .map_err(PyErr::from)
+        })?;
+        self.set_state(table.state)?;
+        Ok(())
+    }
+
     #[pyo3()]
     pub fn generate(&self, _py: Python) -> PyResult<()> {
         let table = self._table.lock().map_err(to_rt_err)?.clone();

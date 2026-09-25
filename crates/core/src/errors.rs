@@ -239,6 +239,22 @@ pub enum DeltaTableError {
         /// Human-readable description of the operation (e.g. "ADD COLUMN").
         operation: String,
     },
+
+    /// Error returned when dropping a column is attempted on a table that does not have
+    /// column mapping enabled.
+    ///
+    /// Without column mapping the logical schema cannot stop referencing a column while the
+    /// existing data files still contain it, so the drop would require rewriting every data
+    /// file.
+    #[error(
+        "Cannot drop column(s) {columns}: dropping columns requires column mapping to be \
+         enabled on the table (delta.columnMapping.mode = 'name' or 'id'). Without it, \
+         dropping a column would require rewriting all data files, which is not supported."
+    )]
+    ColumnMappingRequiredForDrop {
+        /// The column(s) the caller attempted to drop.
+        columns: String,
+    },
 }
 
 impl From<object_store::path::Error> for DeltaTableError {
@@ -279,5 +295,19 @@ impl DeltaTableError {
             mode,
             operation: operation.to_string(),
         }
+    }
+
+    /// Construct a
+    /// [`ColumnMappingRequiredForDrop`](DeltaTableError::ColumnMappingRequiredForDrop) error for
+    /// the given columns.
+    pub fn column_mapping_required_for_drop<T: AsRef<str>>(
+        columns: impl IntoIterator<Item = T>,
+    ) -> Self {
+        let columns = columns
+            .into_iter()
+            .map(|c| format!("'{}'", c.as_ref()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self::ColumnMappingRequiredForDrop { columns }
     }
 }

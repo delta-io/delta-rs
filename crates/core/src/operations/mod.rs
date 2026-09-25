@@ -31,9 +31,9 @@ use self::{
 };
 #[cfg(feature = "datafusion")]
 use self::{
-    constraints::ConstraintBuilder, delete::DeleteBuilder, drop_constraints::DropConstraintBuilder,
-    load::LoadBuilder, load_cdf::CdfLoadBuilder, merge::MergeBuilder, optimize::OptimizeBuilder,
-    update::UpdateBuilder, write::WriteBuilder,
+    constraints::ConstraintBuilder, delete::DeleteBuilder, drop_column::DropColumnsBuilder,
+    drop_constraints::DropConstraintBuilder, load::LoadBuilder, load_cdf::CdfLoadBuilder,
+    merge::MergeBuilder, optimize::OptimizeBuilder, update::UpdateBuilder, write::WriteBuilder,
 };
 use crate::DeltaTable;
 #[cfg(feature = "datafusion")]
@@ -63,6 +63,8 @@ mod cdc;
 pub mod constraints;
 #[cfg(feature = "datafusion")]
 pub mod delete;
+#[cfg(feature = "datafusion")]
+pub mod drop_column;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
@@ -257,6 +259,14 @@ impl DeltaTable {
     #[must_use]
     pub fn drop_constraints(self) -> DropConstraintBuilder {
         DropConstraintBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
+    }
+
+    /// Drops top-level columns from a table
+    ///
+    /// Requires column mapping to be enabled on the table.
+    #[must_use]
+    pub fn drop_columns(self) -> DropColumnsBuilder {
+        DropColumnsBuilder::new(self.log_store(), self.state.clone().map(|s| s.snapshot))
     }
 }
 

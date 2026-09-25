@@ -180,6 +180,13 @@ class RawDeltaTable:
         commit_properties: CommitProperties | None,
         post_commithook_properties: PostCommitHookProperties | None,
     ) -> None: ...
+    def drop_columns(
+        self,
+        column_names: list[str],
+        raise_if_not_exists: bool,
+        commit_properties: CommitProperties | None,
+        post_commithook_properties: PostCommitHookProperties | None,
+    ) -> None: ...
     def set_table_properties(
         self,
         properties: dict[str, str],
