@@ -39,11 +39,6 @@ runs:
         key: cargo-cache3-${{ hashFiles('**/Cargo.toml') }}
         restore-keys: cargo-cache3-
 
-    - name: Disable debuginfo generation
-      # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      shell: bash
-      run: echo "RUSTFLAGS=-C debuginfo=1" >> $GITHUB_ENV
     - name: Enable backtraces
       shell: bash
       run: echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
