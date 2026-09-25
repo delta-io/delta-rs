@@ -12,6 +12,7 @@ defaults:
     working-directory: ./python
 
 env:
+  PROFILE: ci
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 

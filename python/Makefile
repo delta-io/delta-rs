@@ -40,7 +40,7 @@ develop-bench: ## Install a release build of the Python binding, with the depend
 develop-pyspark:
 	uv sync --all-extras --group pyspark --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --uv --extras=pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --uv --profile $(PROFILE) --extras=pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
