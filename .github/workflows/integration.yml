@@ -11,6 +11,15 @@ env:
   # https://github.com/rust-lang/cargo/issues/10280
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   DEFAULT_FEATURES: "azure,datafusion,s3,gcs,glue,hdfs "
+  # Build all integration test jobs with the same packages and features
+  # so they can share cache entries.
+  INTEGRATION_TEST_BUILD_ARGS: >-
+    --package deltalake-aws
+    --package deltalake-azure
+    --package deltalake-gcp
+    --package deltalake-hdfs
+    --package deltalake-lakefs
+    --features deltalake-aws/integration_test,deltalake-azure/integration_test,deltalake-gcp/integration_test,deltalake-hdfs/integration_test,deltalake-lakefs/integration_test_lakefs
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
@@ -51,8 +60,8 @@ jobs:
         run: |
           gmake setup-dat
           cargo llvm-cov nextest --cargo-profile=ci \
-            --package deltalake-${{ matrix.target.name }} \
-            --features integration_test \
+            $INTEGRATION_TEST_BUILD_ARGS \
+            --filterset 'package(deltalake-${{ matrix.target.name }})' \
             --codecov \
             --output-path codecov.json
 
@@ -117,8 +126,8 @@ jobs:
         run: |
           gmake setup-dat
           cargo llvm-cov nextest --cargo-profile=ci \
-            --features integration_test \
-            --package deltalake-hdfs \
+            $INTEGRATION_TEST_BUILD_ARGS \
+            --filterset 'package(deltalake-hdfs)' \
             --codecov \
             --output-path codecov.json
 
@@ -149,8 +158,8 @@ jobs:
         run: |
           gmake setup-dat
           cargo llvm-cov nextest --cargo-profile=ci \
-            --package deltalake-lakefs \
-            --features integration_test_lakefs \
+            $INTEGRATION_TEST_BUILD_ARGS \
+            --filterset 'package(deltalake-lakefs)' \
             --codecov \
             --output-path codecov.json
 
