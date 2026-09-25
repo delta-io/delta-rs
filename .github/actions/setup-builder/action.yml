@@ -52,6 +52,12 @@ runs:
     - name: Enable sccahe
       shell: bash
       run: echo RUSTC_WRAPPER=sccache >> $GITHUB_ENV
+    - name: Make sccache read-only for PRs
+      # Only write to the cache from branch pushes, so PR builds can't evict
+      # cache entries from main or release branches. PRs can stil read caches
+      # from the branches they target.
+      shell: bash
+      run: echo "SCCACHE_GHA_RW_MODE=${{ github.event_name == 'push' && 'READ_WRITE' || 'READ_ONLY' }}" >> $GITHUB_ENV
 
     # v1.15.4 <https://github.com/actions-rust-lang/setup-rust-toolchain/releases/tag/v1.15.4>
     - name: Setup Rust toolchain
