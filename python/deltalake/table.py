@@ -952,7 +952,7 @@ class DeltaTable:
                 if isinstance(value, (int, float, bool, list)):
                     value = str(value)
                 elif isinstance(value, str):
-                    value = f"'{value}'"
+                    value = "'" + value.replace("'", "''") + "'"
                 elif isinstance(value, datetime):
                     value = str(
                         int(value.timestamp() * 1000 * 1000)
