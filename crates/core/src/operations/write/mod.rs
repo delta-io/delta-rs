@@ -589,7 +589,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     let snapshot_format_options = this
                         .snapshot
                         .as_ref()
-                        .and_then(|s| s.metadata().format_options().ok())
+                        .map(|s| s.metadata().format_options().clone())
                         .unwrap_or_default();
                     writer_properties_from_format_options(&snapshot_format_options, &this.format_options)
                 });

@@ -464,7 +464,6 @@ impl RawDeltaTable {
                 .map_err(PyErr::from)?;
             Ok(snapshot.metadata().clone())
         })?;
-        let format_options = metadata.format_options().unwrap_or_default();
         Ok(RawDeltaTableMetaData {
             id: metadata.id().to_string(),
             name: metadata.name().map(String::from),
@@ -472,7 +471,7 @@ impl RawDeltaTable {
             partition_columns: metadata.partition_columns().to_vec(),
             created_time: metadata.created_time(),
             configuration: metadata.configuration().clone(),
-            format_options,
+            format_options: metadata.format_options().clone(),
         })
     }
 

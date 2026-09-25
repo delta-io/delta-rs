@@ -1118,7 +1118,7 @@ async fn execute(
                     current_metadata.partition_columns(),
                     snapshot.metadata().configuration(),
                 )?
-                .with_format_options(snapshot.metadata().format_options()?)?,
+                .with_format_options(snapshot.metadata().format_options())?,
             );
             schema_action = Some(action);
         }
