@@ -1095,6 +1095,7 @@ class DeltaTable:
     ) -> dict[str, Any]:
         """
         Restores table to a given version or datetime. See also [``load_as_version``](#deltalake.DeltaTable.load_as_version).
+        If a datetime object without a timezone is passed, the UTC timezone will be assumed.
 
         Args:
             target: the expected version will restore, which represented by int, date str or datetime.
@@ -1114,6 +1115,8 @@ class DeltaTable:
             ```
         """
         if isinstance(target, datetime):
+            if target.tzinfo is None:
+                target = target.replace(tzinfo=timezone.utc)
             metrics = self._table.restore(
                 target.isoformat(),
                 ignore_missing_files=ignore_missing_files,
