@@ -216,7 +216,6 @@ impl MergeBuilder {
             safe_cast: false,
             streaming: false,
             streaming_filter_buffer: DEFAULT_STREAMING_FILTER_BUFFER,
-            custom_execute_handler: None,
         }
     }
 
@@ -462,12 +461,6 @@ impl MergeBuilder {
     /// Set streaming mode execution
     pub fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = streaming;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 
@@ -1959,26 +1952,26 @@ impl std::future::IntoFuture for MergeBuilder {
                 // scoped store refuses every call once the scope is closed.
                 update_datafusion_session(&state, this.log_store.as_ref())?;
 
-            let (snapshot, metrics) = execute(
-                this.predicate,
-                this.source,
-                this.log_store.clone(),
-                snapshot,
-                state,
-                this.writer_properties,
-                this.commit_properties,
-                this.safe_cast,
-                this.streaming,
-                this.streaming_filter_buffer,
-                this.source_alias,
-                this.target_alias,
-                this.merge_schema,
-                this.match_operations,
-                this.not_match_operations,
-                this.not_match_source_operations,
-                operation_id,
-                this.custom_execute_handler.as_ref(),
-            )
+                execute(
+                    this.predicate,
+                    this.source,
+                    log_store,
+                    snapshot,
+                    state,
+                    this.writer_properties,
+                    this.commit_properties,
+                    this.safe_cast,
+                    this.streaming,
+                    this.streaming_filter_buffer,
+                    this.source_alias,
+                    this.target_alias,
+                    this.merge_schema,
+                    this.match_operations,
+                    this.not_match_operations,
+                    this.not_match_source_operations,
+                )
+                .await
+            })
             .await?;
 
             Ok((
