@@ -15,6 +15,7 @@ from arro3.core import Field as ArrowField
 
 from deltalake import DeltaTable
 from deltalake._util import encode_partition_value
+from deltalake.exceptions import DeltaError
 from deltalake.query import QueryBuilder
 from deltalake.writer import write_deltalake
 
@@ -587,6 +588,57 @@ def test_get_add_actions_on_empty_table(tmp_path: Path):
     add_actions = dt.get_add_actions()
     assert add_actions.num_rows == 0
     assert dt.get_add_actions(flatten=True).num_rows == 0
+
+
+def test_read_catalog_managed_table_raises(tmp_path: Path):
+    log_dir = tmp_path / "_delta_log"
+    log_dir.mkdir()
+    actions = [
+        {
+            "commitInfo": {
+                "inCommitTimestamp": 1700000000000,
+                "timestamp": 1700000000000,
+                "operation": "CREATE TABLE",
+                "txnId": "8b3c3f56-4d4a-4c61-9d1e-9a36e1c7c0a1",
+            }
+        },
+        {
+            "protocol": {
+                "minReaderVersion": 3,
+                "minWriterVersion": 7,
+                "readerFeatures": ["catalogManaged"],
+                "writerFeatures": ["catalogManaged", "inCommitTimestamp"],
+            }
+        },
+        {
+            "metaData": {
+                "id": "5fba94ed-9794-4965-ba6e-6ee3c0d22af9",
+                "format": {"provider": "parquet", "options": {}},
+                "schemaString": json.dumps(
+                    {
+                        "type": "struct",
+                        "fields": [
+                            {
+                                "name": "value",
+                                "type": "long",
+                                "nullable": True,
+                                "metadata": {},
+                            }
+                        ],
+                    }
+                ),
+                "partitionColumns": [],
+                "configuration": {"delta.enableInCommitTimestamps": "true"},
+                "createdTime": 1700000000000,
+            }
+        },
+    ]
+    (log_dir / "00000000000000000000.json").write_text(
+        "\n".join(json.dumps(action) for action in actions)
+    )
+
+    with pytest.raises(DeltaError, match="catalogManaged"):
+        DeltaTable(str(tmp_path))
 
 
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
