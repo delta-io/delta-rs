@@ -2075,14 +2075,11 @@ def test_merge_date_partitioned_2344(tmp_path: pathlib.Path, streaming: bool):
 
     assert last_action["operation"] == "MERGE"
     assert result == expected
-    if not streaming:
-        assert (
-            last_action["operationParameters"].get("predicate")
-            == "date = '2022-02-01'::date"
-        )
-    else:
-        # In streaming mode we don't use aggregated stats of the source in the predicate
-        assert last_action["operationParameters"].get("predicate") is None
+    # A streamed source records the predicate that it builds while it is read.
+    assert (
+        last_action["operationParameters"].get("predicate")
+        == "date = '2022-02-01'::date"
+    )
 
 
 @pytest.mark.pyarrow
@@ -3683,13 +3680,8 @@ def test_merge_type_mismatch_partition_pruning(tmp_path: pathlib.Path, streaming
 
 
 @pytest.mark.pandas
-# Streamed merge has no source stats, so it cannot prune target files yet.
-@pytest.mark.parametrize(
-    ("streaming", "expected_files_scanned"), ((False, 1), (True, 3))
-)
-def test_merge_file_pruning_regression_3636(
-    tmp_path: pathlib.Path, streaming: bool, expected_files_scanned: int
-):
+@pytest.mark.parametrize("streaming", (True, False))
+def test_merge_file_pruning_regression_3636(tmp_path: pathlib.Path, streaming: bool):
     """
     https://github.com/delta-io/delta-rs/issues/3636
     """
@@ -3759,7 +3751,7 @@ def test_merge_file_pruning_regression_3636(
         .execute()
     )
 
-    assert stats["num_target_files_scanned"] == expected_files_scanned
+    assert stats["num_target_files_scanned"] == 1
 
 
 @pytest.mark.pyarrow

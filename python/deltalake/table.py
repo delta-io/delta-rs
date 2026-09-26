@@ -1041,8 +1041,9 @@ class DeltaTable:
             merge_schema: Enable merge schema evolution for mismatch schema between source and target tables
             error_on_type_mismatch: specify if merge returns an error when update or insert expressions fail to cast to target column types :default = True
             writer_properties: Pass writer properties to the Rust parquet writer
-            streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. Enabling streamed_exec
-                implicitly disables source table stats to derive an early_pruning_predicate
+            streamed_exec: Will execute MERGE using a LazyMemoryExec plan, this improves memory pressure for large source tables. With streamed_exec,
+                the source is read once. The source statistics that skip target files are collected while the source is read, and are applied
+                before the target is read.
             max_spill_size: The maximum number of bytes allowed in memory before spilling to disk.
                 If not specified, uses DataFusion's default.
                 Set this to avoid OOM when merging into large tables with a source table which touches a large number of files.
