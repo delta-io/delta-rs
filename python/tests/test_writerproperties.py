@@ -67,6 +67,7 @@ def test_writer_properties_missing_compression_level(compression, expected):
     [
         ("GZIP", -1),
         ("GZIP", 11),
+        ("GZIP", 10),
         ("BROTLI", -1),
         ("BROTLI", 12),
         ("ZSTD", 0),

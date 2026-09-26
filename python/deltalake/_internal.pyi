@@ -997,7 +997,7 @@ class DeltaFileSystemHandler:
         known_sizes: dict[str, int] | None = None,
     ) -> DeltaFileSystemHandler: ...
     def get_type_name(self) -> str: ...
-    def copy_file(self, src: str, dst: str) -> None:
+    def copy_file(self, src: str, dest: str) -> None:
         """Copy a file.
 
         If the destination exists and is a directory, an error is returned. Otherwise, it is replaced.
