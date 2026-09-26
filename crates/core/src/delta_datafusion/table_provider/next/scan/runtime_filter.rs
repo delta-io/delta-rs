@@ -187,6 +187,9 @@ impl RuntimeScanFilePruner {
 
         let mut keep = vec![false; self.file_indexes.len()];
         super::for_each_selected_file(scan.table_root(), stream, |file_url| {
+            // This scan applies only the runtime predicates, so it can also return files that
+            // planning skipped. Therefore `keep` refers to the intersection of the two:
+            // kept files = 'planned files' ∩ 'matching runtime files'.
             if let Some(&file_index) = self.file_indexes.get(file_url.as_str()) {
                 keep[file_index] = true;
             }
