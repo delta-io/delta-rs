@@ -133,7 +133,9 @@ debug = true
 # Usage: cargo build --profile=ci
 [profile.ci]
 inherits = "dev"
-debug = false
+# Line tables for workspace crates only, so panic backtraces have file and
+# line numbers without the cost of debuginfo for all dependencies.
+debug = "line-tables-only"
 incremental = false
 
 [profile.ci.package."*"]
