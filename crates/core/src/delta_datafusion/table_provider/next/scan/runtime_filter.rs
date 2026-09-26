@@ -270,10 +270,11 @@ impl PhysicalExpr for KeptFilesExpr {
         self: Arc<Self>,
         children: Vec<Arc<dyn PhysicalExpr>>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let file_id = children
-            .into_iter()
-            .next()
-            .ok_or_else(|| internal_datafusion_err!("KeptFilesExpr expects one child"))?;
+        if children.len() != 1 {
+            return Err(internal_datafusion_err!("KeptFilesExpr expects one child"));
+        }
+        let file_id = children.into_iter().next().unwrap();
+
         Ok(Arc::new(Self {
             file_id,
             keep: Arc::clone(&self.keep),
