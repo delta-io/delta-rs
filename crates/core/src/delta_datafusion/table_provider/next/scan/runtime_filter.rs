@@ -7,19 +7,19 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Result, internal_datafusion_err};
-use datafusion::physical_plan::ExecutionPlan;
+use arrow::array::BooleanArray;
+use arrow::datatypes::{DataType, Schema};
+use arrow::record_batch::RecordBatch;
+use datafusion::common::{Result, ScalarValue, internal_datafusion_err};
+use datafusion::logical_expr::ColumnarValue;
+use datafusion::physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
+use datafusion::physical_plan::PhysicalExpr;
 use datafusion::physical_plan::metrics::Gauge;
 use datafusion::prelude::Expr;
-use datafusion_datasource::PartitionedFile;
-use datafusion_datasource::file_groups::FileGroup;
-use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource::source::DataSourceExec;
 use delta_kernel::Engine;
-use parking_lot::Mutex;
 use tokio::sync::OnceCell;
 use tracing::warn;
 
@@ -33,9 +33,9 @@ use crate::kernel::{FileStatsMaterialization, Snapshot, StatsProjection};
 ///
 /// A scan reads the filter once, when it is first polled, and does not wait for a value. When
 /// the filter has predicates, the scan runs kernel file skipping with them.
-/// It then reads a copy of its Parquet input that has only the kept files, so a skipped file
-/// is never opened. Terms that kernel file skipping cannot use are ignored, so the scan keeps
-/// every file that may match.
+/// It then sets the kept files in a dynamic filter on the file id column of its Parquet input,
+/// so the Parquet scan skips a file before it reads the footer. Terms that kernel file skipping
+/// cannot use are ignored, so the scan keeps every file that may match.
 ///
 /// Predicates that are set after a scan started have no effect on it. So they skip files only
 /// in scans that are polled later, for example the probe side of a hash join that builds on the
@@ -56,28 +56,26 @@ pub(super) struct RuntimeScanFilePruner {
     file_indexes: HashMap<String, usize>,
     /// The `count_files_scanned` metric of the scan
     files_scanned: Gauge,
-    /// Whether to keep each planned file, by file index. `None` keeps all files.
-    keep: OnceCell<Option<Vec<bool>>>,
-    /// The last input that the scan started with, and its copy
-    input_copy: Mutex<Option<InputCopy>>,
-}
-
-/// A scan input, and its copy with only the kept files.
-struct InputCopy {
-    input: Arc<dyn ExecutionPlan>,
-    copy: Arc<dyn ExecutionPlan>,
+    /// The file id column of the Parquet input
+    file_id: Arc<dyn PhysicalExpr>,
+    /// Predicate of the Parquet input. It keeps all files until the scan starts, then only the
+    /// kept files.
+    filter: Arc<DynamicFilterPhysicalExpr>,
+    /// Set when the first partition has decided the kept files
+    started: OnceCell<()>,
 }
 
 impl fmt::Debug for RuntimeScanFilePruner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RuntimeScanFilePruner")
             .field("files", &self.file_indexes.len())
-            .field("keep", &self.keep)
+            .field("filter", &self.filter)
             .finish_non_exhaustive()
     }
 }
 
 impl RuntimeScanFilePruner {
+    /// `file_id` is the file id column of the Parquet input.
     pub(super) fn new(
         predicates: RuntimeFileFilter,
         snapshot: Snapshot,
@@ -85,12 +83,18 @@ impl RuntimeScanFilePruner {
         engine: Arc<dyn Engine>,
         files: &[ScanFileContext],
         files_scanned: Gauge,
+        file_id: Column,
     ) -> Self {
         let file_indexes = files
             .iter()
             .enumerate()
             .map(|(file_index, file)| (file.file_url.to_string(), file_index))
             .collect();
+        let file_id: Arc<dyn PhysicalExpr> = Arc::new(file_id);
+        let filter = Arc::new(DynamicFilterPhysicalExpr::new(
+            vec![Arc::clone(&file_id)],
+            lit(true),
+        ));
         Self {
             predicates,
             snapshot,
@@ -98,49 +102,37 @@ impl RuntimeScanFilePruner {
             engine,
             file_indexes,
             files_scanned,
-            keep: OnceCell::new(),
-            input_copy: Mutex::new(None),
+            file_id,
+            filter,
+            started: OnceCell::new(),
         }
     }
 
-    /// Return the scan plan to read: `input` with only the kept files.
+    /// The predicate to set on the Parquet input of the scan.
+    pub(super) fn predicate(&self) -> Arc<dyn PhysicalExpr> {
+        Arc::clone(&self.filter) as _
+    }
+
+    /// Decide the kept files, and set them in the predicate of the Parquet input.
     ///
     /// Each partition of the scan calls this when it is first polled, before it executes its
-    /// part of the input. The partitions start at different times, and the predicates can be set
-    /// between two starts. So all calls must return the same plan:
-    /// - The first call decides if and which files need to be kept, and later calls reuse
-    ///   that decision. This needs to be set once so all partitions are in sync.
-    /// - Calls with the same `input` return the same copy. A Parquet `DataSourceExec` keeps its
-    ///   queue of files in the node itself, and all partitions that execute that node take files
-    ///   from it. A new copy is a new node with a new, full queue, so a copy for each partition
-    ///   would read each kept file once per partition.
-    /// - A new `input`, for example after the plan is reset for a second execution, gets a new
-    ///   copy with the same kept files, because the queue of the old copy is empty.
-    pub(super) async fn maybe_prune_input(
-        &self,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let Some(keep) = self.keep.get_or_init(|| self.select_files()).await else {
-            return Ok(input);
-        };
-        // Check and build under one lock, so that two partitions cannot both build a copy.
-        let mut input_copy = self.input_copy.lock();
-
-        // The same node object: another partition of this run. Share its copy, and its queue.
-        if let Some(last) = input_copy.as_ref()
-            && Arc::ptr_eq(&last.input, &input)
-        {
-            return Ok(Arc::clone(&last.copy));
-        }
-
-        // The first call of a run, or a new `input` after a reset: build a copy with the same kept
-        // files. The old copy has used up its queue.
-        let copy = rewrite_parquet_nodes_by_pruning(Arc::clone(&input), keep)?;
-        *input_copy = Some(InputCopy {
-            input,
-            copy: Arc::clone(&copy),
-        });
-        Ok(copy)
+    /// part of the input. The first call decides, and later calls wait for it. All partitions
+    /// execute the same input, so they all see the same kept files.
+    pub(super) async fn start(&self) -> Result<()> {
+        self.started
+            .get_or_try_init(|| async {
+                if let Some(keep) = self.select_files().await {
+                    self.filter.update(Arc::new(KeptFilesExpr {
+                        file_id: Arc::clone(&self.file_id),
+                        keep: Arc::new(keep),
+                    }))?;
+                }
+                // No later update: the Parquet scan does not need to check the filter again.
+                self.filter.mark_complete();
+                Ok(())
+            })
+            .await
+            .map(|_| ())
     }
 
     /// Whether to keep each planned file, for the predicates in the filter. Returns `None`
@@ -200,118 +192,134 @@ impl RuntimeScanFilePruner {
     }
 }
 
-/// `plan` with only the files in `keep` in its Parquet scans.
+/// `true` for the rows of the kept files, by the file id column of the Parquet input.
 ///
-/// Empty file groups stay, so the partitions of `plan` do not change.
-fn rewrite_parquet_nodes_by_pruning(
-    plan: Arc<dyn ExecutionPlan>,
-    keep: &[bool],
-) -> Result<Arc<dyn ExecutionPlan>> {
-    // The only partition column of the Parquet scan is the file id, checked below.
-    let keeps = |file: &&PartitionedFile| {
-        file.partition_values
-            .first()
-            .and_then(|value| value.try_as_str().flatten())
+/// The Parquet scan replaces the file id column with the id of the file that it opens, so the
+/// expression is constant for each file. The scan then skips a whole file, and row-level uses of
+/// the predicate, such as a row filter, never remove single rows.
+///
+/// This is not an `IN` list, because the Parquet scan rewrites the predicate for each file, and
+/// an `IN` list copies all its values in each rewrite.
+#[derive(Debug, Eq)]
+struct KeptFilesExpr {
+    file_id: Arc<dyn PhysicalExpr>,
+    /// Whether to keep each planned file, by file index
+    keep: Arc<Vec<bool>>,
+}
+
+impl PartialEq for KeptFilesExpr {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_id.as_ref() == other.file_id.as_ref() && self.keep == other.keep
+    }
+}
+
+impl Hash for KeptFilesExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.file_id.as_ref().hash(state);
+        self.keep.hash(state);
+    }
+}
+
+impl KeptFilesExpr {
+    fn keeps(&self, file_id: &ScalarValue) -> bool {
+        // Keep a file whose id is not a planned file index
+        file_id
+            .try_as_str()
+            .flatten()
             .and_then(super::internal_file_index)
-            .is_none_or(|file_index| keep.get(file_index).copied().unwrap_or(true))
-    };
-    plan.transform_up(|node| {
-        let Some(config) = node
-            .downcast_ref::<DataSourceExec>()
-            .and_then(|source| source.data_source().downcast_ref::<FileScanConfig>())
-        else {
-            return Ok(Transformed::no(node));
-        };
-        let partition_columns = config.table_partition_cols().len();
-        if partition_columns != 1 {
-            return Err(internal_datafusion_err!(
-                "DeltaScanExec runtime file pruning requires the file id as the only partition column, got {partition_columns}"
-            ));
-        }
-        let file_groups = config
-            .file_groups
-            .iter()
-            .map(|group| group.iter().filter(keeps).cloned().collect::<FileGroup>())
-            .collect();
-        let config = FileScanConfigBuilder::from(config.clone())
-            .with_file_groups(file_groups)
-            .build();
-        Ok(Transformed::yes(
-            DataSourceExec::from_data_source(config) as Arc<dyn ExecutionPlan>
-        ))
-    })
-    .map(|plan| plan.data)
+            .is_none_or(|file_index| self.keep.get(file_index).copied().unwrap_or(true))
+    }
+}
+
+impl fmt::Display for KeptFilesExpr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} IN kept files", self.file_id)
+    }
+}
+
+impl PhysicalExpr for KeptFilesExpr {
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
+        Ok(false)
+    }
+
+    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+        Ok(match self.file_id.evaluate(batch)? {
+            ColumnarValue::Scalar(file_id) => {
+                ColumnarValue::Scalar(ScalarValue::from(self.keeps(&file_id)))
+            }
+            ColumnarValue::Array(file_ids) => ColumnarValue::Array(Arc::new(
+                (0..file_ids.len())
+                    .map(|row| {
+                        ScalarValue::try_from_array(&file_ids, row)
+                            .map(|file_id| Some(self.keeps(&file_id)))
+                    })
+                    .collect::<Result<BooleanArray>>()?,
+            )),
+        })
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+        vec![&self.file_id]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn PhysicalExpr>>,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let file_id = children
+            .into_iter()
+            .next()
+            .ok_or_else(|| internal_datafusion_err!("KeptFilesExpr expects one child"))?;
+        Ok(Arc::new(Self {
+            file_id,
+            keep: Arc::clone(&self.keep),
+        }))
+    }
+
+    fn fmt_sql(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::delta_datafusion::file_id::{file_id_field, wrap_file_id_value};
-    use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::datasource::physical_plan::ParquetSource;
-    use datafusion::execution::object_store::ObjectStoreUrl;
-    use datafusion::physical_plan::ExecutionPlanProperties;
-    use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-    use datafusion_datasource::TableSchema;
+    use arrow::array::{AsArray, DictionaryArray};
+    use arrow::datatypes::UInt16Type;
     use rstest::rstest;
 
-    fn planned_file(file_index: usize) -> PartitionedFile {
-        let mut file = PartitionedFile::new(format!("file-{file_index}.parquet"), 10);
-        file.partition_values = vec![wrap_file_id_value(super::super::compact_internal_file_id(
-            file_index,
-        ))];
-        file
-    }
+    use super::*;
+    use crate::delta_datafusion::file_id::{file_id_field, wrap_file_id_value};
 
-    /// The planned file groups are `[file-0, file-1]` and `[file-2]`.
+    /// Keeps file 0 and skips file 1. An unknown file id is not
+    /// filtered out
     #[rstest]
-    #[case::first_file(&[true, false, false], vec![vec!["file-0.parquet"], vec![]])]
-    #[case::first_group(&[true, true, false], vec![vec!["file-0.parquet", "file-1.parquet"], vec![]])]
-    #[case::second_file(&[false, true, false], vec![vec!["file-1.parquet"], vec![]])]
-    #[case::second_group(&[false, false, true], vec![vec![], vec!["file-2.parquet"]])]
-    #[case::one_file_per_group(&[true, false, true], vec![vec!["file-0.parquet"], vec!["file-2.parquet"]])]
-    fn rewrite_parquet_nodes_by_pruning_removes_skipped_files_and_keeps_partitions(
-        #[case] keep: &[bool],
-        #[case] expected_groups: Vec<Vec<&str>>,
-    ) {
-        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
-        let table_schema = TableSchema::builder(schema)
-            .with_table_partition_cols(vec![file_id_field(None)])
-            .build();
-        let config = FileScanConfigBuilder::new(
-            ObjectStoreUrl::local_filesystem(),
-            Arc::new(ParquetSource::new(table_schema)),
-        )
-        .with_file_groups(vec![
-            FileGroup::new(vec![planned_file(0), planned_file(1)]),
-            FileGroup::new(vec![planned_file(2)]),
-        ])
-        .build();
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(CoalescePartitionsExec::new(
-            DataSourceExec::from_data_source(config),
-        ));
+    #[case::kept("0", true)]
+    #[case::skipped("1", false)]
+    #[case::out_of_range("7", true)]
+    #[case::not_a_file_index("x", true)]
+    fn kept_files_expr_keeps_file(#[case] file_id: &str, #[case] expected: bool) -> Result<()> {
+        let field = file_id_field(None);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(KeptFilesExpr {
+            file_id: Arc::new(Column::new(field.name(), 0)),
+            keep: Arc::new(vec![true, false]),
+        });
 
-        let plan = rewrite_parquet_nodes_by_pruning(plan, keep).unwrap();
+        let literal =
+            Arc::clone(&expr).with_new_children(vec![lit(wrap_file_id_value(file_id))])?;
 
-        let source = plan.children()[0].downcast_ref::<DataSourceExec>().unwrap();
-        let config = source
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .unwrap();
-        let files: Vec<Vec<String>> = config
-            .file_groups
-            .iter()
-            .map(|group| {
-                group
-                    .iter()
-                    .map(|file| file.object_meta.location.to_string())
-                    .collect()
-            })
-            .collect();
-        assert_eq!(files, expected_groups);
-        assert_eq!(
-            plan.children()[0].output_partitioning().partition_count(),
-            2
-        );
+        let file_ids: DictionaryArray<UInt16Type> = [file_id].into_iter().collect();
+        let batch =
+            RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![Arc::new(file_ids)])?;
+
+        // The column gives an array evaluation, the literal a scalar eval
+        for expr in [expr, literal] {
+            let keeps = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(keeps.as_boolean(), &BooleanArray::from(vec![expected]));
+        }
+        Ok(())
     }
 }

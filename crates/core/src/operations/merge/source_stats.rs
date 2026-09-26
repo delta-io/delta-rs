@@ -37,29 +37,29 @@
 //! │  SourceStatsExec  │                             │    DeltaScanExec     │
 //! │at the source end: │      RuntimeFileFilter      │ first poll: read the │
 //! │  set predicates,  │─ ─ ─ ─ ─ predicates ─ ─ ─ ─►│ filter, do not wait  │
-//! │     then EOF      │                             │ if predicates: copy  ╞════════════════╗
-//! └─────────▲─────────┘                             │ else: planned input  │                ║
-//!           │                                       └───────────▲──────────┘                ║
-//!           │                                                   │                           ║
-//! ┌─────────┴─────────┐                             ┌───────────┴──────────┐    ╔═══════════╩══════════╗
-//! │      source       │                             │CoalescePartitionsExec│    ║CoalescePartitionsExec║
-//! │     read once     │                             └───────────▲──────────┘    ╚═══════════╦══════════╝
-//! └───────────────────┘                                         │                           ║
-//!                                                   ┌───────────┴──────────┐    ╔═══════════╩══════════╗
-//!                                                   │    DataSourceExec    │    ║    DataSourceExec    ║
-//!                                                   │p0: f0 f1   p1: f2 f3 │    ║ p0: f0      p1: none ║
-//!                                                   └───────────╥──────────┘    ╚═══════════╦══════════╝
-//!                                                               ║                           ║
-//!                                                               ╚══════════════════════════►╝
-//!                                                       copy + rewrite node with keep-list [T F F F]
+//! │     then EOF      │                             │ if predicates: set   │
+//! └─────────▲─────────┘                             │ the kept files       ╞═══╗
+//!           │                                       └───────────▲──────────┘   ║
+//!           │                                                   │              ║ file filter:
+//! ┌─────────┴─────────┐                             ┌───────────┴──────────┐   ║ file id in the
+//! │      source       │                             │CoalescePartitionsExec│   ║ kept files
+//! │     read once     │                             └───────────▲──────────┘   ║ [T F F F]
+//! └───────────────────┘                                         │              ║
+//!                                                   ┌───────────┴──────────┐   ║
+//!                                                   │    DataSourceExec    │◄══╝
+//!                                                   │p0: f0 f1   p1: f2 f3 │
+//!                                                   │skips f1 f2 f3 before │
+//!                                                   │  reading the footer  │
+//!                                                   └──────────────────────┘
 //!
 //! early filter with placeholders:  id >= $min AND id <= $max AND modified = $m
-//! target files f0..f3 have ids 0..3; the scan counts 4 files until the keep-list lowers it
+//! target files f0..f3 have ids 0..3; the scan counts 4 files until the kept files lower it
 //! ```
 //!
-//! Single lines show how data flows up. `─ ─►` is the [`RuntimeFileFilter`]. Double
-//! lines show the copy of the scan input that the target scan builds and reads when file
-//! skipping with the predicates gives a keep-list. The planned input then never runs.
+//! Single lines show how data flows up. `─ ─►` is the [`RuntimeFileFilter`]. Double lines show
+//! the file filter: the target scan sets the kept files in a dynamic filter on the file id column
+//! of its Parquet input. The Parquet scan then skips the other files before it reads their
+//! footers.
 
 use std::cmp::Ordering;
 use std::fmt;

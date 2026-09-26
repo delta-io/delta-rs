@@ -1833,7 +1833,9 @@ mod tests {
 
     /// Plan a scan with a runtime file filter of a table with two files: ids 1 and 2, and ids
     /// 11 and 12. The scan has two partitions. Returns the filter, to set its predicates.
-    async fn plan_scan_with_runtime_file_filter() -> crate::DeltaResult<(
+    async fn plan_scan_with_runtime_file_filter(
+        pushdown_filters: bool,
+    ) -> crate::DeltaResult<(
         RuntimeFileFilter,
         Arc<dyn ExecutionPlan>,
         Arc<datafusion::execution::TaskContext>,
@@ -1850,6 +1852,14 @@ mod tests {
             .await?
             .with_runtime_file_filter(Arc::clone(&predicates));
         let session = Arc::new(create_session().into_inner());
+        session
+            .state_ref()
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .pushdown_filters = pushdown_filters;
         let state = session.state_ref().read().clone();
         let plan = provider.scan(&state, None, &[], None).await?;
         let mut config = datafusion::common::config::ConfigOptions::new();
@@ -1867,8 +1877,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_runtime_file_filter_keeps_rows_with_parquet_pushdown() -> TestResult {
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(true).await?;
+
+        // Keep only the file with id 11. A row filter must not remove 12.
+        predicates.set(vec![col("id").eq(lit(11i64))]).unwrap();
+        let batches: Vec<_> = collect_partitioned(Arc::clone(&plan), task_ctx)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut ids: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, [11, 12]);
+
+        // The Parquet scan skipped the other file with the file statistics, before it read
+        // the footer.
+        use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+        let mut parquet_metrics = None;
+        plan.apply(|node| {
+            if node.name() == "DataSourceExec" {
+                parquet_metrics = node.metrics();
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let parquet_metrics = parquet_metrics
+            .expect("the scan has a Parquet node")
+            .aggregate_by_name();
+        let metric = |name: &str| {
+            parquet_metrics
+                .iter()
+                .find(|metric| metric.value().name() == name)
+                .map(|metric| metric.value().to_string())
+        };
+        assert_eq!(
+            metric("files_ranges_pruned_statistics").as_deref(),
+            Some("2 total → 1 matched")
+        );
+        // The row filter ran on the kept file and kept all its rows.
+        assert_eq!(metric("pushdown_rows_matched").as_deref(), Some("2"));
+        assert_eq!(metric("pushdown_rows_pruned").as_deref(), Some("0"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_scan_runtime_file_filter_skips_files() -> TestResult {
-        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter().await?;
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(false).await?;
 
         // Keep only the file with id 11.
         predicates.set(vec![col("id").eq(lit(11i64))]).unwrap();
@@ -1880,7 +1943,6 @@ mod tests {
 
         let metrics = scan_metrics(&plan);
         assert_eq!(metrics.num_scanned, Some(1));
-        // The scan read a copy of its Parquet node. The planned node still shows the metrics.
         assert!(metrics.total_bytes_scanned.is_some_and(|bytes| bytes > 0));
         // The filter skips files, not rows: the kept file is read whole, so 12 comes back too.
         let mut ids: Vec<i64> = batches
@@ -1901,7 +1963,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan_runtime_file_filter_keeps_files_of_started_scan() -> TestResult {
-        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter().await?;
+        let (predicates, plan, task_ctx) = plan_scan_with_runtime_file_filter(false).await?;
 
         // The first partition starts the scan before the predicates are set, therefore predicates
         // are ignored.
@@ -3189,6 +3251,73 @@ mod tests {
         assert_eq!(schema_file.fields().len(), 2);
         assert!(schema_file.column_with_name("my_files").is_some());
 
+        Ok(())
+    }
+
+    /// Time a scan whose runtime file filter keeps `BENCH_KEEP` of `BENCH_FILES` files.
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore = "benchmark"]
+    async fn bench_runtime_file_filter() -> TestResult {
+        let env = |name: &str, default: i64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(default)
+        };
+        let files = env("BENCH_FILES", 10_000);
+        let keep = env("BENCH_KEEP", 1);
+        let rows_per_file = 100i64;
+
+        let schema = StructType::try_new(vec![
+            StructField::new("id", DataType::Primitive(PrimitiveType::Long), true),
+            StructField::new("part", DataType::Primitive(PrimitiveType::Long), true),
+        ])?;
+        let table = crate::DeltaTable::new_in_memory()
+            .create()
+            .with_columns(schema.fields().cloned())
+            .with_partition_columns(["part"])
+            .await?;
+        let ids: Vec<i64> = (0..files * rows_per_file).collect();
+        let parts: Vec<i64> = ids.iter().map(|id| id / rows_per_file).collect();
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("id", ArrowDataType::Int64, true),
+                ArrowField::new("part", ArrowDataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(ids)),
+                Arc::new(Int64Array::from(parts)),
+            ],
+        )?;
+        let table = table.write(vec![batch]).await?;
+        let session = Arc::new(create_session().into_inner());
+        let state = session.state_ref().read().clone();
+
+        let mut times = Vec::new();
+        for _ in 0..7 {
+            let predicates = RuntimeFileFilter::default();
+            let provider = DeltaScan::builder()
+                .with_log_store(table.log_store())
+                .build()
+                .await?
+                .with_runtime_file_filter(Arc::clone(&predicates));
+            let plan = provider.scan(&state, None, &[], None).await?;
+            predicates
+                .set(vec![col("id").lt(lit(keep * rows_per_file))])
+                .unwrap();
+            let start = std::time::Instant::now();
+            let batches = datafusion::physical_plan::collect(plan, session.task_ctx()).await?;
+            times.push(start.elapsed());
+            let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
+            assert_eq!(rows as i64, keep * rows_per_file);
+        }
+        times.sort();
+        println!(
+            "BENCH files={files} keep={keep} median={:?} min={:?} max={:?}",
+            times[times.len() / 2],
+            times[0],
+            times[times.len() - 1]
+        );
         Ok(())
     }
 }

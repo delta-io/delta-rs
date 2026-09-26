@@ -280,6 +280,7 @@ impl DeltaScanExec {
         fn visit(
             plan: &Arc<dyn ExecutionPlan>,
             expected: &super::PhysicalFileIdentityMap,
+            file_filter_id: Option<u64>,
             observed: &mut HashSet<String>,
         ) -> Result<()> {
             if let Some(fetch) = plan.fetch() {
@@ -288,11 +289,11 @@ impl DeltaScanExec {
                 );
             }
             if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
-                return visit(coalesce.input(), expected, observed);
+                return visit(coalesce.input(), expected, file_filter_id, observed);
             }
             if let Some(union) = plan.downcast_ref::<UnionExec>() {
                 for input in union.inputs() {
-                    visit(input, expected, observed)?;
+                    visit(input, expected, file_filter_id, observed)?;
                 }
                 return Ok(());
             }
@@ -316,7 +317,11 @@ impl DeltaScanExec {
                     "DeltaScanExec requires a locked file group layout during sequential deletion vector scans"
                 );
             }
-            if config.file_source.filter().is_some() {
+            // The only allowed filter is the file filter of the runtime file pruner. It skips
+            // whole files, so the rows of a kept file stay aligned with its deletion vector.
+            if let Some(filter) = config.file_source.filter()
+                && (file_filter_id.is_none() || filter.expression_id() != file_filter_id)
+            {
                 return plan_err!(
                     "DeltaScanExec rejects file source filters during sequential deletion vector scans"
                 );
@@ -362,8 +367,12 @@ impl DeltaScanExec {
                 "DeltaScanExec deletion vector topology validation requires sequential state"
             )
         })?;
+        let file_filter_id = self
+            .file_pruner
+            .as_ref()
+            .and_then(|pruner| pruner.predicate().expression_id());
         let mut observed = HashSet::new();
-        visit(input, expected, &mut observed)?;
+        visit(input, expected, file_filter_id, &mut observed)?;
         if observed.len() != expected.len() {
             return plan_err!("DeltaScanExec sequential deletion vector scan lacks selected files");
         }
@@ -572,16 +581,15 @@ impl ExecutionPlan for DeltaScanExec {
         }
 
         // Some inputs open all files as soon as they are executed. With a file pruner, execute
-        // the input at the first poll, with only the files that the pruner keeps.
+        // the input at the first poll, after the pruner has set the kept files in the input's
+        // predicate.
         let input = match &self.file_pruner {
             Some(pruner) => {
                 let pruner = Arc::clone(pruner);
                 let input = Arc::clone(&self.input);
                 let stream = futures::stream::once(async move {
-                    pruner
-                        .maybe_prune_input(input)
-                        .await?
-                        .execute(partition, context)
+                    pruner.start().await?;
+                    input.execute(partition, context)
                 })
                 .try_flatten();
                 Box::pin(RecordBatchStreamAdapter::new(self.input.schema(), stream))
@@ -2991,8 +2999,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_dv_scan_with_runtime_filter_accepts_coalesced_input() -> TestResult {
-        // A runtime file filter adds no Parquet filter, so a scan with deletion vectors accepts
-        // the inputs that optimizer rules create, such as a merge of its partitions.
+        // A runtime file filter only skips whole files, so a scan with deletion vectors accepts
+        // its Parquet filter, and the inputs that optimizer rules create, such as a merge of its
+        // partitions.
         let table = open_fs_path(DV_TABLE_PATH);
         let predicates = Arc::new(std::sync::OnceLock::new());
         let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
