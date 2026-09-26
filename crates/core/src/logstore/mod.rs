@@ -84,6 +84,8 @@ pub use self::factories::{
     LogStoreFactory, LogStoreFactoryRegistry, ObjectStoreFactory, ObjectStoreFactoryRegistry,
     logstore_factories, object_store_factories, store_for,
 };
+#[cfg(feature = "delta-cache")]
+pub use self::storage::CachingObjectStore;
 pub use self::storage::utils::commit_uri_from_version;
 pub use self::storage::{
     DefaultObjectStoreRegistry, DeltaIOStorageBackend, IORuntime, ObjectStoreRef,
