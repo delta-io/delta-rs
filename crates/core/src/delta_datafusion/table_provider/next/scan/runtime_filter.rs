@@ -222,7 +222,7 @@ impl Hash for KeptFilesExpr {
 
 impl KeptFilesExpr {
     fn keeps(&self, file_id: &ScalarValue) -> bool {
-        // Keep a file with an unknown id, because it may match
+        // Keep a file whose id is not a planned file index
         file_id
             .try_as_str()
             .flatten()
