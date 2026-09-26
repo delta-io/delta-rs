@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use arrow::array::BooleanArray;
@@ -199,7 +200,7 @@ impl RuntimeScanFilePruner {
 ///
 /// This is not an `IN` list, because the Parquet scan rewrites the predicate for each file, and
 /// an `IN` list copies all its values in each rewrite.
-#[derive(Debug, Eq, Hash)]
+#[derive(Debug, Eq)]
 struct KeptFilesExpr {
     file_id: Arc<dyn PhysicalExpr>,
     /// Whether to keep each planned file, by file index
@@ -209,6 +210,13 @@ struct KeptFilesExpr {
 impl PartialEq for KeptFilesExpr {
     fn eq(&self, other: &Self) -> bool {
         self.file_id.as_ref() == other.file_id.as_ref() && self.keep == other.keep
+    }
+}
+
+impl Hash for KeptFilesExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.file_id.as_ref().hash(state);
+        self.keep.hash(state);
     }
 }
 
