@@ -284,3 +284,42 @@ impl PhysicalExpr for KeptFilesExpr {
         write!(f, "{self}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow::array::{AsArray, DictionaryArray};
+    use arrow::datatypes::UInt16Type;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::delta_datafusion::file_id::{file_id_field, wrap_file_id_value};
+
+    /// Keeps file 0 and skips file 1. An unknown file id is not
+    /// filtered out
+    #[rstest]
+    #[case::kept("0", true)]
+    #[case::skipped("1", false)]
+    #[case::out_of_range("7", true)]
+    #[case::not_a_file_index("x", true)]
+    fn kept_files_expr_keeps_file(#[case] file_id: &str, #[case] expected: bool) -> Result<()> {
+        let field = file_id_field(None);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(KeptFilesExpr {
+            file_id: Arc::new(Column::new(field.name(), 0)),
+            keep: Arc::new(vec![true, false]),
+        });
+
+        let literal =
+            Arc::clone(&expr).with_new_children(vec![lit(wrap_file_id_value(file_id))])?;
+
+        let file_ids: DictionaryArray<UInt16Type> = [file_id].into_iter().collect();
+        let batch =
+            RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![Arc::new(file_ids)])?;
+
+        // The column gives an array evaluation, the literal a scalar eval
+        for expr in [expr, literal] {
+            let keeps = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(keeps.as_boolean(), &BooleanArray::from(vec![expected]));
+        }
+        Ok(())
+    }
+}
