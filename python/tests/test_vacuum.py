@@ -89,7 +89,7 @@ def test_vacuum_transaction_log(tmp_path: pathlib.Path, sample_table: Table):
 
     dt = DeltaTable(tmp_path)
 
-    history = dt.history(2)
+    history = list(dt.history(2))
 
     expected_start_parameters = {
         "retentionCheckEnabled": "false",
