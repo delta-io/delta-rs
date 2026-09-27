@@ -1606,6 +1606,7 @@ class DeltaTable:
         *args: Any,
         commit_properties: CommitProperties | None = None,
         post_commithook_properties: PostCommitHookProperties | None = None,
+        schema_mode: Literal["merge"] | None = None,
     ) -> None:
         """
         Commit file actions to the table as a single transaction.
@@ -1625,6 +1626,11 @@ class DeltaTable:
             partition_filters: partitions to replace when `mode="overwrite"`.
             commit_properties: properties of the transaction commit.
             post_commithook_properties: properties for the post commit hook.
+            schema_mode: set to `"merge"` to add columns from `schema` that are missing
+                from the table schema in the same commit, upgrading the table protocol
+                when a new column requires it. Only supported with `mode="append"`.
+                New columns should be nullable, since existing files do not contain
+                them. Tables with column mapping enabled are not supported.
         """
         commit_properties, post_commithook_properties = (
             deprecate_positional_commit_args(
@@ -1648,6 +1654,7 @@ class DeltaTable:
             partition_filters,
             commit_properties=commit_properties,
             post_commithook_properties=post_commithook_properties,
+            schema_mode=schema_mode,
         )
 
     def __datafusion_table_provider__(self, session: Any | None = None) -> Any:
