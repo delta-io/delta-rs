@@ -23,7 +23,7 @@ fn map_client_error(e: reqwest::Error) -> super::DataCatalogError {
     }
 }
 
-static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
+static DEFAULT_USER_AGENT: &str = "Delta/3.2.0 Spark/3.5.0";
 
 /// HTTP client configuration for remote catalogs
 #[derive(Debug, Clone, Default, TypedBuilder)]

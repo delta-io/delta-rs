@@ -56,7 +56,7 @@ use bytes::Bytes;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use delta_kernel::log_segment::LogSegment;
 use delta_kernel::path::{LogPathFileType, ParsedLogPath};
-use delta_kernel::{AsAny, Engine};
+use delta_kernel::{AsAny, Engine, LogPath};
 use delta_kernel_default_engine::DefaultEngineBuilder;
 use delta_kernel_default_engine::executor::tokio::{
     TokioBackgroundExecutor, TokioMultiThreadExecutor,
@@ -316,6 +316,15 @@ pub enum CommitOrBytes {
     LogBytes(Bytes),
 }
 
+/// The logtail for a catalog managed table
+#[derive(Clone)]
+pub struct CatalogLogTail {
+    /// The tail log paths
+    pub log_tail: Vec<LogPath>,
+    /// The table's latest version
+    pub max_version: Version,
+}
+
 /// Configuration parameters for a log store
 #[derive(Debug, Clone)]
 pub struct LogStoreConfig {
@@ -403,6 +412,12 @@ pub trait LogStore: Send + Sync + AsAny {
 
     /// Find latest version currently stored in the delta log.
     async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version>;
+
+    /// Return catalog-provided commits for a catalog-managed table, or `None` for
+    /// filesystem-managed tables (the default).
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        Ok(None)
+    }
 
     /// Get object store, can pass operation_id for object stores linked to an operation
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
@@ -544,6 +559,10 @@ impl<T: LogStore + ?Sized> LogStore for Arc<T> {
 
     async fn get_latest_version(&self, start_version: Version) -> DeltaResult<Version> {
         T::get_latest_version(self, start_version).await
+    }
+
+    async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
+        T::catalog_log_tail(self).await
     }
 
     fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {

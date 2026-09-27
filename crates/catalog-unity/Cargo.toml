@@ -13,6 +13,8 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+bytes.workspace = true
+uuid.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -22,12 +24,15 @@ chrono.workspace = true
 tracing.workspace = true
 typed-builder = { workspace = true }
 deltalake-core = { version = "2.0", path = "../core", default-features = false }
+delta_kernel.workspace = true
 deltalake-aws = { version = "2.0", path = "../aws", optional = true }
 deltalake-azure = { version = "2.0", path = "../azure", optional = true }
 deltalake-gcp = { version = "2.0", path = "../gcp", optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "http2"] }
 reqwest-retry = "0.9"
 reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
+unity-catalog-delta-client-api = { git = "https://github.com/delta-io/delta-kernel-rs", package = "unity-catalog-delta-client-api", rev = "dc740f805633853d7a1a421f599c741fbe454e45" }
+unity-catalog-delta-rest-client = { git = "https://github.com/delta-io/delta-kernel-rs", package = "unity-catalog-delta-rest-client", rev = "dc740f805633853d7a1a421f599c741fbe454e45" }
 rand = "0.10"
 dashmap = "6"
 datafusion = { workspace = true, optional = true }

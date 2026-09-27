@@ -45,7 +45,7 @@ use super::{Action, CommitInfo, Metadata, Protocol};
 use crate::checkpoints::parse_last_checkpoint_hint;
 use crate::kernel::arrow::engine_ext::{ExpressionEvaluatorExt, rb_from_scan_meta};
 use crate::kernel::{ARROW_HANDLER, StructType, spawn_blocking_with_span};
-use crate::logstore::{LogStore, LogStoreExt};
+use crate::logstore::{CatalogLogTail, LogStore, LogStoreExt};
 use crate::{DeltaResult, DeltaTableError};
 
 pub use self::log_data::*;
@@ -210,10 +210,30 @@ impl Snapshot {
         table_root: Url,
         version: Option<Version>,
     ) -> DeltaResult<Self> {
+        Self::try_new_with_engine_and_catalog(engine, table_root, version, None).await
+    }
+
+    /// Build a snapshot like [`Snapshot::try_new_with_engine`], additionally feeding the kernel a
+    /// catalog-provided log tail for catalog-managed tables.
+    ///
+    /// When `catalog_log_tail` is `Some`, the catalog is the source of truth: the ratified
+    /// commits are passed via `with_log_tail` and the kernel is capped at `max_version` via
+    /// `with_max_catalog_version`, so filesystem commits beyond that version are ignored.
+    pub async fn try_new_with_engine_and_catalog(
+        engine: Arc<dyn Engine>,
+        table_root: Url,
+        version: Option<Version>,
+        catalog_log_tail: Option<CatalogLogTail>,
+    ) -> DeltaResult<Self> {
         let snapshot = match spawn_blocking_with_span(move || {
             let mut builder = KernelSnapshot::builder_for(table_root);
             if let Some(version) = version {
                 builder = builder.at_version(version);
+            }
+            if let Some(tail) = catalog_log_tail {
+                builder = builder
+                    .with_log_tail(tail.log_tail)
+                    .with_max_catalog_version(tail.max_version);
             }
             builder.build(engine.as_ref())
         })
@@ -250,7 +270,11 @@ impl Snapshot {
             table_root.set_path(&format!("{}/", table_root.path()));
         }
 
-        Self::try_new_with_engine(engine, table_root, version).await
+        // For catalog-managed tables the log store fronts a commit coordinator and supplies the
+        // ratified log tail; filesystem-managed stores return `None` here.
+        let catalog_log_tail = log_store.catalog_log_tail().await?;
+
+        Self::try_new_with_engine_and_catalog(engine, table_root, version, catalog_log_tail).await
     }
 
     /// Create a [`ScanBuilder`] borrowing this snapshot to configure a read of the table.
@@ -1292,6 +1316,16 @@ impl EagerSnapshot {
         log_store: &dyn LogStore,
         target_version: Option<Version>,
     ) -> DeltaResult<()> {
+        // Catalog-managed tables: the incremental (filesystem-only) update path below can't see
+        // ratified-but-unpublished commits, and the catalog — not the filesystem — decides the
+        // latest version. Rebuild from the catalog-provided log tail instead.
+        // TODO(catalog-commits): make this incremental once kernel `builder_from` is wired with a
+        // refreshed catalog log tail.
+        if log_store.catalog_log_tail().await?.is_some() {
+            *self = EagerSnapshot::try_new(log_store, target_version).await?;
+            return Ok(());
+        }
+
         let previous_snapshot = self.snapshot.clone();
         let updated_snapshot = previous_snapshot
             .clone()

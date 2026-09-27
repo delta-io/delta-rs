@@ -42,6 +42,11 @@ use crate::client::retry::*;
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
+use unity_catalog_delta_client_api::{Operation, StorageCredential};
+use unity_catalog_delta_rest_client::{ClientConfig, UCClient};
+use crate::catalog_managed::{CatalogManagedLogStore, UnityCommitCoordinator};
+
+pub mod catalog_managed;
 pub mod client;
 pub mod credential;
 
@@ -450,7 +455,7 @@ impl UnityCatalogBuilder {
 
     /// Hydrate builder from key value pairs.
     ///
-    /// Keys that are not recognised as Unity Catalog options are skipped, so
+    /// Keys that are not recognized as Unity Catalog options are skipped, so
     /// callers can pass a mixed config map that also contains object store
     /// options (e.g. `aws_region`, `timeout`) destined for downstream
     /// consumers. Use [`Self::try_with_option`] to fail on unknown keys.
@@ -873,6 +878,28 @@ impl UnityCatalog {
         Ok(table)
     }
 
+    pub async fn delta_rest_client(&self) -> Result<UCClient, UnityCatalogError> {
+        let header = self.get_credential().await?;
+        let token = header
+            .to_str()
+            .ok()
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .ok_or(UnityCatalogError::MissingCredential)?;
+        let config = ClientConfig::build(self.workspace_url.clone(), token)
+            .with_additional_user_agent([
+                (env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
+                ("Delta", "3.2.0"),
+                ("Spark", "3.5.0"),
+            ])
+            .build()
+            .map_err(|e| UnityCatalogError::Generic {
+                source: Box::new(e),
+            })?;
+        UCClient::new(config).map_err(|e| UnityCatalogError::Generic {
+            source: Box::new(e),
+        })
+    }
+
     pub async fn get_temp_table_credentials<S>(
         &self,
         catalog_id: S,
@@ -930,8 +957,22 @@ impl UnityCatalog {
     }
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default)]
 pub struct UnityCatalogFactory {}
+
+impl UnityCatalogFactory {
+    pub fn new_delta_client(config: &StorageConfig) -> DeltaResult<UnityCatalog> {
+        UnityCatalogBuilder::from_env()
+            .try_with_options(config.raw.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .map_err(|e| {
+                DeltaTableError::Generic(format!("failed to configure Unity Catalog client: {e}"))
+            })?
+            .build()
+            .map_err(|e| {
+                DeltaTableError::Generic(format!("failed to build Unity Catalog client: {e}"))
+            })
+    }
+}
 
 impl ObjectStoreFactory for UnityCatalogFactory {
     fn parse_url_opts(
@@ -939,9 +980,24 @@ impl ObjectStoreFactory for UnityCatalogFactory {
         table_uri: &Url,
         config: &StorageConfig,
     ) -> DeltaResult<(ObjectStoreRef, Path)> {
-        let (table_path, temp_creds) = UnityCatalogBuilder::execute_uc_future(
-            UnityCatalogBuilder::get_uc_location_and_token(table_uri.as_str(), Some(&config.raw)),
-        )??;
+        let (table_path, temp_creds) = if is_catalog_managed_requested(config) {
+            let (catalog, schema, table) = parse_uc_identity(table_uri).ok_or_else(|| {
+                DeltaTableError::Generic(format!(
+                    "expected a `uc://catalog.schema.table` identity, got `{table_uri}`"
+                ))
+            })?;
+            let uc = Self::new_delta_client(config)?;
+            UnityCatalogBuilder::execute_uc_future(catalog_managed_location_and_token(
+                &uc, &catalog, &schema, &table,
+            ))??
+        } else {
+            UnityCatalogBuilder::execute_uc_future(
+                UnityCatalogBuilder::get_uc_location_and_token(
+                    table_uri.as_str(),
+                    Some(&config.raw),
+                ),
+            )??
+        };
 
         let mut storage_options = config.raw.clone();
         storage_options.extend(temp_creds);
@@ -973,12 +1029,96 @@ impl LogStoreFactory for UnityCatalogFactory {
         location: &Url,
         options: &StorageConfig,
     ) -> DeltaResult<Arc<dyn LogStore>> {
+        if is_catalog_managed_requested(options)
+            && let Some((catalog, schema, table)) = parse_uc_identity(location)
+        {
+            let uc = Self::new_delta_client(options)?;
+            let coordinator = Arc::new(UnityCommitCoordinator::new(
+                uc, catalog, schema, table,
+            ));
+            return Ok(Arc::new(CatalogManagedLogStore::new(
+                prefixed_store,
+                root_store,
+                deltalake_core::logstore::LogStoreConfig::new(location, options.clone()),
+                coordinator,
+            )));
+        }
+
         Ok(default_logstore(
             prefixed_store,
             root_store,
             location,
             options,
         ))
+    }
+}
+
+async fn catalog_managed_location_and_token(
+    uc: &UnityCatalog,
+    catalog: &str,
+    schema: &str,
+    table: &str,
+) -> DeltaResult<(String, HashMap<String, String>)> {
+    let loaded = uc
+        .delta_rest_client()
+        .await?
+        .load_table(catalog, schema, table)
+        .await
+        .map_err(|e| DeltaTableError::Generic(format!("UC Delta v1 load_table failed: {e}")))?;
+    let storage_location = loaded.metadata.location;
+
+    let creds = uc
+        .delta_rest_client()
+        .await?
+        .get_table_credentials(catalog, schema, table, Operation::Read)
+        .await
+        .map_err(|e| {
+            DeltaTableError::Generic(format!("UC Delta v1 credential vending failed: {e}"))
+        })?;
+    Ok((
+        storage_location,
+        storage_credentials_to_options(&creds.storage_credentials),
+    ))
+}
+
+fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Some(cred) = creds.first() else {
+        return out;
+    };
+    for (key, value) in &cred.config {
+        let mapped = match key.as_str() {
+            "s3.access-key-id" => "aws_access_key_id",
+            "s3.secret-access-key" => "aws_secret_access_key",
+            "s3.session-token" => "aws_session_token",
+            "azure.sas-token" => "azure_storage_sas_key",
+            "gcs.oauth-token" => "google_application_credentials",
+            _ => continue,
+        };
+        out.insert(mapped.to_string(), value.clone());
+    }
+    out
+}
+
+fn is_catalog_managed_requested(options: &StorageConfig) -> bool {
+    [
+        "unity_catalog_managed",
+        "databricks_catalog_managed",
+        "catalog_managed",
+    ]
+    .iter()
+    .filter_map(|k| options.raw.get(*k))
+    .any(|v| str_is_truthy(v))
+}
+
+fn parse_uc_identity(location: &Url) -> Option<(String, String, String)> {
+    let rest = location.as_str().strip_prefix("uc://")?;
+    let parts: Vec<&str> = rest.trim_end_matches('/').split('.').collect();
+    match parts.as_slice() {
+        [catalog, schema, table] => {
+            Some((catalog.to_string(), schema.to_string(), table.to_string()))
+        }
+        _ => None,
     }
 }
 

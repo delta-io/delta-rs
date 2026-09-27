@@ -42,7 +42,7 @@ arrow-select = { version = "59" }
 object_store = { version = "0.13.2" }
 parquet = { version = "59" }
 
-# datafusion 54
+# datafusion 55
 datafusion = { version = "55" }
 datafusion-datasource = { version = "55" }
 datafusion-physical-expr-adapter = { version = "55" }
