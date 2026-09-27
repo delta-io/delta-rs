@@ -43,9 +43,9 @@ use datafusion::{
         cache::{cache_manager::FileMetadataCache, default_cache::DefaultCache},
         object_store::ObjectStoreUrl,
     },
-    physical_expr::Partitioning,
+    physical_expr::{Partitioning, conjunction, expressions::Column},
     physical_plan::{
-        ExecutionPlan,
+        ExecutionPlan, PhysicalExpr,
         coalesce_partitions::CoalescePartitionsExec,
         empty::EmptyExec,
         metrics::{ExecutionPlanMetricsSet, Gauge, MetricBuilder},
@@ -54,8 +54,8 @@ use datafusion::{
     prelude::Expr,
 };
 use datafusion_datasource::{
-    PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
-    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
+    PartitionedFile, TableSchema, compute_all_files_statistics, file::FileSource,
+    file_groups::FileGroup, file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
     BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
@@ -201,6 +201,11 @@ pub(super) async fn execution_plan(
             engine,
             &replayed.files,
             replayed.files_scanned.clone(),
+            // The file id is the partition column after the Parquet file columns
+            Column::new(
+                scan_plan.contract.file_id_field.name(),
+                scan_plan.parquet_read_schema.fields().len(),
+            ),
         ))
     });
 
@@ -713,6 +718,7 @@ async fn get_data_scan_plan(
         limit,
         &file_id_field,
         predicate,
+        file_pruner.as_ref().map(|pruner| pruner.predicate()),
     )
     .await?;
     let pq_plan = if has_deletion_vectors && pq_plan.properties().partitioning.partition_count() > 1
@@ -901,6 +907,7 @@ fn partitioned_files_to_file_groups_with_limit(
     file_groups
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
@@ -915,6 +922,11 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
+    // Skips the files that the runtime file filter does not keep, see `RuntimeScanFilePruner`.
+    // `predicate` is not set when the table has deletion vectors, because it can remove single
+    // rows, and the deletion vector of a file must see all rows of that file. This predicate is
+    // always set, because it keeps or removes a file with all its rows.
+    file_predicate: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
@@ -1000,6 +1012,14 @@ async fn get_read_plan(
                     );
                 }
             }
+        }
+
+        if let Some(file_predicate) = &file_predicate {
+            let predicate = match file_source.filter() {
+                Some(predicate) => conjunction([predicate, Arc::clone(file_predicate)]),
+                None => Arc::clone(file_predicate),
+            };
+            file_source = file_source.with_predicate(predicate);
         }
 
         let file_groups = partitioned_files_to_file_groups(files);
@@ -1681,6 +1701,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1703,6 +1724,7 @@ mod tests {
             &parquet_predicate_schema,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1731,6 +1753,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1806,6 +1829,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1843,6 +1867,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -2031,6 +2056,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2095,6 +2121,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2158,6 +2185,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2234,6 +2262,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2307,6 +2336,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2381,6 +2411,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2467,6 +2498,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
