@@ -3573,6 +3573,152 @@ def test_create_write_transaction_rejects_unknown_action_type(tmp_path: pathlib.
         )
 
 
+def _commit_entries(tmp_path: pathlib.Path, version: int) -> list[dict]:
+    log_file = tmp_path / "_delta_log" / f"{version:020}.json"
+    return [json.loads(line) for line in log_file.read_text().splitlines() if line]
+
+
+def test_create_write_transaction_merge_adds_new_column(tmp_path: pathlib.Path):
+    from arro3.io import write_parquet
+
+    dt = _append_ids(tmp_path, [1, 2])
+    version = dt.version()
+
+    data = Table.from_pydict(
+        {
+            "id": Array([3], DataType.int64()),
+            "name": Array(["c"], DataType.string()),
+        }
+    )
+    path = "part-merge.parquet"
+    write_parquet(data, tmp_path / path)
+    add = AddAction(
+        path=path,
+        size=(tmp_path / path).stat().st_size,
+        partition_values={},
+        modification_time=_now_ms(),
+        data_change=True,
+        stats=json.dumps({"numRecords": 1}),
+    )
+
+    dt.create_write_transaction(
+        [add], mode="append", schema=data.schema, schema_mode="merge"
+    )
+    dt.update_incremental()
+
+    assert dt.version() == version + 1
+    assert [field.name for field in dt.schema().fields] == ["id", "name"]
+    result = (
+        QueryBuilder()
+        .register("tbl", dt)
+        .execute("select id, name from tbl order by id")
+        .read_all()
+    )
+    assert result["id"].to_pylist() == [1, 2, 3]
+    assert result["name"].to_pylist() == [None, None, "c"]
+
+
+def test_create_write_transaction_merge_unchanged_schema_skips_metadata(
+    tmp_path: pathlib.Path,
+):
+    dt = _append_ids(tmp_path, [1])
+    add = _compacted_add_action(tmp_path, [2])
+
+    dt.create_write_transaction(
+        [add], mode="append", schema=dt.schema(), schema_mode="merge"
+    )
+    dt.update_incremental()
+
+    assert _read_ids(dt) == [1, 2]
+    entries = _commit_entries(tmp_path, dt.version())
+    assert not any("metaData" in entry for entry in entries)
+
+
+def test_create_write_transaction_merge_upgrades_protocol(tmp_path: pathlib.Path):
+    dt = _append_ids(tmp_path, [1])
+    add = _compacted_add_action(tmp_path, [2])
+    schema = Schema(
+        [
+            Field("id", PrimitiveType("long"), nullable=True),
+            Field("ts", PrimitiveType("timestamp_ntz"), nullable=True),
+        ]
+    )
+
+    dt.create_write_transaction(
+        [add], mode="append", schema=schema, schema_mode="merge"
+    )
+    dt.update_incremental()
+
+    assert [field.name for field in dt.schema().fields] == ["id", "ts"]
+    assert "timestampNtz" in (dt.protocol().writer_features or [])
+    assert _read_ids(dt) == [1, 2]
+
+
+def test_create_write_transaction_merge_rejects_incompatible_type(
+    tmp_path: pathlib.Path,
+):
+    dt = _append_ids(tmp_path, [1])
+    version = dt.version()
+    add = _compacted_add_action(tmp_path, [2])
+    schema = Schema([Field("id", PrimitiveType("string"), nullable=True)])
+
+    with pytest.raises(SchemaMismatchError):
+        dt.create_write_transaction(
+            [add], mode="append", schema=schema, schema_mode="merge"
+        )
+
+    assert DeltaTable(tmp_path).version() == version
+
+
+def test_create_write_transaction_merge_rejects_column_mapping(
+    tmp_path: pathlib.Path,
+):
+    dt = _append_ids(
+        tmp_path,
+        [1],
+        configuration={
+            "delta.columnMapping.mode": "name",
+            "delta.minReaderVersion": "2",
+            "delta.minWriterVersion": "5",
+        },
+    )
+    version = dt.version()
+    schema = Schema(
+        [
+            Field("id", PrimitiveType("long"), nullable=True),
+            Field("name", PrimitiveType("string"), nullable=True),
+        ]
+    )
+
+    with pytest.raises(DeltaError, match="Column mapping is not supported"):
+        dt.create_write_transaction(
+            [], mode="append", schema=schema, schema_mode="merge"
+        )
+
+    assert DeltaTable(tmp_path).version() == version
+
+
+@pytest.mark.parametrize(
+    ("mode", "schema_mode", "match"),
+    [
+        ("overwrite", "merge", "not supported with mode='overwrite'"),
+        ("append", "overwrite", "only 'merge' is supported"),
+    ],
+)
+def test_create_write_transaction_rejects_invalid_schema_mode(
+    tmp_path: pathlib.Path, mode: str, schema_mode: str, match: str
+):
+    dt = _append_ids(tmp_path, [1])
+    version = dt.version()
+
+    with pytest.raises(ValueError, match=match):
+        dt.create_write_transaction(
+            [], mode=mode, schema=dt.schema(), schema_mode=schema_mode
+        )
+
+    assert DeltaTable(tmp_path).version() == version
+
+
 def test_remove_action_constructor():
     minimal = RemoveAction("part-a.parquet", False, 123)
     assert minimal.path == "part-a.parquet"
