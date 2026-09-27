@@ -72,10 +72,10 @@ tokio = { version = "1" }
 typed-builder = { version = "0.23.0" }
 
 # opentelemetry
-tracing-opentelemetry = { version = "0.32" }
-opentelemetry = { version = "0.31" }
-opentelemetry-otlp = { version = "0.31", features = ["http-proto"] }
-opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+tracing-opentelemetry = { version = "0.34" }
+opentelemetry = { version = "0.33" }
+opentelemetry-otlp = { version = "0.33", features = ["http-proto"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [workspace.metadata.typos]

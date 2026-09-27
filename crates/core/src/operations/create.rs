@@ -13,10 +13,9 @@ use uuid::Uuid;
 
 use super::{CustomExecuteHandler, Operation};
 use crate::errors::{ColumnMappingOperation, DeltaResult, DeltaTableError};
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, PROTOCOL, TableReference};
+use crate::kernel::transaction::{CommitBuilder, CommitProperties, TableReference};
 use crate::kernel::{Action, DataType, MetadataExt, ProtocolExt as _, StructField, StructType};
 use crate::kernel::{ProtocolInner, new_metadata};
-use crate::kernel::{reader_features_for_version, writer_features_for_version};
 use crate::logstore::LogStoreRef;
 use crate::protocol::{DeltaOperation, SaveMode};
 use crate::table::builder::ensure_table_uri;
@@ -466,6 +465,7 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::transaction::PROTOCOL;
     use crate::table::config::TableProperty;
     use crate::writer::test_utils::get_delta_schema;
     use delta_kernel::table_features::TableFeature;

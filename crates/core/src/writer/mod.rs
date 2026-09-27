@@ -50,10 +50,6 @@ pub(crate) fn ensure_legacy_writer_supports_table(
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum DeltaWriterError {
-    /// Partition column is missing in a record written to delta.
-    #[error("Missing partition column: {0}")]
-    MissingPartitionColumn(String),
-
     /// The Arrow RecordBatch schema does not match the expected schema.
     #[error("{}", format_schema_mismatch(record_batch_schema, expected_schema))]
     SchemaMismatch {

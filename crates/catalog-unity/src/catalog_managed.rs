@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::UnityCatalog;
 use async_trait::async_trait;
 use bytes::Bytes;
 use delta_kernel::LogPath;
@@ -9,22 +10,14 @@ use deltalake_core::logstore::object_store::ObjectStore;
 use deltalake_core::logstore::{
     CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, ObjectStoreRef,
 };
-use deltalake_core::{DeltaResult, DeltaTableError};
+use deltalake_core::{DeltaResult, DeltaTableError, Path};
+use unity_catalog_delta_client_api::Commit;
 use uuid::Uuid;
-use crate::UnityCatalog;
-
-#[derive(Debug, Clone)]
-pub struct CatalogCommit {
-    pub version: Version,
-    pub file_name: String,
-    pub size: u64,
-    pub last_modified: i64,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitList {
-    pub commits: Vec<CatalogCommit>,
-    pub max_version: Version,
+    pub commits: Vec<Commit>,
+    pub max_version: u64,
 }
 
 #[async_trait]
@@ -60,55 +53,39 @@ impl UnityCommitCoordinator {
 impl CommitCoordinator for UnityCommitCoordinator {
     async fn get_commits(&self) -> DeltaResult<CommitList> {
         let resp = self
-            .client.delta_rest_client().await?
+            .client
+            .delta_rest_client()
+            .await?
             .load_table(&self.catalog, &self.schema, &self.table)
             .await
             .map_err(|e| DeltaTableError::Generic(format!("UC load_table failed: {e}")))?;
 
-        let commits: Vec<CatalogCommit> = resp
-            .commits
-            .into_iter()
-            .map(|c| CatalogCommit {
-                version: c.version.max(0) as Version,
-                file_name: c
-                    .file_name
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&c.file_name)
-                    .to_string(),
-                size: c.file_size.max(0) as u64,
-                last_modified: c.file_modification_timestamp,
-            })
-            .collect();
-
         let max_version = resp
             .latest_table_version
             .or(resp.metadata.last_commit_version)
-            .map(|v| v.max(0) as Version)
-            .or_else(|| commits.iter().map(|c| c.version).max())
-            .unwrap_or(0);
+            .unwrap_or(0) as u64;
 
         Ok(CommitList {
-            commits,
+            commits: resp.commits,
             max_version,
         })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct CatalogManagedLogStore<CC: CommitCoordinator> {
+pub struct CatalogManagedLogStore<C: CommitCoordinator> {
     prefixed_store: ObjectStoreRef,
     root_store: ObjectStoreRef,
     config: LogStoreConfig,
-    coordinator: Arc<CC>,
+    coordinator: Arc<C>,
 }
 
-impl<CC: CommitCoordinator> CatalogManagedLogStore<CC> {
+impl<C: CommitCoordinator> CatalogManagedLogStore<C> {
     pub fn new(
         prefixed_store: ObjectStoreRef,
         root_store: ObjectStoreRef,
         config: LogStoreConfig,
-        coordinator: Arc<CC>,
+        coordinator: Arc<C>,
     ) -> Self {
         Self {
             prefixed_store,
@@ -120,7 +97,7 @@ impl<CC: CommitCoordinator> CatalogManagedLogStore<CC> {
 }
 
 #[async_trait]
-impl<CC: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<CC> {
+impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
     fn name(&self) -> String {
         "CatalogManagedLogStore".into()
     }
@@ -158,20 +135,24 @@ impl<CC: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<CC> {
     }
 
     async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
-        let mut list = self.coordinator.get_commits().await?;
-        list.commits.sort_by_key(|c| c.version);
-
-        let base = self.config.location().clone();
+        let list = self.coordinator.get_commits().await?;
+        let base = self.config.location();
         let mut log_tail = Vec::with_capacity(list.commits.len());
         for c in &list.commits {
-            let file_name = c.file_name.rsplit('/').next().unwrap_or(&c.file_name);
-            let path = LogPath::staged_commit(base.clone(), file_name, c.last_modified, c.size)
-                .map_err(|e| {
-                    DeltaTableError::Generic(format!(
-                        "invalid staged commit path for {}: {e}",
-                        c.file_name
-                    ))
-                })?;
+            let file_path = Path::parse(&c.file_name)?;
+            let file_name = file_path.filename().unwrap_or(&c.file_name);
+            let path = LogPath::staged_commit(
+                base.clone(),
+                file_name,
+                c.file_modification_timestamp,
+                c.file_size as u64,
+            )
+            .map_err(|e| {
+                DeltaTableError::Generic(format!(
+                    "invalid staged commit path for {}: {e}",
+                    c.file_name
+                ))
+            })?;
             log_tail.push(path);
         }
 
@@ -224,21 +205,20 @@ mod tests {
     fn sample_commits() -> CommitList {
         CommitList {
             commits: vec![
-                CatalogCommit {
-                    version: 2,
-                    file_name: "00000000000000000002.3a0d65cd-4a56-49a8-937b-95f9e3ee90e5.json"
-                        .into(),
-                    size: 20,
-                    last_modified: 200,
-                },
-                CatalogCommit {
-                    version: 1,
-                    file_name:
-                        "_staged_commits/00000000000000000001.1b1c9f7e-1234-5678-9012-345678901234.json"
-                            .into(),
-                    size: 10,
-                    last_modified: 100,
-                },
+                Commit::new(
+                    1,
+                    100,
+                    "_staged_commits/00000000000000000001.1b1c9f7e-1234-5678-9012-345678901234.json",
+                    10,
+                    200,
+                ),
+                Commit::new(
+                    2,
+                    200,
+                    "00000000000000000002.3a0d65cd-4a56-49a8-937b-95f9e3ee90e5.json",
+                    20,
+                    200,
+                ),
             ],
             max_version: 2,
         }

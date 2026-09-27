@@ -38,13 +38,13 @@ use deltalake_core::{
     ObjectStoreError, Path, ensure_table_uri,
 };
 
+use crate::catalog_managed::{CatalogManagedLogStore, UnityCommitCoordinator};
 use crate::client::retry::*;
 use deltalake_core::logstore::{
     ObjectStoreFactory, ObjectStoreRef, config::str_is_truthy, object_store_factories,
 };
 use unity_catalog_delta_client_api::{Operation, StorageCredential};
-use unity_catalog_delta_rest_client::{ClientConfig, UCClient};
-use crate::catalog_managed::{CatalogManagedLogStore, UnityCommitCoordinator};
+use unity_catalog_delta_rest_client::{ClientConfig, Error, UCClient};
 
 pub mod catalog_managed;
 pub mod client;
@@ -142,6 +142,9 @@ pub enum UnityCatalogError {
 
     #[error("{0} is not a table and doesn't have an included storage location. Type: {1}")]
     NotATable(String, TableType),
+
+    #[error("Error received from Unity Catalog: {0}")]
+    UnityCatalogClientError(#[from] Error),
 }
 
 impl From<ErrorResponse> for UnityCatalogError {
@@ -891,13 +894,8 @@ impl UnityCatalog {
                 ("Delta", "3.2.0"),
                 ("Spark", "3.5.0"),
             ])
-            .build()
-            .map_err(|e| UnityCatalogError::Generic {
-                source: Box::new(e),
-            })?;
-        UCClient::new(config).map_err(|e| UnityCatalogError::Generic {
-            source: Box::new(e),
-        })
+            .build()?;
+        Ok(UCClient::new(config)?)
     }
 
     pub async fn get_temp_table_credentials<S>(
@@ -1033,9 +1031,7 @@ impl LogStoreFactory for UnityCatalogFactory {
             && let Some((catalog, schema, table)) = parse_uc_identity(location)
         {
             let uc = Self::new_delta_client(options)?;
-            let coordinator = Arc::new(UnityCommitCoordinator::new(
-                uc, catalog, schema, table,
-            ));
+            let coordinator = Arc::new(UnityCommitCoordinator::new(uc, catalog, schema, table));
             return Ok(Arc::new(CatalogManagedLogStore::new(
                 prefixed_store,
                 root_store,
@@ -1059,21 +1055,19 @@ async fn catalog_managed_location_and_token(
     schema: &str,
     table: &str,
 ) -> DeltaResult<(String, HashMap<String, String>)> {
-    let loaded = uc
-        .delta_rest_client()
-        .await?
+    let client = uc.delta_rest_client().await?;
+    let loaded = client
         .load_table(catalog, schema, table)
         .await
         .map_err(|e| DeltaTableError::Generic(format!("UC Delta v1 load_table failed: {e}")))?;
+
     let storage_location = loaded.metadata.location;
 
-    let creds = uc
-        .delta_rest_client()
-        .await?
+    let creds = client
         .get_table_credentials(catalog, schema, table, Operation::Read)
         .await
         .map_err(|e| {
-            DeltaTableError::Generic(format!("UC Delta v1 credential vending failed: {e}"))
+            DeltaTableError::Generic(format!("UC Delta credential vending failed: {e}"))
         })?;
     Ok((
         storage_location,
