@@ -45,12 +45,14 @@ fn upload_part_size() -> usize {
     })
 }
 
-/// Upload a parquet file to object store and return metadata for creating an Add action.
-/// Holds `_permit`, the file's [`UploadBudget`] reservation, until the upload is done.
+/// Finish a parquet file: encode the last row group and the footer, send what is left of the
+/// file, and complete the upload. Most parts of a large file went out while it was written.
+/// Returns the metadata for the file's Add action. Holds `_permit`, the file's
+/// [`UploadBudget`] reservation, until the upload is done.
 ///
 /// [`UploadBudget`]: super::UploadBudget
 #[instrument(skip(arrow_writer, _permit), fields(rows = 0, size = 0))]
-pub(super) async fn upload_parquet_file(
+async fn finish_parquet_file(
     mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
     path: Path,
     _permit: OwnedSemaphorePermit,
@@ -139,6 +141,15 @@ pub(super) enum LazyArrowWriter {
 }
 
 impl LazyArrowWriter {
+    /// A file at `path` that creates its writers on the first batch.
+    pub(super) fn new(
+        path: Path,
+        object_store: ObjectStoreRef,
+        config: PartitionWriterConfig,
+    ) -> Self {
+        LazyArrowWriter::Initialized(path, object_store, config)
+    }
+
     pub(super) async fn write_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
         match self {
             LazyArrowWriter::Initialized(path, object_store, config) => {
@@ -214,6 +225,22 @@ impl LazyArrowWriter {
                 let in_flight_parts =
                     (last_row_group + older_parts).min(arrow_writer.bytes_written());
                 buffered + in_flight_parts
+            }
+        }
+    }
+
+    /// Finish the file in the returned future, see [`finish_parquet_file`]. The future holds
+    /// `permit` until the upload is done. `None` when the file never got a row, so there is
+    /// nothing to write.
+    pub(super) fn finish(
+        self,
+        permit: OwnedSemaphorePermit,
+    ) -> Option<impl Future<Output = DeltaResult<(Path, usize, ParquetMetaData)>> + Send + 'static>
+    {
+        match self {
+            LazyArrowWriter::Initialized(_, _, _) => None,
+            LazyArrowWriter::Writing(path, arrow_writer) => {
+                Some(finish_parquet_file(arrow_writer, path, permit))
             }
         }
     }

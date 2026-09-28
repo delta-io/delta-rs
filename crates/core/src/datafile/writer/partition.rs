@@ -16,7 +16,7 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use super::file::{LazyArrowWriter, upload_parquet_file};
+use super::file::LazyArrowWriter;
 use super::{UploadBudget, WriteError};
 use crate::datafile::DataFileWriter;
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -194,7 +194,7 @@ impl PartitionWriter {
         path: Path,
         config: &PartitionWriterConfig,
     ) -> LazyArrowWriter {
-        LazyArrowWriter::Initialized(path, object_store, config.clone())
+        LazyArrowWriter::new(path, object_store, config.clone())
     }
 
     /// Bytes a background upload of the current file would hold; see
@@ -225,12 +225,11 @@ impl PartitionWriter {
             .await;
         let next_path = self.next_data_path();
         let new_writer = Self::create_writer(self.object_store.clone(), next_path, &self.config);
-        let state = std::mem::replace(&mut self.writer, new_writer);
+        let file = std::mem::replace(&mut self.writer, new_writer);
 
-        if let LazyArrowWriter::Writing(path, arrow_writer) = state {
-            self.rolled_bytes += arrow_writer.bytes_written() + arrow_writer.in_progress_size();
-            self.in_flight_writers
-                .spawn(upload_parquet_file(arrow_writer, path, permit));
+        self.rolled_bytes += file.estimated_size();
+        if let Some(finish) = file.finish(permit) {
+            self.in_flight_writers.spawn(finish);
         }
         Ok(())
     }
@@ -339,11 +338,14 @@ impl PartitionWriter {
     ///
     /// This will flush any remaining data and collect all Add actions from background tasks.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
-        let pending_bytes = self.pending_upload_bytes();
-        if let LazyArrowWriter::Writing(path, arrow_writer) = self.writer {
-            let permit = self.config.upload_budget.reserve(pending_bytes).await;
-            self.in_flight_writers
-                .spawn(upload_parquet_file(arrow_writer, path, permit));
+        // A file that never got a row reserves 0 bytes, which never waits.
+        let permit = self
+            .config
+            .upload_budget
+            .reserve(self.pending_upload_bytes())
+            .await;
+        if let Some(finish) = self.writer.finish(permit) {
+            self.in_flight_writers.spawn(finish);
         }
 
         // On a failed upload, keep draining the siblings rather than returning
