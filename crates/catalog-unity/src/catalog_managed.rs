@@ -5,14 +5,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use delta_kernel::LogPath;
 use deltalake_core::kernel::Version;
-use deltalake_core::kernel::transaction::TransactionError;
 use deltalake_core::logstore::object_store::ObjectStore;
-use deltalake_core::logstore::{
-    CatalogLogTail, CommitOrBytes, LogStore, LogStoreConfig, ObjectStoreRef,
-};
+use deltalake_core::logstore::{CatalogLogTail, LogStore, LogStoreConfig, ObjectStoreRef};
 use deltalake_core::{DeltaResult, DeltaTableError, Path};
 use unity_catalog_delta_client_api::Commit;
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Default)]
 pub struct CommitList {
@@ -106,37 +102,16 @@ impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
         deltalake_core::logstore::read_commit_entry(self.prefixed_store.as_ref(), version).await
     }
 
-    async fn write_commit_entry(
-        &self,
-        _version: Version,
-        _commit_or_bytes: CommitOrBytes,
-        _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        Err(TransactionError::LogStoreError {
-            msg: "writes to catalog-managed Unity Catalog tables are not implemented yet".into(),
-            source: "catalog-managed writes unimplemented".into(),
-        })
-    }
-
-    async fn abort_commit_entry(
-        &self,
-        _version: Version,
-        _commit_or_bytes: CommitOrBytes,
-        _operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        Err(TransactionError::LogStoreError {
-            msg: "writes to catalog-managed Unity Catalog tables are not implemented yet".into(),
-            source: "catalog-managed writes unimplemented".into(),
-        })
-    }
-
     async fn get_latest_version(&self, _start_version: Version) -> DeltaResult<Version> {
         Ok(self.coordinator.get_commits().await?.max_version)
     }
 
     async fn catalog_log_tail(&self) -> DeltaResult<Option<CatalogLogTail>> {
         let list = self.coordinator.get_commits().await?;
-        let base = self.config.location();
+        let mut base = self.config.location().clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
         let mut log_tail = Vec::with_capacity(list.commits.len());
         for c in &list.commits {
             let file_path = Path::parse(&c.file_name)?;
@@ -162,11 +137,11 @@ impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
         }))
     }
 
-    fn object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn object_store(&self) -> Arc<dyn ObjectStore> {
         self.prefixed_store.clone()
     }
 
-    fn root_object_store(&self, _operation_id: Option<Uuid>) -> Arc<dyn ObjectStore> {
+    fn root_object_store(&self) -> Arc<dyn ObjectStore> {
         self.root_store.clone()
     }
 

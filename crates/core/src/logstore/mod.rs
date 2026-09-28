@@ -95,7 +95,6 @@ pub use self::storage::{
 };
 /// Convenience re-export of the object store crate
 pub use ::object_store;
-use delta_kernel::committer::{Committer, FileSystemCommitter};
 
 pub mod committer;
 pub mod config;
@@ -432,7 +431,10 @@ pub trait LogStore: Send + Sync + AsAny {
     /// [`LogStore::object_store`]. Stores with an atomic put-if-absent return a
     /// [`FileSystemCommitter`] with [`CommitStrategy::ConditionalPut`].
     fn committer(&self) -> Arc<dyn Committer> {
-        Arc::new(FileSystemCommitter::new())
+        Arc::new(FileSystemCommitter::new(
+            self.object_store(),
+            CommitStrategy::ConditionalPut,
+        ))
     }
 
     /// Begin an isolated write scope for one operation.
