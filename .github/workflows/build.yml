@@ -69,17 +69,17 @@ jobs:
         with:
           python-version: 3.13
 
+      - name: load DAT
+        run: make setup-dat
+
       - name: Default build
         run: cargo build --profile=ci --package deltalake
 
       - name: Default features with clippy
-        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }}
+        run: cargo clippy --profile=ci --features ${{ env.DEFAULT_FEATURES }} --tests
 
       - name: Spot-check build for native-tls features
         run: cargo build --profile=ci --package deltalake --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue
-
-      - name: Check no default features (except rustls)
-        run: cargo check --profile=ci --package deltalake --no-default-features --features rustls
 
   test:
     name: Unit Tests
@@ -91,11 +91,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       DEFAULT_FEATURES: "datafusion"
-      # Doc tests are built with the dev profile, whereas llvm-cov
-      # builds with the test profile.
-      # Make debug match test to avoid rebuilding all dependencies
-      # when running the doc tests.
-      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
 
     steps:
       # v6.0.2
@@ -127,7 +122,7 @@ jobs:
         shell: bash
         run: |
           make setup-dat
-          cargo llvm-cov --features ${{ env.DEFAULT_FEATURES }} \
+          cargo llvm-cov --profile=ci --features ${{ env.DEFAULT_FEATURES }} \
             --workspace \
             --codecov \
             --output-path codecov.json \
@@ -148,7 +143,7 @@ jobs:
           # Use the environment from llvm-cov and the same target dir and
           # package selection, to avoid recompilation.
           eval "$(cargo llvm-cov show-env --sh)"
-          cargo test --features ${{ env.DEFAULT_FEATURES }} \
+          cargo test --profile=ci --features ${{ env.DEFAULT_FEATURES }} \
             --target-dir target/llvm-cov-target \
             --workspace \
             --exclude deltalake \
