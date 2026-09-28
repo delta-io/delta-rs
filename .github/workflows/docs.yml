@@ -15,6 +15,7 @@ on:
   workflow_dispatch:
 
 env:
+  PROFILE: ci
   IS_RELEASE: ${{ github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch' }}
   BUILD_ARGS: ${{ (github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch') && 'install MATURIN_EXTRA_ARGS="--manylinux off"' || 'develop' }}
 
