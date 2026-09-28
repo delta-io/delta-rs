@@ -433,7 +433,7 @@ pub trait LogStore: Send + Sync + AsAny {
     fn committer(&self) -> Arc<dyn Committer> {
         Arc::new(FileSystemCommitter::new(
             self.object_store(),
-            CommitStrategy::ConditionalPut,
+            CommitStrategy::TmpCommit,
         ))
     }
 
