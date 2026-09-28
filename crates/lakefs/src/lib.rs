@@ -1,17 +1,19 @@
-//! LakeFS and similar tooling for delta-rs
+//! LakeFS support for delta-rs
 //!
-//! This module also contains the [LakeFSLogStore] implementation for delta operations executed in transaction branches
-//! where deltalake commits only happen when the branch can be safely merged.
+//! [`LakeFSLogStore`](logstore::LakeFSLogStore) runs every writing Delta operation on a hidden
+//! LakeFS transaction branch and squash-merges that branch into the source branch once per Delta
+//! commit. The branch is created by [`LogStore::begin_operation`] and released by core when the
+//! operation finishes or fails, so callers need no extra wiring: a table opened with a
+//! `lakefs://repo/branch/table` URL gets this behaviour for every operation.
 
 pub mod client;
 pub mod errors;
-pub mod execute;
 pub mod logstore;
 pub mod storage;
+pub mod transaction;
 use deltalake_core::DeltaResult;
 use deltalake_core::logstore::{LogStore, LogStoreFactory, logstore_factories};
 use deltalake_core::logstore::{ObjectStoreRef, StorageConfig, object_store_factories};
-pub use execute::LakeFSCustomExecuteHandler;
 use logstore::lakefs_logstore;
 use std::sync::Arc;
 use storage::LakeFSObjectStoreFactory;

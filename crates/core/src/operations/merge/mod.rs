@@ -62,18 +62,20 @@ use datafusion::{
 
 use delta_kernel::engine::arrow_conversion::{TryIntoArrow as _, TryIntoKernel as _};
 use delta_kernel::schema::{ColumnMetadataKey, StructType};
-use filter::try_construct_early_filter;
+use filter::{
+    DEFAULT_STREAMING_FILTER_BUFFER, try_construct_early_filter,
+    try_construct_streaming_early_filter,
+};
 use futures::{TryStreamExt as _, future::BoxFuture};
 use parquet::file::properties::WriterProperties;
 use serde::Serialize;
 use tracing::*;
-use uuid::Uuid;
 
 use self::barrier::{MergeBarrier, MergeBarrierExec};
+use self::source_stats::{SourceStats, SourceStatsCollector, SourceStatsExec};
 use self::validation::{
     MergeValidation, MergeValidationExec, build_duplicate_match_validation_plan,
 };
-use super::{CustomExecuteHandler, Operation};
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
@@ -91,6 +93,7 @@ use crate::kernel::{
     Action, ActiveAddOptions, AddStatsPolicy, EagerSnapshot, StructTypeExt, new_metadata,
     resolve_snapshot,
 };
+use crate::logstore::with_operation;
 use crate::logstore::{LogStore, LogStoreRef};
 use crate::operations::cdc::*;
 use crate::operations::merge::barrier::find_node;
@@ -107,6 +110,7 @@ use delta_kernel::table_features::ColumnMappingMode;
 
 mod barrier;
 mod filter;
+mod source_stats;
 mod validation;
 
 const SOURCE_COLUMN: &str = "__delta_rs_source";
@@ -167,6 +171,8 @@ pub struct MergeBuilder {
     source: DataFrame,
     /// Whether the source is a streaming source (if true, stats deducing to prune target is disabled)
     streaming: bool,
+    /// Batches in flight between a streaming source and the early filter of the target scan
+    streaming_filter_buffer: usize,
     /// Enable merge schema evolution
     merge_schema: bool,
     /// Delta object store for handling data files
@@ -181,16 +187,6 @@ pub struct MergeBuilder {
     /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
     safe_cast: bool,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for MergeBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl MergeBuilder {
@@ -219,7 +215,7 @@ impl MergeBuilder {
             not_match_source_operations: Vec::new(),
             safe_cast: false,
             streaming: false,
-            custom_execute_handler: None,
+            streaming_filter_buffer: DEFAULT_STREAMING_FILTER_BUFFER,
         }
     }
 
@@ -468,9 +464,13 @@ impl MergeBuilder {
         self
     }
 
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
+    /// Set the number of source batches in flight to the early filter of a streaming source.
+    ///
+    /// The early filter collects the source values that skip target files while the join reads
+    /// the source. A larger buffer lets the join read ahead of the collection, at the cost of
+    /// memory. Only used with [`Self::with_streaming`]. Default is 4.
+    pub fn with_streaming_filter_buffer(mut self, buffer: usize) -> Self {
+        self.streaming_filter_buffer = buffer;
         self
     }
 }
@@ -723,6 +723,13 @@ impl ExtensionPlanner for MergeMetricExtensionPlanner {
         session_state: &dyn Session,
         planning_ctx: &PhysicalPlanningContext,
     ) -> DataFusionResult<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(source_stats) = node.as_any().downcast_ref::<SourceStats>() {
+            return Ok(Some(Arc::new(SourceStatsExec::new(
+                Arc::clone(&physical_inputs[0]),
+                Arc::clone(&source_stats.collector),
+            ))));
+        }
+
         if let Some(metric_observer) = node.as_any().downcast_ref::<MetricObserver>() {
             if metric_observer.id.eq(SOURCE_COUNT_ID) {
                 return Ok(Some(MetricObserverExec::try_new(
@@ -868,14 +875,13 @@ async fn execute(
     mut commit_properties: CommitProperties,
     safe_cast: bool,
     streaming: bool,
+    streaming_filter_buffer: usize,
     source_alias: Option<String>,
     target_alias: Option<String>,
     merge_schema: bool,
     match_operations: Vec<MergeOperationConfig>,
     not_match_target_operations: Vec<MergeOperationConfig>,
     not_match_source_operations: Vec<MergeOperationConfig>,
-    operation_id: Uuid,
-    handle: Option<&Arc<dyn CustomExecuteHandler>>,
 ) -> DeltaResult<(EagerSnapshot, MergeMetrics)> {
     info!(
         operation = "merge",
@@ -998,18 +1004,32 @@ async fn execute(
     .transpose()?;
 
     // Predicate will be used for conflict detection
-    let commit_predicate = match target_subset_filter.clone() {
-        None => None, // No predicate means it's a full table merge
-        Some(some_filter) => {
-            let predict_expr = match &target_alias {
-                None => some_filter,
-                Some(alias) => remove_table_alias(some_filter, alias),
-            };
-            Some(fmt_expr_to_sql(&predict_expr)?)
-        }
-    };
+    let commit_predicate = target_subset_filter
+        .clone()
+        .map(|filter| commit_predicate_sql(filter, target_alias.as_deref()))
+        .transpose()?;
 
     debug!("Using target subset filter: {commit_predicate:?}");
+
+    // A streaming source can be read only once, so the parts of the early filter that depend on
+    // source values are built while the join reads the source. They skip target files at run time.
+    let source_stats = if streaming && not_match_source_operations.is_empty() {
+        try_construct_streaming_early_filter(
+            predicate.clone(),
+            &snapshot,
+            &state,
+            &source,
+            &source_name,
+            &target_name,
+            streaming_filter_buffer,
+        )
+        .await?
+        .map(|filter| {
+            SourceStatsCollector::new(filter, target.schema().clone(), target_alias.clone())
+        })
+    } else {
+        None
+    };
 
     // Apply the early filter only to file skipping.
     let file_skipping_predicates =
@@ -1031,12 +1051,25 @@ async fn execute(
             builder = builder.with_file_skipping_predicates(file_skipping_predicates);
         }
 
+        if let Some(source_stats) = &source_stats {
+            builder = builder.with_runtime_file_filter(source_stats.runtime_file_filter());
+        }
+
         provider_as_source(builder.await?)
     };
 
     let target = LogicalPlanBuilder::scan(target_name.clone(), target_provider, None)?.build()?;
 
-    let source = DataFrame::new(state.clone(), source.clone());
+    let source = match &source_stats {
+        Some(collector) => LogicalPlan::Extension(Extension {
+            node: Arc::new(SourceStats {
+                input: source.clone(),
+                collector: Arc::clone(collector).into(),
+            }),
+        }),
+        None => source.clone(),
+    };
+    let source = DataFrame::new(state.clone(), source);
     let source = source.with_column(SOURCE_COLUMN, lit(true))?;
 
     // Not match operations imply a full scan of the target table is required
@@ -1607,7 +1640,7 @@ async fn execute(
         snapshot.table_configuration(),
         &state,
         write,
-        log_store.object_store(Some(operation_id)),
+        log_store.object_store(),
         WriteExecOptions {
             target_file_size: Some(snapshot.table_properties().target_file_size()),
             write_batch_size: None,
@@ -1670,7 +1703,8 @@ async fn execute(
         &target_files_scanned_metric_names,
         || {
             warn!(
-                %operation_id, metric_names = ?target_files_scanned_metric_names, "Missing target scan metric; defaulting target files scanned to zero"
+                metric_names = ?target_files_scanned_metric_names,
+                "Missing target scan metric; defaulting target files scanned to zero"
             );
             0
         },
@@ -1691,11 +1725,16 @@ async fn execute(
             derive_skipped_file_count(total_files, metrics.num_target_files_scanned);
         if impossible_state {
             warn!(
-                %operation_id, total_files, scanned_files = metrics.num_target_files_scanned, metric_names = ?target_files_skipped_metric_names, "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
+                total_files,
+                scanned_files = metrics.num_target_files_scanned,
+                metric_names = ?target_files_skipped_metric_names,
+                "Target scan metrics reported more scanned files than exist; clamping derived skipped-file count to zero"
             );
         }
         warn!(
-            %operation_id, metric_names = ?target_files_skipped_metric_names, derived, "Missing target skipped-file metric; deriving from total-files minus scanned-files"
+            metric_names = ?target_files_skipped_metric_names,
+            derived,
+            "Missing target skipped-file metric; deriving from total-files minus scanned-files"
         );
         derived
     };
@@ -1706,6 +1745,15 @@ async fn execute(
     if let Ok(map) = serde_json::to_value(&metrics) {
         app_metadata.insert("operationMetrics".to_owned(), map);
     }
+
+    // The early filter of a streaming source covers every file that can match.
+    let commit_predicate = match source_stats.as_ref().and_then(|stats| stats.early_filter()) {
+        Some(filter) => Some(commit_predicate_sql(
+            filter.clone(),
+            target_alias.as_deref(),
+        )?),
+        None => commit_predicate,
+    };
 
     // Do not make a commit when there are zero updates to the state
     let operation = DeltaOperation::Merge {
@@ -1722,9 +1770,7 @@ async fn execute(
 
     let commit = CommitBuilder::from(commit_properties)
         .with_actions(actions)
-        .with_operation_id(operation_id)
-        .with_post_commit_hook_handler(handle.cloned())
-        .build(Some(&snapshot), log_store.clone(), operation)
+        .build(Some(&snapshot), log_store, operation)
         .await?;
     Ok((commit.snapshot().snapshot, metrics))
 }
@@ -1782,6 +1828,15 @@ fn remove_table_alias(expr: Expr, table_alias: &str) -> Expr {
     })
     .unwrap()
     .data
+}
+
+/// The predicate recorded in the commit for conflict detection.
+fn commit_predicate_sql(filter: Expr, target_alias: Option<&str>) -> DeltaResult<String> {
+    let filter = match target_alias {
+        None => filter,
+        Some(alias) => remove_table_alias(filter, alias),
+    };
+    fmt_expr_to_sql(&filter)
 }
 
 fn normalize_target_subset_filter(target_schema: DFSchemaRef, expr: Expr) -> DeltaResult<Expr> {
@@ -1880,49 +1935,47 @@ impl std::future::IntoFuture for MergeBuilder {
                 ));
             }
 
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let parent = this.log_store.clone();
+            let (snapshot, metrics) = with_operation(&parent, |log_store| async move {
+                let (state, _) = resolve_session_state(
+                    this.state.as_deref(),
+                    this.session_fallback_policy,
+                    || create_session().state(),
+                    SessionResolveContext {
+                        operation: "merge",
+                        table_uri: Some(log_store.root_url()),
+                        cdc: false,
+                    },
+                )?;
 
-            let (state, _) = resolve_session_state(
-                this.state.as_deref(),
-                this.session_fallback_policy,
-                || create_session().state(),
-                SessionResolveContext {
-                    operation: "merge",
-                    table_uri: Some(this.log_store.root_url()),
-                    cdc: false,
-                },
-            )?;
+                // Register the parent store: the caller's session outlives this scope, and a
+                // scoped store refuses every call once the scope is closed.
+                update_datafusion_session(&state, this.log_store.as_ref())?;
 
-            update_datafusion_session(&state, this.log_store.as_ref(), Some(operation_id))?;
-
-            let (snapshot, metrics) = execute(
-                this.predicate,
-                this.source,
-                this.log_store.clone(),
-                snapshot,
-                state,
-                this.writer_properties,
-                this.commit_properties,
-                this.safe_cast,
-                this.streaming,
-                this.source_alias,
-                this.target_alias,
-                this.merge_schema,
-                this.match_operations,
-                this.not_match_operations,
-                this.not_match_source_operations,
-                operation_id,
-                this.custom_execute_handler.as_ref(),
-            )
+                execute(
+                    this.predicate,
+                    this.source,
+                    log_store,
+                    snapshot,
+                    state,
+                    this.writer_properties,
+                    this.commit_properties,
+                    this.safe_cast,
+                    this.streaming,
+                    this.streaming_filter_buffer,
+                    this.source_alias,
+                    this.target_alias,
+                    this.merge_schema,
+                    this.match_operations,
+                    this.not_match_operations,
+                    this.not_match_source_operations,
+                )
+                .await
+            })
             .await?;
 
-            if let Some(handler) = this.custom_execute_handler {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
-
             Ok((
-                DeltaTable::new_with_state(this.log_store, DeltaTableState { snapshot }),
+                DeltaTable::new_with_state(parent, DeltaTableState { snapshot }),
                 metrics,
             ))
         })
@@ -2054,6 +2107,424 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), Some(0));
         table
+    }
+
+    /// A source partition that fails when it is read twice, like a Python `RecordBatchReader`.
+    #[derive(Debug)]
+    struct OneShotPartition {
+        schema: arrow_schema::SchemaRef,
+        batches: parking_lot::Mutex<Option<Vec<RecordBatch>>>,
+    }
+
+    impl datafusion::physical_plan::streaming::PartitionStream for OneShotPartition {
+        fn schema(&self) -> &arrow_schema::SchemaRef {
+            &self.schema
+        }
+
+        fn execute(
+            &self,
+            _ctx: Arc<datafusion::execution::TaskContext>,
+        ) -> datafusion::execution::SendableRecordBatchStream {
+            let batches = match self.batches.lock().take() {
+                Some(batches) => batches.into_iter().map(Ok).collect(),
+                None => vec![Err(datafusion::error::DataFusionError::Execution(
+                    "source already read".into(),
+                ))],
+            };
+            Box::pin(
+                datafusion::physical_plan::stream::RecordBatchStreamAdapter::new(
+                    Arc::clone(&self.schema),
+                    futures::stream::iter(batches),
+                ),
+            )
+        }
+    }
+
+    /// A source that can be read once. Each inner vector is one partition.
+    fn one_shot_source(
+        schema: arrow_schema::SchemaRef,
+        partitions: Vec<Vec<RecordBatch>>,
+    ) -> DataFrame {
+        let partitions = partitions
+            .into_iter()
+            .map(|batches| {
+                Arc::new(OneShotPartition {
+                    schema: Arc::clone(&schema),
+                    batches: parking_lot::Mutex::new(Some(batches)),
+                }) as _
+            })
+            .collect();
+        let table =
+            datafusion::catalog::streaming::StreamingTable::try_new(schema, partitions).unwrap();
+        SessionContext::new().read_table(Arc::new(table)).unwrap()
+    }
+
+    /// Keeps the source on the build side of the join, also for small test tables.
+    fn source_build_side_session() -> Arc<dyn datafusion::catalog::Session> {
+        let config = SessionConfig::new()
+            .set_usize(
+                "datafusion.optimizer.hash_join_single_partition_threshold",
+                0,
+            )
+            .set_usize(
+                "datafusion.optimizer.hash_join_single_partition_threshold_rows",
+                0,
+            )
+            // Split the small test files into ranges, like large files in production.
+            .with_repartition_file_min_size(0);
+        Arc::new(SessionContext::new_with_config(config).state())
+    }
+
+    fn source_batch(
+        schema: &Arc<ArrowSchema>,
+        ids: Vec<&str>,
+        values: Vec<i32>,
+        modified: Vec<&str>,
+    ) -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::clone(schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(ids)),
+                Arc::new(arrow::array::Int32Array::from(values)),
+                Arc::new(arrow::array::StringArray::from(modified)),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// Updates row A and inserts row X, both in partition 2021-02-01.
+    fn a_and_x_source(schema: &Arc<ArrowSchema>) -> DataFrame {
+        one_shot_source(
+            Arc::clone(schema),
+            vec![vec![source_batch(
+                schema,
+                vec!["A", "X"],
+                vec![999, 5],
+                vec!["2021-02-01", "2021-02-01"],
+            )]],
+        )
+    }
+
+    /// The table after the upsert of [`a_and_x_source`].
+    const A_AND_X_UPSERTED: [&str; 9] = [
+        "+----+-------+------------+",
+        "| id | value | modified   |",
+        "+----+-------+------------+",
+        "| A  | 999   | 2021-02-01 |",
+        "| B  | 10    | 2021-02-01 |",
+        "| C  | 10    | 2021-02-02 |",
+        "| D  | 100   | 2021-02-02 |",
+        "| X  | 5     | 2021-02-01 |",
+        "+----+-------+------------+",
+    ];
+
+    fn id_and_modified_match() -> Expr {
+        col("target.id")
+            .eq(col("source.id"))
+            .and(col("target.modified").eq(col("source.modified")))
+    }
+
+    async fn upsert(
+        table: DeltaTable,
+        source: DataFrame,
+        predicate: Expr,
+        session: Option<Arc<dyn datafusion::catalog::Session>>,
+    ) -> (DeltaTable, super::MergeMetrics) {
+        let mut builder = table
+            .merge(source, predicate)
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_streaming(true);
+        if let Some(session) = session {
+            builder = builder.with_session_state(session);
+        }
+        builder
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_skips_partitions() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+
+        let (table, metrics) = upsert(
+            table,
+            a_and_x_source(&schema),
+            id_and_modified_match(),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(metrics.num_source_rows, 2);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+        assert_eq!(metrics.num_target_files_removed, 1);
+
+        let last_commit = table.last_commit().await.unwrap();
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(
+            parameters["predicate"],
+            json!("id >= 'A' AND id <= 'X' AND modified = '2021-02-01'")
+        );
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&A_AND_X_UPSERTED, &actual);
+    }
+
+    /// Skipped files must not be opened. The source touches only partition 2021-02-01, so the
+    /// test deletes the file of partition 2021-02-02 from the storage, but keeps it in the log.
+    /// The MERGE then fails if it opens that file.
+    #[tokio::test]
+    async fn test_merge_streaming_source_does_not_open_skipped_files() {
+        use object_store::ObjectStoreExt as _;
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        let skipped = table
+            .get_files_by_partitions(&[(
+                "modified",
+                crate::FilterOp::Eq,
+                crate::FilterValue::Scalar("2021-02-02"),
+            )])
+            .await
+            .unwrap();
+        assert_eq!(skipped.len(), 1);
+        table.object_store().delete(&skipped[0]).await.unwrap();
+
+        let (table, metrics) = upsert(
+            table,
+            a_and_x_source(&schema),
+            id_and_modified_match(),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(table.version(), Some(2));
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_skips_files_by_key_range() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+        let table = write_data(table, &schema).await;
+        // Second file, with ids X and Y. The first file has ids A to D.
+        let table = table
+            .write(vec![source_batch(
+                &schema,
+                vec!["X", "Y"],
+                vec![1, 2],
+                vec!["2021-02-03", "2021-02-03"],
+            )])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.snapshot().unwrap().log_data().num_files(), 2);
+
+        let source = one_shot_source(
+            Arc::clone(&schema),
+            // Update row
+            vec![vec![source_batch(
+                &schema,
+                vec!["Y"],
+                vec![20],
+                vec!["2021-02-03"],
+            )]],
+        );
+        let (table, metrics) = upsert(
+            table,
+            source,
+            col("target.id").eq(col("source.id")),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 1     | 2021-02-03 |",
+            "| Y  | 20    | 2021-02-03 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_with_several_partitions() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        let source = one_shot_source(
+            Arc::clone(&schema),
+            vec![
+                // Update row
+                vec![source_batch(
+                    &schema,
+                    vec!["C"],
+                    vec![30],
+                    vec!["2021-02-02"],
+                )],
+                // Insert row
+                vec![source_batch(
+                    &schema,
+                    vec!["E"],
+                    vec![50],
+                    vec!["2021-02-02"],
+                )],
+            ],
+        );
+        let (table, metrics) = upsert(
+            table,
+            source,
+            id_and_modified_match(),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(metrics.num_source_rows, 2);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 1);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 30    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| E  | 50    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_empty() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+        let version = table.version();
+
+        // One partition without batches
+        let source = one_shot_source(Arc::clone(&schema), vec![vec![]]);
+        let (table, metrics) = upsert(
+            table,
+            source,
+            id_and_modified_match(),
+            Some(source_build_side_session()),
+        )
+        .await;
+
+        assert_eq!(metrics.num_source_rows, 0);
+        assert_eq!(metrics.num_target_files_scanned, 0);
+        assert_eq!(metrics.num_target_files_skipped_during_scan, 2);
+        assert_eq!(table.version(), version);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_target_on_build_side() {
+        // With the default session, the small target is the build side of the join. The target
+        // is read before the source statistics are known, so no file is skipped.
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        let (table, metrics) = upsert(
+            table,
+            a_and_x_source(&schema),
+            id_and_modified_match(),
+            None,
+        )
+        .await;
+
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_files_scanned, 2);
+        assert_eq!(metrics.num_target_files_removed, 1);
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&A_AND_X_UPSERTED, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_streaming_source_not_matched_by_source_reads_all_files() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_data(table, &schema).await;
+
+        let source = one_shot_source(
+            Arc::clone(&schema),
+            // Update row
+            vec![vec![source_batch(
+                &schema,
+                vec!["A"],
+                vec![999],
+                vec!["2021-02-01"],
+            )]],
+        );
+        let (table, metrics) = table
+            .merge(source, id_and_modified_match())
+            .with_source_alias("source")
+            .with_target_alias("target")
+            .with_streaming(true)
+            .with_session_state(source_build_side_session())
+            .when_matched_update(|update| update.update("value", col("source.value")))
+            .unwrap()
+            // Delete rows C and D, which match no source row and are in 2021-02-02
+            .when_not_matched_by_source_delete(|delete| {
+                delete.predicate(col("target.modified").eq(lit("2021-02-02")))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(metrics.num_target_files_scanned, 2);
+        assert_eq!(metrics.num_target_rows_updated, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 999   | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -5589,7 +6060,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5622,7 +6093,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5667,7 +6138,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5707,7 +6178,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 
@@ -5738,7 +6209,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
         let expected_filter_l = Expr::Placeholder(Placeholder {
@@ -5772,7 +6243,7 @@ mod tests {
             &source,
             &target,
             &mut placeholders,
-            false,
+            true,
         )
         .unwrap();
 

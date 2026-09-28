@@ -72,6 +72,7 @@ pub use cdf::scan::DeltaCdfTableProvider;
 pub(crate) use column_mapping::ColumnMappingState;
 pub(crate) use data_validation::{DataValidationExec, constraints_to_exprs, validation_predicates};
 pub(crate) use find_files::*;
+pub(crate) use table_provider::next::RuntimeFileFilter;
 pub(crate) use table_provider::next::normalize_path_as_file_id;
 pub use table_provider::{
     DeltaScanConfig, DeltaScanConfigBuilder, TableProviderBuilder, next::DeltaScanExec,
@@ -1016,7 +1017,7 @@ mod tests {
         let ctx = SessionContext::new();
         ctx.runtime_env().register_object_store(
             table.log_store().root_url(),
-            table.log_store().object_store(None),
+            table.log_store().object_store(),
         );
         ctx.register_table("test", provider).unwrap();
 

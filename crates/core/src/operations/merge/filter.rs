@@ -3,16 +3,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::concat_batches;
+use arrow::record_batch::RecordBatch;
+use arrow_schema::SchemaRef;
 use datafusion::catalog::Session;
+use datafusion::catalog::streaming::StreamingTable;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{ScalarValue, TableReference};
+use datafusion::common::{ScalarValue, TableReference, exec_err};
+use datafusion::datasource::provider_as_source;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::functions_aggregate::expr_fn::{max, min};
 use datafusion::logical_expr::expr::{InList, Placeholder};
-use datafusion::logical_expr::{Aggregate, Between, BinaryExpr, Expr, LogicalPlan, Operator, lit};
+use datafusion::logical_expr::{
+    Aggregate, Between, BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator, lit,
+};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::streaming::PartitionStream;
 use either::{Left, Right};
-use futures::TryStreamExt as _;
+use futures::channel::mpsc;
+use futures::{StreamExt as _, TryStreamExt as _};
 use itertools::Itertools;
+use parking_lot::Mutex;
 
 use crate::kernel::EagerSnapshot;
 use crate::{DeltaResult, DeltaTableError};
@@ -181,11 +192,11 @@ pub(crate) fn generalize_filter(
     source_name: &TableReference,
     target_name: &TableReference,
     placeholders: &mut Vec<PredicatePlaceholder>,
-    streaming_source: bool,
+    with_placeholders: bool,
 ) -> Option<Expr> {
     match predicate {
         Expr::BinaryExpr(binary) => {
-            if !streaming_source {
+            if with_placeholders {
                 if references_table(&binary.right, source_name).has_reference() {
                     if let ReferenceTableCheck::HasReference(left_target) =
                         references_table(&binary.left, target_name)
@@ -222,7 +233,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             );
             let right = generalize_filter(
                 *binary.right,
@@ -230,7 +241,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             );
 
             match (left, right) {
@@ -262,7 +273,7 @@ pub(crate) fn generalize_filter(
                 source_name,
                 target_name,
                 placeholders,
-                streaming_source,
+                with_placeholders,
             )?;
 
             let mut list_expr = Vec::new();
@@ -277,7 +288,7 @@ pub(crate) fn generalize_filter(
                             source_name,
                             target_name,
                             placeholders,
-                            streaming_source,
+                            with_placeholders,
                         ) {
                             list_expr.push(item)
                         }
@@ -297,7 +308,7 @@ pub(crate) fn generalize_filter(
         }
         other => match references_table(&other, source_name) {
             ReferenceTableCheck::HasReference(col) => {
-                if !streaming_source {
+                if with_placeholders {
                     let placeholder_name = format!("{col}_{}", placeholders.len());
 
                     let placeholder = Expr::Placeholder(Placeholder {
@@ -341,7 +352,7 @@ pub(crate) async fn try_construct_early_filter(
         source_name,
         target_name,
         &mut placeholders,
-        streaming_source,
+        !streaming_source,
     ) {
         None => Ok(None),
         Some(filter) => {
@@ -350,47 +361,158 @@ pub(crate) async fn try_construct_early_filter(
                 Ok(Some(filter))
             } else {
                 // if we have some filters, which depend on the source df, then collect the placeholders values from the source data
-                // We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
-                // Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
-                let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
-                    if p.is_aggregate {
-                        Left(p.expr.alias(p.alias))
-                    } else {
-                        Right(p.expr.alias(p.alias))
-                    }
-                });
-                let distinct_partitions = LogicalPlan::Aggregate(Aggregate::try_new(
-                    source.clone().into(),
-                    group_columns,
-                    agg_columns,
-                )?);
-                let execution_plan = session_state
-                    .create_physical_plan(&distinct_partitions)
-                    .await?;
+                let aggregate = placeholder_aggregate(source.clone(), placeholders)?;
+                let execution_plan = session_state.create_physical_plan(&aggregate).await?;
                 let items = execute_plan_to_batch(session_state, execution_plan).await?;
-                let placeholder_names = items
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|f| f.name().to_owned())
-                    .collect_vec();
-                let expr = (0..items.num_rows())
-                    .map(|i| {
-                        let replacements = placeholder_names
-                            .iter()
-                            .map(|placeholder| {
-                                let col = items.column_by_name(placeholder).unwrap();
-                                let value = ScalarValue::try_from_array(col, i)?;
-                                Ok((placeholder.clone(), value))
-                            })
-                            .try_collect::<_, _, DeltaTableError>()?;
-                        Ok(replace_placeholders(filter.clone(), &replacements))
-                    })
-                    .collect::<DeltaResult<Vec<_>>>()?
-                    .into_iter()
-                    .reduce(Expr::or);
-                Ok(expr)
+                filter_from_placeholder_values(&filter, &items)
             }
+        }
+    }
+}
+
+/// Aggregate the placeholder values of an early filter from the source.
+///
+/// We aggregate the distinct values for partitions with the group_columns and stats(min, max) for dynamic filter as agg_columns
+/// Can be translated into `SELECT partition1 as part1_0, min(id) as id_1_min, max(id) as id_1_max FROM source GROUP BY partition1`
+fn placeholder_aggregate(
+    source: LogicalPlan,
+    placeholders: Vec<PredicatePlaceholder>,
+) -> DeltaResult<LogicalPlan> {
+    let (agg_columns, group_columns) = placeholders.into_iter().partition_map(|p| {
+        if p.is_aggregate {
+            Left(p.expr.alias(p.alias))
+        } else {
+            Right(p.expr.alias(p.alias))
+        }
+    });
+    Ok(LogicalPlan::Aggregate(Aggregate::try_new(
+        source.into(),
+        group_columns,
+        agg_columns,
+    )?))
+}
+
+/// Replace the placeholders of `filter` with the values of each row of `items`, and combine the
+/// rows with `OR`. Returns `None` when `items` has no rows.
+pub(crate) fn filter_from_placeholder_values(
+    filter: &Expr,
+    items: &RecordBatch,
+) -> DeltaResult<Option<Expr>> {
+    let placeholder_names = items
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_owned())
+        .collect_vec();
+    let expr = (0..items.num_rows())
+        .map(|i| {
+            let replacements = placeholder_names
+                .iter()
+                .map(|placeholder| {
+                    let col = items.column_by_name(placeholder).unwrap();
+                    let value = ScalarValue::try_from_array(col, i)?;
+                    Ok((placeholder.clone(), value))
+                })
+                .try_collect::<_, _, DeltaTableError>()?;
+            Ok(replace_placeholders(filter.clone(), &replacements))
+        })
+        .collect::<DeltaResult<Vec<_>>>()?
+        .into_iter()
+        .reduce(Expr::or);
+    Ok(expr)
+}
+
+/// Default additional buffer of batches in flight between a streaming source and the aggregation of its
+/// placeholder values.
+pub(super) const DEFAULT_STREAMING_FILTER_BUFFER: usize = 4;
+
+/// The early filter of a MERGE with a source that can only be read once.
+///
+/// The placeholder values are aggregated from the batches sent to `batch_sender` while the join
+/// reads the source, see [`super::source_stats`].
+pub(crate) struct StreamingEarlyFilter {
+    /// Early filter with placeholders for the source values, see [`generalize_filter`]
+    pub filter: Expr,
+    /// Aggregates the placeholder values from the batches sent to `batch_sender`
+    pub aggregate: Arc<dyn ExecutionPlan>,
+    pub batch_sender: mpsc::Sender<RecordBatch>,
+}
+
+/// Plan the early filter for a source that can only be read once.
+///
+/// Returns `None` when the filter does not depend on source values. The static part of the
+/// filter is then returned by [`try_construct_early_filter`].
+pub(crate) async fn try_construct_streaming_early_filter(
+    join_predicate: Expr,
+    table_snapshot: &EagerSnapshot,
+    session_state: &dyn Session,
+    source: &LogicalPlan,
+    source_name: &TableReference,
+    target_name: &TableReference,
+    buffer: usize,
+) -> DeltaResult<Option<StreamingEarlyFilter>> {
+    let partition_columns = table_snapshot.metadata().partition_columns();
+    let mut placeholders = Vec::default();
+    let Some(filter) = generalize_filter(
+        join_predicate,
+        &partition_columns.to_vec(),
+        source_name,
+        target_name,
+        &mut placeholders,
+        true,
+    ) else {
+        return Ok(None);
+    };
+    if placeholders.is_empty() {
+        return Ok(None);
+    }
+
+    let schema = Arc::new(source.schema().as_arrow().clone());
+    let (batch_sender, receiver) = mpsc::channel(buffer);
+    let input = StreamingTable::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(ReceiverPartition {
+            schema,
+            receiver: Mutex::new(Some(receiver)),
+        })],
+    )?;
+    let input = LogicalPlanBuilder::scan(
+        source_name.clone(),
+        provider_as_source(Arc::new(input)),
+        None,
+    )?
+    .build()?;
+    let aggregate = placeholder_aggregate(input, placeholders)?;
+    let aggregate = session_state.create_physical_plan(&aggregate).await?;
+    Ok(Some(StreamingEarlyFilter {
+        filter,
+        aggregate,
+        batch_sender,
+    }))
+}
+
+/// Yields the batches sent to a channel. It can be executed once.
+#[derive(Debug)]
+struct ReceiverPartition {
+    schema: SchemaRef,
+    receiver: Mutex<Option<mpsc::Receiver<RecordBatch>>>,
+}
+
+impl PartitionStream for ReceiverPartition {
+    fn schema(&self) -> &SchemaRef {
+        &self.schema
+    }
+
+    fn execute(&self, _ctx: Arc<TaskContext>) -> SendableRecordBatchStream {
+        let schema = Arc::clone(&self.schema);
+        match self.receiver.lock().take() {
+            Some(receiver) => Box::pin(RecordBatchStreamAdapter::new(schema, receiver.map(Ok))),
+            None => Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::once(async {
+                    exec_err!("MERGE source batches can only be read once")
+                }),
+            )),
         }
     }
 }

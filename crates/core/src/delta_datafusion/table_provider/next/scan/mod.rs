@@ -37,18 +37,18 @@ use datafusion::{
     datasource::physical_plan::{ParquetSource, parquet::CachedParquetFileReaderFactory},
     error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
-    physical_expr::Partitioning,
+    physical_expr::{Partitioning, conjunction, expressions::Column},
     physical_plan::{
-        ExecutionPlan,
+        ExecutionPlan, PhysicalExpr,
         empty::EmptyExec,
-        metrics::{ExecutionPlanMetricsSet, MetricBuilder},
+        metrics::{ExecutionPlanMetricsSet, Gauge, MetricBuilder},
         union::UnionExec,
     },
     prelude::Expr,
 };
 use datafusion_datasource::{
-    PartitionedFile, TableSchema, compute_all_files_statistics, file_groups::FileGroup,
-    file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
+    PartitionedFile, TableSchema, compute_all_files_statistics, file::FileSource,
+    file_groups::FileGroup, file_scan_config::FileScanConfigBuilder, source::DataSourceExec,
 };
 use datafusion_physical_expr_adapter::{
     BatchAdapter, BatchAdapterFactory, PhysicalExprAdapterFactory,
@@ -69,6 +69,8 @@ use self::exec_meta::DeltaScanMetaExec;
 use self::expr_adapter::{DeltaPhysicalExprAdapterFactory, relax_schema_nested_nullability};
 pub(crate) use self::plan::{KernelScanPlan, ProjectedScanContract, supports_filters_pushdown};
 use self::replay::{ScanFileContext, ScanFileStream};
+pub(crate) use self::runtime_filter::RuntimeFileFilter;
+use self::runtime_filter::RuntimeScanFilePruner;
 use super::{FileSelection, ResolvedFileSelection};
 use crate::{
     DeltaTableError,
@@ -86,6 +88,7 @@ mod exec_meta;
 mod expr_adapter;
 mod plan;
 mod replay;
+mod runtime_filter;
 
 type ScanMetadataStream = Pin<Box<dyn Stream<Item = Result<ScanMetadata, DeltaTableError>> + Send>>;
 type PublicFileIdMap = HashMap<String, String>;
@@ -103,8 +106,11 @@ struct ReplayedScanFiles {
     dvs: HashMap<String, Vec<bool>>,
     public_file_ids: PublicFileIdMap,
     metrics: ExecutionPlanMetricsSet,
+    /// The `count_files_scanned` metric in `metrics`
+    files_scanned: Gauge,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn execution_plan(
     config: &DeltaScanConfig,
     session: &dyn Session,
@@ -113,6 +119,7 @@ pub(super) async fn execution_plan(
     engine: Arc<dyn Engine>,
     limit: Option<usize>,
     file_selection: Option<&ResolvedFileSelection>,
+    runtime_filter: Option<&RuntimeFileFilter>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     if let Some(selection) = file_selection
         && selection.active_file_ids.is_empty()
@@ -122,7 +129,14 @@ pub(super) async fn execution_plan(
         )));
     }
 
-    let replayed = replay_files(engine, &scan_plan, config.clone(), stream, file_selection).await?;
+    let replayed = replay_files(
+        Arc::clone(&engine),
+        &scan_plan,
+        config.clone(),
+        stream,
+        file_selection,
+    )
+    .await?;
 
     let file_id_field = scan_plan.contract.file_id_field.clone();
     if scan_plan.is_metadata_only() && !scan_plan.contract.retain_row_index {
@@ -169,7 +183,23 @@ pub(super) async fn execution_plan(
         }
     }
 
-    get_data_scan_plan(session, scan_plan, replayed, limit).await
+    let file_pruner = runtime_filter.map(|filter| {
+        Arc::new(RuntimeScanFilePruner::new(
+            Arc::clone(filter),
+            scan_plan.snapshot.clone(),
+            config.clone(),
+            engine,
+            &replayed.files,
+            replayed.files_scanned.clone(),
+            // The file id is the partition column after the Parquet file columns
+            Column::new(
+                scan_plan.contract.file_id_field.name(),
+                scan_plan.parquet_read_schema.fields().len(),
+            ),
+        ))
+    });
+
+    get_data_scan_plan(session, scan_plan, replayed, limit, file_pruner).await
 }
 
 /// Load deletion-vector keep masks for the selected files.
@@ -268,11 +298,27 @@ async fn resolve_input_file_ids_on_blocking_pool(
 
 async fn collect_selected_active_file_ids(
     table_root: &Url,
-    mut stream: ScanMetadataStream,
+    stream: ScanMetadataStream,
     missing_file_ids: &mut HashSet<String>,
 ) -> Result<HashSet<String>> {
     let mut selected_active_file_ids = HashSet::new();
+    for_each_selected_file(table_root, stream, |file_url| {
+        let file_id = file_url.to_string();
+        if missing_file_ids.remove(&file_id) {
+            selected_active_file_ids.insert(file_id);
+        }
+        !missing_file_ids.is_empty()
+    })
+    .await?;
+    Ok(selected_active_file_ids)
+}
 
+/// Call `f` with the URL of each file that a kernel scan selects, until `f` returns `false`.
+async fn for_each_selected_file(
+    table_root: &Url,
+    mut stream: ScanMetadataStream,
+    mut f: impl FnMut(Url) -> bool,
+) -> Result<()> {
     while let Some(scan_data) = stream.try_next().await? {
         let (data, mut selection_vector) = scan_data.scan_files.into_parts();
         let batch: RecordBatch = ArrowEngineData::try_from_engine_data(data)
@@ -287,18 +333,13 @@ async fn collect_selected_active_file_ids(
                     table_root,
                     LogicalFileView::new(batch.clone(), idx).path_raw(),
                 )?;
-                let file_id = file_url.to_string();
-                if missing_file_ids.remove(&file_id) {
-                    selected_active_file_ids.insert(file_id);
-                    if missing_file_ids.is_empty() {
-                        return Ok(selected_active_file_ids);
-                    }
+                if !f(file_url) {
+                    return Ok(());
                 }
             }
         }
     }
-
-    Ok(selected_active_file_ids)
+    Ok(())
 }
 
 async fn replay_files(
@@ -348,9 +389,9 @@ async fn replay_files(
     let dvs = remap_deletion_vectors_to_internal_file_ids(&files, dvs_by_url)?;
 
     let metrics = ExecutionPlanMetricsSet::new();
-    MetricBuilder::new(&metrics)
-        .global_counter("count_files_scanned")
-        .add(stream.metrics.num_scanned);
+    // A gauge, because a runtime filter can skip planned files.
+    let files_scanned = MetricBuilder::new(&metrics).global_gauge("count_files_scanned");
+    files_scanned.add(stream.metrics.num_scanned);
 
     Ok(ReplayedScanFiles {
         files,
@@ -358,6 +399,7 @@ async fn replay_files(
         dvs,
         public_file_ids,
         metrics,
+        files_scanned,
     })
 }
 
@@ -402,6 +444,7 @@ async fn get_data_scan_plan(
     scan_plan: KernelScanPlan,
     replayed: ReplayedScanFiles,
     limit: Option<usize>,
+    file_pruner: Option<Arc<RuntimeScanFilePruner>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let ReplayedScanFiles {
         files,
@@ -409,6 +452,7 @@ async fn get_data_scan_plan(
         dvs,
         public_file_ids,
         metrics,
+        ..
     } = replayed;
     let has_deletion_vectors = !dvs.is_empty();
     let mut partition_stats = HashMap::new();
@@ -493,6 +537,7 @@ async fn get_data_scan_plan(
         limit,
         &file_id_field,
         predicate,
+        file_pruner.as_ref().map(|pruner| pruner.predicate()),
     )
     .await?;
 
@@ -506,7 +551,8 @@ async fn get_data_scan_plan(
         Arc::clone(&public_file_ids),
         partition_stats,
         metrics,
-    );
+    )
+    .with_file_pruner(file_pruner);
 
     Ok(Arc::new(exec))
 }
@@ -551,6 +597,11 @@ type FilesByStore = (ObjectStoreUrl, Vec<PartitionedFile>, bool);
 
 fn compact_internal_file_id(file_index: usize) -> String {
     file_index.to_string()
+}
+
+/// The file index of an id from [`compact_internal_file_id`].
+fn internal_file_index(file_id: &str) -> Option<usize> {
+    file_id.parse().ok()
 }
 
 fn remap_deletion_vectors_to_internal_file_ids(
@@ -664,6 +715,7 @@ fn partitioned_files_to_file_groups_with_limit(
     file_groups
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn get_read_plan(
     state: &dyn Session,
     files_by_store: impl IntoIterator<Item = FilesByStore>,
@@ -678,6 +730,11 @@ async fn get_read_plan(
     limit: Option<usize>,
     file_id_field: &FieldRef,
     predicate: Option<&Expr>,
+    // Skips the files that the runtime file filter does not keep, see `RuntimeScanFilePruner`.
+    // `predicate` is not set when the table has deletion vectors, because it can remove single
+    // rows, and the deletion vector of a file must see all rows of that file. This predicate is
+    // always set, because it keeps or removes a file with all its rows.
+    file_predicate: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let mut plans = Vec::new();
 
@@ -754,6 +811,14 @@ async fn get_read_plan(
                     );
                 }
             }
+        }
+
+        if let Some(file_predicate) = &file_predicate {
+            let predicate = match file_source.filter() {
+                Some(predicate) => conjunction([predicate, Arc::clone(file_predicate)]),
+                None => Arc::clone(file_predicate),
+            };
+            file_source = file_source.with_predicate(predicate);
         }
 
         let file_groups = partitioned_files_to_file_groups(files);
@@ -977,6 +1042,7 @@ mod tests {
             engine,
             None,
             Some(&selection),
+            None,
         )
         .await?;
 
@@ -1408,6 +1474,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1430,6 +1497,7 @@ mod tests {
             &parquet_predicate_schema,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1458,6 +1526,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             Some(1),
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1533,6 +1602,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1570,6 +1640,7 @@ mod tests {
             &parquet_predicate_schema_extended,
             None,
             &file_id_field,
+            None,
             None,
         )
         .await?;
@@ -1635,7 +1706,7 @@ mod tests {
         writer.close()?;
         let size = buffer.len() as i64;
 
-        let store = log_store.object_store(None);
+        let store = log_store.object_store();
         store
             .put(&Path::from("part-00000.parquet"), buffer.into())
             .await?;
@@ -1758,6 +1829,7 @@ mod tests {
             None,
             &file_id_field,
             None,
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1822,6 +1894,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1885,6 +1958,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -1961,6 +2035,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2034,6 +2109,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2108,6 +2184,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;
@@ -2194,6 +2271,7 @@ mod tests {
             None,
             &file_id_field,
             Some(&predicate),
+            None,
         )
         .await?;
         let batches = collect(plan, session.task_ctx()).await?;

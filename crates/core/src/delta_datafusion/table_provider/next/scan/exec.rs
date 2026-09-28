@@ -30,7 +30,8 @@ use datafusion::physical_plan::statistics::{ChildStats, StatisticsArgs};
 use datafusion::physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlan,
     InputDistributionRequirements, PhysicalExpr, ReplaceChildrenOptions, Statistics,
-    coalesce_partitions::CoalescePartitionsExec, union::UnionExec,
+    coalesce_partitions::CoalescePartitionsExec, stream::RecordBatchStreamAdapter,
+    union::UnionExec,
 };
 use datafusion::scalar::ScalarValue;
 use datafusion_datasource::{file_scan_config::FileScanConfig, source::DataSourceExec};
@@ -38,10 +39,12 @@ use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use delta_kernel::schema::DataType as KernelDataType;
 use delta_kernel::table_features::TableFeature;
 use delta_kernel::{EvaluationHandler, ExpressionRef};
+use futures::TryStreamExt as _;
 use futures::stream::{Stream, StreamExt};
 
 use super::expr_adapter::DeltaPhysicalExprAdapterFactory;
 use super::plan::KernelScanPlan;
+use super::runtime_filter::RuntimeScanFilePruner;
 use crate::delta_datafusion::file_id::file_id_field;
 use crate::kernel::ARROW_HANDLER;
 use crate::kernel::arrow::engine_ext::ExpressionEvaluatorExt;
@@ -169,6 +172,8 @@ pub struct DeltaScanExec {
     properties: Arc<PlanProperties>,
     /// Aggregated partition column statistics
     partition_stats: HashMap<String, ColumnStatistics>,
+    /// Selects the files to read when the scan starts, see [`super::RuntimeFileFilter`].
+    file_pruner: Option<Arc<RuntimeScanFilePruner>>,
 }
 
 impl DisplayAs for DeltaScanExec {
@@ -230,7 +235,15 @@ impl DeltaScanExec {
             input_file_id_column,
             file_id_column,
             properties,
+            file_pruner: None,
         }
+    }
+
+    /// Read only the files that `pruner` keeps. The scan then executes its input when it is
+    /// first polled, so that predicates set until then can skip files.
+    pub(super) fn with_file_pruner(mut self, pruner: Option<Arc<RuntimeScanFilePruner>>) -> Self {
+        self.file_pruner = pruner;
+        self
     }
 
     // Keep the metrics: they hold the file counts recorded during planning.
@@ -267,6 +280,7 @@ impl DeltaScanExec {
         fn visit(
             plan: &Arc<dyn ExecutionPlan>,
             expected: &super::PhysicalFileIdentityMap,
+            file_filter_id: Option<u64>,
             observed: &mut HashSet<String>,
         ) -> Result<()> {
             if let Some(fetch) = plan.fetch() {
@@ -275,11 +289,11 @@ impl DeltaScanExec {
                 );
             }
             if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
-                return visit(coalesce.input(), expected, observed);
+                return visit(coalesce.input(), expected, file_filter_id, observed);
             }
             if let Some(union) = plan.downcast_ref::<UnionExec>() {
                 for input in union.inputs() {
-                    visit(input, expected, observed)?;
+                    visit(input, expected, file_filter_id, observed)?;
                 }
                 return Ok(());
             }
@@ -303,7 +317,11 @@ impl DeltaScanExec {
                     "DeltaScanExec requires a locked file group layout during sequential deletion vector scans"
                 );
             }
-            if config.file_source.filter().is_some() {
+            // The only allowed filter is the file filter of the runtime file pruner. It skips
+            // whole files, so the rows of a kept file stay aligned with its deletion vector.
+            if let Some(filter) = config.file_source.filter()
+                && (file_filter_id.is_none() || filter.expression_id() != file_filter_id)
+            {
                 return plan_err!(
                     "DeltaScanExec rejects file source filters during sequential deletion vector scans"
                 );
@@ -349,8 +367,12 @@ impl DeltaScanExec {
                 "DeltaScanExec deletion vector topology validation requires sequential state"
             )
         })?;
+        let file_filter_id = self
+            .file_pruner
+            .as_ref()
+            .and_then(|pruner| pruner.predicate().expression_id());
         let mut observed = HashSet::new();
-        visit(input, expected, &mut observed)?;
+        visit(input, expected, file_filter_id, &mut observed)?;
         if observed.len() != expected.len() {
             return plan_err!("DeltaScanExec sequential deletion vector scan lacks selected files");
         }
@@ -558,10 +580,27 @@ impl ExecutionPlan for DeltaScanExec {
             }
         }
 
+        // Some inputs open all files as soon as they are executed. With a file pruner, execute
+        // the input at the first poll, after the pruner has set the kept files in the input's
+        // predicate.
+        let input = match &self.file_pruner {
+            Some(pruner) => {
+                let pruner = Arc::clone(pruner);
+                let input = Arc::clone(&self.input);
+                let stream = futures::stream::once(async move {
+                    pruner.start().await?;
+                    input.execute(partition, context)
+                })
+                .try_flatten();
+                Box::pin(RecordBatchStreamAdapter::new(self.input.schema(), stream))
+            }
+            None => self.input.execute(partition, context)?,
+        };
+
         Ok(Box::pin(DeltaScanStream {
             scan_plan: Arc::clone(&self.scan_plan),
             kernel_type: Arc::clone(self.scan_plan.scan.logical_schema()).into(),
-            input: self.input.execute(partition, context)?,
+            input,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
             transforms: Arc::clone(&self.transforms),
             // Each stream consumes its masks as it reads batches. Deep-copy the masks
@@ -2956,5 +2995,40 @@ mod tests {
             }
         );
         assert_eq!(sv, vec![false, true]);
+    }
+
+    #[tokio::test]
+    async fn test_dv_scan_with_runtime_filter_accepts_coalesced_input() -> TestResult {
+        // A runtime file filter only skips whole files, so a scan with deletion vectors accepts
+        // its Parquet filter, and the inputs that optimizer rules create, such as a merge of its
+        // partitions.
+        let table = open_fs_path(DV_TABLE_PATH);
+        let predicates = Arc::new(std::sync::OnceLock::new());
+        let provider = crate::delta_datafusion::table_provider::next::DeltaScan::builder()
+            .with_log_store(table.log_store())
+            .build()
+            .await?
+            .with_runtime_file_filter(Arc::clone(&predicates));
+        let session = Arc::new(create_session().into_inner());
+        let scan = provider.scan(&session.state(), None, &[], None).await?;
+        let exec = scan
+            .downcast_ref::<DeltaScanExec>()
+            .expect("planner must return DeltaScanExec");
+        assert!(exec.has_deletion_vectors());
+
+        let coalesced: Arc<dyn ExecutionPlan> =
+            Arc::new(CoalescePartitionsExec::new(Arc::clone(&exec.input)));
+        let scan = Arc::new(exec.clone()).replace_children(
+            vec![coalesced],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // Skip all files. The scan reads its rebuilt input and returns no rows.
+        predicates
+            .set(vec![datafusion::prelude::lit(false)])
+            .unwrap();
+        let batches = datafusion::physical_plan::collect(scan, session.task_ctx()).await?;
+        assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
+        Ok(())
     }
 }

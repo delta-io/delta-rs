@@ -43,7 +43,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 env_logger = "0"
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
 parking_lot = "0.12"
 
 # runtime
