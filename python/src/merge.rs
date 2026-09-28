@@ -6,7 +6,6 @@ use deltalake::delta_datafusion::create_session;
 use deltalake::delta_datafusion::create_session_state_with_spill_config;
 use deltalake::kernel::EagerSnapshot;
 use deltalake::logstore::LogStoreRef;
-use deltalake::operations::CustomExecuteHandler;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::{DeltaResult, DeltaTable, DeltaTableError};
 use parking_lot::RwLock;
@@ -55,7 +54,6 @@ impl PyMergeBuilder {
         writer_properties: Option<PyWriterProperties>,
         post_commithook_properties: Option<PyPostCommitHookProperties>,
         commit_properties: Option<PyCommitProperties>,
-        custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
     ) -> DeltaResult<Self> {
         let ctx = create_session().into_inner();
 
@@ -110,10 +108,6 @@ impl PyMergeBuilder {
             maybe_create_commit_properties(commit_properties, post_commithook_properties)
         {
             cmd = cmd.with_commit_properties(commit_properties);
-        }
-
-        if let Some(handler) = custom_execute_handler {
-            cmd = cmd.with_custom_execute_handler(handler);
         }
 
         Ok(Self {
