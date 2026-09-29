@@ -22,9 +22,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::DeltaTableError;
-use crate::datafile::writer::{
-    DeltaWriter, UploadBudget, WriterConfig, write_batches_timed, writer_batch_concurrency,
-};
+use crate::datafile::writer::{DeltaWriter, UploadBudget, WriterConfig, write_batches_timed};
 use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile};
@@ -57,8 +55,26 @@ mod tests {
     use delta_kernel::table_properties::DataSkippingNumIndexedCols;
     use futures::{Stream, stream};
     use object_store::memory::InMemory;
+    use rstest::rstest;
 
-    use super::{ObjectStoreRef, SendableRecordBatchStream, WriterConfig, write_streams};
+    use super::{
+        ObjectStoreRef, SendableRecordBatchStream, WriterConfig, parse_positive_usize,
+        write_streams,
+    };
+
+    #[rstest]
+    #[case::zero(Some("0"), 7)]
+    #[case::negative(Some("-1"), 7)]
+    #[case::unparsable(Some("1GB"), 7)]
+    #[case::empty(Some(""), 7)]
+    #[case::missing(None, 7)]
+    #[case::positive(Some("8"), 8)]
+    fn parse_positive_usize_falls_back_only_on_a_non_positive_value(
+        #[case] raw: Option<&str>,
+        #[case] expected: usize,
+    ) {
+        assert_eq!(parse_positive_usize(raw, 7), expected);
+    }
 
     fn write_streams_schema() -> Arc<ArrowSchema> {
         Arc::new(ArrowSchema::new(vec![Field::new(
@@ -208,12 +224,37 @@ mod tests {
     }
 }
 
+const DEFAULT_WRITER_BATCH_CHANNEL_SIZE: usize = 10;
+
+/// Try parse a positive `usize` knob, falling back to `default`
+fn parse_positive_usize(raw: Option<&str>, default: usize) -> usize {
+    raw.and_then(|s| s.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default)
+}
+
+/// How many record batches may be in flight on a write path. It bounds the
+/// producer→writer channel capacity in `write_streams` (and the change-data
+/// fan-in). Tunable via `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (default 10); read once.
+fn writer_batch_concurrency() -> usize {
+    static CONCURRENCY: OnceLock<usize> = OnceLock::new();
+    *CONCURRENCY.get_or_init(|| {
+        parse_positive_usize(
+            std::env::var("DELTARS_WRITER_BATCH_CHANNEL_SIZE")
+                .ok()
+                .as_deref(),
+            DEFAULT_WRITER_BATCH_CHANNEL_SIZE,
+        )
+    })
+}
+
 /// Cap on concurrent writer tasks. Each writer holds open multipart uploads
 /// and in-memory buffers, so more writers means higher memory and FD usage.
 /// Defaults to `available_parallelism` (matching DataFusion's `target_partitions`),
 /// clamped to [1, 128]. Override via `DELTARS_MAX_CONCURRENT_WRITERS`.
 /// Distinct from `DELTARS_WRITER_BATCH_CHANNEL_SIZE` (channel backpressure) and
-/// `DELTARS_MAX_CONCURRENCY_TASKS` in writer.rs (per-file multipart upload parallelism).
+/// `DELTARS_MAX_CONCURRENCY_TASKS` in `datafile::writer` (per-file multipart upload
+/// parallelism).
 fn max_concurrent_writers() -> usize {
     static MAX_WRITERS: OnceLock<usize> = OnceLock::new();
     *MAX_WRITERS.get_or_init(|| {
