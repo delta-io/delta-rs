@@ -1086,7 +1086,11 @@ fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String
             "s3.secret-access-key" => "aws_secret_access_key",
             "s3.session-token" => "aws_session_token",
             "azure.sas-token" => "azure_storage_sas_key",
-            "gcs.oauth-token" => "google_application_credentials",
+            // `google_application_credentials` expects a *file path* to a service-account JSON
+            // key, not a raw OAuth bearer token. UC credential vending returns a bearer token,
+            // so this mapping would silently fail or expose the token in error messages.
+            // Skip until object-store gains a dedicated pre-fetched-token option for GCS.
+            "gcs.oauth-token" => continue,
             _ => continue,
         };
         out.insert(mapped.to_string(), value.clone());
