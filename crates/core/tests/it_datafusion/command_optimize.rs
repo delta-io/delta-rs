@@ -19,6 +19,7 @@ use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
 use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
+use deltalake_core::logstore::parquet_reader::ParquetObjectReader;
 use deltalake_core::logstore::{
     LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
 };
@@ -33,7 +34,6 @@ use deltalake_core::{
 };
 use futures::TryStreamExt;
 use object_store::ObjectStoreExt as _;
-use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;

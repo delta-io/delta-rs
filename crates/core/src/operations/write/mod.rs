@@ -814,7 +814,7 @@ mod tests {
 
         let files = table.get_files_by_partitions(&[]).await.unwrap();
         assert_eq!(files.len(), 1);
-        let reader = parquet::arrow::async_reader::ParquetObjectReader::new(
+        let reader = crate::logstore::parquet_reader::ParquetObjectReader::new(
             table.log_store().object_store(),
             files[0].clone(),
         );

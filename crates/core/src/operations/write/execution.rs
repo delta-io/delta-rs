@@ -15,7 +15,7 @@ use datafusion::physical_plan::{
     execute_stream_partitioned,
 };
 use delta_kernel::table_configuration::TableConfiguration;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::StreamExt as _;
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
