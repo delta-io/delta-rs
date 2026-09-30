@@ -239,6 +239,95 @@ async fn test_v2_checkpoint_json() -> DeltaResult<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// Regression test for <https://github.com/delta-io/delta-rs/issues/4462>
+///
+/// `checkpointProtection` is a writer-only table feature (see the protocol RFC
+/// <https://github.com/delta-io/delta/blob/master/protocol_rfcs/checkpoint-protection.md>)
+/// which constrains checkpoint creation and log cleanup around `DROP FEATURE` boundaries.
+/// Plain reads and appends are unaffected by the feature, but tables with it enabled used to
+/// fail writes with `Unsupported table features required: [Unknown("checkpointProtection")]`.
+///
+/// The `spark-checkpoint-protection` fixture was generated with PySpark 4.0.1 / delta-spark
+/// 4.0.1 by writing a small table and then running:
+/// `ALTER TABLE delta.`<path>` SET TBLPROPERTIES ('delta.feature.checkpointProtection' = 'supported')`
+/// which produced a protocol of minReaderVersion=1 / minWriterVersion=7 with
+/// `checkpointProtection` in `writerFeatures`.
+async fn test_checkpoint_protection_read_write() -> TestResult {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
+    use arrow_schema::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+    use deltalake_core::operations::collect_sendable_stream;
+    use deltalake_core::protocol::SaveMode;
+
+    let temp_table = clone_table("spark-checkpoint-protection");
+    let table_path = temp_table.path().to_str().unwrap();
+    let table_url = ensure_table_uri(table_path).unwrap();
+
+    let table = deltalake_core::open_table(table_url.clone()).await?;
+    assert_eq!(table.version(), Some(2));
+    let protocol = table.snapshot()?.protocol();
+    assert_eq!(protocol.min_reader_version(), 1);
+    assert_eq!(protocol.min_writer_version(), 7);
+    // The kernel does not have a named variant for this feature yet, so it is
+    // surfaced as `TableFeature::Unknown("checkpointProtection")`. `as_ref()` on
+    // such a variant returns the variant name, not the payload, so compare via Debug.
+    assert!(
+        protocol.writer_features().is_some_and(|features| features
+            .iter()
+            .any(|f| format!("{:?}", f) == "Unknown(\"checkpointProtection\")")),
+        "fixture should carry checkpointProtection in its writer features: {:?}",
+        protocol.writer_features()
+    );
+
+    // Reading the PySpark-generated table must work: the feature is writer-only
+    // and readers do not need to understand it
+    let (_table, stream) = table.scan_table().await?;
+    let batches = collect_sendable_stream(stream).await?;
+    let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(row_count, 11);
+
+    // Appending to the table must work as well; the feature only constrains
+    // checkpoint creation and metadata cleanup
+    let schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("id", ArrowDataType::Int64, true),
+        Field::new("name", ArrowDataType::Utf8, true),
+        Field::new("flag", ArrowDataType::Boolean, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![100])) as ArrayRef,
+            Arc::new(StringArray::from(vec!["delta_rs"])) as ArrayRef,
+            Arc::new(BooleanArray::from(vec![true])) as ArrayRef,
+        ],
+    )?;
+
+    let table = table
+        .write(vec![batch])
+        .with_save_mode(SaveMode::Append)
+        .await?;
+    assert_eq!(table.version(), Some(3));
+
+    // The appended data is readable and the feature remains in the protocol
+    let table = deltalake_core::open_table(table_url).await?;
+    let protocol = table.snapshot()?.protocol();
+    assert!(
+        protocol.writer_features().is_some_and(|features| features
+            .iter()
+            .any(|f| format!("{:?}", f) == "Unknown(\"checkpointProtection\")")),
+        "checkpointProtection should still be in the writer features after appending: {:?}",
+        protocol.writer_features()
+    );
+    let (_table, stream) = table.scan_table().await?;
+    let batches = collect_sendable_stream(stream).await?;
+    let row_count: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(row_count, 12);
+
+    Ok(())
+}
+
 #[tokio::test]
 /// This test that we can read a table with domain metadata. Since we cannot
 /// write domain metadata atm, we can at least test, that accessing restricted
