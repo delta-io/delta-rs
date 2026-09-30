@@ -336,14 +336,6 @@ mod tests {
         Ok((table, source_add))
     }
 
-    fn normalize_adds(mut adds: Vec<Add>) -> DeltaResult<Vec<serde_json::Value>> {
-        adds.sort_by(|left, right| left.path.cmp(&right.path));
-        adds.into_iter()
-            .map(serde_json::to_value)
-            .collect::<Result<_, _>>()
-            .map_err(Into::into)
-    }
-
     #[cfg(feature = "datafusion")]
     #[tokio::test]
     async fn fsck_removes_missing_deletion_vector_logical_file() -> DeltaResult<()> {
