@@ -955,7 +955,7 @@ impl UnityCatalog {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct UnityCatalogFactory {}
 
 impl UnityCatalogFactory {
