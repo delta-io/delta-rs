@@ -27,7 +27,7 @@ use crate::parquet_utils::default_writer_properties;
 use crate::writer::stats::create_add;
 use crate::writer::utils::next_data_path;
 
-pub(super) const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
+pub(super) const DEFAULT_WRITE_BATCH_SIZE: usize = 8192;
 const DEFAULT_MAX_CONCURRENCY_TASKS: usize = 10;
 
 fn get_max_concurrency_tasks() -> usize {
@@ -752,13 +752,14 @@ mod tests {
             .build_storage()
             .unwrap()
             .object_store();
-        // configure small target file size so we can observe multiple files written
+        // configure small target file size so we can observe multiple files written;
+        // small slices, so the size is checked often enough to roll at this target
         let mut writer = get_partition_writer(
             object_store,
             &batch,
             None,
             Some(NonZeroU64::new(10_000).unwrap()),
-            None,
+            Some(1024),
         );
         writer.write(&batch).await.unwrap();
 
