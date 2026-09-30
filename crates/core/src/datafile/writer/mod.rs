@@ -1,7 +1,7 @@
 //! Abstractions and implementations for writing data to delta tables
 //!
-//! A write fans out three times: over partitions, over the files of each partition, and over
-//! the parts of each file's upload.
+//! A write fans out four times: over partitions, over the files of each partition, over the
+//! columns of each file's open row group, and over the parts of each file's upload.
 //!
 //! ```text
 //!                                  RecordBatch from any source
@@ -34,10 +34,20 @@
 //!      └─────────┬─────────┘
 //!                │ Writing holds
 //!                ▼
-//!      ┌───────────────────┐
-//!      │ AsyncArrowWriter  │  encodes rows into the open row group, by encoding columns serially
-//!      └─────────┬─────────┘
-//!                │ each complete row group, through ParquetObjectWriter
+//!      ┌─────────────────────┐
+//!      │ ParallelArrowWriter │  keeps one row group open; splits each slice into its
+//!      └─────────┬───────────┘  leaf columns and sends each one to that column's worker task
+//!    ┌───────────┼───────────┐
+//!    ▼           ▼           ▼
+//! column 0    column 1 ... column n  one task per leaf column, spawned when the row group
+//!    │           │           │       opens; each encodes and compresses its slices as they
+//!    └───────────┼───────────┘       arrive, and returns its column chunk when the row
+//!                │                   group closes at max_row_group_row_count rows
+//!                ▼
+//!      ┌──────────────────────┐
+//!      │ SerializedFileWriter │  appends the chunks in column order, then hands the row
+//!      └─────────┬────────────┘  group's bytes to ParquetObjectWriter
+//!                │
 //!                ▼
 //!      ┌───────────────────┐
 //!      │     BufWriter     │  a file under upload_part_size is one PUT at finish; a larger
@@ -50,14 +60,16 @@
 //!
 //! An unpartitioned table has a single [`PartitionWriter`]. A `LazyArrowWriter` creates its
 //! writers on the first batch, so a file without rows is never written. Every file, open or
-//! finishing, has its own chain from `AsyncArrowWriter` to the parts. Bytes reach the
-//! `BufWriter` only as complete row groups, by default every 1,048,576 rows. A file with several
-//! row groups uploads the earlier ones while it is written. A file with one row group is sent
-//! entirely by its finish task. All partition writers of one write reserve bytes in the same
-//! `UploadBudget`, so a slow store makes them wait instead of holding more files in memory.
+//! finishing, has its own chain from `ParallelArrowWriter` to the parts, so the column tasks
+//! of one file never wait on another file. Bytes reach the `BufWriter` only as complete row
+//! groups, by default every 1,048,576 rows. A file with several row groups uploads the earlier
+//! ones while it is written. A file with one row group is sent entirely by its finish task.
+//! All partition writers of one write reserve bytes in the same `UploadBudget`, so a slow
+//! store makes them wait instead of holding more files in memory.
 //!
 //! [`DeltaWriter`] lives in `dataset.rs`, [`PartitionWriter`] in `partition.rs`, the
-//! `LazyArrowWriter` and its upload in `file.rs`, and the `UploadBudget` in `upload_budget.rs`.
+//! `LazyArrowWriter` and its upload in `file.rs`, the `ParallelArrowWriter` and its column
+//! tasks in `parallel.rs`, and the `UploadBudget` in `upload_budget.rs`.
 
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 
