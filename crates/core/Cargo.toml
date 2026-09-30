@@ -130,7 +130,7 @@ json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 native-tls = ["delta_kernel_default_engine/native-tls"]
 rustls = ["delta_kernel_default_engine/rustls"]
-cloud = ["dep:humantime"]
+cloud = ["object_store/cloud", "dep:humantime"]
 
 # enable caching some file I/O operations when scanning delta logs
 delta-cache = ["foyer", "tempfile", "url/serde"]
