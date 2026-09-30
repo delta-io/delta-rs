@@ -24,21 +24,12 @@ def _convert_arro3_schema_to_delta(
     from deltalake import _nanosecond_timestamps_enabled
 
     def dtype_to_delta_dtype(
-        dtype: DataType, field_name: str | None = None
+        dtype: DataType, existing_dtype: DataType | None = None
     ) -> DataType:
-        if (
-            DataType.is_null(dtype)
-            and existing_schema is not None
-            and field_name is not None
-        ):
-            try:
-                existing_field = existing_schema.field(field_name)
-                # Prevent infinite recursion: if existing field is also null, keep as null
-                if DataType.is_null(existing_field.type):
-                    return dtype
-                return dtype_to_delta_dtype(existing_field.type, None)
-            except (KeyError, IndexError):
-                return dtype
+        # A null field adopts the existing type; pass None so it is not re-matched
+        # (an existing null therefore falls through and stays null).
+        if DataType.is_null(dtype) and existing_dtype is not None:
+            return dtype_to_delta_dtype(existing_dtype, None)
 
         # Handle nested types
         if (
@@ -48,9 +39,9 @@ def _convert_arro3_schema_to_delta(
             or DataType.is_list_view(dtype)
             or DataType.is_large_list_view(dtype)
         ):
-            return list_to_delta_dtype(dtype)
+            return list_to_delta_dtype(dtype, existing_dtype)
         elif DataType.is_struct(dtype):
-            return struct_to_delta_dtype(dtype)
+            return struct_to_delta_dtype(dtype, existing_dtype)
         elif DataType.is_timestamp(dtype):
             if dtype.time_unit == "ns" and _nanosecond_timestamps_enabled():
                 time_unit = "ns"
@@ -76,6 +67,7 @@ def _convert_arro3_schema_to_delta(
 
     def list_to_delta_dtype(
         dtype: DataType,
+        existing_dtype: DataType | None = None,
     ) -> DataType:
         nested_dtype = dtype.value_type
         inner_field = dtype.value_field
@@ -83,8 +75,11 @@ def _convert_arro3_schema_to_delta(
         assert nested_dtype is not None
         assert inner_field is not None
 
+        existing_value = (
+            existing_dtype.value_type if existing_dtype is not None else None
+        )
         inner_field_casted = inner_field.with_type(
-            dtype_to_delta_dtype(nested_dtype, None)
+            dtype_to_delta_dtype(nested_dtype, existing_value)
         )
 
         if DataType.is_large_list(dtype):
@@ -109,12 +104,28 @@ def _convert_arro3_schema_to_delta(
         else:
             raise NotImplementedError
 
-    def struct_to_delta_dtype(dtype: DataType) -> DataType:
+    def struct_to_delta_dtype(
+        dtype: DataType, existing_dtype: DataType | None = None
+    ) -> DataType:
+        existing_fields = (
+            {f.name: f.type for f in existing_dtype.fields}
+            if existing_dtype is not None and DataType.is_struct(existing_dtype)
+            else {}
+        )
         fields_cast = [
-            f.with_type(dtype_to_delta_dtype(f.type, f.name)) for f in dtype.fields
+            f.with_type(dtype_to_delta_dtype(f.type, existing_fields.get(f.name)))
+            for f in dtype.fields
         ]
         return DataType.struct(fields_cast)
 
+    existing_top = (
+        {f.name: f.type for f in existing_schema}  # type: ignore[attr-defined]
+        if existing_schema is not None
+        else {}
+    )
     return Arro3Schema(
-        [f.with_type(dtype_to_delta_dtype(f.type, f.name)) for f in schema]  # type: ignore[attr-defined]
+        [
+            f.with_type(dtype_to_delta_dtype(f.type, existing_top.get(f.name)))
+            for f in schema  # type: ignore[attr-defined]
+        ]
     )
