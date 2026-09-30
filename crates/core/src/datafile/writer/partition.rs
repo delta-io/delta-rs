@@ -19,6 +19,7 @@ use tracing::*;
 use super::file::LazyArrowWriter;
 use super::{UploadBudget, WriteError};
 use crate::datafile::DataFileWriter;
+use crate::datafile::writer::parallel::ArrowWriterOptions;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
@@ -63,6 +64,8 @@ pub struct PartitionWriterConfig {
     partition_values: IndexMap<String, Scalar>,
     /// Properties passed to underlying parquet writer
     pub(super) writer_properties: WriterProperties,
+    /// Options passed to the underlying arrow writer
+    pub(super) arrow_options: ArrowWriterOptions,
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
     target_file_size: Option<NonZeroU64>,
@@ -82,10 +85,12 @@ pub struct PartitionWriterConfig {
 
 impl PartitionWriterConfig {
     /// Create a new instance of [PartitionWriterConfig]
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         file_schema: ArrowSchemaRef,
         partition_values: IndexMap<String, Scalar>,
         writer_properties: Option<WriterProperties>,
+        arrow_options: Option<ArrowWriterOptions>,
         target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
         max_concurrency_tasks: Option<usize>,
@@ -109,6 +114,7 @@ impl PartitionWriterConfig {
             prefix,
             partition_values,
             writer_properties,
+            arrow_options: arrow_options.unwrap_or_default(),
             target_file_size,
             write_batch_size,
             max_concurrency_tasks: max_concurrency_tasks.unwrap_or_else(get_max_concurrency_tasks),
@@ -469,6 +475,7 @@ mod tests {
             batch.schema(),
             IndexMap::new(),
             writer_properties,
+            None,
             target_file_size,
             write_batch_size,
             None,
@@ -523,6 +530,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         let mut writer = PartitionWriter::try_with_config(
@@ -547,9 +555,17 @@ mod tests {
             DataType::Int32,
             true,
         )]));
-        let config =
-            PartitionWriterConfig::try_new(schema, IndexMap::new(), None, None, None, None, None)
-                .unwrap();
+        let config = PartitionWriterConfig::try_new(
+            schema,
+            IndexMap::new(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_default_created_by(&config.writer_properties);
         assert_eq!(
@@ -647,6 +663,7 @@ mod tests {
             batch.schema(),
             IndexMap::new(),
             Some(properties),
+            None,
             Some(NonZeroU64::new(10_000).unwrap()),
             Some(700),
             None,
@@ -710,6 +727,7 @@ mod tests {
         let result = PartitionWriterConfig::try_new(
             schema,
             IndexMap::new(),
+            None,
             None,
             None,
             Some(0),

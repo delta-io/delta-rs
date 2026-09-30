@@ -14,6 +14,7 @@ use arrow_select::concat::concat_batches;
 use arrow_select::take::take;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
+use deltalake_core::datafile::writer::ArrowWriterOptions;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
@@ -855,6 +856,7 @@ async fn test_optimize_execute_reads_and_writes_through_given_log_store()
         &[],
         Some(NonZeroU64::new(1_000_000).unwrap()),
         WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
         df_context.state(),
     )
     .await?;
@@ -1000,6 +1002,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
         df_context.state(),
     )
     .await?;
@@ -1065,6 +1068,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         &filter,
         None,
         WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
         df_context.state(),
     )
     .await?;
@@ -1127,6 +1131,7 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
         &[],
         None,
         WriterProperties::builder().build(),
+        ArrowWriterOptions::default(),
         context.state(),
     )
     .await?;

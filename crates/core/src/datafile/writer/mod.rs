@@ -65,12 +65,14 @@ use crate::errors::DeltaTableError;
 
 mod dataset;
 mod file;
+mod parallel;
 mod partition;
 mod upload_budget;
 
 #[cfg(feature = "datafusion")]
 pub(crate) use dataset::write_batches_timed;
 pub use dataset::{DeltaWriter, WriterConfig};
+pub use parallel::ArrowWriterOptions;
 pub use partition::{PartitionWriter, PartitionWriterConfig};
 pub(crate) use upload_budget::UploadBudget;
 

@@ -8,7 +8,6 @@ use bytes::Bytes;
 use futures::future::BoxFuture;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
-use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_writer::AsyncFileWriter;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
@@ -17,6 +16,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tracing::*;
 
 use super::PartitionWriterConfig;
+use super::parallel::ParallelArrowWriter;
 use crate::errors::DeltaResult;
 use crate::logstore::ObjectStoreRef;
 
@@ -53,7 +53,7 @@ fn upload_part_size() -> usize {
 /// [`UploadBudget`]: super::UploadBudget
 #[instrument(skip(arrow_writer, _permit), fields(rows = 0, size = 0))]
 async fn finish_parquet_file(
-    mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
+    mut arrow_writer: ParallelArrowWriter<ParquetObjectWriter>,
     path: Path,
     _permit: OwnedSemaphorePermit,
 ) -> DeltaResult<(Path, usize, ParquetMetaData)> {
@@ -137,7 +137,7 @@ impl AsyncFileWriter for ParquetObjectWriter {
 
 pub(super) enum LazyArrowWriter {
     Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
-    Writing(Path, AsyncArrowWriter<ParquetObjectWriter>),
+    Writing(Path, ParallelArrowWriter<ParquetObjectWriter>),
 }
 
 impl LazyArrowWriter {
@@ -161,10 +161,11 @@ impl LazyArrowWriter {
                     )
                     .with_max_concurrency(config.max_concurrency_tasks),
                 );
-                let mut arrow_writer = AsyncArrowWriter::try_new(
+                let mut arrow_writer = ParallelArrowWriter::try_new(
                     writer,
                     config.file_schema.clone(),
-                    Some(config.writer_properties.clone()),
+                    config.writer_properties.clone(),
+                    Some(config.arrow_options.clone()),
                 )?;
                 // A large first batch can complete row groups and start a multipart
                 // upload before this call returns. On failure, `self` is still
