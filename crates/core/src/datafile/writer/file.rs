@@ -87,12 +87,12 @@ async fn finish_parquet_file(
         }
     };
     let file_size = arrow_writer.bytes_written();
-    // `bytes_written()` returns cumulative bytes flushed through AsyncArrowWriter,
-    // including all row groups. After `finish()`, the parquet footer is written and
-    // included in this counter (parquet-rs calls write_footer() then updates the
-    // internal byte count before returning the metadata). If this ever understates
-    // the physical object size, use `object_store.head(&path).size` as the source
-    // of truth instead.
+    // `bytes_written()` returns the cumulative bytes of the `SerializedFileWriter`
+    // inside ParallelArrowWriter, including all row groups. After `finish()`, the
+    // parquet footer is written and included in this counter (parquet-rs calls
+    // write_footer() then updates the internal byte count before returning the
+    // metadata). If this ever understates the physical object size, use
+    // `object_store.head(&path).size` as the source of truth instead.
     Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
