@@ -19,3 +19,22 @@ def test_safe_cast(tmp_path):
     tbl = Table.from_pydict({"foo": Array([1, 2, 3, 4], DataType.uint8())})
 
     write_deltalake(tmp_path, tbl)
+
+
+@pytest.mark.parametrize("schema_mode", [None, "merge"])
+def test_append_fractional_float64_to_int64_rejected(tmp_path, schema_mode):
+    """Appending fractional float64 values into an int64 column must raise
+    instead of silently truncating the values.
+
+    See <https://github.com/delta-io/delta-rs/issues/4811>
+    """
+    write_deltalake(tmp_path, Table.from_pydict({"x": Array([1], DataType.int64())}))
+
+    kwargs = {} if schema_mode is None else {"schema_mode": schema_mode}
+    with pytest.raises(DeltaError):
+        write_deltalake(
+            tmp_path,
+            Table.from_pydict({"x": Array([2.9, -2.9], DataType.float64())}),
+            mode="append",
+            **kwargs,
+        )
