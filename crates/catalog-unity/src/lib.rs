@@ -1084,6 +1084,12 @@ async fn catalog_managed_location_and_token(
 
 fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String, String> {
     let mut out = HashMap::new();
+    if creds.len() > 1 {
+        tracing::warn!(
+            "UC returned {} storage credentials; only the first will be used",
+            creds.len()
+        );
+    }
     let Some(cred) = creds.first() else {
         return out;
     };
