@@ -671,8 +671,23 @@ impl UnityCatalogBuilder {
         }
         let client = client_options.client()?;
 
+        let cc_client = if let CredentialProvider::BearerToken(ref token) = credential {
+            let config = ClientConfig::build(workspace_url.clone(), token)
+                .with_additional_user_agent([
+                    (env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
+                    ("Delta", "3.2.0"),
+                    ("Spark", "3.5.0"),
+                ])
+                .build()
+                .map_err(UnityCatalogError::from)?;
+            UCClient::new(config).ok()
+        } else {
+            None
+        };
+
         Ok(UnityCatalog {
             client,
+            cc_client,
             workspace_url,
             credential,
             table_cache: DashMap::new(),
@@ -681,8 +696,10 @@ impl UnityCatalogBuilder {
 }
 
 /// Databricks Unity Catalog
+
 pub struct UnityCatalog {
     client: reqwest_middleware::ClientWithMiddleware,
+    cc_client: Option<UCClient>,
     credential: CredentialProvider,
     workspace_url: String,
     table_cache: DashMap<String, GetTableResponse>,
@@ -881,21 +898,11 @@ impl UnityCatalog {
         Ok(table)
     }
 
-    pub async fn delta_rest_client(&self) -> Result<UCClient, UnityCatalogError> {
-        let header = self.get_credential().await?;
-        let token = header
-            .to_str()
-            .ok()
-            .and_then(|h| h.strip_prefix("Bearer "))
-            .ok_or(UnityCatalogError::MissingCredential)?;
-        let config = ClientConfig::build(self.workspace_url.clone(), token)
-            .with_additional_user_agent([
-                (env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION")),
-                ("Delta", "3.2.0"),
-                ("Spark", "3.5.0"),
-            ])
-            .build()?;
-        Ok(UCClient::new(config)?)
+    pub fn delta_rest_client(&self) -> Result<UCClient, UnityCatalogError> {
+        if let Some(cc_client) = self.cc_client.as_ref() {
+            return Ok(cc_client.clone());
+        }
+        Err(UnityCatalogError::MissingCredential)
     }
 
     pub async fn get_temp_table_credentials<S>(
@@ -1055,7 +1062,7 @@ async fn catalog_managed_location_and_token(
     schema: &str,
     table: &str,
 ) -> DeltaResult<(String, HashMap<String, String>)> {
-    let client = uc.delta_rest_client().await?;
+    let client = uc.delta_rest_client()?;
     let loaded = client
         .load_table(catalog, schema, table)
         .await
@@ -1099,24 +1106,25 @@ fn storage_credentials_to_options(creds: &[StorageCredential]) -> HashMap<String
 }
 
 fn is_catalog_managed_requested(options: &StorageConfig) -> bool {
-    [
-        "unity_catalog_managed",
-        "databricks_catalog_managed",
-        "catalog_managed",
-    ]
-    .iter()
-    .filter_map(|k| options.raw.get(*k))
-    .any(|v| str_is_truthy(v))
+    options
+        .raw
+        .get("catalog_managed")
+        .map(|k| str_is_truthy(k))
+        .unwrap_or(false)
 }
 
 fn parse_uc_identity(location: &Url) -> Option<(String, String, String)> {
-    let rest = location.as_str().strip_prefix("uc://")?;
-    let parts: Vec<&str> = rest.trim_end_matches('/').split('.').collect();
+    let parts: Vec<&str> = location
+        .as_str()
+        .strip_prefix("uc://")?
+        .splitn(3, '.')
+        .collect();
     match parts.as_slice() {
-        [catalog, schema, table] => {
-            Some((catalog.to_string(), schema.to_string(), table.to_string()))
+        [cat, schema, table] => Some((cat.to_string(), schema.to_string(), table.to_string())),
+        _ => {
+            tracing::warn!("Invalid UC table path provided: {location:?}");
+            None
         }
-        _ => None,
     }
 }
 

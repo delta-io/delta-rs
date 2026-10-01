@@ -13,7 +13,7 @@ use unity_catalog_delta_client_api::Commit;
 #[derive(Debug, Clone, Default)]
 pub struct CommitList {
     pub commits: Vec<Commit>,
-    pub max_version: u64,
+    pub max_version: Version,
 }
 
 #[async_trait]
@@ -50,16 +50,20 @@ impl CommitCoordinator for UnityCommitCoordinator {
     async fn get_commits(&self) -> DeltaResult<CommitList> {
         let resp = self
             .client
-            .delta_rest_client()
-            .await?
+            .delta_rest_client()?
             .load_table(&self.catalog, &self.schema, &self.table)
             .await
             .map_err(|e| DeltaTableError::Generic(format!("UC load_table failed: {e}")))?;
 
-        let max_version = resp
+        let raw_max_version = resp
             .latest_table_version
             .or(resp.metadata.last_commit_version)
-            .unwrap_or(0) as u64;
+            .unwrap_or(-1);
+        let max_version = if raw_max_version < 0 {
+            0
+        } else {
+            raw_max_version as u64
+        };
 
         Ok(CommitList {
             commits: resp.commits,
@@ -113,7 +117,9 @@ impl<C: CommitCoordinator + 'static> LogStore for CatalogManagedLogStore<C> {
             base.set_path(&format!("{}/", base.path()));
         }
         let mut log_tail = Vec::with_capacity(list.commits.len());
-        for c in &list.commits {
+        let mut commits = list.commits;
+        commits.sort_by_key(|c| c.version);
+        for c in commits {
             let file_path = Path::parse(&c.file_name)?;
             let file_name = file_path.filename().unwrap_or(&c.file_name);
             let path = LogPath::staged_commit(
@@ -260,8 +266,7 @@ mod tests {
     fn catalog_managed_opt_in_detected() {
         let mut cfg = StorageConfig::default();
         assert!(!crate::is_catalog_managed_requested(&cfg));
-        cfg.raw
-            .insert("unity_catalog_managed".into(), "true".into());
+        cfg.raw.insert("catalog_managed".into(), "true".into());
         assert!(crate::is_catalog_managed_requested(&cfg));
     }
 }
