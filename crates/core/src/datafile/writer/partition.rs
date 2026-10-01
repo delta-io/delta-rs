@@ -655,6 +655,78 @@ mod tests {
         assert_eq!(read, batch);
     }
 
+    /// A batch may not straddle the row-group limit: the rows that fit complete the open group
+    /// and the rest start the next one. Both encodings, on both slicing paths of
+    /// [`PartitionWriter::write`]: a write batch above the limit (with a target file size), and
+    /// a second write that starts with rows already buffered in an open group (without one).
+    #[rstest::rstest]
+    #[case::parallel_with_target(true, Some(10 * 1024 * 1024))]
+    #[case::serial_with_target(false, Some(10 * 1024 * 1024))]
+    #[case::parallel_without_target(true, None)]
+    #[case::serial_without_target(false, None)]
+    #[tokio::test]
+    async fn test_row_groups_never_exceed_max_row_count(
+        #[case] parallel: bool,
+        #[case] target_file_size: Option<u64>,
+    ) {
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from((0..10).collect::<Vec<i32>>()))],
+        )
+        .unwrap();
+        let object_store = DeltaTableBuilder::from_url(url::Url::parse("memory:///").unwrap())
+            .unwrap()
+            .build_storage()
+            .unwrap()
+            .object_store();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            schema,
+            IndexMap::new(),
+            Some(properties),
+            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+            target_file_size.and_then(NonZeroU64::new),
+            Some(8),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(
+            object_store.clone(),
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).await.unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 1);
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = SerializedFileReader::new(bytes).unwrap();
+        let group_sizes: Vec<i64> = reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|rg| rg.num_rows())
+            .collect();
+        assert_eq!(group_sizes, [3, 3, 3, 3, 3, 3, 2]);
+    }
+
     #[tokio::test]
     async fn test_write_partition_with_parts() {
         let base_int = Arc::new(Int32Array::from((0..10000).collect::<Vec<i32>>()));
