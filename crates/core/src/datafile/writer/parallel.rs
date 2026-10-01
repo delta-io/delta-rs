@@ -61,7 +61,6 @@ impl ArrowWriterOptions {
     }
 
     /// Skip writing the serialized arrow schema into the parquet footer (defaults to `false`).
-    /// Skip writing the serialized arrow schema into the parquet footer (defaults to `false`).
     pub fn with_skip_arrow_metadata(mut self, skip_arrow_metadata: bool) -> Self {
         self.skip_arrow_metadata_hint = skip_arrow_metadata;
         self
@@ -170,24 +169,28 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
         })
     }
 
-    /// Caller is responsible to slice batches to the size of max_rows_in_group_row.
     pub(crate) async fn write(&mut self, batch: &RecordBatch) -> ParquetResult<()> {
-        if self.workers.is_empty() {
-            self.start_row_group()?;
-        }
-
-        let schema = self.schema.clone();
-        let mut leaf = 0;
-        for (field, array) in schema.fields().iter().zip(batch.columns()) {
-            for column in compute_leaves(field, array)? {
-                self.send(leaf, column).await?;
-                leaf += 1;
+        let mut offset = 0;
+        while offset < batch.num_rows() {
+            if self.workers.is_empty() {
+                self.start_row_group()?;
             }
-        }
 
-        self.buffered_rows += batch.num_rows();
-        if self.buffered_rows >= self.max_rows_in_group_row {
-            self.close_row_group().await?;
+            let length = usize::min(
+                self.max_rows_in_group_row - self.buffered_rows,
+                batch.num_rows() - offset,
+            );
+            if length == batch.num_rows() {
+                self.send_columns(batch).await?;
+            } else {
+                self.send_columns(&batch.slice(offset, length)).await?;
+            }
+            offset += length;
+
+            self.buffered_rows += length;
+            if self.buffered_rows >= self.max_rows_in_group_row {
+                self.close_row_group().await?;
+            }
         }
         Ok(())
     }
@@ -263,6 +266,19 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
                 }
             })
             .collect();
+        Ok(())
+    }
+
+    /// Hand each leaf column of `batch` to its worker.
+    async fn send_columns(&mut self, batch: &RecordBatch) -> ParquetResult<()> {
+        let schema = self.schema.clone();
+        let mut leaf = 0;
+        for (field, array) in schema.fields().iter().zip(batch.columns()) {
+            for column in compute_leaves(field, array)? {
+                self.send(leaf, column).await?;
+                leaf += 1;
+            }
+        }
         Ok(())
     }
 
