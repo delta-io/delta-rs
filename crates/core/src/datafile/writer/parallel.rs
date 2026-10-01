@@ -437,4 +437,28 @@ mod tests {
         );
         assert_eq!(parallel_reader.metadata().num_row_groups(), 5);
     }
+
+    #[tokio::test]
+    async fn test_large_batch_splits_row_groups() {
+        let schema = int_schema();
+        let batch = int_batch(schema.clone(), 201);
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(100))
+            .build();
+
+        let mut writer =
+            ParallelArrowWriter::try_new(VecSink::default(), schema.clone(), props, None).unwrap();
+        writer.write(&batch).await.unwrap();
+        writer.finish().await.unwrap();
+        let bytes = writer.into_inner().bytes();
+
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        let sizes: Vec<i64> = reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|rg| rg.num_rows())
+            .collect();
+        assert_eq!(sizes, [100, 100, 1]);
+    }
 }
