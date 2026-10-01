@@ -139,8 +139,6 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
         let options = options.unwrap_or_default();
 
         if !options.skip_arrow_metadata_hint {
-            // add serialized arrow schema, so readers see the same file
-            // unless provided to be skipped.
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
         }
 
