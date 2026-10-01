@@ -461,4 +461,22 @@ mod tests {
             .collect();
         assert_eq!(sizes, [100, 100, 1]);
     }
+
+    #[tokio::test]
+    async fn test_write_then_drop_survives() {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            let schema = int_schema();
+            let batch = int_batch(schema.clone(), 10);
+            let props = WriterProperties::builder().build();
+
+            let mut writer =
+                ParallelArrowWriter::try_new(VecSink::default(), schema, props, None).unwrap();
+            writer.write(&batch).await.unwrap();
+
+            let sink: VecSink = writer.into_inner();
+            let _ = sink;
+        })
+        .await
+        .expect("into_inner after a write should not hang");
+    }
 }
