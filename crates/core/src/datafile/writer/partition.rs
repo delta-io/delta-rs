@@ -16,10 +16,12 @@ use parquet::file::properties::WriterProperties;
 use tokio::task::JoinSet;
 use tracing::*;
 
-use super::file::LazyArrowWriter;
-use super::{UploadBudget, WriteError};
 use crate::datafile::DataFileWriter;
+use crate::datafile::writer::WriteError;
+use crate::datafile::writer::file::LazyArrowWriter;
 use crate::datafile::writer::parallel::ArrowWriterOptions;
+
+use crate::datafile::writer::upload_budget::UploadBudget;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
 use crate::logstore::ObjectStoreRef;
