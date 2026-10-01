@@ -354,3 +354,87 @@ async fn encode_column(
     }
     writer.close()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::Int32Array;
+    use arrow_schema::{DataType, Field, Schema};
+    use futures::future::BoxFuture;
+    use parquet::arrow::AsyncArrowWriter;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use std::sync::Mutex;
+
+    /// In-memory [`AsyncFileWriter`] sink. Cloning shares the same backing buffer, which
+    /// lets a test read the bytes back after a writer that consumes itself on close.
+    #[derive(Clone, Default)]
+    struct VecSink(Arc<Mutex<Vec<u8>>>);
+
+    impl VecSink {
+        fn bytes(&self) -> Bytes {
+            Bytes::from(self.0.lock().unwrap().clone())
+        }
+    }
+
+    impl AsyncFileWriter for VecSink {
+        fn write(&mut self, bs: Bytes) -> BoxFuture<'_, ParquetResult<()>> {
+            self.0.lock().unwrap().extend_from_slice(&bs);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn complete(&mut self) -> BoxFuture<'_, ParquetResult<()>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn int_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
+    }
+
+    fn int_batch(schema: SchemaRef, rows: i32) -> RecordBatch {
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int32Array::from((0..rows).collect::<Vec<i32>>()))],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_row_group_count_matches_serial() {
+        let schema = int_schema();
+        let batch = int_batch(schema.clone(), 5000);
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1000))
+            .build();
+
+        // Both writers receive the whole batch and must split it into row groups themselves.
+        let slices = [batch];
+
+        let mut parallel_writer =
+            ParallelArrowWriter::try_new(VecSink::default(), schema.clone(), props.clone(), None)
+                .unwrap();
+        for slice in &slices {
+            parallel_writer.write(slice).await.unwrap();
+        }
+        parallel_writer.finish().await.unwrap();
+        let parallel_bytes = parallel_writer.into_inner().bytes();
+
+        let serial_sink = VecSink::default();
+        let serial_sink_handle = serial_sink.clone();
+        let mut serial_writer =
+            AsyncArrowWriter::try_new(serial_sink, schema.clone(), Some(props)).unwrap();
+        for slice in &slices {
+            serial_writer.write(slice).await.unwrap();
+        }
+        serial_writer.close().await.unwrap();
+        let serial_bytes = serial_sink_handle.bytes();
+
+        let parallel_reader = ParquetRecordBatchReaderBuilder::try_new(parallel_bytes).unwrap();
+        let serial_reader = ParquetRecordBatchReaderBuilder::try_new(serial_bytes).unwrap();
+        assert_eq!(
+            parallel_reader.metadata().num_row_groups(),
+            serial_reader.metadata().num_row_groups(),
+        );
+        assert_eq!(parallel_reader.metadata().num_row_groups(), 5);
+    }
+}
