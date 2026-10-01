@@ -66,7 +66,6 @@ impl ArrowWriterOptions {
         self.skip_arrow_metadata_hint = skip_arrow_metadata;
         self
     }
-    }
 
     /// Sets the [`PageStoreFactory`] that buffers completed pages while a row group is open.
     ///
