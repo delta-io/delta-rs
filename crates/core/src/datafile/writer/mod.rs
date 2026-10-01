@@ -65,11 +65,15 @@
 //! groups, by default every 1,048,576 rows. A file with several row groups uploads the earlier
 //! ones while it is written. A file with one row group is sent entirely by its finish task.
 //! All partition writers of one write reserve bytes in the same `UploadBudget`, so a slow
-//! store makes them wait instead of holding more files in memory.
+//! store makes them wait instead of holding more files in memory. With
+//! [`ArrowWriterOptions::with_enable_parallel_encoding`] set to `false`, arrow-rs's
+//! `AsyncArrowWriter` takes the place of `ParallelArrowWriter` and encodes the columns of a
+//! row group one after another.
 //!
 //! [`DeltaWriter`] lives in `dataset.rs`, [`PartitionWriter`] in `partition.rs`, the
-//! `LazyArrowWriter` and its upload in `file.rs`, the `ParallelArrowWriter` and its column
-//! tasks in `parallel.rs`, and the `UploadBudget` in `upload_budget.rs`.
+//! `LazyArrowWriter`, its `FileArrowWriter` and its upload in `file.rs`, the
+//! `ParallelArrowWriter` and its column tasks in `parallel.rs`, and the `UploadBudget` in
+//! `upload_budget.rs`.
 
 use arrow_schema::{ArrowError, SchemaRef as ArrowSchemaRef};
 

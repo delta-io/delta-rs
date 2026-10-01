@@ -601,6 +601,58 @@ mod tests {
         assert_eq!(head.size, adds[0].size as u64)
     }
 
+    #[rstest::rstest]
+    #[case::parallel(true)]
+    #[case::serial(false)]
+    #[tokio::test]
+    async fn test_write_partition_with_either_encoding(#[case] parallel: bool) {
+        use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+        let batch = get_record_batch(None, false);
+        let object_store = DeltaTableBuilder::from_url(url::Url::parse("memory:///").unwrap())
+            .unwrap()
+            .build_storage()
+            .unwrap()
+            .object_store();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .build();
+        let config = PartitionWriterConfig::try_new(
+            batch.schema(),
+            IndexMap::new(),
+            Some(properties),
+            Some(ArrowWriterOptions::new().with_enable_parallel_encoding(parallel)),
+            None,
+            Some(2),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut writer = PartitionWriter::try_with_config(
+            object_store.clone(),
+            config,
+            DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
+            None,
+        )
+        .unwrap();
+        writer.write(&batch).await.unwrap();
+        let adds = writer.close().await.unwrap();
+        assert_eq!(adds.len(), 1);
+
+        let bytes = object_store
+            .get(&Path::from(adds[0].path.clone()))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+        assert!(reader.metadata().num_row_groups() > 1);
+        let read: Vec<RecordBatch> = reader.build().unwrap().map(Result::unwrap).collect();
+        let read = arrow::compute::concat_batches(&batch.schema(), &read).unwrap();
+        assert_eq!(read, batch);
+    }
+
     #[tokio::test]
     async fn test_write_partition_with_parts() {
         let base_int = Arc::new(Int32Array::from((0..10000).collect::<Vec<i32>>()));

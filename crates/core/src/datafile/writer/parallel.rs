@@ -37,10 +37,21 @@ struct ColumnWorker {
 }
 
 /// Arrow-specific settings for writing parquet data files.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ArrowWriterOptions {
     skip_arrow_metadata_hint: bool,
     page_store_factory: Option<Arc<dyn PageStoreFactory>>,
+    enable_parallel_encoding: bool,
+}
+
+impl Default for ArrowWriterOptions {
+    fn default() -> Self {
+        Self {
+            skip_arrow_metadata_hint: false,
+            page_store_factory: None,
+            enable_parallel_encoding: true,
+        }
+    }
 }
 
 impl ArrowWriterOptions {
@@ -64,6 +75,33 @@ impl ArrowWriterOptions {
     ) -> Self {
         self.page_store_factory = Some(page_store_factory);
         self
+    }
+
+    /// Encode each column of a row group in its own task (defaults to `true`). When `false`,
+    /// arrow-rs's `AsyncArrowWriter` encodes the columns one after another.
+    pub fn with_enable_parallel_encoding(mut self, enable_parallel_encoding: bool) -> Self {
+        self.enable_parallel_encoding = enable_parallel_encoding;
+        self
+    }
+
+    pub(crate) fn enable_parallel_encoding(&self) -> bool {
+        self.enable_parallel_encoding
+    }
+
+    /// The same settings as parquet's own options, for `AsyncArrowWriter`.
+    pub(crate) fn to_parquet_options(
+        &self,
+        props: WriterProperties,
+    ) -> parquet::arrow::arrow_writer::ArrowWriterOptions {
+        let options = parquet::arrow::arrow_writer::ArrowWriterOptions::new()
+            .with_properties(props)
+            .with_skip_arrow_metadata(self.skip_arrow_metadata_hint);
+        match &self.page_store_factory {
+            Some(page_store_factory) => {
+                options.with_page_store_factory(Arc::clone(page_store_factory))
+            }
+            None => options,
+        }
     }
 }
 
