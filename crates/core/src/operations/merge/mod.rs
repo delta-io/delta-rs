@@ -1986,10 +1986,9 @@ impl std::future::IntoFuture for MergeBuilder {
 mod tests {
     use crate::DeltaTable;
     use crate::TableProperty;
-    use crate::kernel::{Action, DataType, EagerSnapshot, PrimitiveType, StructField};
+    use crate::kernel::{Action, DataType, PrimitiveType, StructField};
     use crate::operations::merge::filter::generalize_filter;
     use crate::protocol::*;
-    use crate::test_utils::{TestResult, TestTables};
     use crate::writer::test_utils::datafusion::{get_data, get_data_sorted};
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
