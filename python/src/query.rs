@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use deltalake::{
@@ -22,11 +23,16 @@ pub(crate) struct PyQueryBuilder {
 #[pymethods]
 impl PyQueryBuilder {
     #[new]
-    pub fn new() -> Self {
-        let delta_ctx = DeltaSessionContext::new();
+    #[pyo3(signature = (session_config = None))]
+    pub fn new(session_config: Option<HashMap<String, String>>) -> PyResult<Self> {
+        let delta_ctx = match session_config {
+            Some(overrides) => DeltaSessionContext::new_with_session_overrides(&overrides)
+                .map_err(PythonError::from)?,
+            None => DeltaSessionContext::new(),
+        };
         let ctx = delta_ctx.into_inner();
 
-        PyQueryBuilder { ctx }
+        Ok(PyQueryBuilder { ctx })
     }
 
     /// Register the given [RawDeltaTable] into the [SessionContext] using the provided
@@ -40,7 +46,7 @@ impl PyQueryBuilder {
         let url = log_store.root_url();
 
         self.ctx
-            .register_object_store(url, log_store.root_object_store(None));
+            .register_object_store(url, log_store.root_object_store());
 
         let config = DeltaScanConfig::new().with_wrap_partition_values(false);
         let provider = Arc::new(DeltaScanNext::new(snapshot, config).map_err(PythonError::from)?)

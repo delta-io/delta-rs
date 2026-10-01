@@ -1110,6 +1110,47 @@ mod tests {
         assert_eq!(&expected, &stats_schema);
     }
 
+    /// A struct whose leaves are all ineligible for min/max stats is dropped from
+    /// `minValues`/`maxValues`. Keeping it as an empty struct produced zero-length struct
+    /// arrays in `stats_parsed`. See delta-io/delta-rs#3237.
+    #[test]
+    fn test_stats_schema_drops_nested_struct_without_eligible_fields() {
+        let properties: TableProperties = [("key", "value")].into();
+        // `payload` holds a single binary leaf, so it has no min/max eligible leaf at all.
+        let payload =
+            StructType::try_new([StructField::nullable("data", DataType::BINARY)]).unwrap();
+        let file_schema = StructType::try_new([
+            StructField::nullable("id", DataType::LONG),
+            StructField::nullable("payload", DataType::Struct(Box::new(payload))),
+        ])
+        .unwrap();
+
+        // `nullCount` counts every leaf, so it still carries `payload`.
+        let null_count = StructType::try_new([
+            StructField::nullable("id", DataType::LONG),
+            StructField::nullable(
+                "payload",
+                DataType::Struct(Box::new(
+                    StructType::try_new([StructField::nullable("data", DataType::LONG)]).unwrap(),
+                )),
+            ),
+        ])
+        .unwrap();
+        // `payload` is absent here: it is dropped, not kept as an empty struct.
+        let min_max_without_payload =
+            StructType::try_new([StructField::nullable("id", DataType::LONG)]).unwrap();
+
+        let expected = StructType::try_new([
+            StructField::nullable("numRecords", DataType::LONG),
+            StructField::nullable("nullCount", null_count),
+            StructField::nullable("minValues", min_max_without_payload.clone()),
+            StructField::nullable("maxValues", min_max_without_payload),
+        ])
+        .unwrap();
+
+        assert_eq!(&expected, &stats_schema(&file_schema, &properties));
+    }
+
     #[test]
     fn test_partitions_schema() -> DeltaResultLocal<()> {
         let logical_schema = StructType::try_new([

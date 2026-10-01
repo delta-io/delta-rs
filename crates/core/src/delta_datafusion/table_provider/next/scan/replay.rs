@@ -78,7 +78,7 @@ pin_project! {
 
         file_selection: Option<&'a HashSet<String>>,
 
-        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>)>,
+        pub(crate) dv_stream: ReceiverStreamBuilder<(Url, Option<Vec<bool>>, Option<u64>, i64)>,
 
         #[pin]
         stream: S,
@@ -95,7 +95,7 @@ impl<'a, S> ScanFileStream<'a, S> {
     ) -> Self {
         Self {
             metrics: ReplayStats::new(),
-            dv_stream: ReceiverStreamBuilder::<(Url, Option<Vec<bool>>, Option<u64>)>::new(100),
+            dv_stream: ReceiverStreamBuilder::new(100),
             engine,
             table_root: scan.table_root().clone(),
             kernel_scan: scan.inner().clone(),
@@ -144,19 +144,38 @@ where
                     Err(err) => return Poll::Ready(Some(Err(err.into()))),
                 };
 
+                let (data, selection_vector) = scan_data.scan_files.into_parts();
+                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
+                let scan_files =
+                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
+
                 // Spawn tasks to read the deletion vectors from disk.
-                for file in &ctx.files {
+                for (index, file) in ctx.files.iter().enumerate() {
                     if file.dv_info.has_vector() {
                         let engine = this.engine.clone();
                         let dv_info = file.dv_info.clone();
                         let file_url = file.file_url.clone();
-                        let num_records = file.num_records;
+                        // Kernel's visitor reads JSON stats. Recover counts from structured stats.
+                        let num_records = file.num_records.or_else(|| {
+                            LogicalFileView::new(scan_files.clone(), index)
+                                .num_records()
+                                .map(|count| count as u64)
+                        });
+                        let cardinality = LogicalFileView::new(scan_files.clone(), index)
+                            .deletion_vector_descriptor()
+                            .map(|descriptor| descriptor.cardinality);
+                        let Some(cardinality) = cardinality else {
+                            return Poll::Ready(Some(Err(DeltaTableError::generic(format!(
+                                "DV file {} has no descriptor in scan metadata",
+                                super::super::redact_url_for_error(&file_url)
+                            )))));
+                        };
                         let table_root = this.table_root.clone();
                         let tx = this.dv_stream.tx();
 
                         let load_dv = move || {
                             let dv = dv_info.get_selection_vector(engine.as_ref(), &table_root)?;
-                            let _ = tx.blocking_send(Ok((file_url, dv, num_records)));
+                            let _ = tx.blocking_send(Ok((file_url, dv, num_records, cardinality)));
                             Ok(())
                         };
                         this.dv_stream.spawn_blocking(load_dv);
@@ -164,11 +183,6 @@ where
                 }
 
                 this.metrics.num_scanned += ctx.count;
-
-                let (data, selection_vector) = scan_data.scan_files.into_parts();
-                let batch = ArrowEngineData::try_from_engine_data(data)?.into();
-                let scan_files =
-                    filter_record_batch(&batch, &BooleanArray::from(selection_vector))?;
 
                 let stats_projection = match StatsProjection::for_scan(this.kernel_scan.as_ref()) {
                     Ok(projection) => projection,
@@ -370,6 +384,8 @@ pub(crate) struct ScanFileContext {
     ///
     /// The query engine may choose to use these statistics to further optimize the scan.
     pub stats: Statistics,
+    /// Physical row count from the Delta log, if present.
+    pub num_records: Option<u64>,
     /// Partition values for the file.
     pub partitions: Option<StructData>,
 }
@@ -382,12 +398,14 @@ impl ScanFileContext {
             size: inner.size,
             transform: inner.transform,
             stats,
+            num_records: inner.num_records,
             partitions,
         }
     }
 }
 
 /// Metadata to read a data file from object storage.
+#[derive(Debug)]
 struct ScanFileContextInner {
     /// Fully qualified URL of the file.
     pub file_url: Url,

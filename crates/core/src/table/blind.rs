@@ -31,7 +31,7 @@ use delta_kernel::table_properties::TableProperties;
 use delta_kernel::transaction::CommitResult;
 use url::Url;
 
-use super::builder::{DeltaTableConfig, ensure_table_uri};
+use super::builder::ensure_table_uri;
 use super::config::TablePropertiesExt;
 use crate::DeltaResult;
 use crate::kernel::{Add, Metadata, Protocol, Snapshot};
@@ -107,11 +107,7 @@ impl BlindDeltaTable {
     ///
     /// * `log_store` - The log store to use
     pub async fn try_new_with_log_store(log_store: LogStoreRef) -> DeltaResult<Self> {
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = Snapshot::try_new(log_store.as_ref(), config, None).await?;
+        let snapshot = Snapshot::try_new(log_store.as_ref(), None).await?;
 
         Ok(Self {
             log_store,
@@ -126,7 +122,7 @@ impl BlindDeltaTable {
 
     /// Get a reference to the object store.
     pub fn object_store(&self) -> ObjectStoreRef {
-        self.log_store.object_store(None)
+        self.log_store.object_store()
     }
 
     /// Get the table URL.
@@ -193,7 +189,7 @@ impl BlindDeltaTable {
         let add_files_batch = adds_to_record_batch(&adds)?;
 
         let kernel_snapshot = self.snapshot.inner.clone();
-        let engine = self.log_store.engine(None);
+        let engine = self.log_store.engine();
 
         let commit_version = spawn_blocking_with_span(move || {
             let committer = Box::new(FileSystemCommitter::new());
@@ -234,13 +230,7 @@ impl BlindDeltaTable {
         .await
         .map_err(|e| DeltaTableError::Generic(e.to_string()))??;
 
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-
-        self.snapshot =
-            Snapshot::try_new(self.log_store().as_ref(), config, Some(commit_version)).await?;
+        self.snapshot = Snapshot::try_new(self.log_store().as_ref(), Some(commit_version)).await?;
         Ok(commit_version)
     }
 }

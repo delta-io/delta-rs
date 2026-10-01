@@ -80,9 +80,6 @@ class RawDeltaTable:
         table_uri: str,
         version: int | None,
         storage_options: dict[str, str] | None,
-        without_files: bool,
-        log_buffer_size: int | None,
-        skip_stats: bool,
     ) -> None: ...
     @staticmethod
     def get_table_uri_from_data_catalog(
@@ -98,7 +95,6 @@ class RawDeltaTable:
     ) -> bool: ...
     def table_uri(self) -> str: ...
     def version(self) -> int: ...
-    def has_files(self) -> bool: ...
     def get_add_file_sizes(self) -> dict[str, int]: ...
     def get_latest_version(self) -> int: ...
     def metadata(self) -> RawDeltaTableMetaData: ...
@@ -266,7 +262,7 @@ class RawDeltaTable:
     ) -> Any: ...
     def create_write_transaction(
         self,
-        add_actions: list[AddAction],
+        actions: list[AddAction | RemoveAction],
         mode: str,
         partition_by: list[str],
         schema: Schema,
@@ -353,11 +349,12 @@ def write_to_deltalake(
 def convert_to_deltalake(
     uri: str,
     partition_schema: Schema | None,
-    partition_strategy: Literal["hive"] | None,
+    partition_strategy: Literal["hive", "directory"] | None,
     name: str | None,
     description: str | None,
     configuration: Mapping[str, str | None] | None,
     storage_options: dict[str, str] | None,
+    collect_stats: bool,
     commit_properties: CommitProperties | None,
     post_commithook_properties: PostCommitHookProperties | None,
 ) -> None: ...
@@ -1000,7 +997,7 @@ class DeltaFileSystemHandler:
         known_sizes: dict[str, int] | None = None,
     ) -> DeltaFileSystemHandler: ...
     def get_type_name(self) -> str: ...
-    def copy_file(self, src: str, dst: str) -> None:
+    def copy_file(self, src: str, dest: str) -> None:
         """Copy a file.
 
         If the destination exists and is a directory, an error is returned. Otherwise, it is replaced.
@@ -1055,7 +1052,7 @@ class DeltaFileSystemHandler:
         """Open an output stream for sequential writing."""
 
 class PyQueryBuilder:
-    def __init__(self) -> None: ...
+    def __init__(self, session_config: dict[str, str] | None = None) -> None: ...
     def register(self, table_name: str, delta_table: RawDeltaTable) -> None: ...
     def execute(self, sql: str) -> RecordBatchReader: ...
 
@@ -1098,4 +1095,20 @@ class Transaction:
 
     def __init__(
         self, app_id: str, version: int, last_updated: int | None = None
+    ) -> None: ...
+
+class RemoveAction:
+    path: str
+    data_change: bool
+    deletion_timestamp: int
+    size: int | None
+    partition_values: dict[str, str | None] | None
+
+    def __init__(
+        self,
+        path: str,
+        data_change: bool,
+        deletion_timestamp: int,
+        size: int | None = None,
+        partition_values: dict[str, str | None] | None = None,
     ) -> None: ...

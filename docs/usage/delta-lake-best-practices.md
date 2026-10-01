@@ -68,6 +68,12 @@ Delta Lake supports a table feature called deletion vectors that implements DML 
 
 You should periodically purge deletion vectors because they can accumulate and slow subsequent read operations.  Once you enable the feature, you must purge the deletion vectors in your table with an appropriate cadence.
 
+## Writing to a slow object store
+
+When the object store accepts data more slowly than the writer produces it, finished files wait in memory for their upload to land.  On a large write against a slow or throttled store, those pending uploads can grow until the process runs out of memory.
+
+delta-rs caps how many bytes pending uploads may hold, so a slow store slows the write down instead of exhausting memory.  The cap is set for you and usually needs no attention.  Note that it bounds uploads only, so a write spread over many partition values still uses extra memory for the files it holds open.  If you write very large files, or run in a container with little memory, see [bounding memory when the object store is slow](https://delta-io.github.io/delta-rs/usage/writing/#bounding-memory-when-the-object-store-is-slow).
+
 ## Use vacuum to save storage costs
 
 Delta Lake supports transactions, which necessitates keeping old versions of data in storage, even the files marked for removal in the transaction log.

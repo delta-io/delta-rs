@@ -67,6 +67,7 @@ def test_writer_properties_missing_compression_level(compression, expected):
     [
         ("GZIP", -1),
         ("GZIP", 11),
+        ("GZIP", 10),
         ("BROTLI", -1),
         ("BROTLI", 12),
         ("ZSTD", 0),
@@ -83,9 +84,10 @@ def test_writer_properties_no_compression():
         WriterProperties(compression_level=10)
 
 
-def test_invalid_fpp_value():
+@pytest.mark.parametrize("fpp", [1.1, float("nan")])
+def test_invalid_fpp_value(fpp):
     with pytest.raises(ValueError):
-        BloomFilterProperties(set_bloom_filter_enabled=True, fpp=1.1, ndv=30)
+        BloomFilterProperties(set_bloom_filter_enabled=True, fpp=fpp, ndv=30)
 
 
 @pytest.mark.pyarrow
@@ -129,6 +131,27 @@ def test_write_with_writerproperties_encoding(
         if c["path_in_schema"] == "sold"
     )
     assert "RLE_DICTIONARY" in sold_metadata["encodings"]
+
+
+@pytest.mark.pyarrow
+def test_write_with_default_column_properties_encoding(tmp_path: pathlib.Path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    writer_properties = WriterProperties(
+        default_column_properties=ColumnProperties(
+            encoding="DELTA_BINARY_PACKED",
+        ),
+    )
+
+    write_deltalake(
+        tmp_path, pa.table({"value": [1, 2, 3]}), writer_properties=writer_properties
+    )
+
+    parquet_path = DeltaTable(tmp_path).file_uris()[0]
+    encodings = pq.read_metadata(parquet_path).row_group(0).column(0).encodings
+
+    assert encodings == ("RLE", "DELTA_BINARY_PACKED")
 
 
 @pytest.mark.pyarrow

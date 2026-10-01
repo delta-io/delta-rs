@@ -1,15 +1,13 @@
 //! Update table metadata operation
 
-use std::sync::Arc;
-
 use futures::future::BoxFuture;
 use validator::Validate;
 
-use super::{CustomExecuteHandler, Operation};
 use crate::DeltaTable;
-use crate::kernel::transaction::{CommitBuilder, CommitProperties};
+use crate::kernel::transaction::CommitProperties;
 use crate::kernel::{Action, EagerSnapshot, MetadataExt, SnapshotMetadataRef, resolve_snapshot};
 use crate::logstore::LogStoreRef;
+use crate::operations::commit_actions_in_scope;
 use crate::protocol::DeltaOperation;
 use crate::{DeltaResult, DeltaTableError};
 
@@ -29,7 +27,6 @@ pub struct TableMetadataUpdate {
         message = "Table name cannot be empty and cannot exceed 255 characters"
     ))]
     pub name: Option<String>,
-
     /// New table description. When set, must be at most 4000 characters.
     #[validate(length(
         max = 4000,
@@ -57,16 +54,6 @@ pub struct UpdateTableMetadataBuilder {
     log_store: LogStoreRef,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
-    custom_execute_handler: Option<Arc<dyn CustomExecuteHandler>>,
-}
-
-impl super::Operation for UpdateTableMetadataBuilder {
-    fn log_store(&self) -> &LogStoreRef {
-        &self.log_store
-    }
-    fn get_custom_execute_handler(&self) -> Option<Arc<dyn CustomExecuteHandler>> {
-        self.custom_execute_handler.clone()
-    }
 }
 
 impl UpdateTableMetadataBuilder {
@@ -77,7 +64,6 @@ impl UpdateTableMetadataBuilder {
             snapshot,
             log_store,
             commit_properties: CommitProperties::default(),
-            custom_execute_handler: None,
         }
     }
 
@@ -90,12 +76,6 @@ impl UpdateTableMetadataBuilder {
     /// Additional metadata to be added to commit info
     pub fn with_commit_properties(mut self, commit_properties: CommitProperties) -> Self {
         self.commit_properties = commit_properties;
-        self
-    }
-
-    /// Set a custom execute handler, for pre and post execution
-    pub fn with_custom_execute_handler(mut self, handler: Arc<dyn CustomExecuteHandler>) -> Self {
-        self.custom_execute_handler = Some(handler);
         self
     }
 }
@@ -129,11 +109,7 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
         let this = self;
 
         Box::pin(async move {
-            let snapshot =
-                resolve_snapshot(&this.log_store, this.snapshot.clone(), false, None).await?;
-
-            let operation_id = this.get_operation_id();
-            this.pre_execute(operation_id).await?;
+            let snapshot = resolve_snapshot(&this.log_store, this.snapshot.clone(), None).await?;
 
             let update = this.update.ok_or_else(|| {
                 DeltaTableError::MetadataError("No metadata update specified".to_string())
@@ -145,107 +121,14 @@ impl std::future::IntoFuture for UpdateTableMetadataBuilder {
             let (actions, operation) =
                 plan_update_table_metadata_actions(snapshot.snapshot().metadata_state(), update)?;
 
-            let commit = CommitBuilder::from(this.commit_properties.clone())
-                .with_actions(actions)
-                .with_operation_id(operation_id)
-                .with_post_commit_hook_handler(this.custom_execute_handler.clone())
-                .build(Some(&snapshot), this.log_store.clone(), operation.clone())
-                .await?;
-
-            if let Some(handler) = this.custom_execute_handler {
-                handler.post_execute(&this.log_store, operation_id).await?;
-            }
-            Ok(DeltaTable::new_with_state(
-                this.log_store,
-                commit.snapshot(),
-            ))
+            commit_actions_in_scope(
+                &this.log_store,
+                &snapshot,
+                this.commit_properties,
+                actions,
+                operation,
+            )
+            .await
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use arrow_array::{Int32Array, RecordBatch};
-    use arrow_schema::{DataType as ArrowDataType, Field, Schema};
-
-    use crate::kernel::{DataType, EagerSnapshot, PrimitiveType, StructField};
-    use crate::{DeltaTableConfig, writer::test_utils::TestResult};
-
-    use super::*;
-
-    fn id_field() -> StructField {
-        StructField::new("id", DataType::Primitive(PrimitiveType::Integer), true)
-    }
-
-    fn metadata_update() -> TableMetadataUpdate {
-        TableMetadataUpdate {
-            name: Some("events".to_string()),
-            description: Some("event table".to_string()),
-        }
-    }
-
-    #[tokio::test]
-    async fn update_table_metadata_with_lazy_snapshot_does_not_materialize_files() -> TestResult {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
-            .with_update(metadata_update())
-            .await?;
-
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
-    }
-
-    #[cfg(feature = "datafusion")]
-    #[tokio::test]
-    async fn update_table_metadata_with_lazy_snapshot_retries_after_concurrent_commit() -> TestResult
-    {
-        let table = DeltaTable::new_in_memory()
-            .create()
-            .with_columns([id_field()])
-            .await?;
-        let log_store = table.log_store().clone();
-        let config = DeltaTableConfig {
-            require_files: false,
-            ..Default::default()
-        };
-        let snapshot = EagerSnapshot::try_new(log_store.as_ref(), config, None).await?;
-
-        let batch = RecordBatch::try_new(
-            Arc::new(Schema::new(vec![Field::new(
-                "id",
-                ArrowDataType::Int32,
-                true,
-            )])),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
-        )?;
-        let table = table.write(vec![batch]).await?;
-
-        assert_eq!(table.version(), Some(1));
-        assert_eq!(snapshot.version(), 0);
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        let updated = UpdateTableMetadataBuilder::new(log_store, Some(snapshot.clone()))
-            .with_update(metadata_update())
-            .await?;
-
-        assert_eq!(updated.version(), Some(2));
-        assert!(!snapshot.snapshot().has_materialized_files_for_test());
-
-        Ok(())
     }
 }

@@ -227,6 +227,27 @@ def test_update_with_predicate_and_new_values(
     assert result == expected
 
 
+@pytest.mark.parametrize("value", ["Alice", "O'Reilly", "a' || 'b", ""])
+def test_update_new_values_preserves_strings(tmp_path, value):
+    data = Table(
+        {
+            "name": Array(
+                ["before"],
+                ArrowField("name", type=DataType.string(), nullable=True),
+            )
+        }
+    )
+    write_deltalake(tmp_path, data)
+    dt = DeltaTable(tmp_path)
+
+    dt.update(new_values={"name": value})
+
+    result = (
+        QueryBuilder().register("tbl", dt).execute("SELECT name FROm tbl").read_all()
+    )
+    assert result.column("name")[0].as_py() == value
+
+
 def test_update_no_inputs(tmp_path: pathlib.Path, sample_table: Table):
     write_deltalake(tmp_path, sample_table, mode="append")
 

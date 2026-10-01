@@ -6,18 +6,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{
+    ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StringViewArray, UInt32Array,
+};
 use arrow_schema::{DataType as ArrowDataType, Field, Fields, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
+use arrow_select::take::take;
 use bytes::Bytes;
 use datafusion::prelude::SessionContext;
 use deltalake_core::delta_datafusion::DeltaSessionContext;
 use deltalake_core::ensure_table_uri;
 use deltalake_core::errors::DeltaTableError;
-use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties, TransactionError};
+use deltalake_core::kernel::transaction::{CommitBuilder, CommitProperties};
 use deltalake_core::kernel::{Action, Add, DataType, PrimitiveType, StructField, StructType};
 use deltalake_core::logstore::{
-    CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
+    LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, get_actions,
 };
 use deltalake_core::operations::optimize::{
     MetricDetails, Metrics, OptimizeType, PlannerStrategy, create_merge_plan,
@@ -37,7 +40,6 @@ use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
 use tempfile::TempDir;
-use uuid::Uuid;
 
 struct Context {
     pub tmp_dir: TempDir,
@@ -453,8 +455,8 @@ async fn assert_optimize_preserves_live_rows_with_deletion_vectors(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum TrackedLogStoreCall {
-    Object(Option<Uuid>),
-    Root(Option<Uuid>),
+    Object,
+    Root,
 }
 
 #[derive(Debug)]
@@ -480,28 +482,6 @@ impl LogStore for OperationTrackingLogStore {
         self.inner.read_commit_entry(version).await
     }
 
-    async fn write_commit_entry(
-        &self,
-        version: deltalake_core::kernel::Version,
-        commit_or_bytes: CommitOrBytes,
-        operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        self.inner
-            .write_commit_entry(version, commit_or_bytes, operation_id)
-            .await
-    }
-
-    async fn abort_commit_entry(
-        &self,
-        version: deltalake_core::kernel::Version,
-        commit_or_bytes: CommitOrBytes,
-        operation_id: Uuid,
-    ) -> Result<(), TransactionError> {
-        self.inner
-            .abort_commit_entry(version, commit_or_bytes, operation_id)
-            .await
-    }
-
     async fn get_latest_version(
         &self,
         start_version: deltalake_core::kernel::Version,
@@ -509,20 +489,25 @@ impl LogStore for OperationTrackingLogStore {
         self.inner.get_latest_version(start_version).await
     }
 
-    fn object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn object_store::ObjectStore> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(TrackedLogStoreCall::Object(operation_id));
-        self.inner.object_store(operation_id)
+    fn object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+        self.calls.lock().unwrap().push(TrackedLogStoreCall::Object);
+        self.inner.object_store()
     }
 
-    fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn object_store::ObjectStore> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push(TrackedLogStoreCall::Root(operation_id));
-        self.inner.root_object_store(operation_id)
+    fn root_object_store(&self) -> Arc<dyn object_store::ObjectStore> {
+        self.calls.lock().unwrap().push(TrackedLogStoreCall::Root);
+        self.inner.root_object_store()
+    }
+
+    fn committer(&self) -> Arc<dyn deltalake_core::logstore::Committer> {
+        self.inner.committer()
+    }
+
+    async fn begin_operation(
+        &self,
+    ) -> deltalake_core::errors::DeltaResult<Option<deltalake_core::logstore::OperationContext>>
+    {
+        self.inner.begin_operation().await
     }
 
     fn config(&self) -> &LogStoreConfig {
@@ -636,7 +621,7 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
     assert_eq!(metrics.partitions_optimized, 1);
     assert_eq!(dt.snapshot().unwrap().log_data().num_files(), 2);
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     let parameters = last_commit.operation_parameters.clone().unwrap();
     assert_eq!(parameters["targetSize"], json!("2000000"));
@@ -838,7 +823,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
+async fn test_optimize_execute_reads_and_writes_through_given_log_store()
 -> Result<(), Box<dyn Error>> {
     let table = DeltaTable::new_in_memory()
         .write(vec![tuples_to_batch(
@@ -860,7 +845,7 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
         inner: table.log_store(),
         calls: calls.clone(),
     });
-    let mut tracked_table = DeltaTable::new(tracked_log_store, Default::default());
+    let mut tracked_table = DeltaTable::new(tracked_log_store);
     tracked_table.load().await?;
     let df_context: SessionContext = DeltaSessionContext::default().into();
     let plan = create_merge_plan(
@@ -875,7 +860,6 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
     .await?;
 
     calls.lock().unwrap().clear();
-    let operation_id = Uuid::new_v4();
     let metrics = plan
         .execute(
             tracked_table.log_store(),
@@ -883,8 +867,6 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
             1,
             None,
             CommitProperties::default(),
-            operation_id,
-            None,
         )
         .await?;
 
@@ -893,16 +875,12 @@ async fn test_optimize_selected_file_scans_register_operation_scoped_log_store()
 
     let calls = calls.lock().unwrap().clone();
     assert!(
-        calls
-            .iter()
-            .any(|call| matches!(call, TrackedLogStoreCall::Root(Some(id)) if *id == operation_id)),
-        "expected optimize selected-file scans to register an operation-scoped root object store, got {calls:?}",
+        calls.contains(&TrackedLogStoreCall::Root),
+        "expected optimize selected-file scans to register the root object store of the given log store, got {calls:?}",
     );
     assert!(
-        calls.iter().any(
-            |call| matches!(call, TrackedLogStoreCall::Object(Some(id)) if *id == operation_id)
-        ),
-        "expected optimize execution to use an operation-scoped object store, got {calls:?}",
+        calls.contains(&TrackedLogStoreCall::Object),
+        "expected optimize execution to write through the object store of the given log store, got {calls:?}",
     );
 
     Ok(())
@@ -1045,8 +1023,6 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
             1,
             None,
             CommitProperties::default(),
-            Uuid::new_v4(),
-            None,
         )
         .await;
 
@@ -1111,8 +1087,6 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
             1,
             None,
             CommitProperties::default(),
-            Uuid::new_v4(),
-            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 1);
@@ -1164,8 +1138,6 @@ async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
             1,
             Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
             CommitProperties::default(),
-            Uuid::new_v4(),
-            None,
         )
         .await?;
     assert_eq!(metrics.num_files_added, 2);
@@ -1717,7 +1689,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         .with_filters(&filter);
     let (dt, metrics) = optimize.await?;
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
 
     let commit_metrics =
@@ -1760,7 +1732,7 @@ async fn test_optimize_metrics_expose_planner_strategy() -> Result<(), Box<dyn E
     assert_eq!(metrics_json["maxBinSpanFiles"], json!(2));
     assert!(metrics_json.get("maxInputDisplacement").is_none());
 
-    let commit_info: Vec<_> = dt.history(Some(1)).await?.collect();
+    let commit_info: Vec<_> = dt.history(Some(1)).try_collect().await?;
     let last_commit = &commit_info[0];
     assert_eq!(
         last_commit.info["operationMetrics"]["plannerStrategy"],
@@ -1912,7 +1884,7 @@ async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
         vec![
             Arc::new(Int32Array::from(vec![1, 2, 1, 1, 1, 2])),
             Arc::new(Int32Array::from(vec![1, 1, 2, 2, 2, 2])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringViewArray::from(vec![
                 "1970-01-01",
                 "1970-01-04",
                 "1970-01-01",
@@ -2268,11 +2240,32 @@ async fn test_optimize_spark_written_nullable_nested_field() -> Result<(), Box<d
         .column_by_name("int_id")
         .unwrap()
         .as_any()
-        .downcast_ref::<arrow_array::StringArray>()
+        .downcast_ref::<arrow_array::StringViewArray>()
         .unwrap();
     let mut actual: Vec<&str> = int_id_col.iter().map(|v| v.expect("non-null")).collect();
     actual.sort_unstable();
     assert_eq!(actual, vec!["t1", "t2", "t3", "t4"]);
+
+    Ok(())
+}
+
+/// Issue <https://github.com/delta-io/delta-rs/issues/3790>: one 8192-row scan batch holds
+/// ~2.2 GB of strings, which overflowed i32 offsets when optimize cast it from Utf8View to Utf8.
+#[tokio::test]
+async fn test_zorder_batch_with_more_than_2gib_of_strings() -> Result<(), Box<dyn Error>> {
+    // 8500 views of one 268,435 byte string, so the ~2.3 GB is never materialized.
+    let value = StringViewArray::from(vec!["a".repeat(268_435)]);
+    let values = take(&value, &UInt32Array::from(vec![0; 8500]), None)?;
+    let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(0..8500));
+    let batch = RecordBatch::try_from_iter([("id", ids), ("value", values)])?;
+    let table = DeltaTable::new_in_memory().write(vec![batch]).await?;
+
+    let (_, metrics) = table
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["id".to_string()]))
+        .await?;
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 1);
 
     Ok(())
 }

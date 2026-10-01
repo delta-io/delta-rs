@@ -1,5 +1,5 @@
 site_name: Delta Lake Documentation
-site_url: https://github.com/delta-io/delta-rs
+site_url: https://delta-io.github.io/delta-rs/
 repo_url: https://github.com/delta-io/delta-rs
 repo_name: delta-io/delta-rs
 
@@ -108,6 +108,7 @@ nav:
       - File skipping: how-delta-lake-works/delta-lake-file-skipping.md
   - Upgrade guides:
       - Version 1.0.0: upgrade-guides/guide-1.0.0.md
+      - Rust 1.1.0: upgrade-guides/guide-rust-1.1.0.md
   - About:
       - Contributing: about/contributing.md
       - History: about/history.md
@@ -116,12 +117,17 @@ not_in_nav: |
 
 exclude_docs: |
   /_build/
+  /Makefile
   /mlc_config.json
   /src
   /requirements.txt
   *.py
 
 plugins:
+  - mike:
+      # Every version declares /latest/ as canonical, so search engines index
+      # one copy of each page instead of one per release.
+      canonical_version: latest
   - autorefs
   - mkdocstrings:
       handlers:
@@ -176,6 +182,8 @@ markdown_extensions:
   - footnotes
 
 extra:
+  version:
+    provider: mike
   python_api_url: https://delta-io.github.io/delta-rs/api/
   generator: false
   social:

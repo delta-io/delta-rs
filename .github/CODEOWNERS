@@ -1,14 +1,27 @@
-crates/core @roeap @rtyler @hntd187
-crates/aws @rtyler
-crates/lakefs @ion-elgreco
-crates/catalog-glue @rtyler
-crates/catalog-unity @roeap @hntd187
+# Core library crates
+crates/core          @ethan-tyler @rtyler @roeap @ion-elgreco
+crates/aws           @rtyler @roeap
+crates/azure         @rtyler
+crates/gcp           @rtyler
+crates/hdfs          @rtyler
+crates/opendal       @kszucs
+crates/benchmarks    @abhiaagarwal @roeap @rtyler
+crates/lakefs        @rtyler @ion-elgreco
+crates/catalog-glue  @rtyler
+crates/catalog-unity @rtyler @roeap @hntd187
 
-delta-inspect/ @rtyler
+# CLI tooling
+delta-inspect/       @rtyler
 
-proofs/ @houqp
-python/ @ion-elgreco
+# Formal verification (low recent activity — ownership may need revisiting)
+proofs/              @houqp
+tlaplus/             @houqp
 
-tlaplus/ @houqp
+# Python bindings
+python/              @rtyler @ethan-tyler @ion-elgreco
 
-.github/ @rtyler
+# Documentation
+docs/                @plaindocs @ion-elgreco
+
+# CI / repo configuration
+.github/             @rtyler @ethan-tyler @ion-elgreco

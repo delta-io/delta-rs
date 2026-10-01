@@ -31,11 +31,16 @@ install: build ## Install Python binding of delta-rs
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
 	uv pip install $(TARGET_WHEEL)[pandas]
 
+.PHONY: develop-bench
+develop-bench: ## Install a release build of the Python binding, with the dependencies of bench/
+	uv sync --no-install-project --all-extras --group bench
+	uvx --from 'maturin[zig]' maturin develop --uv --profile python-release $(MATURIN_EXTRA_ARGS)
+
 .PHONY: develop-pyspark
 develop-pyspark:
 	uv sync --all-extras --group pyspark --no-install-project
 	$(info --- Develop with Python binding ---)
-	uvx --from 'maturin[zig]' maturin develop --uv --extras=pandas $(MATURIN_EXTRA_ARGS)
+	uvx --from 'maturin[zig]' maturin develop --uv --profile $(PROFILE) --extras=pandas $(MATURIN_EXTRA_ARGS)
 
 .PHONY: format
 format: ## Format the code
@@ -77,11 +82,6 @@ test-cov: ## Create coverage report
 .PHONY: test-pyspark
 test-pyspark:
 	uv run --no-sync pytest -m 'pyarrow and pyspark and integration'
-
-.PHONY: build-documentation
-build-documentation: ## Build documentation with Sphinx
-	$(info --- Run build of the Sphinx documentation ---)
-	uv run --no-sync sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
 
 .PHONY: build-docs
 build-docs: ## Build documentation with mkdocs

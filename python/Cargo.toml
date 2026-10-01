@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "1.6.3"
+version = "1.6.5"
 authors = [
     "Qingping Hou <dave2008713@gmail.com>",
     "Will Jones <willjones127@gmail.com>",
@@ -43,12 +43,10 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 env_logger = "0"
 thiserror = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
 parking_lot = "0.12"
 
 # runtime
 futures = { workspace = true }
-num_cpus = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 deltalake-mount = { path = "../crates/mount" }
@@ -90,11 +88,11 @@ tikv-jemallocator = { version = "0.7.0", features = ["disable_initial_exec_tls"]
 
 [dependencies.pyo3]
 version = "0.29"
-features = ["extension-module", "abi3", "abi3-py310"]
+features = ["extension-module", "abi3", "abi3-py311"]
 
 [dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = [
     "azure",
     "datafusion",
@@ -126,7 +124,7 @@ features = [
 # Keep SFTP enabled for Linux and macOS Python wheels.
 [target.'cfg(not(windows))'.dependencies.deltalake]
 path = "../crates/deltalake"
-version = "1"
+version = "2"
 features = ["opendal-sftp"]
 
 [features]
