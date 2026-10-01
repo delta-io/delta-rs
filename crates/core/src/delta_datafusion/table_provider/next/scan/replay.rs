@@ -205,13 +205,28 @@ where
                     &stats_projection,
                 );
 
+                // A file without a parsed stats entry gets unknown statistics. Match the
+                // column-stat shape produced by `extract_file_statistics`: an empty column
+                // vector when the projection emits no column stats (issue #4522), so files
+                // with and without stats entries stay consistent within a scan.
+                let unknown_stats = || {
+                    if stats_projection.emits_any_column_stats() {
+                        Statistics::new_unknown(&physical_arrow)
+                    } else {
+                        Statistics {
+                            num_rows: Precision::Absent,
+                            total_byte_size: Precision::Absent,
+                            column_statistics: Vec::new(),
+                        }
+                    }
+                };
                 Poll::Ready(Some(Ok(ctx
                     .files
                     .into_iter()
                     .map(|ctx| {
                         let (stats, partitions) = file_statistics
                             .remove(&ctx.file_url)
-                            .unwrap_or_else(|| (Statistics::new_unknown(&physical_arrow), None));
+                            .unwrap_or_else(|| (unknown_stats(), None));
                         ScanFileContext::new(ctx, stats, partitions)
                     })
                     .collect_vec())))
@@ -259,56 +274,69 @@ fn extract_file_statistics(
             let max_values = extract_struct(view.max_values());
             let min_values = extract_struct(view.min_values());
 
-            let column_statistics = scan
-                .physical_schema()
-                .fields()
-                .map(|f| {
-                    let should_extract_stats =
-                        stats_projection.emits_top_level_column_stats(f.name());
+            // When no column emits stats (i.e. there is no predicate to prune on), every
+            // per-column entry would be `Absent` and carries no information. Skip allocating
+            // the full-width vector entirely (issue #4522). `num_rows`/`total_byte_size`
+            // below are still kept for the COUNT(*) fast path and partition statistics, and
+            // the empty vector signals the caller to leave the file's DataFusion statistics
+            // unset rather than attaching an uninformative full-width `Statistics`.
+            let column_statistics = if !stats_projection.emits_any_column_stats() {
+                Vec::new()
+            } else {
+                scan.physical_schema()
+                    .fields()
+                    .map(|f| {
+                        let should_extract_stats =
+                            stats_projection.emits_top_level_column_stats(f.name());
 
-                    if !should_extract_stats {
-                        // Return unknown statistics for non-predicate columns
-                        return ColumnStatistics {
-                            null_count: Precision::Absent,
-                            max_value: Precision::Absent,
-                            min_value: Precision::Absent,
+                        if !should_extract_stats {
+                            // Return unknown statistics for non-predicate columns
+                            return ColumnStatistics {
+                                null_count: Precision::Absent,
+                                max_value: Precision::Absent,
+                                min_value: Precision::Absent,
+                                sum_value: Precision::Absent,
+                                distinct_count: Precision::Absent,
+                                byte_size: Precision::Absent,
+                            };
+                        }
+
+                        // Extract statistics for predicate columns
+                        let null_count = if let Some(field_index) =
+                            null_counts.as_ref().and_then(|v| v.index_of(f.name()))
+                        {
+                            null_counts
+                                .as_ref()
+                                .map(|v| match v.values()[field_index] {
+                                    Scalar::Integer(int_val) => Precision::Exact(int_val as usize),
+                                    Scalar::Long(long_val) => Precision::Exact(long_val as usize),
+                                    _ => Precision::Absent,
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            Precision::Absent
+                        };
+
+                        let max_value = physical_precision(
+                            extract_precision(&max_values, f.name()),
+                            scan_config,
+                        );
+                        let min_value = physical_precision(
+                            extract_precision(&min_values, f.name()),
+                            scan_config,
+                        );
+
+                        ColumnStatistics {
+                            null_count,
+                            max_value,
+                            min_value,
                             sum_value: Precision::Absent,
                             distinct_count: Precision::Absent,
                             byte_size: Precision::Absent,
-                        };
-                    }
-
-                    // Extract statistics for predicate columns
-                    let null_count = if let Some(field_index) =
-                        null_counts.as_ref().and_then(|v| v.index_of(f.name()))
-                    {
-                        null_counts
-                            .as_ref()
-                            .map(|v| match v.values()[field_index] {
-                                Scalar::Integer(int_val) => Precision::Exact(int_val as usize),
-                                Scalar::Long(long_val) => Precision::Exact(long_val as usize),
-                                _ => Precision::Absent,
-                            })
-                            .unwrap_or_default()
-                    } else {
-                        Precision::Absent
-                    };
-
-                    let max_value =
-                        physical_precision(extract_precision(&max_values, f.name()), scan_config);
-                    let min_value =
-                        physical_precision(extract_precision(&min_values, f.name()), scan_config);
-
-                    ColumnStatistics {
-                        null_count,
-                        max_value,
-                        min_value,
-                        sum_value: Precision::Absent,
-                        distinct_count: Precision::Absent,
-                        byte_size: Precision::Absent,
-                    }
-                })
-                .collect_vec();
+                        }
+                    })
+                    .collect_vec()
+            };
 
             Some((
                 parse_path(scan.snapshot().table_root(), view.path_raw()).ok()?,
