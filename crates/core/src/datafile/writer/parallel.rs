@@ -61,9 +61,11 @@ impl ArrowWriterOptions {
     }
 
     /// Skip writing the serialized arrow schema into the parquet footer (defaults to `false`).
-    pub fn with_skip_arrow_metadata_hint(mut self, skip_arrow_metadata_hint: bool) -> Self {
-        self.skip_arrow_metadata_hint = skip_arrow_metadata_hint;
+    /// Skip writing the serialized arrow schema into the parquet footer (defaults to `false`).
+    pub fn with_skip_arrow_metadata(mut self, skip_arrow_metadata: bool) -> Self {
+        self.skip_arrow_metadata_hint = skip_arrow_metadata;
         self
+    }
     }
 
     /// Sets the [`PageStoreFactory`] that buffers completed pages while a row group is open.
@@ -244,7 +246,7 @@ impl<W: AsyncFileWriter> ParallelArrowWriter<W> {
         self.workers = column_writers
             .into_iter()
             .map(|column_writer| {
-                let (sender, receiver) = channel::<ArrowLeafColumn>(1);
+                let (sender, receiver) = channel::<ArrowLeafColumn>(2);
                 let encoded_size = Arc::new(AtomicUsize::new(0));
                 let memory_size = Arc::new(AtomicUsize::new(0));
                 let task = encode_column(
