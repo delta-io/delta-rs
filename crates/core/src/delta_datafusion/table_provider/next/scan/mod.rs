@@ -581,7 +581,14 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        // Only attach per-file statistics when they carry column information. An empty
+        // column-stat vector means the scan has no predicate to prune on (issue #4522), so
+        // leaving the file's statistics unset avoids retaining an uninformative full-width
+        // `Statistics` per file. DataFusion treats unset file statistics as unknown, and
+        // partition-column statistics still flow through `partition_stats` at execution time.
+        if !f.stats.column_statistics.is_empty() {
+            partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        }
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
     };
 
@@ -1023,8 +1030,24 @@ async fn get_read_plan(
         }
 
         let file_groups = partitioned_files_to_file_groups(files);
-        let (file_groups, statistics) =
+        let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
+
+        // When per-file statistics are omitted (a scan with no predicate to prune on, see
+        // issue #4522), DataFusion aggregates to an all-unknown table statistic and loses
+        // `total_byte_size`. Restore it from the exact on-disk file sizes, which are always
+        // known, so plan-level byte estimates stay accurate without retaining a per-file
+        // column-statistics vector for every file.
+        if statistics.total_byte_size == Precision::Absent {
+            let total_byte_size: usize = file_groups
+                .iter()
+                .flat_map(|group| group.files())
+                .map(|file| file.object_meta.size as usize)
+                .sum();
+            if total_byte_size > 0 {
+                statistics.total_byte_size = Precision::Exact(total_byte_size);
+            }
+        }
 
         let file_group_count = file_groups.len();
         let builder = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
