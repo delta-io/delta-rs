@@ -221,7 +221,7 @@ impl FileArrowWriter {
     }
 }
 
-pub(super) enum LazyArrowWriter {
+pub enum LazyArrowWriter {
     Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
     Writing(Path, FileArrowWriter),
 }
