@@ -205,10 +205,8 @@ where
                     &stats_projection,
                 );
 
-                // A file without a parsed stats entry gets unknown statistics. Match the
-                // column-stat shape produced by `extract_file_statistics`: an empty column
-                // vector when the projection emits no column stats (issue #4522), so files
-                // with and without stats entries stay consistent within a scan.
+                // Unknown stats for files with no parsed entry. Match the column shape of
+                // `extract_file_statistics`: empty when no column stats are emitted (#4522).
                 let unknown_stats = || {
                     if stats_projection.emits_any_column_stats() {
                         Statistics::new_unknown(&physical_arrow)
@@ -274,12 +272,8 @@ fn extract_file_statistics(
             let max_values = extract_struct(view.max_values());
             let min_values = extract_struct(view.min_values());
 
-            // When no column emits stats (i.e. there is no predicate to prune on), every
-            // per-column entry would be `Absent` and carries no information. Skip allocating
-            // the full-width vector entirely (issue #4522). `num_rows`/`total_byte_size`
-            // below are still kept for the COUNT(*) fast path and partition statistics, and
-            // the empty vector signals the caller to leave the file's DataFusion statistics
-            // unset rather than attaching an uninformative full-width `Statistics`.
+            // No predicate to prune on (#4522): every column entry would be `Absent`, so skip
+            // the full-width vector. num_rows/total_byte_size below are still kept.
             let column_statistics = if !stats_projection.emits_any_column_stats() {
                 Vec::new()
             } else {
