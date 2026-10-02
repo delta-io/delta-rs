@@ -321,11 +321,10 @@ impl StatsProjection {
         }
     }
 
-    /// Returns whether this projection emits column statistics for any physical column.
+    /// Whether this projection emits column statistics for any physical column.
     ///
-    /// When it does not (there is no predicate to prune on), per-file DataFusion
-    /// column statistics are entirely `Absent` and carry no information, so callers
-    /// can skip allocating and attaching them (see issue #4522).
+    /// When it does not (no predicate to prune on), per-file column stats are all `Absent`,
+    /// so callers can skip allocating them (#4522).
     #[cfg(feature = "datafusion")]
     pub(crate) fn emits_any_column_stats(&self) -> bool {
         match self {
