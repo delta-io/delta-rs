@@ -581,12 +581,12 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        // Only attach per-file statistics when they carry column information. An empty
-        // column-stat vector means the scan has no predicate to prune on (issue #4522), so
-        // leaving the file's statistics unset avoids retaining an uninformative full-width
-        // `Statistics` per file. DataFusion treats unset file statistics as unknown, and
-        // partition-column statistics still flow through `partition_stats` at execution time.
-        if !f.stats.column_statistics.is_empty() {
+        if f.stats.column_statistics.is_empty() {
+            // No predicate to prune on (#4522): keep only num_rows/total_byte_size, no
+            // per-file column vector. Assign directly so `with_statistics` doesn't add a
+            // partition-column entry; table-level column stats are rebuilt below.
+            partitioned_file.statistics = Some(Arc::new(f.stats));
+        } else {
             partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
         }
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
@@ -1030,23 +1030,15 @@ async fn get_read_plan(
         }
 
         let file_groups = partitioned_files_to_file_groups(files);
+        let full_table_width = full_table_schema.fields().len();
         let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
 
-        // When per-file statistics are omitted (a scan with no predicate to prune on, see
-        // issue #4522), DataFusion aggregates to an all-unknown table statistic and loses
-        // `total_byte_size`. Restore it from the exact on-disk file sizes, which are always
-        // known, so plan-level byte estimates stay accurate without retaining a per-file
-        // column-statistics vector for every file.
-        if statistics.total_byte_size == Precision::Absent {
-            let total_byte_size: usize = file_groups
-                .iter()
-                .flat_map(|group| group.files())
-                .map(|file| file.object_meta.size as usize)
-                .sum();
-            if total_byte_size > 0 {
-                statistics.total_byte_size = Precision::Exact(total_byte_size);
-            }
+        // Per-file column stats are omitted when there's no predicate (#4522); the merged
+        // stat then has an empty column vector. Rebuild it as all-unknown full width so the
+        // file source and `map_statistics` see the expected column count.
+        if statistics.column_statistics.is_empty() && full_table_width > 0 {
+            statistics.column_statistics = vec![ColumnStatistics::new_unknown(); full_table_width];
         }
 
         let file_group_count = file_groups.len();

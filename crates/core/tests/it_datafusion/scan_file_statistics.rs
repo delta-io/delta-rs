@@ -1,15 +1,6 @@
-//! Regression tests for issue #4522: `DeltaScanNext` per-file DataFusion `Statistics`
-//! add planning overhead.
-//!
-//! When a scan has no predicate there is nothing to skip on, so every per-file
-//! `ColumnStatistics` entry is `Absent` and carries zero information. Building and
-//! retaining a full-width `Vec<ColumnStatistics>` for every file is pure overhead
-//! (`num_files * num_columns` empty entries). These tests assert:
-//!
-//! 1. A no-predicate scan attaches no per-file column statistics.
-//! 2. A scan with a predicate still retains statistics for the predicate column
-//!    (so file pruning is preserved — the maintainer's explicit "no pruning
-//!    regression" requirement on #4522).
+//! Regression tests for #4522: `DeltaScanNext` should not attach per-file column
+//! statistics when a scan has no predicate (nothing to prune on), but must keep them
+//! when a predicate is present so file pruning is preserved.
 
 use std::sync::Arc;
 
