@@ -96,8 +96,10 @@ async fn no_predicate_scan_attaches_no_per_file_column_statistics() -> TestResul
     let session = SessionContext::new().state();
     table.update_datafusion_session(&session)?;
 
-    let provider =
-        DeltaScanNext::new(table.snapshot()?.snapshot().clone(), DeltaScanConfig::default())?;
+    let provider = DeltaScanNext::new(
+        table.snapshot()?.snapshot().clone(),
+        DeltaScanConfig::default(),
+    )?;
     let plan = provider.scan(&session, None, &[], None).await?;
 
     let (total_column_stats, files) = count_per_file_column_stats(&plan);
@@ -116,8 +118,10 @@ async fn predicate_scan_retains_statistics_for_pruning() -> TestResult {
     let session = SessionContext::new().state();
     table.update_datafusion_session(&session)?;
 
-    let provider =
-        DeltaScanNext::new(table.snapshot()?.snapshot().clone(), DeltaScanConfig::default())?;
+    let provider = DeltaScanNext::new(
+        table.snapshot()?.snapshot().clone(),
+        DeltaScanConfig::default(),
+    )?;
     // A predicate on `c0` must keep per-file statistics so file skipping still works.
     let predicate = col("c0").gt(lit(50i32));
     let plan = provider.scan(&session, None, &[predicate], None).await?;
