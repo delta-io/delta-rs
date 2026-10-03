@@ -44,9 +44,10 @@ def test_local_convert_to_delta(
     assert dt.metadata().name == name
     assert dt.metadata().description == description
     assert dt.metadata().configuration == {"delta.appendOnly": "true"}
-    assert next(dt.history())["userName"] == "John Doe"
-    assert next(dt.history())["operation"] == "CONVERT"
-    assert next(dt.history())["operationParameters"]["collectStats"] == "true"
+    commit = next(dt.history())
+    assert commit["userName"] == "John Doe"
+    assert commit["operation"] == "CONVERT"
+    assert commit["operationParameters"]["collectStats"] == "true"
 
 
 @pytest.mark.pyarrow
