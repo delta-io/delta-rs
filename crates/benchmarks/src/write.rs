@@ -162,9 +162,9 @@ pub async fn run_write(
     Ok(())
 }
 
-/// The scenario matrix: {1M, 10M} rows × {unpartitioned, 32 partitions}, the
-/// high-level path with few large batches, and the `RecordBatchWriter` path with
-/// both few-large and many-small batches (the latter stresses per-batch cost).
+/// The scenario matrix: {1M, 10M} rows × {unpartitioned, 32 partitions}, with
+/// both the high-level path and the `RecordBatchWriter` path, each fed few-large
+/// and many-small batches (the latter stresses per-batch cost).
 pub fn write_cases() -> Vec<WriteParams> {
     let mut cases = Vec::new();
     for rows in [1_000_000usize, 10_000_000] {
@@ -173,6 +173,12 @@ pub fn write_cases() -> Vec<WriteParams> {
                 rows,
                 partitions,
                 batch_size: rows.div_ceil(8),
+                path: WritePath::HighLevel,
+            });
+            cases.push(WriteParams {
+                rows,
+                partitions,
+                batch_size: 8_192,
                 path: WritePath::HighLevel,
             });
             cases.push(WriteParams {

@@ -76,6 +76,7 @@ use self::source_stats::{SourceStats, SourceStatsCollector, SourceStatsExec};
 use self::validation::{
     MergeValidation, MergeValidationExec, build_duplicate_match_validation_plan,
 };
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::expr::fmt_expr_to_sql;
 use crate::delta_datafusion::logical::MetricObserver;
 use crate::delta_datafusion::physical::{MetricObserverExec, find_metric_node, get_metric};
@@ -182,6 +183,8 @@ pub struct MergeBuilder {
     session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
+    /// Options passed to underlying arrow writer for when files are rewritten
+    arrow_options: Option<ArrowWriterOptions>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -209,6 +212,7 @@ impl MergeBuilder {
             session_fallback_policy: SessionFallbackPolicy::default(),
             commit_properties: CommitProperties::default(),
             writer_properties: None,
+            arrow_options: None,
             merge_schema: false,
             match_operations: Vec::new(),
             not_match_operations: Vec::new(),
@@ -440,6 +444,12 @@ impl MergeBuilder {
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 
@@ -872,6 +882,7 @@ async fn execute(
     snapshot: EagerSnapshot,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
     mut commit_properties: CommitProperties,
     safe_cast: bool,
     streaming: bool,
@@ -1645,6 +1656,7 @@ async fn execute(
             target_file_size: Some(snapshot.table_properties().target_file_size()),
             write_batch_size: None,
             writer_properties: writer_properties.clone(),
+            arrow_options,
         },
         None,
         should_cdc, // if true, write execution plan splits batches in [normal, cdc] data before writing
@@ -1959,6 +1971,7 @@ impl std::future::IntoFuture for MergeBuilder {
                     snapshot,
                     state,
                     this.writer_properties,
+                    this.arrow_options,
                     this.commit_properties,
                     this.safe_cast,
                     this.streaming,
