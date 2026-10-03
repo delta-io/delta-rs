@@ -16,7 +16,9 @@ use super::models::{
     GetTableResponse, ListCatalogsResponse, ListSchemasResponse, ListTableSummariesResponse, Table,
     TableTempCredentialsResponse, TableType, TemporaryTableCredentials,
 };
+use super::store_router::UnityStoreRegistry;
 use super::{DataCatalogResult, UnityCatalog, UnityCatalogError};
+use deltalake_core::logstore::LogStore as _;
 use deltalake_core::{DeltaTableBuilder, ensure_table_uri};
 
 /// In-memory list of catalogs populated by unity catalog
@@ -78,14 +80,28 @@ impl UnityCatalogProvider {
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
     ) -> DataCatalogResult<Self> {
+        Self::try_new_with_stores(client, catalog_name, None).await
+    }
+
+    /// Like [`Self::try_new`], routing each loaded table's object store through `stores`
+    /// so tables sharing a container keep their own credentials.
+    pub async fn try_new_with_stores(
+        client: Arc<UnityCatalog>,
+        catalog_name: impl Into<String>,
+        stores: Option<Arc<UnityStoreRegistry>>,
+    ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schemas = match client.list_schemas(&catalog_name).await? {
             ListSchemasResponse::Success { schemas } => {
                 let mut providers = Vec::new();
                 for schema in schemas {
-                    let provider =
-                        UnitySchemaProvider::try_new(client.clone(), &catalog_name, &schema.name)
-                            .await?;
+                    let provider = UnitySchemaProvider::try_new_with_stores(
+                        client.clone(),
+                        &catalog_name,
+                        &schema.name,
+                        stores.clone(),
+                    )
+                    .await?;
                     providers.push((schema.name, Arc::new(provider) as Arc<dyn SchemaProvider>));
                 }
                 providers
@@ -136,6 +152,7 @@ pub struct UnitySchemaProvider {
     table_names: Vec<String>,
     table_cache: DashMap<String, Arc<dyn TableProvider>>,
     token_cache: Cache<String, TemporaryTableCredentials>,
+    stores: Option<Arc<UnityStoreRegistry>>,
 }
 
 impl UnitySchemaProvider {
@@ -144,6 +161,16 @@ impl UnitySchemaProvider {
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
         schema_name: impl Into<String>,
+    ) -> DataCatalogResult<Self> {
+        Self::try_new_with_stores(client, catalog_name, schema_name, None).await
+    }
+
+    /// Like [`Self::try_new`], routing each loaded table's object store through `stores`.
+    pub async fn try_new_with_stores(
+        client: Arc<UnityCatalog>,
+        catalog_name: impl Into<String>,
+        schema_name: impl Into<String>,
+        stores: Option<Arc<UnityStoreRegistry>>,
     ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schema_name = schema_name.into();
@@ -168,6 +195,7 @@ impl UnitySchemaProvider {
             schema_name,
             token_cache,
             table_cache: DashMap::new(),
+            stores,
         })
     }
 
@@ -257,6 +285,10 @@ impl SchemaProvider for UnitySchemaProvider {
                     .with_storage_options(new_storage_opts)
                     .load()
                     .await?;
+                if let Some(stores) = &self.stores {
+                    let log_store = table.log_store();
+                    stores.register(log_store.root_url(), log_store.root_object_store());
+                }
                 let provider = table.table_provider().await?;
                 self.table_cache
                     .insert(name.to_string(), Arc::clone(&provider));

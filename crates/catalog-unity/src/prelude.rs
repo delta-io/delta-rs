@@ -2,3 +2,5 @@ pub use crate::{UnityCatalog, UnityCatalogBuilder, UnityCatalogConfigKey, UnityC
 
 #[cfg(feature = "datafusion")]
 pub use crate::datafusion::{UnityCatalogList, UnityCatalogProvider, UnitySchemaProvider};
+#[cfg(feature = "datafusion")]
+pub use crate::store_router::{PrefixRoutingStore, UnityStoreRegistry};

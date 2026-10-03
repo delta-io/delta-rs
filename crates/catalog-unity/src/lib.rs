@@ -50,6 +50,8 @@ const STORE_NAME: &str = "UnityCatalogObjectStore";
 pub mod datafusion;
 pub mod models;
 pub mod prelude;
+#[cfg(feature = "datafusion")]
+pub mod store_router;
 
 /// Possible errors from the unity-catalog/tables API call
 #[derive(thiserror::Error, Debug)]

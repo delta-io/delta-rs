@@ -30,6 +30,8 @@ reqwest-retry = "0.9"
 reqwest-middleware = { version = "0.5", features = ["json", "query", "form"] }
 rand = "0.10"
 dashmap = "6"
+object_store = { workspace = true, optional = true }
+url = { workspace = true, optional = true }
 datafusion = { workspace = true, optional = true }
 moka = { version = "0.12", optional = true, features = ["future"] }
 
@@ -47,7 +49,7 @@ aws = ["deltalake-aws"]
 azure = ["deltalake-azure"]
 gcp = ["deltalake-gcp"]
 r2 = ["deltalake-aws"]
-datafusion = ["dep:datafusion", "deltalake-core/datafusion", "moka"]
+datafusion = ["dep:datafusion", "dep:object_store", "dep:url", "deltalake-core/datafusion", "moka"]
 
 [[example]]
 name = "uc_example"
