@@ -581,7 +581,14 @@ async fn get_data_scan_plan(
         // NOTE: `PartitionedFile::with_statistics` appends exact stats for partition columns based
         // on `partition_values`, so partition values must be set first.
         partitioned_file.partition_values = vec![file_value.clone()];
-        partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        if f.stats.column_statistics.is_empty() {
+            // No predicate to prune on (#4522): keep only num_rows/total_byte_size, no
+            // per-file column vector. Assign directly so `with_statistics` doesn't add a
+            // partition-column entry; table-level column stats are rebuilt below.
+            partitioned_file.statistics = Some(Arc::new(f.stats));
+        } else {
+            partitioned_file = partitioned_file.with_statistics(Arc::new(f.stats));
+        }
         Ok::<_, DataFusionError>((f.file_url.as_object_store_url(), partitioned_file))
     };
 
@@ -1023,8 +1030,16 @@ async fn get_read_plan(
         }
 
         let file_groups = partitioned_files_to_file_groups(files);
-        let (file_groups, statistics) =
+        let full_table_width = full_table_schema.fields().len();
+        let (file_groups, mut statistics) =
             compute_all_files_statistics(file_groups, full_table_schema, true, false)?;
+
+        // Per-file column stats are omitted when there's no predicate (#4522); the merged
+        // stat then has an empty column vector. Rebuild it as all-unknown full width so the
+        // file source and `map_statistics` see the expected column count.
+        if statistics.column_statistics.is_empty() && full_table_width > 0 {
+            statistics.column_statistics = vec![ColumnStatistics::new_unknown(); full_table_width];
+        }
 
         let file_group_count = file_groups.len();
         let builder = FileScanConfigBuilder::new(store_url, Arc::new(file_source))
