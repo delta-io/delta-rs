@@ -16,6 +16,7 @@ use tracing::*;
 
 use super::partition::DEFAULT_WRITE_BATCH_SIZE;
 use super::{PartitionWriter, PartitionWriterConfig, UploadBudget, WriteError};
+use crate::datafile::writer::parallel::ArrowWriterOptions;
 use crate::datafile::{BatchStream, DeltaDataWriter};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::{Add, PartitionsExt};
@@ -33,6 +34,8 @@ pub struct WriterConfig {
     partition_columns: Vec<String>,
     /// Properties passed to underlying parquet writer
     writer_properties: WriterProperties,
+    /// Options passed to the underlying arrow writer
+    arrow_options: ArrowWriterOptions,
     /// Size above which we will write a buffered parquet file to disk.
     /// If None, the writer will not create a new file until the writer is closed.
     target_file_size: Option<NonZeroU64>,
@@ -53,10 +56,12 @@ pub struct WriterConfig {
 
 impl WriterConfig {
     /// Create a new instance of [WriterConfig].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
         writer_properties: Option<WriterProperties>,
+        arrow_options: Option<ArrowWriterOptions>,
         target_file_size: Option<NonZeroU64>,
         write_batch_size: Option<usize>,
         num_indexed_cols: DataSkippingNumIndexedCols,
@@ -70,6 +75,7 @@ impl WriterConfig {
             table_schema,
             partition_columns,
             writer_properties,
+            arrow_options: arrow_options.unwrap_or_default(),
             target_file_size,
             write_batch_size,
             num_indexed_cols,
@@ -133,6 +139,12 @@ impl DeltaWriter {
         self
     }
 
+    /// Apply custom arrow_options to the underlying arrow writer
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.config.arrow_options = arrow_options;
+        self
+    }
+
     fn divide_by_partition_values(
         &mut self,
         values: &RecordBatch,
@@ -158,6 +170,7 @@ impl DeltaWriter {
             self.file_schema.clone(),
             partition_values,
             Some(self.config.writer_properties.clone()),
+            Some(self.config.arrow_options.clone()),
             self.config.target_file_size,
             Some(self.config.write_batch_size),
             None,
@@ -403,6 +416,7 @@ mod tests {
             batch.schema(),
             vec![],
             writer_properties,
+            None,
             target_file_size,
             write_batch_size,
             DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
@@ -421,6 +435,7 @@ mod tests {
         let config = WriterConfig::new(
             schema,
             vec![],
+            None,
             None,
             None,
             None,
@@ -500,6 +515,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             DataSkippingNumIndexedCols::NumColumns(DEFAULT_NUM_INDEX_COLS),
             None,
         );
@@ -513,6 +529,7 @@ mod tests {
         let other = WriterConfig::new(
             schema,
             vec![],
+            None,
             None,
             None,
             None,

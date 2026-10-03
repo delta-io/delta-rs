@@ -177,6 +177,7 @@ impl DeltaDataSink {
             table_schema,
             physical_partition_columns,
             None,
+            None,
             Some(table_props.target_file_size()),
             None,
             stats_config.num_indexed_cols,

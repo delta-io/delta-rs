@@ -15,14 +15,16 @@ use datafusion::physical_plan::{
     execute_stream_partitioned,
 };
 use delta_kernel::table_configuration::TableConfiguration;
-use futures::{StreamExt as _, TryStreamExt as _};
+use futures::StreamExt as _;
 use object_store::prefix::PrefixStore;
 use parquet::file::properties::WriterProperties;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 
 use crate::DeltaTableError;
-use crate::datafile::writer::{DeltaWriter, UploadBudget, WriterConfig, write_batches_timed};
+use crate::datafile::writer::{
+    ArrowWriterOptions, DeltaWriter, UploadBudget, WriterConfig, write_batches_timed,
+};
 use crate::delta_datafusion::{ColumnMappingState, DataValidationExec, validation_predicates};
 use crate::errors::DeltaResult;
 use crate::kernel::{Action, Add, AddCDCFile};
@@ -88,6 +90,7 @@ mod tests {
         WriterConfig::new(
             schema,
             vec![],
+            None,
             None,
             Some(NonZeroU64::new(1024).unwrap()),
             Some(1024),
@@ -285,6 +288,7 @@ struct WriteSinkConfig {
     writer_properties: Option<WriterProperties>,
     writer_stats_config: WriterStatsConfig,
     column_mapping: Option<ColumnMappingState>,
+    arrow_options: Option<ArrowWriterOptions>,
 }
 
 /// A plan with its (physical) partition columns and optional random-prefix length.
@@ -413,6 +417,7 @@ pub(crate) async fn write_execution_plan_v2(
         writer_properties: exec_options.writer_properties,
         writer_stats_config: WriterStatsConfig::from_config(table_config),
         column_mapping: ColumnMappingState::from_table_config(table_config),
+        arrow_options: exec_options.arrow_options,
     };
 
     if !contains_cdc {
@@ -450,11 +455,10 @@ pub(crate) async fn write_exec_plan(
     log_store: &dyn LogStore,
     table_config: &TableConfiguration,
     exec: Arc<dyn ExecutionPlan>,
-    target_file_size: Option<NonZeroU64>,
     write_as_cdc: bool,
-    writer_properties: Option<WriterProperties>,
+    exec_options: WriteExecOptions,
 ) -> DeltaResult<(Vec<Action>, WriteExecutionPlanMetrics)> {
-    let writer_properties = match writer_properties {
+    let writer_properties = match exec_options.writer_properties {
         Some(props) => props,
         None => session
             .config_options()
@@ -468,11 +472,12 @@ pub(crate) async fn write_exec_plan(
     let sink_config = WriteSinkConfig {
         partition_columns: table_config.metadata().partition_columns().to_vec(),
         object_store,
-        target_file_size,
+        target_file_size: exec_options.target_file_size,
         write_batch_size: None,
         writer_properties: Some(writer_properties),
         writer_stats_config: stats_config,
         column_mapping: ColumnMappingState::from_table_config(table_config),
+        arrow_options: exec_options.arrow_options,
     };
 
     if write_as_cdc {
@@ -748,6 +753,7 @@ async fn write_data_plan(
         writer_properties,
         writer_stats_config,
         column_mapping,
+        arrow_options,
     } = sink_config;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
@@ -755,6 +761,7 @@ async fn write_data_plan(
         plan.schema().clone(),
         partition_columns.clone(),
         writer_properties.clone(),
+        arrow_options,
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,
@@ -912,6 +919,7 @@ async fn write_cdc_plan(
         writer_properties,
         writer_stats_config,
         column_mapping,
+        arrow_options,
     } = sink_config;
     let (plan, partition_columns, random_prefix_length) =
         apply_column_mapping_to_plan(plan, partition_columns, &column_mapping)?;
@@ -939,6 +947,7 @@ async fn write_cdc_plan(
         write_schema.clone(),
         partition_columns.clone(),
         writer_properties.clone(),
+        arrow_options.clone(),
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,
@@ -951,6 +960,7 @@ async fn write_cdc_plan(
         cdf_schema.clone(),
         partition_columns.clone(),
         writer_properties.clone(),
+        arrow_options,
         target_file_size,
         write_batch_size,
         writer_stats_config.num_indexed_cols,

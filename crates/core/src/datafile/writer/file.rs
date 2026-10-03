@@ -10,13 +10,14 @@ use object_store::buffered::BufWriter;
 use object_store::path::Path;
 use parquet::arrow::AsyncArrowWriter;
 use parquet::arrow::async_writer::AsyncFileWriter;
-use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::errors::{ParquetError, Result as ParquetResult};
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::*;
 
 use super::PartitionWriterConfig;
+use super::parallel::ParallelArrowWriter;
 use crate::errors::DeltaResult;
 use crate::logstore::ObjectStoreRef;
 
@@ -53,7 +54,7 @@ fn upload_part_size() -> usize {
 /// [`UploadBudget`]: super::UploadBudget
 #[instrument(skip(arrow_writer, _permit), fields(rows = 0, size = 0))]
 async fn finish_parquet_file(
-    mut arrow_writer: AsyncArrowWriter<ParquetObjectWriter>,
+    mut arrow_writer: FileArrowWriter,
     path: Path,
     _permit: OwnedSemaphorePermit,
 ) -> DeltaResult<(Path, usize, ParquetMetaData)> {
@@ -87,12 +88,12 @@ async fn finish_parquet_file(
         }
     };
     let file_size = arrow_writer.bytes_written();
-    // `bytes_written()` returns cumulative bytes flushed through AsyncArrowWriter,
-    // including all row groups. After `finish()`, the parquet footer is written and
-    // included in this counter (parquet-rs calls write_footer() then updates the
-    // internal byte count before returning the metadata). If this ever understates
-    // the physical object size, use `object_store.head(&path).size` as the source
-    // of truth instead.
+    // `bytes_written()` returns the cumulative bytes of the `SerializedFileWriter`
+    // inside the arrow writer, including all row groups. After `finish()`, the
+    // parquet footer is written and included in this counter (parquet-rs calls
+    // write_footer() then updates the internal byte count before returning the
+    // metadata). If this ever understates the physical object size, use
+    // `object_store.head(&path).size` as the source of truth instead.
     Span::current().record("rows", metadata.file_metadata().num_rows());
     Span::current().record("size", file_size);
     debug!("multipart upload completed successfully");
@@ -135,9 +136,94 @@ impl AsyncFileWriter for ParquetObjectWriter {
     }
 }
 
-pub(super) enum LazyArrowWriter {
+/// The parquet writer of one file: its columns encoded in parallel, or one after another
+/// by arrow-rs. Chosen by [`ArrowWriterOptions::with_enable_parallel_encoding`].
+pub(super) enum FileArrowWriter {
+    Parallel(ParallelArrowWriter<ParquetObjectWriter>),
+    Serial(AsyncArrowWriter<ParquetObjectWriter>),
+}
+
+impl FileArrowWriter {
+    fn try_new(writer: ParquetObjectWriter, config: &PartitionWriterConfig) -> ParquetResult<Self> {
+        let options = &config.arrow_options;
+        if options.enable_parallel_encoding() {
+            ParallelArrowWriter::try_new(
+                writer,
+                config.file_schema.clone(),
+                config.writer_properties.clone(),
+                Some(options.clone()),
+            )
+            .map(Self::Parallel)
+        } else {
+            AsyncArrowWriter::try_new_with_options(
+                writer,
+                config.file_schema.clone(),
+                options.to_parquet_options(config.writer_properties.clone()),
+            )
+            .map(Self::Serial)
+        }
+    }
+
+    async fn write(&mut self, batch: &RecordBatch) -> ParquetResult<()> {
+        match self {
+            Self::Parallel(writer) => writer.write(batch).await,
+            Self::Serial(writer) => writer.write(batch).await,
+        }
+    }
+
+    async fn finish(&mut self) -> ParquetResult<ParquetMetaData> {
+        match self {
+            Self::Parallel(writer) => writer.finish().await,
+            Self::Serial(writer) => writer.finish().await,
+        }
+    }
+
+    fn into_inner(self) -> ParquetObjectWriter {
+        match self {
+            Self::Parallel(writer) => writer.into_inner(),
+            Self::Serial(writer) => writer.into_inner(),
+        }
+    }
+
+    fn bytes_written(&self) -> usize {
+        match self {
+            Self::Parallel(writer) => writer.bytes_written(),
+            Self::Serial(writer) => writer.bytes_written(),
+        }
+    }
+
+    fn in_progress_size(&self) -> usize {
+        match self {
+            Self::Parallel(writer) => writer.in_progress_size(),
+            Self::Serial(writer) => writer.in_progress_size(),
+        }
+    }
+
+    fn memory_size(&self) -> usize {
+        match self {
+            Self::Parallel(writer) => writer.memory_size(),
+            Self::Serial(writer) => writer.memory_size(),
+        }
+    }
+
+    fn in_progress_rows(&self) -> usize {
+        match self {
+            Self::Parallel(writer) => writer.in_progress_rows(),
+            Self::Serial(writer) => writer.in_progress_rows(),
+        }
+    }
+
+    fn flushed_row_groups(&self) -> &[RowGroupMetaData] {
+        match self {
+            Self::Parallel(writer) => writer.flushed_row_groups(),
+            Self::Serial(writer) => writer.flushed_row_groups(),
+        }
+    }
+}
+
+pub enum LazyArrowWriter {
     Initialized(Path, ObjectStoreRef, PartitionWriterConfig),
-    Writing(Path, AsyncArrowWriter<ParquetObjectWriter>),
+    Writing(Path, FileArrowWriter),
 }
 
 impl LazyArrowWriter {
@@ -161,11 +247,7 @@ impl LazyArrowWriter {
                     )
                     .with_max_concurrency(config.max_concurrency_tasks),
                 );
-                let mut arrow_writer = AsyncArrowWriter::try_new(
-                    writer,
-                    config.file_schema.clone(),
-                    Some(config.writer_properties.clone()),
-                )?;
+                let mut arrow_writer = FileArrowWriter::try_new(writer, config)?;
                 // A large first batch can complete row groups and start a multipart
                 // upload before this call returns. On failure, `self` is still
                 // `Initialized` — unreachable by the outer abort paths — so the
