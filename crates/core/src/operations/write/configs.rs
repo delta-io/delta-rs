@@ -5,6 +5,7 @@ use delta_kernel::{
 };
 use parquet::file::properties::WriterProperties;
 
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::kernel::arrow::engine_ext::stats_table_properties;
 use crate::table::config::TablePropertiesExt as _;
 
@@ -13,6 +14,7 @@ pub(crate) struct WriteExecOptions {
     pub(crate) target_file_size: Option<NonZeroU64>,
     pub(crate) write_batch_size: Option<usize>,
     pub(crate) writer_properties: Option<WriterProperties>,
+    pub(crate) arrow_options: Option<ArrowWriterOptions>,
 }
 
 /// Configuration for the writer on how to collect stats

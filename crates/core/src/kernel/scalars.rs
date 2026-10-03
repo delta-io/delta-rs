@@ -64,6 +64,19 @@ pub trait ScalarExt: Sized {
     fn to_json(&self) -> Value;
 }
 
+/// Formats an unscaled decimal value with a positive scale, e.g. `-105` with scale 2 as `-1.05`.
+fn serialize_scaled_decimal(value: i128, scale: u8) -> String {
+    let scalar_multiple = 10_u128.pow(scale as u32);
+    let abs = value.unsigned_abs();
+    let sign = if value < 0 { "-" } else { "" };
+    format!(
+        "{sign}{}.{:0>scale$}",
+        abs / scalar_multiple,
+        abs % scalar_multiple,
+        scale = scale as usize
+    )
+}
+
 impl ScalarExt for Scalar {
     /// Serializes this scalar as a string.
     fn serialize(&self) -> String {
@@ -97,20 +110,7 @@ impl ScalarExt for Scalar {
             }
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => decimal.bits().to_string(),
-                Ordering::Greater => {
-                    let scale = decimal.scale();
-                    let value = decimal.bits();
-                    let scalar_multiple = 10_i128.pow(scale as u32);
-                    let mut s = String::new();
-                    s.push_str((value / scalar_multiple).to_string().as_str());
-                    s.push('.');
-                    s.push_str(&format!(
-                        "{:0>scale$}",
-                        value % scalar_multiple,
-                        scale = scale as usize
-                    ));
-                    s
-                }
+                Ordering::Greater => serialize_scaled_decimal(decimal.bits(), decimal.scale()),
                 Ordering::Less => {
                     let mut s = decimal.bits().to_string();
                     for _ in 0..decimal.scale() {
@@ -358,18 +358,7 @@ impl ScalarExt for Scalar {
             Self::Decimal(decimal) => match decimal.scale().cmp(&0) {
                 Ordering::Equal => Value::String(decimal.bits().to_string()),
                 Ordering::Greater => {
-                    let scale = decimal.scale();
-                    let value = decimal.bits();
-                    let scalar_multiple = 10_i128.pow(scale as u32);
-                    let mut s = String::new();
-                    s.push_str((value / scalar_multiple).to_string().as_str());
-                    s.push('.');
-                    s.push_str(&format!(
-                        "{:0>scale$}",
-                        value % scalar_multiple,
-                        scale = scale as usize
-                    ));
-                    Value::String(s)
+                    Value::String(serialize_scaled_decimal(decimal.bits(), decimal.scale()))
                 }
                 Ordering::Less => {
                     let mut s = decimal.bits().to_string();
@@ -531,6 +520,18 @@ mod tests {
         // Test decimal with zero scale
         let decimal2 = Scalar::decimal(123, 10, 0).unwrap();
         assert_eq!(decimal2.serialize(), "123");
+
+        // Test negative decimals with positive scale
+        let decimal = Scalar::decimal(-12345, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-123.45");
+        let decimal = Scalar::decimal(-105, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-1.05");
+        let decimal = Scalar::decimal(-1, 10, 2).unwrap();
+        assert_eq!(decimal.serialize(), "-0.01");
+        assert_eq!(
+            decimal.to_json(),
+            serde_json::Value::String("-0.01".to_string())
+        );
     }
 
     #[test]

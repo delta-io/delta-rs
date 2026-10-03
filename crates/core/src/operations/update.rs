@@ -44,6 +44,7 @@ use tracing::log::*;
 
 use super::write::configs::WriteExecOptions;
 use super::write::execution::{write_execution_plan, write_execution_plan_cdc};
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::{
     DeltaScanConfig, Expression, scan_files_where_matches, update_datafusion_session,
 };
@@ -95,6 +96,8 @@ pub struct UpdateBuilder {
     session_fallback_policy: SessionFallbackPolicy,
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
+    /// Options passed to underlying arrow writer for when files are rewritten
+    arrow_options: Option<ArrowWriterOptions>,
     /// Additional information to add to the commit
     commit_properties: CommitProperties,
     /// safe_cast determines how data types that do not match the underlying table are handled
@@ -130,6 +133,7 @@ impl UpdateBuilder {
             session: None,
             session_fallback_policy: SessionFallbackPolicy::default(),
             writer_properties: None,
+            arrow_options: None,
             commit_properties: CommitProperties::default(),
             safe_cast: false,
         }
@@ -182,6 +186,12 @@ impl UpdateBuilder {
     /// Writer properties passed to parquet writer for when files are rewritten
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Arrow writer options passed to the parquet writer for when files are rewritten
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 
@@ -261,6 +271,7 @@ async fn execute(
     snapshot: &EagerSnapshot,
     session: &dyn Session,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
     safe_cast: bool,
 ) -> DeltaResult<(Vec<Action>, UpdateMetrics)> {
     let eager_snapshot = snapshot;
@@ -362,6 +373,7 @@ async fn execute(
             target_file_size: Some(snapshot.table_properties().target_file_size()),
             write_batch_size: None,
             writer_properties: writer_properties.clone(),
+            arrow_options: arrow_options.clone(),
         },
     )
     .await?;
@@ -418,6 +430,7 @@ async fn execute(
                         target_file_size: Some(snapshot.table_properties().target_file_size()),
                         write_batch_size: None,
                         writer_properties,
+                        arrow_options,
                     },
                 )
                 .await?;
@@ -489,6 +502,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                     &snapshot,
                     &state,
                     this.writer_properties,
+                    this.arrow_options,
                     this.safe_cast,
                 )
                 .await?;
