@@ -703,7 +703,7 @@ pub struct PreCommit<'a> {
     post_commit_hook: Option<PostCommitHookProperties>,
 }
 
-impl<'a> std::future::IntoFuture for PreCommit<'a> {
+impl<'a> IntoFuture for PreCommit<'a> {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -758,7 +758,7 @@ impl<'a> PreCommit<'a> {
     }
 }
 
-/// Represents a inflight commit
+/// Represents an inflight commit
 pub struct PreparedCommit<'a> {
     commit_or_bytes: CommitOrBytes,
     committer: Arc<dyn Committer>,
@@ -776,7 +776,7 @@ impl PreparedCommit<'_> {
     }
 }
 
-impl<'a> std::future::IntoFuture for PreparedCommit<'a> {
+impl<'a> IntoFuture for PreparedCommit<'a> {
     type Output = DeltaResult<PostCommit>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 

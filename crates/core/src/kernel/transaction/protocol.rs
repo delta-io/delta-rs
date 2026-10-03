@@ -312,6 +312,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::VariantType);
     reader_features.insert(TableFeature::VariantTypePreview);
     reader_features.insert(TableFeature::V2Checkpoint);
+    reader_features.insert(TableFeature::CatalogManaged);
+    reader_features.insert(TableFeature::VacuumProtocolCheck);
     #[cfg(feature = "nanosecond-timestamps")]
     reader_features.insert(TableFeature::TimestampNanos);
     #[cfg(feature = "datafusion")]
