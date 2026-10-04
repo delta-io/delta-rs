@@ -26,7 +26,7 @@ use indexmap::IndexMap;
 use object_store::ObjectStore;
 use parquet::file::properties::WriterProperties;
 
-use crate::datafile::writer::{DeltaWriter as DatasetSink, WriterConfig};
+use crate::datafile::writer::{ArrowWriterOptions, DeltaWriter as DatasetSink, WriterConfig};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::kernel::Add;
 
@@ -37,6 +37,7 @@ pub(crate) struct SinkFactory {
     pub(crate) storage: Arc<dyn ObjectStore>,
     pub(crate) partition_columns: Vec<String>,
     pub(crate) writer_properties: WriterProperties,
+    pub(crate) arrow_options: ArrowWriterOptions,
     pub(crate) target_file_size: Option<NonZeroU64>,
     pub(crate) num_indexed_cols: DataSkippingNumIndexedCols,
     pub(crate) stats_columns: Option<Vec<String>>,
@@ -49,6 +50,7 @@ impl SinkFactory {
             schema,
             self.partition_columns.clone(),
             Some(self.writer_properties.clone()),
+            Some(self.arrow_options.clone()),
             self.target_file_size,
             None,
             self.num_indexed_cols,
@@ -131,6 +133,11 @@ impl WriteWindow {
     /// Set the writer properties used for sinks opened from now on.
     pub(crate) fn set_writer_properties(&mut self, writer_properties: WriterProperties) {
         self.factory.writer_properties = writer_properties;
+    }
+
+    /// Set the arrow writer options used for sinks opened from now on.
+    pub(crate) fn set_arrow_options(&mut self, arrow_options: ArrowWriterOptions) {
+        self.factory.arrow_options = arrow_options;
     }
 
     /// Schema widening rotates the whole window's sink, which only makes sense when
@@ -353,6 +360,7 @@ mod tests {
             storage: Arc::new(InMemory::new()),
             partition_columns: vec![],
             writer_properties: WriterProperties::builder().build(),
+            arrow_options: ArrowWriterOptions::default(),
             target_file_size: None,
             num_indexed_cols: DataSkippingNumIndexedCols::AllColumns,
             stats_columns: None,
@@ -459,6 +467,7 @@ mod tests {
             writer_properties: WriterProperties::builder()
                 .set_dictionary_enabled(false)
                 .build(),
+            arrow_options: ArrowWriterOptions::default(),
             target_file_size: None,
             num_indexed_cols: DataSkippingNumIndexedCols::AllColumns,
             stats_columns: None,

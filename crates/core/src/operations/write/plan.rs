@@ -28,6 +28,7 @@ use super::generated_columns::{gc_is_enabled, with_generated_columns};
 use super::metrics::SOURCE_COUNT_ID;
 use super::schema_evolution::try_cast_schema;
 use super::{SchemaMode, WriteError};
+use crate::datafile::writer::ArrowWriterOptions;
 use crate::delta_datafusion::logical::{LogicalPlanBuilderExt as _, MetricObserver};
 use crate::delta_datafusion::{
     DataFusionMixins, Expression, analyze_predicate_for_find_files, scan_files_where_matches,
@@ -107,6 +108,7 @@ pub(super) struct WritePreparationInput<'a> {
     pub(super) target_file_size: Option<Option<NonZeroU64>>,
     pub(super) write_batch_size: Option<usize>,
     pub(super) writer_properties: Option<WriterProperties>,
+    pub(super) arrow_options: Option<ArrowWriterOptions>,
     pub(super) configuration: &'a HashMap<String, Option<String>>,
 }
 
@@ -285,6 +287,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
         target_file_size,
         write_batch_size,
         writer_properties,
+        arrow_options,
         configuration,
     } = input;
 
@@ -421,6 +424,7 @@ pub(super) fn prepare_write(input: WritePreparationInput<'_>) -> DeltaResult<Pre
             target_file_size,
             write_batch_size,
             writer_properties,
+            arrow_options,
             configuration,
         ),
     })
@@ -697,6 +701,7 @@ fn build_exec_options(
     target_file_size: Option<Option<NonZeroU64>>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
+    arrow_options: Option<ArrowWriterOptions>,
     configuration: &HashMap<String, Option<String>>,
 ) -> WriteExecOptions {
     let config = snapshot.map(|snapshot| snapshot.table_properties());
@@ -707,6 +712,7 @@ fn build_exec_options(
         target_file_size,
         write_batch_size,
         writer_properties,
+        arrow_options,
     }
 }
 
@@ -908,6 +914,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -950,6 +957,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -975,6 +983,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1011,6 +1020,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1050,6 +1060,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1096,6 +1107,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1152,6 +1164,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1218,6 +1231,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();
@@ -1280,6 +1294,7 @@ mod tests {
             target_file_size: None,
             write_batch_size: None,
             writer_properties: None,
+            arrow_options: None,
             configuration: &configuration,
         })
         .unwrap();

@@ -45,7 +45,9 @@ use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use tracing::*;
 
-use crate::datafile::writer::{PartitionWriter, PartitionWriterConfig, UploadBudget};
+use crate::datafile::writer::{
+    ArrowWriterOptions, PartitionWriter, PartitionWriterConfig, UploadBudget,
+};
 use crate::delta_datafusion::{
     DeltaScanConfig, DeltaScanNext, SessionFallbackPolicy, SessionResolveContext,
     create_session_state_with_spill_config, resolve_session_state, update_datafusion_session,
@@ -286,6 +288,8 @@ pub struct OptimizeBuilder<'a> {
     target_size: Option<NonZeroU64>,
     /// Properties passed to underlying parquet writer
     writer_properties: Option<WriterProperties>,
+    /// Options passed to underlying arrow writer
+    arrow_options: Option<ArrowWriterOptions>,
     /// Commit properties and configuration
     commit_properties: CommitProperties,
     /// Maximum number of concurrent tasks (default is number of cpus)
@@ -307,6 +311,7 @@ impl<'a> OptimizeBuilder<'a> {
             filters: &[],
             target_size: None,
             writer_properties: None,
+            arrow_options: None,
             commit_properties: CommitProperties::default(),
             max_concurrent_tasks: std::thread::available_parallelism()
                 .map(|n| n.get())
@@ -340,6 +345,12 @@ impl<'a> OptimizeBuilder<'a> {
     /// Writer properties passed to parquet writer
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Arrow writer options passed to parquet writer
+    pub fn with_arrow_options(mut self, arrow_options: ArrowWriterOptions) -> Self {
+        self.arrow_options = Some(arrow_options);
         self
     }
 
@@ -433,6 +444,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
+                this.arrow_options.unwrap_or_default(),
                 session,
             )
             .await?;
@@ -589,6 +601,8 @@ pub struct MergeTaskParameters {
     file_schema: SchemaRef,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
+    /// Options passed to arrow writer
+    arrow_options: ArrowWriterOptions,
     /// Input parameters for the optimize operation
     input_parameters: OptimizeInput,
     /// Num index cols to collect stats for
@@ -671,6 +685,7 @@ impl MergePlan {
             task_parameters.file_schema.clone(),
             partition_values.clone(),
             Some(task_parameters.writer_properties.clone()),
+            Some(task_parameters.arrow_options.clone()),
             // Since we know the total size of the bin, we can set the target file size to None.
             if ignore_target_size {
                 None
@@ -979,6 +994,7 @@ impl MergePlan {
 }
 
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
+#[allow(clippy::too_many_arguments)]
 #[instrument(skip_all, fields(operation = "create_merge_plan", version = snapshot.version()))]
 pub async fn create_merge_plan(
     log_store: &dyn LogStore,
@@ -987,6 +1003,7 @@ pub async fn create_merge_plan(
     filters: &[FilterLiteral<'_>],
     target_size: Option<NonZeroU64>,
     writer_properties: WriterProperties,
+    arrow_options: ArrowWriterOptions,
     session: SessionState,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_properties().target_file_size());
@@ -1039,6 +1056,7 @@ pub async fn create_merge_plan(
         task_parameters: Arc::new(MergeTaskParameters {
             file_schema,
             writer_properties,
+            arrow_options,
             input_parameters,
             num_indexed_cols: snapshot.table_properties().num_indexed_cols(),
             stats_columns: snapshot
