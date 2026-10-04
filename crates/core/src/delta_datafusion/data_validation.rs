@@ -90,7 +90,7 @@ impl DataValidation {
         input: LogicalPlan,
         validations: impl IntoIterator<Item = Expr>,
     ) -> Result<Arc<Self>> {
-        let validations = validations
+        let validations: Vec<Expr> = validations
             .into_iter()
             .map(|e| {
                 let dt = e.get_type(input.schema())?;
